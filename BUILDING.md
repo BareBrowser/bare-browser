@@ -33,7 +33,7 @@ series: it is a 4MB signed third party binary and base64 in a patch would be
 unreviewable. Copy it into the Chromium tree before building:
 
 ```
-cp third_party/ublock_origin/uBlockOrigin-1.73.0.crx \
+cp third_party/ublock_origin/uBlockOrigin-1.75.0.crx \
    $CHROMIUM_SRC/chrome/browser/resources/bare/ublock_origin.crx
 ```
 

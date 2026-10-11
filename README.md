@@ -197,7 +197,7 @@ from a macOS bind mount is slow and unreliable; only small files cross to the ho
 
 ```bash
 cp -R patches exchange/
-cp third_party/ublock_origin/uBlockOrigin-1.73.0.crx exchange/
+cp third_party/ublock_origin/uBlockOrigin-1.75.0.crx exchange/
 tools/version.py gn arm64 > exchange/version-args.gn
 ```
 
@@ -224,7 +224,7 @@ Without it the build fails at packaging.
 ```bash
 git am /exchange/patches/*.patch
 mkdir -p chrome/browser/resources/bare
-cp /exchange/uBlockOrigin-1.73.0.crx chrome/browser/resources/bare/ublock_origin.crx
+cp /exchange/uBlockOrigin-1.75.0.crx chrome/browser/resources/bare/ublock_origin.crx
 ```
 
 **5. Configure.** This is the complete configuration the published release was built with,

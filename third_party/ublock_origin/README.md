@@ -6,15 +6,32 @@ removed like any other extension.
 
 ## What this is
 
-`uBlockOrigin-1.73.0.crx` is the unmodified extension as published by its
-author, downloaded from the Chrome Web Store. Nothing in it has been changed,
-repackaged or re-signed, so it keeps its original extension ID
-(`cjpalhdlnbpafiamejdnhcphjbkeiagm`) and its original signature.
+`uBlockOrigin-1.75.0.crx` is the extension exactly as its author publishes it,
+downloaded from the project's GitHub release. Nothing in it has been changed,
+repackaged or re-signed.
 
-    version   1.73.0
-    id        cjpalhdlnbpafiamejdnhcphjbkeiagm
-    source    Chrome Web Store
-    sha256    see uBlockOrigin-1.73.0.crx.sha256
+    version   1.75.0
+    id        fkgkibajhfbepljeaefdnfnegdcjomkh
+    source    https://github.com/gorhill/uBlock/releases/tag/1.75.0
+              (uBlock0_1.75.0.chromium.crx)
+    sha256    see uBlockOrigin-1.75.0.crx.sha256, which matches the digest
+              GitHub publishes for that asset
+
+The Chrome Web Store stopped carrying Manifest V2 extensions on 31 August 2026,
+and 1.74.0 was the last release uploaded there. Bare shipped the store's copy up
+to 1.73.0, under the store id `cjpalhdlnbpafiamejdnhcphjbkeiagm`. The author
+signs his own builds with a different key, so this copy has a different id.
+When a profile that has the store copy is upgraded, Bare moves its settings
+across to this one and then removes the old copy. A profile whose user removed
+the store copy does not get this one either.
+
+## Updates
+
+The manifest's `update_url` points at the author's update file on jsDelivr
+(`cdn.jsdelivr.net/gh/gorhill/uBlock@master/dist/chromium/update.xml`), which
+names the latest stable release on GitHub. Chromium's extension updater checks it
+about every five hours and installs newer versions from github.com. Filter lists
+update separately, from uBlock Origin's own list sources.
 
 ## Licence
 
@@ -25,15 +42,11 @@ extension as `LICENSE.txt`.
 Bare itself is BSD licensed. Distributing the two together is mere aggregation:
 uBlock Origin remains under the GPL and Bare's licence is unaffected. Because
 the extension is redistributed unmodified, the corresponding source is the
-upstream release, available at:
+upstream release:
 
-    https://github.com/gorhill/uBlock/releases/tag/1.73.0
+    https://github.com/gorhill/uBlock/releases/tag/1.75.0
 
-## Updating
+## Changing the version
 
-This copy is frozen at the version above. Filter lists still update on their
-own, so blocking stays current between releases, but the extension code only
-moves when this file is replaced and Bare is rebuilt.
-
-Replace the `.crx`, refresh the `.sha256`, and update the version referenced by
-the loader patch.
+Replace the `.crx`, refresh the `.sha256`, and update the id, version and file
+name in `chrome/browser/extensions/bare_bundled_extensions_loader.cc`.
