@@ -1,0 +1,87 @@
+From e3a7859b3f5d390ba0dac6e41256438bbf54aa19 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 11 Oct 2026 07:23:38 +0000
+Subject: [PATCH] Keep Glic off on desktop Android, in native code too
+
+The desktop Android block of ChromeBrowserFieldTrials::RegisterFeatureOverrides
+force-enables kGlic, kGlicActor, kGlicAndroidSidePanel, kGlicRollout and
+glic::kContextualCueing. It is compiled into every desktop Android build and
+applies regardless of the field trial testing config, so it reaches Bare on
+phones as well; 153 already had most of it. On top of that, 156 adds Android
+to kGlic's own default.
+
+Patch 0070 makes every Java GlicEnabling check answer no, but the native side
+reads the features directly: GlicKeyedService is built for every profile on a
+device with enough memory, and with kGlicShowForSignedOut on, the C++
+IsEnabledForProfile can answer yes without an account. Nothing found puts that
+on screen or on the network, but it is Gemini plumbing running for no one.
+
+The five overrides go, and kGlic goes back to off on Android. Two Java checks
+are new since 0070 and lacked its early return,
+shouldShowExperimentalTriggeringToggle and experimentalOptInIsNeeded; they get
+it now.
+---
+ chrome/browser/chrome_browser_field_trials.cc             | 8 ++------
+ .../org/chromium/chrome/browser/glic/GlicEnabling.java    | 2 ++
+ chrome/common/chrome_features.cc                          | 5 +++--
+ 3 files changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/chrome/browser/chrome_browser_field_trials.cc b/chrome/browser/chrome_browser_field_trials.cc
+index bb7f9dd0eb6..2d638f0cce2 100644
+--- a/chrome/browser/chrome_browser_field_trials.cc
++++ b/chrome/browser/chrome_browser_field_trials.cc
+@@ -319,15 +319,11 @@ void ChromeBrowserFieldTrials::RegisterFeatureOverrides(
+   // Suppress fallback to the legacy Android edge glow shade on Desktop Android.
+   feature_overrides.EnableFeature(features::kSuppressOverscrollGlow);
+ 
+-  // Enable Glic and side panel features on Desktop Android.
++  // Enable side panel features on Desktop Android.
+   // TODO(crbug.com/545760718): Remove when rollout is complete to all form
+   // factors.
+   feature_overrides.EnableFeature(chrome::android::kEnableAndroidSidePanel);
+-  feature_overrides.EnableFeature(features::kGlic);
+-  feature_overrides.EnableFeature(features::kGlicActor);
+-  feature_overrides.EnableFeature(features::kGlicAndroidSidePanel);
+-  feature_overrides.EnableFeature(features::kGlicRollout);
+-  feature_overrides.EnableFeature(glic::kContextualCueing);
++  // Bare: Glic is not turned on here. See the kGlic default.
+ 
+   // As of writing, the only devices that can make use of browsing history
+   // donation are desktop devices.
+diff --git a/chrome/browser/glic/public/android/java/src/org/chromium/chrome/browser/glic/GlicEnabling.java b/chrome/browser/glic/public/android/java/src/org/chromium/chrome/browser/glic/GlicEnabling.java
+index 79acfe29999..2563d6d768f 100644
+--- a/chrome/browser/glic/public/android/java/src/org/chromium/chrome/browser/glic/GlicEnabling.java
++++ b/chrome/browser/glic/public/android/java/src/org/chromium/chrome/browser/glic/GlicEnabling.java
+@@ -92,6 +92,7 @@ public class GlicEnabling {
+      * should be shown for the profile.
+      */
+     public static boolean shouldShowExperimentalTriggeringToggle(@Nullable Profile profile) {
++        if (!GLIC_ENABLED) return false;
+         if (profile == null) return false;
+         if (sIsEnabledForTesting != null) return sIsEnabledForTesting;
+         return GlicEnablingJni.get().shouldShowExperimentalTriggeringToggle(profile);
+@@ -168,6 +169,7 @@ public class GlicEnabling {
+      * this method.
+      */
+     public static boolean experimentalOptInIsNeeded(Profile profile) {
++        if (!GLIC_ENABLED) return false;
+         return GlicEnablingJni.get().experimentalOptInIsNeeded(profile);
+     }
+ 
+diff --git a/chrome/common/chrome_features.cc b/chrome/common/chrome_features.cc
+index 1083b90ec99..dd247122540 100644
+--- a/chrome/common/chrome_features.cc
++++ b/chrome/common/chrome_features.cc
+@@ -523,9 +523,10 @@ BASE_FEATURE(kGlicMessageFirstFre, base::FEATURE_DISABLED_BY_DEFAULT);
+ // IMPORTANT: this feature should never be expired! It is used as the main
+ // kill-switch for Glic and can be used in the future to handle unsupported
+ // Chrome versions.
++// Bare: not on Android. Patch 0070 closes the Java side; this keeps the native
++// service and its enablement checks from coming up with every profile.
+ BASE_FEATURE(kGlic,
+-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || \
+-    BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+              base::FEATURE_ENABLED_BY_DEFAULT
+ #else
+              base::FEATURE_DISABLED_BY_DEFAULT

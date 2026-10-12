@@ -1,4 +1,4 @@
-From 8a7f2e37ba8d6e59637c10a2ef96d03612160094 Mon Sep 17 00:00:00 2001
+From 5909c721f63581c96bf5cb18405edb1eda3112e5 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Sat, 15 Aug 2026 04:07:03 +0000
 Subject: [PATCH] Stop the extensions menu crashing without a toolbar
@@ -6,16 +6,14 @@ Subject: [PATCH] Stop the extensions menu crashing without a toolbar
 The extensions toolbar coordinator is only created for Desktop Android, but extension support can still be enabled on a phone-sized layout. Guard against a null coordinator and fall back to opening the extension management page rather than crashing.
 ---
  .../chrome/browser/ChromeTabbedActivity.java  | 35 ++++++++++++++-----
- chrome/android/junit/BUILD.gn                 |  1 +
- .../browser/ChromeTabbedActivityUnitTest.java | 34 ++++++++++++++++++
- 3 files changed, 61 insertions(+), 9 deletions(-)
- create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/ChromeTabbedActivityUnitTest.java
+ .../browser/ChromeTabbedActivityUnitTest.java | 15 ++++++++
+ 2 files changed, 41 insertions(+), 9 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-index 888a4909ba..7e515925c5 100644
+index 4e3ec193aaa..cf8d5ed1993 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-@@ -4503,17 +4503,15 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -4662,17 +4662,15 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
          } else if (id == R.id.extensions_menu_menu_id) {
              ExtensionsToolbarCoordinator coordinator =
                      getToolbarManager().getExtensionsToolbarCoordinator();
@@ -40,7 +38,7 @@ index 888a4909ba..7e515925c5 100644
              RecordUserAction.record("MobileMenuManageExtensions");
              Profile profile = mTabModelProfileSupplier.get();
              if (profile != null) {
-@@ -4683,6 +4681,25 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -4849,6 +4847,25 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
          return true;
      }
  
@@ -66,44 +64,23 @@ index 888a4909ba..7e515925c5 100644
      private void openForeignSessionTab(String sessionTag, int tabId) {
          Profile profile = getTabModelSelector().getCurrentModel().getProfile();
          ForeignSessionHelper helper = new ForeignSessionHelper(profile);
-diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
-index f7a78991b7..3aab8ac3b7 100644
---- a/chrome/android/junit/BUILD.gn
-+++ b/chrome/android/junit/BUILD.gn
-@@ -435,6 +435,7 @@ if (is_android) {
-       "src/org/chromium/chrome/browser/ChromeActivityUnitTest.java",
-       "src/org/chromium/chrome/browser/ChromeBaseAppCompatActivityUnitTest.java",
-       "src/org/chromium/chrome/browser/ChromeLocalizationUtilsTest.java",
-+      "src/org/chromium/chrome/browser/ChromeTabbedActivityUnitTest.java",
-       "src/org/chromium/chrome/browser/DeferredStartupHandlerTest.java",
-       "src/org/chromium/chrome/browser/ExampleRobolectricTest.java",
-       "src/org/chromium/chrome/browser/ExternalIntentUrlCheckerTest.java",
 diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/ChromeTabbedActivityUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/ChromeTabbedActivityUnitTest.java
-new file mode 100644
-index 0000000000..3fdc285a20
---- /dev/null
+index 2f8206b5658..f3fe9828c69 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/ChromeTabbedActivityUnitTest.java
 +++ b/chrome/android/junit/src/org/chromium/chrome/browser/ChromeTabbedActivityUnitTest.java
-@@ -0,0 +1,34 @@
-+// Copyright 2026 The Chromium Authors
-+// Use of this source code is governed by a BSD-style license that can be
-+// found in the LICENSE file.
-+
-+package org.chromium.chrome.browser;
-+
-+import static org.junit.Assert.assertFalse;
-+import static org.junit.Assert.assertTrue;
-+import static org.mockito.Mockito.mock;
-+import static org.mockito.Mockito.verify;
-+
-+import org.junit.Test;
-+import org.junit.runner.RunWith;
-+
-+import org.chromium.base.test.BaseRobolectricTestRunner;
+@@ -46,6 +46,7 @@ import org.chromium.chrome.browser.tabmodel.IncognitoTabHostRegistry;
+ import org.chromium.chrome.browser.tabmodel.TabModel;
+ import org.chromium.chrome.browser.tabmodel.TabModelSelectorBase;
+ import org.chromium.chrome.browser.tasks.tab_management.vertical_tabs.VerticalTabsActionDelegate;
 +import org.chromium.chrome.browser.toolbar.extensions.ExtensionsToolbarCoordinator;
+ 
+ /** Unit tests for {@link ChromeTabbedActivity}. */
+ @RunWith(BaseRobolectricTestRunner.class)
+@@ -358,4 +359,18 @@ public class ChromeTabbedActivityUnitTest {
+         activity.onPreCreate();
+         verify(activity).supportRequestWindowFeature(Window.FEATURE_ACTION_MODE_OVERLAY);
+     }
 +
-+/** Unit tests for {@link ChromeTabbedActivity}. */
-+@RunWith(BaseRobolectricTestRunner.class)
-+public class ChromeTabbedActivityUnitTest {
 +    @Test
 +    public void showExtensionsMenu_nullCoordinatorReturnsFalse() {
 +        assertFalse(ChromeTabbedActivity.showExtensionsMenu(null));
@@ -117,4 +94,4 @@ index 0000000000..3fdc285a20
 +
 +        verify(coordinator).showExtensionsMenu();
 +    }
-+}
+ }

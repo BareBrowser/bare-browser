@@ -1,0 +1,579 @@
+From f92986ce8214cd077facf2011e385204da579bad Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 11 Oct 2026 07:23:34 +0000
+Subject: [PATCH] Load the bundled blocker again after Android kills it
+
+When Android's low memory killer takes the process uBlock Origin's background
+page runs in, Chromium marks the extension terminated. That is neither
+disabled nor removed and writes no preference, but filtering stops, and on
+Android nothing brings it back short of restarting the browser. Upstream's
+own recovery, ReloadIfTerminated, needs a frame belonging to the extension,
+which cannot be created while it is unloaded, and the service that restarts
+force-installed extensions on desktop is compiled out here. This was the
+"uBlock Origin randomly stops working" report: the extension renderer has no
+binding as a Manifest V2 background page, so it is among the first things the
+killer takes while Bare is in the background.
+
+BundledExtensionRecovery watches for an extension being unloaded as
+terminated and loads it again with ReloadExtensionWithQuietFailure. It only
+touches extensions the bundled loader still claims at the location it installs
+to, so nothing the user installed is affected and a blocker the user removed or
+declined is never claimed. It also leaves alone anything with a disable reason,
+and an extension Chromium itself terminated for reloading too often, which it
+marks with a kReloadTooFrequent warning.
+
+Android reports a crash and an out-of-memory kill the same way, so whether an
+extension is broken or merely unlucky cannot be told from the termination. The
+backoff is what stops a broken one being restarted forever. It reuses
+CorruptedExtensionReinstaller's policy: the first attempt is immediate, later
+ones double from 100 ms up to 30 minutes, and an entry left alone for six hours
+starts over, so an occasional kill is undone at once and a crash loop settles at
+one attempt every half hour.
+---
+ chrome/browser/extensions/BUILD.gn            |   2 +
+ .../bare_bundled_extension_recovery.cc        | 135 ++++++++++++++++++
+ .../bare_bundled_extension_recovery.h         |  37 +++++
+ .../bare_bundled_extensions_loader.cc         |  13 +-
+ .../bare_bundled_extensions_loader.h          |   7 +
+ .../extensions/external_provider_impl.cc      |   6 +-
+ components/bare_bundled_extensions/BUILD.gn   |  17 ++-
+ components/bare_bundled_extensions/DEPS       |   3 +
+ .../recovery_policy.cc                        |  32 +++++
+ .../bare_bundled_extensions/recovery_policy.h |  39 +++++
+ .../recovery_policy_unittest.cc               |  85 +++++++++++
+ 11 files changed, 368 insertions(+), 8 deletions(-)
+ create mode 100644 chrome/browser/extensions/bare_bundled_extension_recovery.cc
+ create mode 100644 chrome/browser/extensions/bare_bundled_extension_recovery.h
+ create mode 100644 components/bare_bundled_extensions/DEPS
+ create mode 100644 components/bare_bundled_extensions/recovery_policy.cc
+ create mode 100644 components/bare_bundled_extensions/recovery_policy.h
+ create mode 100644 components/bare_bundled_extensions/recovery_policy_unittest.cc
+
+diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
+index 72d5747cd1c..95237c7c366 100644
+--- a/chrome/browser/extensions/BUILD.gn
++++ b/chrome/browser/extensions/BUILD.gn
+@@ -350,6 +350,8 @@ source_set("extensions") {
+     "external_policy_loader.h",
+     "external_pref_loader.cc",
+     "external_pref_loader.h",
++    "bare_bundled_extension_recovery.cc",
++    "bare_bundled_extension_recovery.h",
+     "bare_bundled_extensions_loader.cc",
+     "bare_bundled_extensions_loader.h",
+     "external_provider_impl.cc",
+diff --git a/chrome/browser/extensions/bare_bundled_extension_recovery.cc b/chrome/browser/extensions/bare_bundled_extension_recovery.cc
+new file mode 100644
+index 00000000000..823e7bbef2c
+--- /dev/null
++++ b/chrome/browser/extensions/bare_bundled_extension_recovery.cc
+@@ -0,0 +1,135 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/extensions/bare_bundled_extension_recovery.h"
++
++#include <map>
++#include <memory>
++#include <set>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/logging.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/scoped_observation.h"
++#include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/extensions/bare_bundled_extensions_loader.h"
++#include "chrome/browser/profiles/profile.h"
++#include "components/bare_bundled_extensions/recovery_policy.h"
++#include "extensions/browser/extension_prefs.h"
++#include "extensions/browser/extension_registrar.h"
++#include "extensions/browser/extension_registry.h"
++#include "extensions/browser/extension_registry_observer.h"
++#include "extensions/browser/unloaded_extension_reason.h"
++#include "extensions/browser/warning_service.h"
++#include "extensions/browser/warning_set.h"
++#include "extensions/common/extension.h"
++#include "extensions/common/mojom/manifest.mojom-shared.h"
++#include "net/base/backoff_entry.h"
++
++namespace extensions {
++
++namespace {
++
++// Lives as long as the profile's extension registry, then deletes itself.
++class BundledExtensionRecovery : public ExtensionRegistryObserver {
++ public:
++  BundledExtensionRecovery(Profile* profile,
++                           scoped_refptr<BareBundledExtensionsLoader> loader)
++      : profile_(profile), loader_(std::move(loader)) {
++    observation_.Observe(ExtensionRegistry::Get(profile_));
++  }
++
++  BundledExtensionRecovery(const BundledExtensionRecovery&) = delete;
++  BundledExtensionRecovery& operator=(const BundledExtensionRecovery&) = delete;
++
++  ~BundledExtensionRecovery() override = default;
++
++ private:
++  // ExtensionRegistryObserver:
++  void OnExtensionUnloaded(content::BrowserContext* browser_context,
++                           const Extension* extension,
++                           UnloadedExtensionReason reason) override {
++    // A disable, an update, a removal and a browser shutdown all arrive with
++    // other reasons, or not at all.
++    if (reason != UnloadedExtensionReason::TERMINATE ||
++        !IsClaimed(*extension)) {
++      return;
++    }
++    Schedule(extension->id());
++  }
++
++  void OnShutdown(ExtensionRegistry* registry) override {
++    observation_.Reset();
++    weak_factory_.InvalidateWeakPtrs();
++    base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
++                                                                 this);
++  }
++
++  bool IsClaimed(const Extension& extension) const {
++    return extension.location() == mojom::ManifestLocation::kExternalPref &&
++           loader_->ClaimsExtension(extension.id());
++  }
++
++  void Schedule(const ExtensionId& id) {
++    if (pending_.contains(id)) {
++      return;
++    }
++    std::unique_ptr<net::BackoffEntry>& entry = backoff_[id];
++    if (!entry || entry->CanDiscard()) {
++      entry = std::make_unique<net::BackoffEntry>(
++          &bare_bundled_extensions::kRecoveryBackoffPolicy);
++    }
++    entry->InformOfRequest(false);
++    const base::TimeDelta delay = entry->GetTimeUntilRelease();
++    LOG(WARNING) << "Bare: " << id << " was terminated; loading it again in "
++                 << delay << " (attempt " << entry->failure_count() << ")";
++    pending_.insert(id);
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE,
++        base::BindOnce(&BundledExtensionRecovery::Fire,
++                       weak_factory_.GetWeakPtr(), id),
++        delay);
++  }
++
++  void Fire(const ExtensionId& id) {
++    pending_.erase(id);
++    ExtensionRegistry* registry = ExtensionRegistry::Get(profile_);
++    ExtensionPrefs* prefs = ExtensionPrefs::Get(profile_);
++    const Extension* terminated = registry->terminated_extensions().GetByID(id);
++
++    bare_bundled_extensions::RecoveryFacts facts;
++    facts.still_terminated = terminated != nullptr;
++    facts.claimed_by_bare = terminated && IsClaimed(*terminated);
++    facts.removed_by_user = prefs->IsExternalExtensionUninstalled(id);
++    facts.has_disable_reasons = !prefs->GetDisableReasons(id).empty();
++    facts.reload_too_frequent =
++        WarningService::Get(profile_)
++            ->GetWarningTypesAffectingExtension(id)
++            .contains(Warning::kReloadTooFrequent);
++    if (!bare_bundled_extensions::ShouldRecover(facts)) {
++      return;
++    }
++    ExtensionRegistrar::Get(profile_)->ReloadExtensionWithQuietFailure(id);
++  }
++
++  raw_ptr<Profile> profile_;
++  scoped_refptr<BareBundledExtensionsLoader> loader_;
++  std::map<ExtensionId, std::unique_ptr<net::BackoffEntry>> backoff_;
++  std::set<ExtensionId> pending_;
++  base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
++      observation_{this};
++  base::WeakPtrFactory<BundledExtensionRecovery> weak_factory_{this};
++};
++
++}  // namespace
++
++void StartBundledExtensionRecovery(
++    Profile* profile,
++    scoped_refptr<BareBundledExtensionsLoader> loader) {
++  new BundledExtensionRecovery(profile, std::move(loader));  // Owns itself.
++}
++
++}  // namespace extensions
+diff --git a/chrome/browser/extensions/bare_bundled_extension_recovery.h b/chrome/browser/extensions/bare_bundled_extension_recovery.h
+new file mode 100644
+index 00000000000..fafffd0bdcd
+--- /dev/null
++++ b/chrome/browser/extensions/bare_bundled_extension_recovery.h
+@@ -0,0 +1,37 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_EXTENSIONS_BARE_BUNDLED_EXTENSION_RECOVERY_H_
++#define CHROME_BROWSER_EXTENSIONS_BARE_BUNDLED_EXTENSION_RECOVERY_H_
++
++#include "base/memory/scoped_refptr.h"
++
++class Profile;
++
++namespace extensions {
++
++class BareBundledExtensionsLoader;
++
++// Loads an extension Bare provisioned again after Android has killed the
++// process its background page ran in.
++//
++// Chromium marks such an extension terminated, which is neither disabled nor
++// removed and leaves no trace in its preferences. Filtering stops, and nothing
++// on Android brings it back short of a browser restart: upstream's own recovery
++// needs a frame belonging to the extension, which cannot be created while it is
++// unloaded, and the service that restarts force-installed extensions on desktop
++// is compiled out here. Android reports a crash and an out-of-memory kill the
++// same way, so the guard against reloading a genuinely broken extension forever
++// is the backoff, not the cause.
++//
++// Only extensions `loader` still claims are touched. A disable, a removal, or
++// Chromium's own refusal to reload an extension that restarts itself too often
++// is never overridden. Safe to call once per profile at startup.
++void StartBundledExtensionRecovery(
++    Profile* profile,
++    scoped_refptr<BareBundledExtensionsLoader> loader);
++
++}  // namespace extensions
++
++#endif  // CHROME_BROWSER_EXTENSIONS_BARE_BUNDLED_EXTENSION_RECOVERY_H_
+diff --git a/chrome/browser/extensions/bare_bundled_extensions_loader.cc b/chrome/browser/extensions/bare_bundled_extensions_loader.cc
+index f4bc98e6e10..62edd9e8aec 100644
+--- a/chrome/browser/extensions/bare_bundled_extensions_loader.cc
++++ b/chrome/browser/extensions/bare_bundled_extensions_loader.cc
+@@ -130,7 +130,8 @@ bool ExtractBundledCrx(const base::FilePath& crx) {
+ 
+   // Already extracted by an earlier launch. Trust it only if it is whole.
+   std::optional<int64_t> existing = base::GetFileSize(crx);
+-  if (existing && *existing == region.size) {
++  if (existing && *existing >= 0 &&
++      static_cast<uint64_t>(*existing) == region.size) {
+     return true;
+   }
+ 
+@@ -249,7 +250,7 @@ std::optional<base::DictValue> ReadCarryOver(const base::FilePath& record) {
+   if (record.empty() || !base::ReadFileToString(record, &json)) {
+     return std::nullopt;
+   }
+-  std::optional<base::Value> value = base::JSONReader::Read(json);
++  std::optional<base::Value> value = base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+   if (!value || !value->is_dict()) {
+     return std::nullopt;
+   }
+@@ -481,6 +482,13 @@ BareBundledExtensionsLoader::BareBundledExtensionsLoader(Profile* profile)
+ 
+ BareBundledExtensionsLoader::~BareBundledExtensionsLoader() = default;
+ 
++bool BareBundledExtensionsLoader::ClaimsExtension(const ExtensionId& id) const {
++  const base::DictValue* entry = last_prefs_.FindDict(id);
++  // The same test the provider applies to decide whether it claims an id.
++  return entry && entry->contains("external_crx") &&
++         entry->FindString("external_version");
++}
++
+ void BareBundledExtensionsLoader::StartLoading() {
+   if (!profile_) {
+     return;
+@@ -529,6 +537,7 @@ void BareBundledExtensionsLoader::OnCarriedOver(Plan plan, bool carried_over) {
+ }
+ 
+ void BareBundledExtensionsLoader::OnPrefsBuilt(base::DictValue prefs) {
++  last_prefs_ = prefs.Clone();
+   LoadFinished(std::move(prefs));
+ }
+ 
+diff --git a/chrome/browser/extensions/bare_bundled_extensions_loader.h b/chrome/browser/extensions/bare_bundled_extensions_loader.h
+index 1043d9a0bec..aa5166a3aca 100644
+--- a/chrome/browser/extensions/bare_bundled_extensions_loader.h
++++ b/chrome/browser/extensions/bare_bundled_extensions_loader.h
+@@ -9,6 +9,7 @@
+ #include "base/values.h"
+ #include "chrome/browser/extensions/external_loader.h"
+ #include "components/bare_bundled_extensions/bundled_extension_plan.h"
++#include "extensions/common/extension_id.h"
+ 
+ class Profile;
+ 
+@@ -34,6 +35,11 @@ class BareBundledExtensionsLoader : public ExternalLoader {
+   BareBundledExtensionsLoader& operator=(const BareBundledExtensionsLoader&) =
+       delete;
+ 
++  // Whether the entries this loader last handed its provider claim `id`. The
++  // provider keeps whatever it claims and withdraws the rest, so this is the
++  // test for "Bare provisioned this and nobody has taken it back".
++  bool ClaimsExtension(const ExtensionId& id) const;
++
+  protected:
+   ~BareBundledExtensionsLoader() override;
+ 
+@@ -45,6 +51,7 @@ class BareBundledExtensionsLoader : public ExternalLoader {
+   void OnPrefsBuilt(base::DictValue prefs);
+ 
+   base::WeakPtr<Profile> profile_;
++  base::DictValue last_prefs_;
+ };
+ 
+ // Gives the bundled blocker incognito access the first time it is seen, and
+diff --git a/chrome/browser/extensions/external_provider_impl.cc b/chrome/browser/extensions/external_provider_impl.cc
+index a770f5b2c2c..57ea4ec4441 100644
+--- a/chrome/browser/extensions/external_provider_impl.cc
++++ b/chrome/browser/extensions/external_provider_impl.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/extensions/external_provider_impl.h"
+ 
++#include "chrome/browser/extensions/bare_bundled_extension_recovery.h"
+ #include "chrome/browser/extensions/bare_bundled_extensions_loader.h"
+ 
+ #include <stddef.h>
+@@ -951,13 +952,14 @@ void ExternalProviderImpl::CreateExternalProviders(
+   // Bare: extensions shipped inside the apk. Registered at kExternalPref, so
+   // they arrive on first run and are then the user's to keep or remove; a
+   // component extension could be neither disabled nor seen.
++  auto bare_loader = base::MakeRefCounted<BareBundledExtensionsLoader>(profile);
+   provider_list->push_back(std::make_unique<ExternalProviderImpl>(
+-      service, base::MakeRefCounted<BareBundledExtensionsLoader>(profile),
+-      profile,
++      service, bare_loader, profile,
+       ManifestLocation::kExternalPref, ManifestLocation::kExternalPrefDownload,
+       Extension::NO_FLAGS));
+   ApplyBundledExtensionIncognitoDefault(profile);
+   ApplyBundledExtensionCarryOver(profile);
++  StartBundledExtensionRecovery(profile, bare_loader);
+ #endif
+ 
+ #if BUILDFLAG(ENABLE_EXTENSIONS)
+diff --git a/components/bare_bundled_extensions/BUILD.gn b/components/bare_bundled_extensions/BUILD.gn
+index c83410e5e7a..44ee948b81c 100644
+--- a/components/bare_bundled_extensions/BUILD.gn
++++ b/components/bare_bundled_extensions/BUILD.gn
+@@ -4,24 +4,33 @@
+ 
+ import("//testing/test.gni")
+ 
+-# Bare: the decisions behind the extensions Bare ships inside the apk, starting
+-# with what the external provider is told.
++# Bare: the decisions behind the extensions Bare ships inside the apk -- what
++# the external provider is told, and when a killed extension is loaded again.
+ # Kept apart from chrome/browser/extensions so the rules can be tested on the
+ # host in seconds. Nothing here touches the disk or the extension system.
+ source_set("bare_bundled_extensions") {
+   sources = [
+     "bundled_extension_plan.cc",
+     "bundled_extension_plan.h",
++    "recovery_policy.cc",
++    "recovery_policy.h",
++  ]
++  public_deps = [
++    "//base",
++    "//net",
+   ]
+-  public_deps = [ "//base" ]
+ }
+ 
+ test("bare_bundled_extensions_unittests") {
+-  sources = [ "bundled_extension_plan_unittest.cc" ]
++  sources = [
++    "bundled_extension_plan_unittest.cc",
++    "recovery_policy_unittest.cc",
++  ]
+   deps = [
+     ":bare_bundled_extensions",
+     "//base",
+     "//base/test:run_all_unittests",
++    "//base/test:test_support",
+     "//testing/gtest",
+   ]
+ }
+diff --git a/components/bare_bundled_extensions/DEPS b/components/bare_bundled_extensions/DEPS
+new file mode 100644
+index 00000000000..6a2f02e2180
+--- /dev/null
++++ b/components/bare_bundled_extensions/DEPS
+@@ -0,0 +1,3 @@
++include_rules = [
++  "+net/base",
++]
+diff --git a/components/bare_bundled_extensions/recovery_policy.cc b/components/bare_bundled_extensions/recovery_policy.cc
+new file mode 100644
+index 00000000000..bca4e410b7b
+--- /dev/null
++++ b/components/bare_bundled_extensions/recovery_policy.cc
+@@ -0,0 +1,32 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/bare_bundled_extensions/recovery_policy.h"
++
++namespace bare_bundled_extensions {
++
++bool ShouldRecover(const RecoveryFacts& facts) {
++  return facts.claimed_by_bare && facts.still_terminated &&
++         !facts.removed_by_user && !facts.has_disable_reasons &&
++         !facts.reload_too_frequent;
++}
++
++const net::BackoffEntry::Policy kRecoveryBackoffPolicy = {
++    // num_errors_to_ignore
++    1,
++    // initial_delay_ms
++    100,
++    // multiply_factor
++    2,
++    // jitter_factor
++    0.1,
++    // maximum_backoff_ms (30 minutes)
++    1000 * 60 * 30,
++    // entry_lifetime_ms (6 hours)
++    1000 * 60 * 60 * 6,
++    // always_use_initial_delay
++    false,
++};
++
++}  // namespace bare_bundled_extensions
+diff --git a/components/bare_bundled_extensions/recovery_policy.h b/components/bare_bundled_extensions/recovery_policy.h
+new file mode 100644
+index 00000000000..f5b2a8e2bf4
+--- /dev/null
++++ b/components/bare_bundled_extensions/recovery_policy.h
+@@ -0,0 +1,39 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef COMPONENTS_BARE_BUNDLED_EXTENSIONS_RECOVERY_POLICY_H_
++#define COMPONENTS_BARE_BUNDLED_EXTENSIONS_RECOVERY_POLICY_H_
++
++#include "net/base/backoff_entry.h"
++
++namespace bare_bundled_extensions {
++
++// What is known about an extension when a reload is due.
++struct RecoveryFacts {
++  // Bare's provider still claims it, at the location it installs to.
++  bool claimed_by_bare = false;
++  // It is still in the terminated set. Disabling, removing or reloading it
++  // takes it out of that set.
++  bool still_terminated = false;
++  bool removed_by_user = false;
++  bool has_disable_reasons = false;
++  // Chromium terminated it on purpose because it reloaded itself too often.
++  bool reload_too_frequent = false;
++};
++
++// Whether a terminated extension should be loaded again. Only extensions Bare
++// provisioned qualify, and nothing that records a decision -- the user's, or
++// Chromium's own -- is overridden.
++bool ShouldRecover(const RecoveryFacts& facts);
++
++// The delays between attempts. The values are CorruptedExtensionReinstaller's:
++// the first attempt is immediate, later ones double from 100 ms up to 30
++// minutes, and an entry left alone for 6 hours is discarded, so an extension
++// killed once in a while is brought straight back while one that dies as soon as
++// it starts settles at one attempt every half hour.
++extern const net::BackoffEntry::Policy kRecoveryBackoffPolicy;
++
++}  // namespace bare_bundled_extensions
++
++#endif  // COMPONENTS_BARE_BUNDLED_EXTENSIONS_RECOVERY_POLICY_H_
+diff --git a/components/bare_bundled_extensions/recovery_policy_unittest.cc b/components/bare_bundled_extensions/recovery_policy_unittest.cc
+new file mode 100644
+index 00000000000..8dc76d2b13c
+--- /dev/null
++++ b/components/bare_bundled_extensions/recovery_policy_unittest.cc
+@@ -0,0 +1,85 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/bare_bundled_extensions/recovery_policy.h"
++
++#include "base/test/simple_test_tick_clock.h"
++#include "base/time/time.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace bare_bundled_extensions {
++namespace {
++
++RecoveryFacts Recoverable() {
++  RecoveryFacts facts;
++  facts.claimed_by_bare = true;
++  facts.still_terminated = true;
++  return facts;
++}
++
++TEST(RecoveryPolicyTest, ABundledExtensionThatWasKilledIsRecovered) {
++  EXPECT_TRUE(ShouldRecover(Recoverable()));
++}
++
++TEST(RecoveryPolicyTest, OnlyWhatBareProvisionedIsTouched) {
++  RecoveryFacts facts = Recoverable();
++  facts.claimed_by_bare = false;
++  EXPECT_FALSE(ShouldRecover(facts));
++}
++
++TEST(RecoveryPolicyTest, AnExtensionNoLongerTerminatedIsLeftAlone) {
++  RecoveryFacts facts = Recoverable();
++  facts.still_terminated = false;
++  EXPECT_FALSE(ShouldRecover(facts));
++}
++
++TEST(RecoveryPolicyTest, ARemovalIsNotUndone) {
++  RecoveryFacts facts = Recoverable();
++  facts.removed_by_user = true;
++  EXPECT_FALSE(ShouldRecover(facts));
++}
++
++TEST(RecoveryPolicyTest, ADisableIsNotUndone) {
++  RecoveryFacts facts = Recoverable();
++  facts.has_disable_reasons = true;
++  EXPECT_FALSE(ShouldRecover(facts));
++}
++
++TEST(RecoveryPolicyTest, ChromiumsOwnReloadLoopGuardIsNotUndone) {
++  RecoveryFacts facts = Recoverable();
++  facts.reload_too_frequent = true;
++  EXPECT_FALSE(ShouldRecover(facts));
++}
++
++TEST(RecoveryPolicyTest, TheFirstAttemptIsImmediate) {
++  base::SimpleTestTickClock clock;
++  net::BackoffEntry entry(&kRecoveryBackoffPolicy, &clock);
++  entry.InformOfRequest(false);
++  EXPECT_EQ(base::TimeDelta(), entry.GetTimeUntilRelease());
++}
++
++TEST(RecoveryPolicyTest, RepeatedDeathsSettleAtHalfAnHour) {
++  base::SimpleTestTickClock clock;
++  net::BackoffEntry entry(&kRecoveryBackoffPolicy, &clock);
++  for (int i = 0; i < 40; ++i) {
++    entry.InformOfRequest(false);
++  }
++  EXPECT_LE(entry.GetTimeUntilRelease(), base::Minutes(30));
++  EXPECT_GE(entry.GetTimeUntilRelease(), base::Minutes(27));
++}
++
++TEST(RecoveryPolicyTest, AQuietSpellOfSixHoursStartsOver) {
++  base::SimpleTestTickClock clock;
++  net::BackoffEntry entry(&kRecoveryBackoffPolicy, &clock);
++  for (int i = 0; i < 10; ++i) {
++    entry.InformOfRequest(false);
++  }
++  clock.Advance(base::Hours(5));
++  EXPECT_FALSE(entry.CanDiscard());
++  clock.Advance(base::Hours(2));
++  EXPECT_TRUE(entry.CanDiscard());
++}
++
++}  // namespace
++}  // namespace bare_bundled_extensions

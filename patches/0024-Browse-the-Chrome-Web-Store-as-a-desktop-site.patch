@@ -1,4 +1,4 @@
-From 99b515b70fce58cc9f79e5844fcacb4418febe80 Mon Sep 17 00:00:00 2001
+From 020ce1996d1fd40735ae19de26ebd1b2fe1ac7e0 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Mon, 17 Aug 2026 16:51:13 +0000
 Subject: [PATCH] Browse the Chrome Web Store as a desktop site
@@ -22,18 +22,18 @@ on the next launch. Skipped for off-the-record profiles.
  2 files changed, 37 insertions(+)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-index 7e515925c5..fce10dd6da 100644
+index cf8d5ed1993..0bdba1478e5 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-@@ -234,6 +234,7 @@ import org.chromium.chrome.browser.preferences.Pref;
- import org.chromium.chrome.browser.price_change.PriceChangeModuleBuilder;
+@@ -238,6 +238,7 @@ import org.chromium.chrome.browser.price_change.PriceChangeModuleBuilder;
+ import org.chromium.chrome.browser.price_tracking.PriceDropNotificationManagerFactory;
  import org.chromium.chrome.browser.profiles.OtrProfileId;
  import org.chromium.chrome.browser.profiles.Profile;
 +import org.chromium.chrome.browser.desktop_site.DesktopSiteUtils;
  import org.chromium.chrome.browser.profiles.ProfileManager;
  import org.chromium.chrome.browser.profiles.ProfileProvider;
  import org.chromium.chrome.browser.quick_delete.QuickDeleteController;
-@@ -1634,11 +1635,38 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -1643,11 +1644,38 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
          }
      }
  
@@ -67,16 +67,16 @@ index 7e515925c5..fce10dd6da 100644
      public void finishNativeInitialization() {
          try (TraceEvent te = TraceEvent.scoped("ChromeTabbedActivity.finishNativeInitialization")) {
              var profileProvider = assertNonNull(getProfileProviderSupplier().get());
-             var profile = profileProvider.getOriginalProfile();
-+            maybeSeedWebstoreDesktopSiteException(profile);
-             new NavigationPredictorBridge(profile, getLifecycleDispatcher(), this::isWarmOnResume);
+             var originalProfile = profileProvider.getOriginalProfile();
++            maybeSeedWebstoreDesktopSiteException(originalProfile);
+             new NavigationPredictorBridge(
+                     originalProfile, getLifecycleDispatcher(), this::isWarmOnResume);
  
-             if (NtpCustomizationUtils.isNtpThemeCustomizationEnabled() && !isIncognitoWindow()) {
 diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-index 4e7505f75f..cc4c317f41 100644
+index db5e354214f..ff35d71833b 100644
 --- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
 +++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-@@ -380,6 +380,14 @@ public final class ChromePreferenceKeys {
+@@ -363,6 +363,14 @@ public final class ChromePreferenceKeys {
      public static final String DEVICE_LOCK_SHOW_ALERT_IF_REMOVED =
              "Chrome.DeviceLock.ShowAlertIfRemoved";
  
@@ -91,7 +91,7 @@ index 4e7505f75f..cc4c317f41 100644
      /**
       * De-Googled build: whether downloads are offered to an installed download manager instead of
       * being fetched by the browser. Off by default, so the browser behaves as usual until asked.
-@@ -1199,6 +1207,7 @@ public final class ChromePreferenceKeys {
+@@ -1178,6 +1186,7 @@ public final class ChromePreferenceKeys {
                  AI_ASSISTANT_WEB_SUMMARIZATION_AVAILABILITY,
                  AUTOFILL_ASSISTANT_FIRST_TIME_LITE_SCRIPT_USER,
                  DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,

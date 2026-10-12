@@ -1,4 +1,4 @@
-From 826ca40f89e22645efabebe5247f285896bf7ff0 Mon Sep 17 00:00:00 2001
+From b66a7e3071990a991d1d0a9682cc05f177f969f0 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Mon, 31 Aug 2026 03:43:53 +0000
 Subject: [PATCH] Let bookmarks be carried in and out as a file
@@ -59,7 +59,7 @@ tell an unwanted duplicate from a deliberate one, so this does not guess.
  create mode 100644 chrome/browser/bookmarks/imported_bookmark_merger_unittest.cc
 
 diff --git a/chrome/android/java/res/menu/bookmark_toolbar_menu_improved.xml b/chrome/android/java/res/menu/bookmark_toolbar_menu_improved.xml
-index e1f113a357..26adaeb83b 100644
+index 3af080bf10b..3d9447e84fd 100644
 --- a/chrome/android/java/res/menu/bookmark_toolbar_menu_improved.xml
 +++ b/chrome/android/java/res/menu/bookmark_toolbar_menu_improved.xml
 @@ -57,6 +57,17 @@ found in the LICENSE file.
@@ -81,10 +81,10 @@ index e1f113a357..26adaeb83b 100644
      <group
          android:id="@+id/selection_mode_menu_group"
 diff --git a/chrome/browser/bookmarks/BUILD.gn b/chrome/browser/bookmarks/BUILD.gn
-index edd4475ea0..4d79a2a96a 100644
+index d5512d16e9b..860f83d095b 100644
 --- a/chrome/browser/bookmarks/BUILD.gn
 +++ b/chrome/browser/bookmarks/BUILD.gn
-@@ -19,6 +19,7 @@ source_set("bookmarks") {
+@@ -21,6 +21,7 @@ source_set("bookmarks") {
      "bookmark_parent_folder.h",
      "bookmark_parent_folder_children.h",
      "chrome_bookmark_client.h",
@@ -92,15 +92,15 @@ index edd4475ea0..4d79a2a96a 100644
      "managed_bookmark_service_factory.h",
      "permanent_folder_ordering_tracker.h",
      "url_and_id.h",
-@@ -34,6 +35,7 @@ source_set("bookmarks") {
-     "//components/os_crypt/async/common",
+@@ -37,6 +38,7 @@ source_set("bookmarks") {
+     "//components/os_crypt/common",
      "//components/policy/core/browser",
      "//components/power_bookmarks/core",
 +    "//components/user_data_importer/common",
      "//url",
    ]
  }
-@@ -51,6 +53,7 @@ source_set("impl") {
+@@ -52,6 +54,7 @@ source_set("impl") {
      "bookmark_parent_folder.cc",
      "bookmark_parent_folder_children.cc",
      "chrome_bookmark_client.cc",
@@ -108,7 +108,7 @@ index edd4475ea0..4d79a2a96a 100644
      "managed_bookmark_service_factory.cc",
      "permanent_folder_ordering_tracker.cc",
    ]
-@@ -121,13 +124,17 @@ source_set("test_support") {
+@@ -122,13 +125,17 @@ source_set("test_support") {
  source_set("unit_tests") {
    testonly = true
  
@@ -130,7 +130,7 @@ index edd4475ea0..4d79a2a96a 100644
        "bookmark_merged_surface_ordering_storage_unittest.cc",
        "bookmark_merged_surface_service_unittest.cc",
        "bookmark_parent_folder_children_unittest.cc",
-@@ -163,20 +170,19 @@ source_set("unit_tests") {
+@@ -161,20 +168,19 @@ source_set("unit_tests") {
      "//url",
    ]
  
@@ -165,7 +165,7 @@ index edd4475ea0..4d79a2a96a 100644
    if (is_android) {
      sources += [ "android/bookmark_bridge_unittest.cc" ]
 diff --git a/chrome/browser/bookmarks/android/BUILD.gn b/chrome/browser/bookmarks/android/BUILD.gn
-index fc84c72b46..5e9239376c 100644
+index ea812516d0f..e56b3b1f2bf 100644
 --- a/chrome/browser/bookmarks/android/BUILD.gn
 +++ b/chrome/browser/bookmarks/android/BUILD.gn
 @@ -24,10 +24,14 @@ source_set("android") {
@@ -194,16 +194,16 @@ index fc84c72b46..5e9239376c 100644
    ]
  }
  
-@@ -58,6 +65,8 @@ android_library("java") {
-     "java/src/org/chromium/chrome/browser/bookmarks/BookmarkDesktopNavigationProperties.java",
+@@ -68,6 +75,8 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/bookmarks/BookmarkFolderPickerMetrics.java",
      "java/src/org/chromium/chrome/browser/bookmarks/BookmarkFolderPickerProperties.java",
      "java/src/org/chromium/chrome/browser/bookmarks/BookmarkFolderPickerViewBinder.java",
 +    "java/src/org/chromium/chrome/browser/bookmarks/BookmarkHtmlBridge.java",
 +    "java/src/org/chromium/chrome/browser/bookmarks/BookmarkHtmlTransferCoordinator.java",
      "java/src/org/chromium/chrome/browser/bookmarks/BookmarkImageFetcher.java",
      "java/src/org/chromium/chrome/browser/bookmarks/BookmarkListEntry.java",
-     "java/src/org/chromium/chrome/browser/bookmarks/BookmarkManagerOpener.java",
-@@ -201,6 +210,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/bookmarks/BookmarkManagerCoordinator.java",
+@@ -245,6 +254,7 @@ android_library("java") {
  generate_jni("jni_headers") {
    sources = [
      "java/src/org/chromium/chrome/browser/bookmarks/BookmarkBridge.java",
@@ -211,17 +211,17 @@ index fc84c72b46..5e9239376c 100644
      "java/src/org/chromium/chrome/browser/bookmarks/bar/BookmarkBarSceneLayer.java",
    ]
  }
-@@ -216,6 +226,7 @@ robolectric_library("junit") {
-     "junit/src/org/chromium/chrome/browser/bookmarks/BookmarkAddNewFolderCoordinatorTest.java",
-     "junit/src/org/chromium/chrome/browser/bookmarks/BookmarkDesktopNavigationMediatorUnitTest.java",
+@@ -263,6 +273,7 @@ robolectric_library("junit") {
+     "junit/src/org/chromium/chrome/browser/bookmarks/BookmarkEditMetricsUnitTest.java",
      "junit/src/org/chromium/chrome/browser/bookmarks/BookmarkFolderPickerMediatorUnitTest.java",
+     "junit/src/org/chromium/chrome/browser/bookmarks/BookmarkFolderPickerMetricsUnitTest.java",
 +    "junit/src/org/chromium/chrome/browser/bookmarks/BookmarkHtmlTransferCoordinatorUnitTest.java",
      "junit/src/org/chromium/chrome/browser/bookmarks/BookmarkImageFetcherTest.java",
      "junit/src/org/chromium/chrome/browser/bookmarks/BookmarkListEntryTest.java",
      "junit/src/org/chromium/chrome/browser/bookmarks/BookmarkManagerCoordinatorTest.java",
 diff --git a/chrome/browser/bookmarks/android/bookmark_html_bridge.cc b/chrome/browser/bookmarks/android/bookmark_html_bridge.cc
 new file mode 100644
-index 0000000000..fe6f9e50b9
+index 00000000000..fe6f9e50b9a
 --- /dev/null
 +++ b/chrome/browser/bookmarks/android/bookmark_html_bridge.cc
 @@ -0,0 +1,177 @@
@@ -404,7 +404,7 @@ index 0000000000..fe6f9e50b9
 +DEFINE_JNI(BookmarkHtmlBridge)
 diff --git a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkHtmlBridge.java b/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkHtmlBridge.java
 new file mode 100644
-index 0000000000..17ae9d82b3
+index 00000000000..17ae9d82b34
 --- /dev/null
 +++ b/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkHtmlBridge.java
 @@ -0,0 +1,84 @@
@@ -494,7 +494,7 @@ index 0000000000..17ae9d82b3
 +}
 diff --git a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkHtmlTransferCoordinator.java b/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkHtmlTransferCoordinator.java
 new file mode 100644
-index 0000000000..ba2f74a29d
+index 00000000000..ba2f74a29d4
 --- /dev/null
 +++ b/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkHtmlTransferCoordinator.java
 @@ -0,0 +1,135 @@
@@ -634,10 +634,10 @@ index 0000000000..ba2f74a29d
 +    }
 +}
 diff --git a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkManagerCoordinator.java b/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkManagerCoordinator.java
-index 62a746a9e9..56e25ffd8f 100644
+index e2217008fb9..998777a0b1e 100644
 --- a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkManagerCoordinator.java
 +++ b/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkManagerCoordinator.java
-@@ -265,6 +265,7 @@ public class BookmarkManagerCoordinator
+@@ -275,6 +275,7 @@ public class BookmarkManagerCoordinator
                  new BookmarkToolbarCoordinator(
                          activity,
                          mProfile,
@@ -646,7 +646,7 @@ index 62a746a9e9..56e25ffd8f 100644
                          mSelectionDelegate,
                          /* searchDelegate= */ this,
 diff --git a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkToolbarCoordinator.java b/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkToolbarCoordinator.java
-index 66b52c15c3..15611a5baf 100644
+index 0aba9d72986..1a04e8707c2 100644
 --- a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkToolbarCoordinator.java
 +++ b/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkToolbarCoordinator.java
 @@ -22,6 +22,7 @@ import org.chromium.components.browser_ui.widget.selectable_list.SelectableListL
@@ -657,7 +657,7 @@ index 66b52c15c3..15611a5baf 100644
  import org.chromium.ui.modaldialog.ModalDialogManager;
  import org.chromium.ui.modelutil.PropertyModel;
  import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
-@@ -37,6 +38,7 @@ public class BookmarkToolbarCoordinator {
+@@ -38,6 +39,7 @@ public class BookmarkToolbarCoordinator {
      BookmarkToolbarCoordinator(
              Context context,
              Profile profile,
@@ -665,20 +665,20 @@ index 66b52c15c3..15611a5baf 100644
              SelectableListLayout<BookmarkId> selectableListLayout,
              SelectionDelegate<BookmarkId> selectionDelegate,
              SearchDelegate searchDelegate,
-@@ -97,6 +99,8 @@ public class BookmarkToolbarCoordinator {
-                 incognitoEnabledSupplier,
-                 bookmarkManagerOpener,
-                 snackbarManager,
-+                new BookmarkHtmlTransferCoordinator(
-+                        context, profile, windowAndroid, snackbarManager),
-                 Clipboard.getInstance(),
-                 bookmarkDeleteObserver);
+@@ -100,6 +102,8 @@ public class BookmarkToolbarCoordinator {
+                         incognitoEnabledSupplier,
+                         bookmarkManagerOpener,
+                         snackbarManager,
++                        new BookmarkHtmlTransferCoordinator(
++                                context, profile, windowAndroid, snackbarManager),
+                         Clipboard.getInstance(),
+                         bookmarkDeleteObserver);
  
 diff --git a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkToolbarMediator.java b/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkToolbarMediator.java
-index 6cd49fe242..8cd6b0b6ab 100644
+index fe8c94d5206..259d92b6d15 100644
 --- a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkToolbarMediator.java
 +++ b/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkToolbarMediator.java
-@@ -88,6 +88,7 @@ class BookmarkToolbarMediator
+@@ -79,6 +79,7 @@ class BookmarkToolbarMediator
      private final BooleanSupplier mIncognitoEnabledSupplier;
      private final BookmarkManagerOpener mBookmarkManagerOpener;
      private final SnackbarManager mSnackbarManager;
@@ -686,7 +686,7 @@ index 6cd49fe242..8cd6b0b6ab 100644
      private final Clipboard mClipboard;
      private final @Nullable BookmarkDeleteObserver mBookmarkDeleteObserver;
  
-@@ -112,6 +113,7 @@ class BookmarkToolbarMediator
+@@ -104,6 +105,7 @@ class BookmarkToolbarMediator
              BooleanSupplier incognitoEnabledSupplier,
              BookmarkManagerOpener bookmarkManagerOpener,
              SnackbarManager snackbarManager,
@@ -694,7 +694,7 @@ index 6cd49fe242..8cd6b0b6ab 100644
              Clipboard clipboard,
              @Nullable BookmarkDeleteObserver bookmarkDeleteObserver) {
          mContext = context;
-@@ -132,6 +134,7 @@ class BookmarkToolbarMediator
+@@ -127,6 +129,7 @@ class BookmarkToolbarMediator
          mIncognitoEnabledSupplier = incognitoEnabledSupplier;
          mBookmarkManagerOpener = bookmarkManagerOpener;
          mSnackbarManager = snackbarManager;
@@ -702,7 +702,7 @@ index 6cd49fe242..8cd6b0b6ab 100644
          mClipboard = clipboard;
          mBookmarkDeleteObserver = bookmarkDeleteObserver;
  
-@@ -209,6 +212,12 @@ class BookmarkToolbarMediator
+@@ -220,6 +223,12 @@ class BookmarkToolbarMediator
          } else if (id == R.id.close_menu_id) {
              mBookmarkManagerOpener.finishActivityOnPhone(mContext);
              return true;
@@ -717,7 +717,7 @@ index 6cd49fe242..8cd6b0b6ab 100644
              assert list.size() == 1;
 diff --git a/chrome/browser/bookmarks/android/junit/src/org/chromium/chrome/browser/bookmarks/BookmarkHtmlTransferCoordinatorUnitTest.java b/chrome/browser/bookmarks/android/junit/src/org/chromium/chrome/browser/bookmarks/BookmarkHtmlTransferCoordinatorUnitTest.java
 new file mode 100644
-index 0000000000..9e9d1b74e5
+index 00000000000..9e9d1b74e5c
 --- /dev/null
 +++ b/chrome/browser/bookmarks/android/junit/src/org/chromium/chrome/browser/bookmarks/BookmarkHtmlTransferCoordinatorUnitTest.java
 @@ -0,0 +1,272 @@
@@ -994,10 +994,10 @@ index 0000000000..9e9d1b74e5
 +    }
 +}
 diff --git a/chrome/browser/bookmarks/android/junit/src/org/chromium/chrome/browser/bookmarks/BookmarkToolbarMediatorTest.java b/chrome/browser/bookmarks/android/junit/src/org/chromium/chrome/browser/bookmarks/BookmarkToolbarMediatorTest.java
-index 0bee2b2ea4..305ea48fe7 100644
+index b345da0b611..2b80d4588a7 100644
 --- a/chrome/browser/bookmarks/android/junit/src/org/chromium/chrome/browser/bookmarks/BookmarkToolbarMediatorTest.java
 +++ b/chrome/browser/bookmarks/android/junit/src/org/chromium/chrome/browser/bookmarks/BookmarkToolbarMediatorTest.java
-@@ -97,6 +97,7 @@ public class BookmarkToolbarMediatorTest {
+@@ -98,6 +98,7 @@ public class BookmarkToolbarMediatorTest {
      @Mock private Profile mProfile;
      @Mock private ProfileResolver.Natives mProfileResolverNatives;
      @Mock private SnackbarManager mSnackbarManager;
@@ -1005,7 +1005,7 @@ index 0bee2b2ea4..305ea48fe7 100644
      @Mock private Clipboard mClipboard;
  
      @Spy private Context mContext;
-@@ -157,6 +158,7 @@ public class BookmarkToolbarMediatorTest {
+@@ -158,6 +159,7 @@ public class BookmarkToolbarMediatorTest {
                          mIncognitoEnabledSupplier,
                          mBookmarkManagerOpener,
                          mSnackbarManager,
@@ -1013,7 +1013,7 @@ index 0bee2b2ea4..305ea48fe7 100644
                          mClipboard,
                          /* bookmarkDeleteObserver= */ null);
          mBookmarkDelegateSupplier.set(mBookmarkDelegate);
-@@ -196,6 +198,7 @@ public class BookmarkToolbarMediatorTest {
+@@ -197,6 +199,7 @@ public class BookmarkToolbarMediatorTest {
                          mIncognitoEnabledSupplier,
                          mBookmarkManagerOpener,
                          mSnackbarManager,
@@ -1023,7 +1023,7 @@ index 0bee2b2ea4..305ea48fe7 100644
      }
 diff --git a/chrome/browser/bookmarks/imported_bookmark_merger.cc b/chrome/browser/bookmarks/imported_bookmark_merger.cc
 new file mode 100644
-index 0000000000..2dbb55ad5a
+index 00000000000..2dbb55ad5a0
 --- /dev/null
 +++ b/chrome/browser/bookmarks/imported_bookmark_merger.cc
 @@ -0,0 +1,165 @@
@@ -1194,7 +1194,7 @@ index 0000000000..2dbb55ad5a
 +}  // namespace bookmark_import
 diff --git a/chrome/browser/bookmarks/imported_bookmark_merger.h b/chrome/browser/bookmarks/imported_bookmark_merger.h
 new file mode 100644
-index 0000000000..e11c8a8fdb
+index 00000000000..e11c8a8fdb5
 --- /dev/null
 +++ b/chrome/browser/bookmarks/imported_bookmark_merger.h
 @@ -0,0 +1,68 @@
@@ -1268,7 +1268,7 @@ index 0000000000..e11c8a8fdb
 +#endif  // CHROME_BROWSER_BOOKMARKS_IMPORTED_BOOKMARK_MERGER_H_
 diff --git a/chrome/browser/bookmarks/imported_bookmark_merger_unittest.cc b/chrome/browser/bookmarks/imported_bookmark_merger_unittest.cc
 new file mode 100644
-index 0000000000..b75053dcc1
+index 00000000000..b75053dcc15
 --- /dev/null
 +++ b/chrome/browser/bookmarks/imported_bookmark_merger_unittest.cc
 @@ -0,0 +1,241 @@
@@ -1514,7 +1514,7 @@ index 0000000000..b75053dcc1
 +}  // namespace
 +}  // namespace bookmark_import
 diff --git a/chrome/browser/importer/profile_writer.cc b/chrome/browser/importer/profile_writer.cc
-index 35842f390f..9974544586 100644
+index 35842f390f5..99745445869 100644
 --- a/chrome/browser/importer/profile_writer.cc
 +++ b/chrome/browser/importer/profile_writer.cc
 @@ -16,6 +16,7 @@
@@ -1671,10 +1671,10 @@ index 35842f390f..9974544586 100644
  
  void ProfileWriter::AddFavicons(
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index 222119b2fb..cce99572a3 100644
+index 7078d734147..0013c318561 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -4308,6 +4308,36 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4285,6 +4285,36 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
        <message name="IDS_BARE_TOOLBAR_POSITION_FIXED_DESCRIPTION" desc="Accessibility description of a toolbar position that cannot be changed.">
          <ph name="ACTION">%1$s<ex>New tab</ex></ph>, cannot be changed
        </message>

@@ -1,4 +1,4 @@
-From 67203ec207211479f4eb678af8a70eb73cff2877 Mon Sep 17 00:00:00 2001
+From 941f70366239d058c87e5fbfd5c4057a983fcce2 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Sun, 23 Aug 2026 17:13:36 +0000
 Subject: [PATCH] Stop advertising Safe Browsing, which has no handler in this
@@ -22,9 +22,13 @@ row and the promo card. The Safety Check binder now tolerates the missing
 row rather than dereferencing it.
 
 Nothing about the underlying lookup path changed. It was already inert.
+
+Migration note (156.0.8078.25): SettingsFragmentRegistry keeps the
+SafeBrowsingSettingsFragment import for upstream's new accessPoint parameter
+mapping. It names an argument, not a route.
 ---
  chrome/android/java/res/xml/privacy_preferences.xml   |  5 -----
- .../browser/settings/SettingsFragmentRegistry.java    |  3 +--
+ .../browser/settings/SettingsFragmentRegistry.java    |  4 ++--
  .../browser/settings/SettingsNavigationImpl.java      |  8 ++------
  .../settings/search/SearchIndexProviderRegistry.java  |  6 ------
  .../EducationalTipCardProviderFactory.java            |  5 ++---
@@ -32,17 +36,17 @@ Nothing about the underlying lookup path changed. It was already inert.
  .../browser/safety_check/SafetyCheckViewBinder.java   | 11 +++++++----
  .../android/java/res/xml/safety_hub_preferences.xml   | 10 ----------
  .../chrome/browser/safety_hub/SafetyHubFragment.java  | 10 +++-------
- 9 files changed, 15 insertions(+), 50 deletions(-)
+ 9 files changed, 16 insertions(+), 50 deletions(-)
 
 diff --git a/chrome/android/java/res/xml/privacy_preferences.xml b/chrome/android/java/res/xml/privacy_preferences.xml
-index 6120bc102a..6a08f65e80 100644
+index ac72dc510f8..33a64a19e31 100644
 --- a/chrome/android/java/res/xml/privacy_preferences.xml
 +++ b/chrome/android/java/res/xml/privacy_preferences.xml
-@@ -45,11 +45,6 @@ found in the LICENSE file.
+@@ -49,11 +49,6 @@ found in the LICENSE file.
       <org.chromium.chrome.browser.safety_hub.SafetyHubExpandablePreference
              android:key="advanced_protection_info"
              android:title="@string/settings_privacy_and_security_advanced_protection_section_title"/>
--    <Preference
+-    <org.chromium.components.browser_ui.settings.ChromeBasePreference
 -        android:key="safe_browsing"
 -        android:title="@string/prefs_safe_browsing_title"
 -        android:summary="@string/prefs_safe_browsing_summary"
@@ -51,18 +55,23 @@ index 6120bc102a..6a08f65e80 100644
          android:key="password_leak_detection"
          android:title="@string/passwords_leak_detection_switch_title"
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsFragmentRegistry.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsFragmentRegistry.java
-index 73d6f07ee2..48fe2f20d1 100644
+index e608c6391e9..8b83a70f7e9 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsFragmentRegistry.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsFragmentRegistry.java
-@@ -37,7 +37,6 @@ import org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings;
- import org.chromium.chrome.browser.privacy.settings.DoNotTrackSettings;
- import org.chromium.chrome.browser.privacy.settings.PrivacySettings;
+@@ -57,11 +57,11 @@ import org.chromium.chrome.browser.privacy_guide.PrivacyGuideFragment;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.safe_browsing.metrics.SettingsAccessPoint;
  import org.chromium.chrome.browser.safe_browsing.settings.EnhancedProtectionSettingsFragment;
 -import org.chromium.chrome.browser.safe_browsing.settings.SafeBrowsingSettingsFragment;
  import org.chromium.chrome.browser.safe_browsing.settings.StandardProtectionSettingsFragment;
- import org.chromium.chrome.browser.safety_check.SafetyCheckSettingsFragment;
  import org.chromium.chrome.browser.safety_hub.SafetyHubFragment;
-@@ -117,7 +116,7 @@ public class SettingsFragmentRegistry {
+ import org.chromium.chrome.browser.safety_hub.SafetyHubNotificationsFragment;
+ import org.chromium.chrome.browser.safety_hub.SafetyHubPermissionsFragment;
++import org.chromium.chrome.browser.safe_browsing.settings.SafeBrowsingSettingsFragment;
+ import org.chromium.chrome.browser.search_engines.settings.SearchEngineSettings;
+ import org.chromium.chrome.browser.search_engines.settings.SiteSearchSettings;
+ import org.chromium.chrome.browser.ssl.HttpsFirstModeSettingsFragment;
+@@ -254,7 +254,7 @@ public class SettingsFragmentRegistry {
          registerMapping("/preloadPages/extended", ExtendedPreloadingSettingsFragment.class);
  
          // Security
@@ -72,10 +81,10 @@ index 73d6f07ee2..48fe2f20d1 100644
          registerMapping("/safeBrowsing/standard", StandardProtectionSettingsFragment.class);
          registerMapping("/httpsFirstMode", HttpsFirstModeSettingsFragment.class);
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsNavigationImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsNavigationImpl.java
-index ae2b707a34..3069a60b23 100644
+index 32a8ea431a3..a8c79081eee 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsNavigationImpl.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsNavigationImpl.java
-@@ -48,9 +48,6 @@ import org.chromium.chrome.browser.prefetch.settings.StandardPreloadingSettingsF
+@@ -49,9 +49,6 @@ import org.chromium.chrome.browser.prefetch.settings.StandardPreloadingSettingsF
  import org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings;
  import org.chromium.chrome.browser.privacy.settings.DoNotTrackSettings;
  import org.chromium.chrome.browser.privacy.settings.PrivacySettings;
@@ -85,7 +94,7 @@ index ae2b707a34..3069a60b23 100644
  import org.chromium.chrome.browser.safety_check.SafetyCheckSettingsFragment;
  import org.chromium.chrome.browser.safety_hub.SafetyHubFragment;
  import org.chromium.chrome.browser.search_engines.settings.SearchEngineSettings;
-@@ -368,11 +365,10 @@ public class SettingsNavigationImpl implements SettingsNavigation {
+@@ -382,11 +379,10 @@ public class SettingsNavigationImpl implements SettingsNavigation {
              case SettingsFragment.PRIVACY:
                  return PrivacySettings.class;
              case SettingsFragment.SAFE_BROWSING:
@@ -100,20 +109,20 @@ index ae2b707a34..3069a60b23 100644
                  return SafetyHubFragment.class;
              case SettingsFragment.SAFETY_CHECK_SETTINGS:
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
-index 267032cc0b..735f6a9960 100644
+index af9f00461c7..95f2d1d1fcd 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
-@@ -35,9 +35,6 @@ import org.chromium.chrome.browser.prefetch.settings.PreloadPagesSettingsFragmen
- import org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings;
+@@ -37,9 +37,6 @@ import org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings;
  import org.chromium.chrome.browser.privacy.settings.DoNotTrackSettings;
  import org.chromium.chrome.browser.privacy.settings.PrivacySettings;
+ import org.chromium.chrome.browser.privacy.settings.UniversalOptOutSettings;
 -import org.chromium.chrome.browser.safe_browsing.settings.SafeBrowsingSettingsFragment;
 -import org.chromium.chrome.browser.safe_browsing.settings.StandardProtectionSettingsFragment;
 -import org.chromium.chrome.browser.safety_check.SafetyCheckSettingsFragment;
  import org.chromium.chrome.browser.safety_hub.SafetyHubFragment;
  import org.chromium.chrome.browser.search_engines.settings.SearchEngineSettings;
  import org.chromium.chrome.browser.search_engines.settings.SiteSearchSettings;
-@@ -102,8 +99,6 @@ public final class SearchIndexProviderRegistry {
+@@ -105,8 +102,6 @@ public final class SearchIndexProviderRegistry {
                      AccessibilitySettings.SEARCH_INDEX_DATA_PROVIDER,
                      ImageDescriptionsSettings.SEARCH_INDEX_DATA_PROVIDER,
                      PreloadPagesSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
@@ -122,7 +131,7 @@ index 267032cc0b..735f6a9960 100644
                      SafetyHubFragment.SEARCH_INDEX_DATA_PROVIDER,
                      AccountManagementFragment.SEARCH_INDEX_DATA_PROVIDER,
                      AndroidPaymentAppsFragment.SEARCH_INDEX_DATA_PROVIDER,
-@@ -125,7 +120,6 @@ public final class SearchIndexProviderRegistry {
+@@ -129,7 +124,6 @@ public final class SearchIndexProviderRegistry {
                      NonCardPaymentMethodsManagementFragment.SEARCH_INDEX_DATA_PROVIDER,
                      PriceNotificationSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
                      PrivacySettings.SEARCH_INDEX_DATA_PROVIDER,
@@ -131,7 +140,7 @@ index 267032cc0b..735f6a9960 100644
                      ThemeSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
                      DownloadSettings.SEARCH_INDEX_DATA_PROVIDER,
 diff --git a/chrome/browser/educational_tip/java/src/org/chromium/chrome/browser/educational_tip/EducationalTipCardProviderFactory.java b/chrome/browser/educational_tip/java/src/org/chromium/chrome/browser/educational_tip/EducationalTipCardProviderFactory.java
-index d36d9a101b..491546f5de 100644
+index d36d9a101bb..491546f5def 100644
 --- a/chrome/browser/educational_tip/java/src/org/chromium/chrome/browser/educational_tip/EducationalTipCardProviderFactory.java
 +++ b/chrome/browser/educational_tip/java/src/org/chromium/chrome/browser/educational_tip/EducationalTipCardProviderFactory.java
 @@ -9,7 +9,6 @@ import org.chromium.build.annotations.NullMarked;
@@ -154,7 +163,7 @@ index d36d9a101b..491546f5de 100644
                  return new AddressBarPlacementPromoCoordinator(
                          onModuleClickedCallback, actionDelegate);
 diff --git a/chrome/browser/safety_check/android/java/res/xml/safety_check_preferences.xml b/chrome/browser/safety_check/android/java/res/xml/safety_check_preferences.xml
-index a961195ebe..e84d48fce2 100644
+index a961195ebe9..e84d48fce23 100644
 --- a/chrome/browser/safety_check/android/java/res/xml/safety_check_preferences.xml
 +++ b/chrome/browser/safety_check/android/java/res/xml/safety_check_preferences.xml
 @@ -33,12 +33,5 @@ found in the LICENSE file.
@@ -171,7 +180,7 @@ index a961195ebe..e84d48fce2 100644
  
  </PreferenceScreen>
 diff --git a/chrome/browser/safety_check/android/java/src/org/chromium/chrome/browser/safety_check/SafetyCheckViewBinder.java b/chrome/browser/safety_check/android/java/src/org/chromium/chrome/browser/safety_check/SafetyCheckViewBinder.java
-index 424527dd75..22492629fe 100644
+index 424527dd758..22492629fe0 100644
 --- a/chrome/browser/safety_check/android/java/src/org/chromium/chrome/browser/safety_check/SafetyCheckViewBinder.java
 +++ b/chrome/browser/safety_check/android/java/src/org/chromium/chrome/browser/safety_check/SafetyCheckViewBinder.java
 @@ -213,6 +213,8 @@ class SafetyCheckViewBinder {
@@ -200,7 +209,7 @@ index 424527dd75..22492629fe 100644
              fragment.findPreference(UPDATES_KEY)
                      .setOnPreferenceClickListener(
 diff --git a/chrome/browser/safety_hub/android/java/res/xml/safety_hub_preferences.xml b/chrome/browser/safety_hub/android/java/res/xml/safety_hub_preferences.xml
-index f03ef9db8c..9a98c27cf2 100644
+index 0c885bef8f8..863da4355ec 100644
 --- a/chrome/browser/safety_hub/android/java/res/xml/safety_hub_preferences.xml
 +++ b/chrome/browser/safety_hub/android/java/res/xml/safety_hub_preferences.xml
 @@ -44,10 +44,6 @@ found in the LICENSE file.
@@ -228,7 +237,7 @@ index f03ef9db8c..9a98c27cf2 100644
  
  </PreferenceScreen>
 diff --git a/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/browser/safety_hub/SafetyHubFragment.java b/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/browser/safety_hub/SafetyHubFragment.java
-index 05e77ee66b..4988be1f23 100644
+index 05e77ee66bd..4988be1f237 100644
 --- a/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/browser/safety_hub/SafetyHubFragment.java
 +++ b/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/browser/safety_hub/SafetyHubFragment.java
 @@ -53,7 +53,6 @@ public class SafetyHubFragment extends SafetyHubBaseFragment

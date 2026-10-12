@@ -1,4 +1,4 @@
-From f98b608711305b0ab110811e393b8a08a4a5cce7 Mon Sep 17 00:00:00 2001
+From 651b73e6ab594e851c2354b7ae6292b273cdb8e5 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Thu, 20 Aug 2026 10:41:06 +0000
 Subject: [PATCH] Follow range requests back to the whole file
@@ -48,10 +48,10 @@ sheer number of them could push the video out of a list capped at 64.
  6 files changed, 250 insertions(+), 103 deletions(-)
 
 diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
-index 36c09cbf4d..4667c0b2e3 100644
+index 21d823ab713..2859bbf4364 100644
 --- a/chrome/android/java/res/values/ids.xml
 +++ b/chrome/android/java/res/values/ids.xml
-@@ -140,6 +140,7 @@ found in the LICENSE file.
+@@ -143,6 +143,7 @@ found in the LICENSE file.
      <item type="id" name="contextmenu_download_video_frame" />
      <item type="id" name="contextmenu_picture_in_picture" />
      <item type="id" name="contextmenu_save_audio" />
@@ -60,7 +60,7 @@ index 36c09cbf4d..4667c0b2e3 100644
      <item type="id" name="contextmenu_save_video" />
      <!-- go/keep-sorted end -->
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java
-index b20692d953..df36b07240 100644
+index b20692d9531..df36b07240b 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java
 @@ -19,54 +19,50 @@ import java.util.List;
@@ -162,12 +162,12 @@ index b20692d953..df36b07240 100644
      }
  }
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
-index 10bd338146..570b5d8c57 100644
+index 40184c49097..e77f18737cd 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
-@@ -93,7 +93,8 @@ class ChromeContextMenuItem {
-         Item.CREATE_QR_CODE,
+@@ -90,7 +90,8 @@ class ChromeContextMenuItem {
          Item.ASK_GEMINI,
+         Item.ASK_GEMINI_IMAGE,
          Item.SAVE_AUDIO,
 -        Item.SAVE_DETECTED_VIDEO
 +        Item.SAVE_DETECTED_VIDEO,
@@ -175,19 +175,19 @@ index 10bd338146..570b5d8c57 100644
      })
      @Retention(RetentionPolicy.SOURCE)
      public @interface Item {
-@@ -166,8 +167,9 @@ class ChromeContextMenuItem {
+@@ -164,8 +165,9 @@ class ChromeContextMenuItem {
          // indexed by these values, so inserting in the middle renumbers the rest.
-         int SAVE_AUDIO = 54;
-         int SAVE_DETECTED_VIDEO = 55;
-+        int SAVE_DETECTED_AUDIO = 56;
+         int SAVE_AUDIO = 55;
+         int SAVE_DETECTED_VIDEO = 56;
++        int SAVE_DETECTED_AUDIO = 57;
          // ALWAYS UPDATE!
--        int NUM_ENTRIES = 56;
-+        int NUM_ENTRIES = 57;
+-        int NUM_ENTRIES = 57;
++        int NUM_ENTRIES = 58;
      }
  
      /** Mapping from {@link Item} to the ID found in the ids.xml. */
-@@ -228,6 +230,7 @@ class ChromeContextMenuItem {
-         R.id.contextmenu_ask_gemini, // Item.ASK_GEMINI
+@@ -227,6 +229,7 @@ class ChromeContextMenuItem {
+         R.id.contextmenu_ask_gemini_image, // Item.ASK_GEMINI_IMAGE
          R.id.contextmenu_save_audio, // Item.SAVE_AUDIO
          R.id.contextmenu_save_detected_video, // Item.SAVE_DETECTED_VIDEO
 +        R.id.contextmenu_save_detected_audio, // Item.SAVE_DETECTED_AUDIO
@@ -195,7 +195,7 @@ index 10bd338146..570b5d8c57 100644
  
      /** Mapping from {@link Item} to the ID of the string that describes the action of the item. */
 @@ -288,6 +291,7 @@ class ChromeContextMenuItem {
-         R.string.glic_button_entrypoint_ask_gemini_label, // Item.ASK_GEMINI
+         R.string.glic_button_entrypoint_ask_gemini_label, // Item.ASK_GEMINI_IMAGE
          R.string.contextmenu_save_audio, // Item.SAVE_AUDIO
          R.string.contextmenu_save_video, // Item.SAVE_DETECTED_VIDEO
 +        R.string.contextmenu_save_audio, // Item.SAVE_DETECTED_AUDIO
@@ -203,10 +203,10 @@ index 10bd338146..570b5d8c57 100644
  
      /**
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
-index 79e36eda33..2392c4c4a5 100644
+index d883c9f1591..7db359a7629 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
-@@ -965,8 +965,8 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+@@ -933,8 +933,8 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
          // the element points at a blob with no file behind it, and the real files were fetched
          // separately and never appear as anyone's src. Blink knows this and clears the save
          // flag, so upstream offers nothing at all here. BareMediaRegistry has been watching
@@ -217,7 +217,7 @@ index 79e36eda33..2392c4c4a5 100644
          //
          // The test is the ordinary item's own condition, negated, rather than a guess about
          // schemes: blob counts as downloadable, so checking the scheme would have matched
-@@ -976,15 +976,27 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+@@ -944,15 +944,27 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
          if (mParams.isVideo()
                  && !upstreamOffersVideoDownload
                  && mMode != ContextMenuMode.THIN_WEB_VIEW
@@ -254,7 +254,7 @@ index 79e36eda33..2392c4c4a5 100644
          }
  
          if (mParams.getOpenedFromHighlight()) {
-@@ -1254,16 +1266,11 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+@@ -1208,16 +1220,11 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
                  mNativeDelegate.startDownload(mParams.getSrcUrl(), /* isMedia= */ true);
              }
          } else if (itemId == R.id.contextmenu_save_detected_video) {
@@ -276,7 +276,7 @@ index 79e36eda33..2392c4c4a5 100644
          } else if (itemId == R.id.contextmenu_save_video) {
              recordContextMenuSelection(ContextMenuUma.Action.SAVE_VIDEO);
              if (mIsDownloadRestrictedByPolicy) {
-@@ -1944,9 +1951,26 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+@@ -1919,9 +1926,26 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
                  && !LocaleManager.getInstance().needToCheckForSearchEnginePromo();
      }
  
@@ -307,7 +307,7 @@ index 79e36eda33..2392c4c4a5 100644
  
      /** Returns the profile of the current tab via the item delegate. */
 diff --git a/chrome/browser/ui/android/bare_media_registry.cc b/chrome/browser/ui/android/bare_media_registry.cc
-index 368a30eef9..aa90ecb163 100644
+index 93b22d8be34..0479a60a989 100644
 --- a/chrome/browser/ui/android/bare_media_registry.cc
 +++ b/chrome/browser/ui/android/bare_media_registry.cc
 @@ -5,6 +5,8 @@
@@ -334,10 +334,10 @@ index 368a30eef9..aa90ecb163 100644
 -// Floors that keep ordinary page furniture out of the list. Sprites, icons,
 -// tracking pixels and interface sounds all sit comfortably below these;
 -// anything a person would actually mean to keep sits comfortably above.
--constexpr base::ByteSize kMinImageSize = base::KiBU(40);
--constexpr base::ByteSize kMinAudioVideoSize = base::KiBU(96);
+-constexpr base::ByteSize kMinImageSize = base::KiB(40);
+-constexpr base::ByteSize kMinAudioVideoSize = base::KiB(96);
 +// The smallest a resource has to be before it earns an entry of its own.
-+constexpr base::ByteSize kMinSize = base::KiBU(96);
++constexpr base::ByteSize kMinSize = base::KiB(96);
  
  bool IsMediaMimeType(std::string_view mime) {
    return base::StartsWith(mime, "video/",
@@ -581,7 +581,7 @@ index 368a30eef9..aa90ecb163 100644
  }
  
 diff --git a/chrome/browser/ui/android/bare_media_registry.h b/chrome/browser/ui/android/bare_media_registry.h
-index e13e52f943..586e159117 100644
+index e13e52f943c..586e159117a 100644
 --- a/chrome/browser/ui/android/bare_media_registry.h
 +++ b/chrome/browser/ui/android/bare_media_registry.h
 @@ -47,11 +47,19 @@ class BareMediaRegistry

@@ -1,4 +1,4 @@
-From 40b1eb21a8e682343febd6945a891a0034b037c1 Mon Sep 17 00:00:00 2001
+From 10b70145c8fab0ba7a1083d15e8fa3c06a153d05 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Sun, 16 Aug 2026 01:55:19 +0000
 Subject: [PATCH] Guard omnibox icon calls so the Google XR SDKs can go
@@ -16,10 +16,10 @@ Verified on device: omnibox suggestions still render search, favicon and navigat
  2 files changed, 21 insertions(+)
 
 diff --git a/chrome/browser/ui/omnibox/omnibox_edit_model.cc b/chrome/browser/ui/omnibox/omnibox_edit_model.cc
-index 358f0d7520..8ade244beb 100644
+index e1d5a40954a..dcee5986b40 100644
 --- a/chrome/browser/ui/omnibox/omnibox_edit_model.cc
 +++ b/chrome/browser/ui/omnibox/omnibox_edit_model.cc
-@@ -1949,11 +1949,20 @@ gfx::Image OmniboxEditModel::GetMatchIcon(const AutocompleteMatch& match,
+@@ -1996,11 +1996,20 @@ gfx::Image OmniboxEditModel::GetMatchIcon(const AutocompleteMatch& match,
      }
    }
  
@@ -41,10 +41,10 @@ index 358f0d7520..8ade244beb 100644
  
  gfx::Image OmniboxEditModel::GetMatchIconIfExtension(
 diff --git a/chrome/browser/ui/webui/cr_components/searchbox/searchbox_handler.cc b/chrome/browser/ui/webui/cr_components/searchbox/searchbox_handler.cc
-index c7559e1436..93833ba2e1 100644
+index 5f5a1819d11..865ec7a76eb 100644
 --- a/chrome/browser/ui/webui/cr_components/searchbox/searchbox_handler.cc
 +++ b/chrome/browser/ui/webui/cr_components/searchbox/searchbox_handler.cc
-@@ -919,6 +919,13 @@ SearchboxHandler::CreateAutocompleteMatch(
+@@ -1000,6 +1000,13 @@ SearchboxHandler::CreateAutocompleteMatch(
    mojom_match->destination_url = match.destination_url;
    mojom_match->suggestion_group_id =
        match.suggestion_group_id.value_or(omnibox::GROUP_INVALID);
@@ -58,15 +58,15 @@ index c7559e1436..93833ba2e1 100644
    const bool is_bookmarked =
        bookmark_model->IsBookmarked(match.destination_url);
    // For starter pack suggestions, use template url to generate proper vector
-@@ -929,6 +936,7 @@ SearchboxHandler::CreateAutocompleteMatch(
+@@ -1010,6 +1017,7 @@ SearchboxHandler::CreateAutocompleteMatch(
            : turl_service->GetTemplateURLForKeyword(match.associated_keyword);
    mojom_match->icon_path = AutocompleteIconToResourceName(
        match.GetVectorIcon(is_bookmarked, associated_keyword_turl));
 +#endif
-   // For enterprise search aggregator people suggestions, use branded icon if
-   // branded build.
-   if (match.enterprise_search_aggregator_type ==
-@@ -1007,7 +1015,11 @@ SearchboxHandler::CreateAutocompleteMatch(
+   OverrideIconPaths(match, mojom_match.get());
+   mojom_match->icon_url = match.icon_url;
+   // For featured enterprise search suggestions, use template url to generate
+@@ -1057,7 +1065,11 @@ SearchboxHandler::CreateAutocompleteMatch(
  #endif
        std::string icon_path;
        if (action->GetIconImage().IsEmpty()) {

@@ -1,4 +1,4 @@
-From 2464402185e5006f73837fe0a56023ed504d6f93 Mon Sep 17 00:00:00 2001
+From 5a23260ea82be9c685f83bc6303eda1f9d79f475 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Tue, 8 Sep 2026 21:48:39 +0000
 Subject: [PATCH] Add Exit to the app menu, and let it clear browsing data
@@ -66,10 +66,10 @@ resolves.
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareClearOnExitSettings.java
 
 diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
-index 5c423c961a..0bd4c70750 100644
+index 383e7febb03..2d92ffc00c4 100644
 --- a/chrome/android/chrome_java_resources.gni
 +++ b/chrome/android/chrome_java_resources.gni
-@@ -679,6 +679,7 @@ chrome_java_resources = [
+@@ -671,6 +671,7 @@ chrome_java_resources = [
    "java/res/xml/account_management_preferences.xml",
    "java/res/xml/ad_services_config.xml",
    "java/res/xml/appearance_preferences.xml",
@@ -78,10 +78,10 @@ index 5c423c961a..0bd4c70750 100644
    "java/res/xml/bookmark_bar_preferences.xml",
    "java/res/xml/bookmark_widget_info.xml",
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
-index f647ea2490..c2fb902244 100644
+index 10b93614467..2e1b80dcfc7 100644
 --- a/chrome/android/chrome_java_sources.gni
 +++ b/chrome/android/chrome_java_sources.gni
-@@ -222,7 +222,9 @@ chrome_java_sources = [
+@@ -242,7 +242,9 @@ chrome_java_sources = [
    "java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java",
    "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java",
    "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java",
@@ -92,10 +92,10 @@ index f647ea2490..c2fb902244 100644
    "java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java",
    "java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java",
 diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
-index 4667c0b2e3..e909fdcc38 100644
+index 2859bbf4364..81f5d1e6c96 100644
 --- a/chrome/android/java/res/values/ids.xml
 +++ b/chrome/android/java/res/values/ids.xml
-@@ -255,6 +255,7 @@ found in the LICENSE file.
+@@ -262,6 +262,7 @@ found in the LICENSE file.
      <item type="id" name="payment_methods_menu_id" />
      <item type="id" name="pin_tab_menu_id" />
      <item type="id" name="preferences_id" />
@@ -105,7 +105,7 @@ index 4667c0b2e3..e909fdcc38 100644
      <item type="id" name="quick_delete_menu_id" />
 diff --git a/chrome/android/java/res/xml/bare_clear_on_exit_preferences.xml b/chrome/android/java/res/xml/bare_clear_on_exit_preferences.xml
 new file mode 100644
-index 0000000000..2eaafb623f
+index 00000000000..2eaafb623ff
 --- /dev/null
 +++ b/chrome/android/java/res/xml/bare_clear_on_exit_preferences.xml
 @@ -0,0 +1,48 @@
@@ -158,7 +158,7 @@ index 0000000000..2eaafb623f
 +
 +</PreferenceScreen>
 diff --git a/chrome/android/java/res/xml/privacy_preferences.xml b/chrome/android/java/res/xml/privacy_preferences.xml
-index 6a08f65e80..627bc460d3 100644
+index 33a64a19e31..223d1e210d1 100644
 --- a/chrome/android/java/res/xml/privacy_preferences.xml
 +++ b/chrome/android/java/res/xml/privacy_preferences.xml
 @@ -15,6 +15,11 @@ found in the LICENSE file.
@@ -170,11 +170,11 @@ index 6a08f65e80..627bc460d3 100644
 +        android:title="@string/bare_clear_on_exit_title"
 +        android:summary="@string/bare_clear_on_exit_summary"
 +        android:fragment="org.chromium.chrome.browser.bare.settings.BareClearOnExitSettings" />
-     <Preference
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
          android:key="privacy_guide"
          android:title="@string/privacy_guide_pref_title"
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-index 7fae27b0e7..b6fe57fa88 100644
+index 6441eb5362a..9fc7f8f75b4 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 @@ -105,6 +105,7 @@ import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchControllerFac
@@ -184,10 +184,10 @@ index 7fae27b0e7..b6fe57fa88 100644
 +import org.chromium.chrome.browser.bare.BareClearOnExit;
  import org.chromium.chrome.browser.back_press.MinimizeAppAndCloseTabBackPressHandler;
  import org.chromium.chrome.browser.back_press.MinimizeAppAndCloseTabBackPressHandler.MinimizeAppAndCloseTabType;
- import org.chromium.chrome.browser.bare.BareUpdateCheck;
-@@ -4011,6 +4012,11 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+ import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpenerImpl;
+@@ -4137,6 +4138,11 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
  
-         LauncherShortcutActivity.updateIncognitoShortcut(profile);
+         LauncherShortcutActivity.updateDynamicLauncherShortcuts(profile);
  
 +        // If an earlier exit began deleting and the process went away before it finished, do it
 +        // now. Ordinarily the flag is clear and this returns immediately.
@@ -198,10 +198,10 @@ index 7fae27b0e7..b6fe57fa88 100644
                  mTabModelSelector, getLifecycleDispatcher(), activity, messageDispatcher, profile);
  
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
-index 67ce688c4b..cf059c7022 100644
+index 136dc3b7e9c..f6e893178e8 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
-@@ -98,6 +98,7 @@ import org.chromium.chrome.browser.app.tabmodel.AsyncTabParamsManagerSingleton;
+@@ -103,6 +103,7 @@ import org.chromium.chrome.browser.app.tabmodel.AsyncTabParamsManagerSingleton;
  import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
  import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
  import org.chromium.chrome.browser.back_press.BackPressManager;
@@ -209,9 +209,9 @@ index 67ce688c4b..cf059c7022 100644
  import org.chromium.chrome.browser.back_press.CloseListenerManager;
  import org.chromium.chrome.browser.base.ColdStartTracker;
  import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpener;
-@@ -2940,6 +2941,17 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
-         @BrowserProfileType
-         int type = Profile.getBrowserProfileTypeFromProfile(getCurrentTabModel().getProfile());
+@@ -3038,6 +3039,17 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+ 
+         @BrowserProfileType int type = Profile.getBrowserProfileTypeFromProfile(currentProfile);
  
 +        if (id == R.id.bare_exit_id) {
 +            // Deletes whatever Clear on exit names, then closes. The callback always runs, so an
@@ -225,11 +225,11 @@ index 67ce688c4b..cf059c7022 100644
 +        }
 +
          if (id == R.id.preferences_id) {
-             if (SettingsInTab.isEnabled()) {
-                 LoadUrlParams params =
+             if (shouldOpenSettingsInTab()) {
+                 Tab settingsTab =
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java
 new file mode 100644
-index 0000000000..e833d3f007
+index 00000000000..e833d3f0070
 --- /dev/null
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java
 @@ -0,0 +1,118 @@
@@ -353,7 +353,7 @@ index 0000000000..e833d3f007
 +}
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareClearOnExitSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareClearOnExitSettings.java
 new file mode 100644
-index 0000000000..a109246953
+index 00000000000..a1092469531
 --- /dev/null
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareClearOnExitSettings.java
 @@ -0,0 +1,87 @@
@@ -445,10 +445,10 @@ index 0000000000..a109246953
 +    }
 +}
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
-index 50861fd78b..cfaca79b9d 100644
+index 3279d2c58a2..97ff8e4c9e5 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
-@@ -566,6 +566,9 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+@@ -554,6 +554,9 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
          // Help
          modelList.add(buildHelpItem());
  
@@ -458,7 +458,7 @@ index 50861fd78b..cfaca79b9d 100644
          // Managed by
          if (shouldShowManagedByMenuItem(currentTab)) {
              AppMenuItemUtils.maybeAddDividerLine(modelList, R.id.managed_by_divider_line_id);
-@@ -752,6 +755,9 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+@@ -740,6 +743,9 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
          // Help
          modelList.add(buildHelpParentItem());
  
@@ -468,7 +468,7 @@ index 50861fd78b..cfaca79b9d 100644
          // Managed by
          if (shouldShowManagedByMenuItem(currentTab)) {
              AppMenuItemUtils.maybeAddDividerLine(modelList, R.id.managed_by_divider_line_id);
-@@ -1438,6 +1444,18 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+@@ -1353,6 +1359,18 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
          return new ListItem(AppMenuHandler.AppMenuItemType.STANDARD, model);
      }
  
@@ -488,10 +488,10 @@ index 50861fd78b..cfaca79b9d 100644
          return new ListItem(
                  AppMenuHandler.AppMenuItemType.STANDARD,
 diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
-index 8492c0747c..32c5a90bc8 100644
+index 10b9c052ba6..7b100128e85 100644
 --- a/chrome/browser/prefs/browser_prefs.cc
 +++ b/chrome/browser/prefs/browser_prefs.cc
-@@ -2263,6 +2263,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
+@@ -2366,6 +2366,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
    registry->RegisterBooleanPref(prefs::kViewSourceLineWrappingEnabled, false);
  #if BUILDFLAG(IS_ANDROID)
    registry->RegisterBooleanPref(prefs::kBackgroundMediaPlayback, false);
@@ -501,10 +501,10 @@ index 8492c0747c..32c5a90bc8 100644
  
    // TODO(crbug.com/442891187): Move these to appropriate manager files when
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index e28736bd34..b331e1ea3f 100644
+index 6d3b1d95791..72e73e52125 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -1093,6 +1093,21 @@ For example, some websites may respond to this request by showing you ads that a
+@@ -1121,6 +1121,21 @@ For example, some websites may respond to this request by showing you ads that a
          Please verify that this is a valid provider or try again later
        </message>
  
@@ -527,7 +527,7 @@ index e28736bd34..b331e1ea3f 100644
          Delete browsing data
        </message>
 diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
-index 79fea1f27e..6bd5422ba4 100644
+index 4595c678034..d28b4e7ab42 100644
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
 @@ -341,6 +341,18 @@ inline constexpr char kWebKitForceDarkModeEnabled[] =

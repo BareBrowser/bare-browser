@@ -1,0 +1,145 @@
+From cd3c40cc82f542f7194cb17331c75f5b155977b2 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 11 Oct 2026 10:45:02 +0000
+Subject: [PATCH] Open an extension's popup in the incognito tab it was opened
+ from
+
+In an incognito tab, uBlock Origin's popup described the last regular tab: its
+hostname, its block count, and its switches acted on that tab. Measured on a
+Pixel 3 with example.org in a regular tab and example.com in an incognito one:
+the popup opened from the incognito tab ran with inIncognitoContext false and
+reported example.org.
+
+The extensions toolbar is built for the activity's regular browser window. On
+a phone the incognito tabs live in the same activity but under a browser window
+of their own, so the action's current tab came from the regular tab model, and
+the popup host took the regular window's profile. A split-mode extension like
+uBlock Origin never reached its incognito instance.
+
+The Android action delegate now answers with the active incognito tab when
+this activity's incognito tab model is the one on screen and the extension is
+allowed in incognito. The popup is then hosted by the window that owns that
+tab, so it gets the incognito profile, and CreateViewHostForIncognito does what
+it does on desktop. An extension not allowed in incognito keeps the old
+behaviour rather than reaching the CHECK in that function.
+
+With the previous patch, on the same phone: the popup in the incognito tab
+runs in the incognito instance and shows example.com; in the regular tab it
+still shows example.org; after the last incognito tab is closed and a new one
+opened on example.net, it shows example.net.
+---
+ .../extension_action_delegate_android.cc      | 40 +++++++++++++++++++
+ .../extension_action_delegate_android.h       |  1 +
+ .../extensions/extension_action_view_model.cc | 18 ++++++++-
+ 3 files changed, 58 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/ui/android/extensions/extension_action_delegate_android.cc b/chrome/browser/ui/android/extensions/extension_action_delegate_android.cc
+index 05f89fe8ee5..7ed5f46663a 100644
+--- a/chrome/browser/ui/android/extensions/extension_action_delegate_android.cc
++++ b/chrome/browser/ui/android/extensions/extension_action_delegate_android.cc
+@@ -9,8 +9,15 @@
+ #include "base/notimplemented.h"
+ #include "chrome/browser/extensions/extension_view_host.h"
+ #include "chrome/browser/extensions/extension_view_host_factory.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/tab_list/tab_list_interface.h"
++#include "chrome/browser/ui/android/tab_model/tab_model.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "chrome/browser/ui/extensions/extension_action_view_model.h"
+ #include "chrome/browser/ui/extensions/extension_popup_types.h"
++#include "extensions/browser/extension_util.h"
++#include "ui/base/base_window.h"
+ 
+ using extensions::ActionInfo;
+ 
+@@ -24,6 +31,39 @@ ExtensionActionDelegateAndroid::ExtensionActionDelegateAndroid(
+ 
+ ExtensionActionDelegateAndroid::~ExtensionActionDelegateAndroid() = default;
+ 
++// Bare: on a phone, incognito tabs open in the same activity as regular ones but
++// belong to a browser window of their own, made for the incognito profile. The
++// toolbar is built for the regular window, so without this an action pressed in
++// an incognito tab, and the popup it opens, act on the last regular tab.
++//
++// An extension that is not allowed in incognito keeps answering for the regular
++// tab, as it did before: a popup host for the incognito profile requires that
++// permission.
++content::WebContents* ExtensionActionDelegateAndroid::GetActiveWebContents()
++    const {
++  const ui::BaseWindow* window = browser_->GetWindow();
++  if (!window) {
++    return nullptr;
++  }
++  const gfx::NativeWindow native_window = window->GetNativeWindow();
++  for (BrowserWindowInterface* other : GetAllBrowserWindowInterfaces()) {
++    Profile* profile = other->GetProfile();
++    if (other == browser_ || !profile->IsOffTheRecord() ||
++        profile->GetOriginalProfile() != browser_->GetProfile() ||
++        !other->GetWindow() ||
++        other->GetWindow()->GetNativeWindow() != native_window) {
++      continue;
++    }
++    auto* tab_model = static_cast<TabModel*>(TabListInterface::From(other));
++    if (!tab_model || !tab_model->IsActiveModel() ||
++        !extensions::util::IsIncognitoEnabled(action_id_, profile)) {
++      return nullptr;
++    }
++    return tab_model->GetActiveWebContents();
++  }
++  return nullptr;
++}
++
+ void ExtensionActionDelegateAndroid::AttachToModel(
+     ExtensionActionViewModel* model) {
+   CHECK(model);
+diff --git a/chrome/browser/ui/android/extensions/extension_action_delegate_android.h b/chrome/browser/ui/android/extensions/extension_action_delegate_android.h
+index 3314da31356..d31f9f30027 100644
+--- a/chrome/browser/ui/android/extensions/extension_action_delegate_android.h
++++ b/chrome/browser/ui/android/extensions/extension_action_delegate_android.h
+@@ -32,6 +32,7 @@ class ExtensionActionDelegateAndroid : public ExtensionActionDelegate {
+ 
+  private:
+   // ExtensionActionDelegate:
++  content::WebContents* GetActiveWebContents() const override;
+   void AttachToModel(ExtensionActionViewModel* model) override;
+   void DetachFromModel() override;
+   void RegisterCommand() override;
+diff --git a/chrome/browser/ui/extensions/extension_action_view_model.cc b/chrome/browser/ui/extensions/extension_action_view_model.cc
+index cf963646506..eab06ecf366 100644
+--- a/chrome/browser/ui/extensions/extension_action_view_model.cc
++++ b/chrome/browser/ui/extensions/extension_action_view_model.cc
+@@ -36,6 +36,7 @@
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/sessions/content/session_tab_helper.h"
++#include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+ #include "extensions/browser/extension_action.h"
+ #include "extensions/browser/extension_action_manager.h"
+@@ -762,9 +763,24 @@ void ExtensionActionViewModel::TriggerPopup(PopupShowAction show_action,
+ 
+   const GURL popup_url = extension_action_->GetPopupUrl(tab_id);
+ 
++  BrowserWindowInterface* popup_browser = browser_;
++#if BUILDFLAG(IS_ANDROID)
++  // Bare: on a phone, an incognito tab shares the activity with regular tabs
++  // but has a browser window of its own. The popup belongs to that window: its
++  // profile decides which instance of a split-mode extension answers.
++  if (tabs::TabInterface* tab =
++          web_contents ? tabs::TabInterface::MaybeGetFromContents(web_contents)
++                       : nullptr) {
++    if (BrowserWindowInterface* tab_browser =
++            tab->GetBrowserWindowInterface()) {
++      popup_browser = tab_browser;
++    }
++  }
++#endif
++
+   std::unique_ptr<extensions::ExtensionViewHost> host =
+       extensions::ExtensionViewHostFactory::CreatePopupHost(
+-          *extension_, popup_url, browser_);
++          *extension_, popup_url, popup_browser);
+   // Creating a host should never fail in this case, since the extension is
+   // valid and has a valid popup URL.
+   CHECK(host);

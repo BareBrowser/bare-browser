@@ -1,4 +1,4 @@
-From e0d4b7d2785302d35cc6e5ae996c4631eba1daee Mon Sep 17 00:00:00 2001
+From 27e44e8a75c3e769d1ba9f69375535271a2fb100 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Thu, 20 Aug 2026 06:54:26 +0000
 Subject: [PATCH] Offer a download for audio on the page
@@ -34,6 +34,10 @@ a downstream-only item.
 
 ChromeContextMenuPopulator is a large file that churns upstream, so the
 additions there are two contiguous blocks rather than being spread through it.
+
+Migration note (156.0.8078.25): upstream appended ASK_GEMINI_IMAGE = 54 to
+ChromeContextMenuItem, so SAVE_AUDIO is 55. The detected video and audio items
+added by the next two patches follow at 56 and 57.
 ---
  chrome/android/java/res/values/ids.xml        |  1 +
  .../contextmenu/ChromeContextMenuItem.java    | 15 +++++++++--
@@ -44,10 +48,10 @@ additions there are two contiguous blocks rather than being spread through it.
  6 files changed, 66 insertions(+), 3 deletions(-)
 
 diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
-index 157ce8357e..79f16a2d3d 100644
+index 39bdafed142..51713b52d47 100644
 --- a/chrome/android/java/res/values/ids.xml
 +++ b/chrome/android/java/res/values/ids.xml
-@@ -139,6 +139,7 @@ found in the LICENSE file.
+@@ -142,6 +142,7 @@ found in the LICENSE file.
      <item type="id" name="contextmenu_copy_video_frame" />
      <item type="id" name="contextmenu_download_video_frame" />
      <item type="id" name="contextmenu_picture_in_picture" />
@@ -56,49 +60,49 @@ index 157ce8357e..79f16a2d3d 100644
      <!-- go/keep-sorted end -->
  
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
-index 7fd8506b0f..85700062b8 100644
+index f10a5acd6b3..d5771c5c0b9 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
-@@ -91,7 +91,8 @@ class ChromeContextMenuItem {
-         Item.SEND_TAB_TO_SELF,
+@@ -88,7 +88,8 @@ class ChromeContextMenuItem {
          Item.TRANSLATE,
          Item.CREATE_QR_CODE,
--        Item.ASK_GEMINI
-+        Item.ASK_GEMINI,
+         Item.ASK_GEMINI,
+-        Item.ASK_GEMINI_IMAGE
++        Item.ASK_GEMINI_IMAGE,
 +        Item.SAVE_AUDIO
      })
      @Retention(RetentionPolicy.SOURCE)
      public @interface Item {
-@@ -160,8 +161,11 @@ class ChromeContextMenuItem {
-         int TRANSLATE = 51;
+@@ -158,8 +159,11 @@ class ChromeContextMenuItem {
          int CREATE_QR_CODE = 52;
          int ASK_GEMINI = 53;
+         int ASK_GEMINI_IMAGE = 54;
 +        // Appended rather than grouped with SAVE_VIDEO: MENU_IDS and STRING_IDS are
 +        // indexed by these values, so inserting in the middle renumbers the rest.
-+        int SAVE_AUDIO = 54;
++        int SAVE_AUDIO = 55;
          // ALWAYS UPDATE!
--        int NUM_ENTRIES = 54;
-+        int NUM_ENTRIES = 55;
+-        int NUM_ENTRIES = 55;
++        int NUM_ENTRIES = 56;
      }
  
      /** Mapping from {@link Item} to the ID found in the ids.xml. */
-@@ -220,6 +224,7 @@ class ChromeContextMenuItem {
-         R.id.contextmenu_translate, // Item.TRANSLATE
+@@ -219,6 +223,7 @@ class ChromeContextMenuItem {
          R.id.contextmenu_create_qr_code, // Item.CREATE_QR_CODE
          R.id.contextmenu_ask_gemini, // Item.ASK_GEMINI
+         R.id.contextmenu_ask_gemini_image, // Item.ASK_GEMINI_IMAGE
 +        R.id.contextmenu_save_audio, // Item.SAVE_AUDIO
      };
  
      /** Mapping from {@link Item} to the ID of the string that describes the action of the item. */
 @@ -278,6 +283,7 @@ class ChromeContextMenuItem {
-         R.string.contextmenu_translate, // Item.TRANSLATE
          R.string.contextmenu_create_qr_code, // Item.CREATE_QR_CODE
          R.string.glic_button_entrypoint_ask_gemini_label, // Item.ASK_GEMINI
+         R.string.glic_button_entrypoint_ask_gemini_label, // Item.ASK_GEMINI_IMAGE
 +        R.string.contextmenu_save_audio, // Item.SAVE_AUDIO
      };
  
      /**
-@@ -334,6 +340,11 @@ class ChromeContextMenuItem {
+@@ -340,6 +346,11 @@ class ChromeContextMenuItem {
                      return context.getString(R.string.contextmenu_save_video_as);
                  }
                  break;
@@ -111,10 +115,10 @@ index 7fd8506b0f..85700062b8 100644
                  return DefaultBrowserMenuUtils.getTitleOpenInDefaultBrowser(false);
              case Item.SEARCH_BY_IMAGE:
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
-index 340688865c..aa73f2e04d 100644
+index 3eac3fd3878..d4272bcbbad 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
-@@ -941,6 +941,25 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+@@ -909,6 +909,25 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
              }
          }
  
@@ -140,7 +144,7 @@ index 340688865c..aa73f2e04d 100644
          if (mParams.getOpenedFromHighlight()) {
              ModelList sharedHighlightingGroup = new ModelList();
              if (mMode == ContextMenuMode.NORMAL) {
-@@ -1199,6 +1218,14 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+@@ -1153,6 +1172,14 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
              } else if (mItemDelegate.startDownload(url, /* isLink= */ false)) {
                  mNativeDelegate.startDownload(url, /* isMedia= */ true);
              }
@@ -156,10 +160,10 @@ index 340688865c..aa73f2e04d 100644
              recordContextMenuSelection(ContextMenuUma.Action.SAVE_VIDEO);
              if (mIsDownloadRestrictedByPolicy) {
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index 11fa22b2c4..8fc36bbe15 100644
+index db8280d5377..a4a331ac10c 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -2953,6 +2953,12 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -2984,6 +2984,12 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
        <message name="IDS_CONTEXTMENU_COPY_LINK_TO_HIGHLIGHT" desc="This string is shown in the context menu for copying the link-to-text.">
          Copy link to highlight
        </message>
@@ -173,7 +177,7 @@ index 11fa22b2c4..8fc36bbe15 100644
          Download video
        </message>
 diff --git a/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuParams.java b/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuParams.java
-index ed2b20315b..295e4bc979 100644
+index 646fb253861..5cf42fa3b03 100644
 --- a/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuParams.java
 +++ b/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuParams.java
 @@ -39,6 +39,7 @@ public class ContextMenuParams {
@@ -201,7 +205,7 @@ index ed2b20315b..295e4bc979 100644
      public boolean canSaveMedia() {
          return mCanSaveMedia;
      }
-@@ -268,6 +279,7 @@ public class ContextMenuParams {
+@@ -274,6 +285,7 @@ public class ContextMenuParams {
          mIsAnchor = !linkUrl.isEmpty();
          mIsImage = mediaType == ContextMenuDataMediaType.IMAGE;
          mIsVideo = mediaType == ContextMenuDataMediaType.VIDEO;
@@ -210,7 +214,7 @@ index ed2b20315b..295e4bc979 100644
          mMediaFlags = mediaFlags;
          mTriggeringTouchXDp = triggeringTouchXDp;
 diff --git a/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuUtils.java b/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuUtils.java
-index a3dc0e78d2..444e26ef12 100644
+index 315ebd8d82f..b5d68373d65 100644
 --- a/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuUtils.java
 +++ b/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuUtils.java
 @@ -196,7 +196,7 @@ public final class ContextMenuUtils {
@@ -222,7 +226,7 @@ index a3dc0e78d2..444e26ef12 100644
              return URLUtil.guessFileName(params.getSrcUrl().getSpec(), null, null);
          }
          return "";
-@@ -212,6 +212,12 @@ public final class ContextMenuUtils {
+@@ -213,6 +213,12 @@ public final class ContextMenuUtils {
      public static String getContextMenuTypeForHistogram(ContextMenuParams params) {
          if (params.isVideo()) {
              return "Video";

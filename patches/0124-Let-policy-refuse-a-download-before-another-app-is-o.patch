@@ -1,4 +1,4 @@
-From c523c320e6a62dc3074bf031e309cf5dff0d937a Mon Sep 17 00:00:00 2001
+From 2271c395b00af837cd2b288c8f417d688328e179 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Thu, 10 Sep 2026 04:04:22 +0000
 Subject: [PATCH] Let policy refuse a download before another app is offered it
@@ -20,10 +20,10 @@ filtered out are now named in EXTRA_EXCLUDE_COMPONENTS, which the chooser reads.
  2 files changed, 34 insertions(+), 17 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
-index 06f2c6db4c..93f365dddb 100644
+index 268a7b6a44b..8cdbc819aab 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
-@@ -44,9 +44,10 @@ public class DownloadController {
+@@ -47,9 +47,10 @@ public class DownloadController {
       * can take it. Returns true only if a chooser was actually shown, so that Chromium falls back
       * to downloading the file itself when no suitable app is installed.
       *
@@ -37,7 +37,7 @@ index 06f2c6db4c..93f365dddb 100644
       *
       * <p>Known limitation: the interception point in ChromeDownloadManagerDelegate does not carry
       * the request cookie, so a download that depends on being signed in will fail in the external
-@@ -82,13 +83,17 @@ public class DownloadController {
+@@ -85,13 +86,17 @@ public class DownloadController {
          // only the package leaves Android to ask which of them should handle it, defeating the
          // point of choosing one in settings.
          java.util.List<String> handlers = new java.util.ArrayList<>();
@@ -59,7 +59,7 @@ index 06f2c6db4c..93f365dddb 100644
              if (!handlers.contains(component)) handlers.add(component);
          }
  
-@@ -119,6 +124,14 @@ public class DownloadController {
+@@ -122,6 +127,14 @@ public class DownloadController {
  
          Intent chooser = Intent.createChooser(intent, null);
          chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -75,10 +75,10 @@ index 06f2c6db4c..93f365dddb 100644
              context.startActivity(chooser);
              return true;
 diff --git a/chrome/browser/download/chrome_download_manager_delegate.cc b/chrome/browser/download/chrome_download_manager_delegate.cc
-index a24552b130..1fd7a87dda 100644
+index df3ffb37615..6022d7c02fc 100644
 --- a/chrome/browser/download/chrome_download_manager_delegate.cc
 +++ b/chrome/browser/download/chrome_download_manager_delegate.cc
-@@ -1196,9 +1196,23 @@ bool ChromeDownloadManagerDelegate::InterceptDownloadIfApplicable(
+@@ -1238,9 +1238,23 @@ bool ChromeDownloadManagerDelegate::InterceptDownloadIfApplicable(
      bool is_transient,
      bool is_content_initiated,
      content::WebContents* web_contents) {
@@ -102,7 +102,7 @@ index a24552b130..1fd7a87dda 100644
    // Returns false when no suitable app is installed, in which case the download
    // proceeds in the browser as usual. Note this hook carries no cookie, so a
    // download that depends on being signed in will fail in the external app.
-@@ -1207,16 +1221,6 @@ bool ChromeDownloadManagerDelegate::InterceptDownloadIfApplicable(
+@@ -1249,16 +1263,6 @@ bool ChromeDownloadManagerDelegate::InterceptDownloadIfApplicable(
    }
  #endif  // BUILDFLAG(IS_ANDROID)
  

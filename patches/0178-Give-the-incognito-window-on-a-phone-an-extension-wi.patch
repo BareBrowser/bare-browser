@@ -1,0 +1,105 @@
+From b40aba98a6a4b846bc52365f84b1b3d62a35e381 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 11 Oct 2026 10:42:23 +0000
+Subject: [PATCH] Give the incognito window on a phone an extension window
+ controller
+
+On a phone, incognito tabs open in the same activity as regular ones, and the
+incognito tab model gets a browser window of its own. The windowing features
+are added once, for the activity's regular profile, so that window never had
+an extension window controller. windows.getLastFocused() walks every browser
+window and hands each one's controller to CanOperateOnWindow, which reads
+through it. Called from an extension's incognito instance with an incognito
+tab open, that is a null dereference and the browser goes down. Measured on a
+Pixel 3 with uBlock Origin's incognito background page, on builds without this
+patch: SIGSEGV in windows_util::CanOperateOnWindow. The tabs API had the same
+blind spot: the incognito instance could not find the incognito tab it was
+running for.
+
+The controller is now added for the incognito profile once its browser window
+exists, keyed on the incognito tab model, so the task removes it when the last
+incognito tab closes and the window goes with it, and adds it again for the
+next one. An activity that is incognito by itself already gets one from the
+regular call.
+
+After it, on the same phone: getLastFocused, getCurrent and getAll from the
+incognito instance return the incognito window, tabs.query finds the incognito
+tab, and the regular instance still sees only regular windows and tabs.
+---
+ .../chrome/browser/ChromeTabbedActivity.java  | 49 +++++++++++++++++++
+ 1 file changed, 49 insertions(+)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index 9fc7f8f75b4..9c81bd8e00a 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -300,6 +300,8 @@ import org.chromium.chrome.browser.tabmodel.ChromeTabCreator;
+ import org.chromium.chrome.browser.tabmodel.IncognitoTabHost;
+ import org.chromium.chrome.browser.tabmodel.IncognitoTabHostRegistry;
+ import org.chromium.chrome.browser.tabmodel.IncognitoTabHostUtils;
++import org.chromium.chrome.browser.tabmodel.IncognitoTabModel;
++import org.chromium.chrome.browser.tabmodel.IncognitoTabModelObserver;
+ import org.chromium.chrome.browser.tabmodel.MismatchedIndicesHandler;
+ import org.chromium.chrome.browser.tabmodel.MultiTabMetadata;
+ import org.chromium.chrome.browser.tabmodel.NextTabPolicy.NextTabPolicySupplier;
+@@ -358,6 +360,8 @@ import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTaskFeatureKey
+ import org.chromium.chrome.browser.ui.default_browser_promo.DefaultBrowserPromoUtils;
+ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
+ import org.chromium.chrome.browser.ui.edge_to_edge.TransitiveTopInsetProvider;
++import org.chromium.chrome.browser.ui.extensions.windowing.ExtensionWindowControllerBridge;
++import org.chromium.chrome.browser.ui.extensions.windowing.ExtensionWindowControllerBridgeFactory;
+ import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityClient;
+ import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.IntentOrigin;
+ import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.ResolutionType;
+@@ -1064,6 +1068,51 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                         /* profile= */ null,
+                         /* activityWindowAndroid= */ null),
+                 () -> TabbedWindowStateTracker.create(mWindowId));
++
++        // Bare: on a phone, incognito tabs open in this activity, and the incognito tab model gets
++        // a browser window of its own. The features above are added for the regular profile only,
++        // so that window had no extension window controller: an extension's incognito instance
++        // calling chrome.windows.getLastFocused() crashed the browser on a null controller, and the
++        // tabs API could not find the incognito tab. An activity that is incognito by itself
++        // already has one from the call above.
++        if (!profile.isOffTheRecord()) {
++            addIncognitoExtensionWindowController(chromeAndroidTask, activityWindowAndroid);
++        }
++    }
++
++    private void addIncognitoExtensionWindowController(
++            ChromeAndroidTask chromeAndroidTask, ActivityWindowAndroid activityWindowAndroid) {
++        TabModel model = getTabModelSelector().getModel(/* incognito= */ true);
++        if (!(model instanceof IncognitoTabModel)) return;
++        IncognitoTabModel incognitoModel = (IncognitoTabModel) model;
++        Runnable add =
++                () -> {
++                    Profile incognitoProfile = incognitoModel.getProfile();
++                    if (incognitoProfile == null
++                            || chromeAndroidTask.getNativeBrowserWindowPtr(incognitoProfile, this)
++                                    == 0) {
++                        return;
++                    }
++                    // Keyed on the tab model, so the task removes it when the model empties and
++                    // its browser window goes.
++                    chromeAndroidTask.addFeature(
++                            new ChromeAndroidTaskFeatureKey(
++                                    ExtensionWindowControllerBridge.class,
++                                    incognitoProfile,
++                                    activityWindowAndroid,
++                                    incognitoModel),
++                            ExtensionWindowControllerBridgeFactory::create);
++                };
++        // The task's own observer was added first, and it is the one that creates the browser
++        // window.
++        incognitoModel.addIncognitoObserver(
++                new IncognitoTabModelObserver() {
++                    @Override
++                    public void onIncognitoModelCreated() {
++                        add.run();
++                    }
++                });
++        add.run();
+     }
+ 
+     private boolean shouldRemoveWindowWithZeroTabs(@TabClosingSource int closingSource) {

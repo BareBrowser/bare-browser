@@ -1,0 +1,452 @@
+From 6aeb1181f65410f599bc03d18f64417228a4c363 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 11 Oct 2026 07:23:32 +0000
+Subject: [PATCH] Keep the bundled blocker when its file cannot be prepared
+
+BareBundledExtensionsLoader returned an empty dictionary whenever it could
+not get the crx out of the apk: no user data directory, a directory it could
+not create, an asset it could not open or read, a file it could not write. The
+external provider reads an empty dictionary as "this extension has been
+withdrawn", and ExternalProviderManager::CheckExternalUninstall then uninstalls
+it as an orphan, settings and all. A full disk or one failed read cost the user
+their blocker and everything they had set in it. A new uBlock Origin version is
+the likeliest moment for it, since that is when a new file has to be written.
+
+A failure now keeps claiming the extension, as something to keep rather than
+something to install. keep_if_present stops the provider installing anything
+when it is absent, and an external_version of 0 is older than any installed
+copy, so nothing is reinstalled over it from a file that may not be there. The
+provider only counts an entry carrying both external_crx and external_version
+as a claim, which is why the entry still names a path. The next launch tries
+the file again. Leaving the blocker out on purpose is still how declining it on
+the welcome screen works.
+
+Two smaller things in the same function. The crx used to be trusted as soon as
+a file of that name existed, so a launch interrupted halfway through writing it
+left a truncated file every later launch would reuse; it is now written beside
+the target and renamed into place, and an existing file is only reused if its
+size matches the asset. And the decision itself now lives in
+components/bare_bundled_extensions, which depends on //base only, so its cases
+have unit tests that run on the host.
+---
+ BUILD.gn                                      |  1 +
+ chrome/browser/extensions/BUILD.gn            |  1 +
+ chrome/browser/extensions/DEPS                |  1 +
+ .../bare_bundled_extensions_loader.cc         | 92 ++++++++++---------
+ components/bare_bundled_extensions/BUILD.gn   | 27 ++++++
+ .../bundled_extension_plan.cc                 | 60 ++++++++++++
+ .../bundled_extension_plan.h                  | 53 +++++++++++
+ .../bundled_extension_plan_unittest.cc        | 67 ++++++++++++++
+ 8 files changed, 260 insertions(+), 42 deletions(-)
+ create mode 100644 components/bare_bundled_extensions/BUILD.gn
+ create mode 100644 components/bare_bundled_extensions/bundled_extension_plan.cc
+ create mode 100644 components/bare_bundled_extensions/bundled_extension_plan.h
+ create mode 100644 components/bare_bundled_extensions/bundled_extension_plan_unittest.cc
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 29478cec804..ad5ae60ef24 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -101,6 +101,7 @@ group("gn_all") {
+       "//build/modules",
+       "//codelabs",
+       "//components:components_unittests",
++      "//components/bare_bundled_extensions:bare_bundled_extensions_unittests",
+       "//components/gwp_asan:gwp_asan_unittests",
+       "//infra/orchestrator:orchestrator_all",
+       "//net:net_unittests",
+diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
+index 9a0f24126a0..72d5747cd1c 100644
+--- a/chrome/browser/extensions/BUILD.gn
++++ b/chrome/browser/extensions/BUILD.gn
+@@ -575,6 +575,7 @@ source_set("extensions") {
+     "//chrome/browser/undo",
+     "//chrome/browser/update_client",
+     "//chrome/common",
++    "//components/bare_bundled_extensions",
+     "//components/bookmarks/browser",
+     "//components/bookmarks/managed",
+     "//components/content_settings/core/browser",
+diff --git a/chrome/browser/extensions/DEPS b/chrome/browser/extensions/DEPS
+index 71589622bac..14ba168c220 100644
+--- a/chrome/browser/extensions/DEPS
++++ b/chrome/browser/extensions/DEPS
+@@ -1,4 +1,5 @@
+ include_rules = [
++  "+components/bare_bundled_extensions",
+   "+components/app_constants/constants.h",
+   "+components/crash/content/browser/error_reporting",
+   "+components/guest_view/common",
+diff --git a/chrome/browser/extensions/bare_bundled_extensions_loader.cc b/chrome/browser/extensions/bare_bundled_extensions_loader.cc
+index 3bf563eccfe..5c888a4fea1 100644
+--- a/chrome/browser/extensions/bare_bundled_extensions_loader.cc
++++ b/chrome/browser/extensions/bare_bundled_extensions_loader.cc
+@@ -14,6 +14,7 @@
+ 
+ #include <stdint.h>
+ 
++#include <optional>
+ #include <utility>
+ #include <vector>
+ 
+@@ -28,6 +29,7 @@
+ #include "base/task/thread_pool.h"
+ #include "chrome/browser/preferences/android/chrome_shared_preferences.h"
+ #include "chrome/common/chrome_paths.h"
++#include "components/bare_bundled_extensions/bundled_extension_plan.h"
+ 
+ namespace extensions {
+ 
+@@ -48,27 +50,29 @@ constexpr base::FilePath::CharType kUBlockOriginCrx[] =
+ constexpr base::FilePath::CharType kBundledDir[] =
+     FILE_PATH_LITERAL("BareBundledExtensions");
+ 
+-// Copies a bundled crx out of the apk so the installer has a real file to read,
+-// and returns where it landed. Assets inside an apk have no path of their own,
+-// which is why this is needed at all.
+-//
+-// Returns an empty path on any failure: the extension is then simply not
+-// offered, which is preferable to blocking startup over a pre-installed extra.
+-base::FilePath ExtractBundledCrx() {
++// Where the bundled crx is expected to be once extracted. Never empty: the
++// provider needs an absolute path even in an entry that installs nothing.
++base::FilePath BundledCrxPath() {
+   base::FilePath user_data;
+   if (!base::PathService::Get(chrome::DIR_USER_DATA, &user_data)) {
+-    return base::FilePath();
+-  }
+-
+-  const base::FilePath dir = user_data.Append(kBundledDir);
+-  if (!base::CreateDirectory(dir)) {
+-    return base::FilePath();
++    return base::FilePath(FILE_PATH_LITERAL("/"))
++        .Append(kBundledDir)
++        .Append(kUBlockOriginCrx);
+   }
++  return user_data.Append(kBundledDir).Append(kUBlockOriginCrx);
++}
+ 
+-  const base::FilePath crx = dir.Append(kUBlockOriginCrx);
+-  if (base::PathExists(crx)) {
+-    // Already extracted by an earlier launch.
+-    return crx;
++// Copies a bundled crx out of the apk so the installer has a real file to read.
++// Assets inside an apk have no path of their own, which is why this is needed at
++// all. Returns false on any failure.
++//
++// The copy is written beside the target and then renamed into place, so an
++// interrupted launch never leaves a truncated file under the final name for
++// every later launch to trust.
++bool ExtractBundledCrx(const base::FilePath& crx) {
++  if (!base::CreateDirectory(crx.DirName())) {
++    LOG(ERROR) << "Bare: could not create " << crx.DirName();
++    return false;
+   }
+ 
+   base::MemoryMappedFile::Region region;
+@@ -77,45 +81,49 @@ base::FilePath ExtractBundledCrx() {
+     base::android::DumpLastOpenApkAssetFailure();
+     LOG(ERROR) << "Bare: bundled extension asset missing: "
+                << kUBlockOriginAsset;
+-    return base::FilePath();
++    return false;
+   }
+-
+   base::File asset(fd);
++
++  // Already extracted by an earlier launch. Trust it only if it is whole.
++  std::optional<int64_t> existing = base::GetFileSize(crx);
++  if (existing && *existing == region.size) {
++    return true;
++  }
++
+   std::vector<uint8_t> contents(static_cast<size_t>(region.size));
+   if (!asset.ReadAndCheck(region.offset, contents)) {
+     LOG(ERROR) << "Bare: could not read bundled extension asset";
+-    return base::FilePath();
++    return false;
+   }
+ 
+-  if (!base::WriteFile(crx, contents)) {
++  const base::FilePath partial = crx.AddExtension(FILE_PATH_LITERAL("partial"));
++  if (!base::WriteFile(partial, contents) ||
++      !base::ReplaceFile(partial, crx, nullptr)) {
+     LOG(ERROR) << "Bare: could not write bundled extension to " << crx;
+-    return base::FilePath();
++    base::DeleteFile(partial);
++    return false;
+   }
+-
+-  return crx;
++  return true;
+ }
+ 
+ base::DictValue BuildPrefs() {
+-  base::DictValue prefs;
+-
+-  // Bare: the welcome screen can decline the bundled ad blocker. Once it is not offered here,
+-  // the external provider treats it as withdrawn and uninstalls it on the next launch.
++  bare_bundled_extensions::ProfileState state;
++  // Bare: the welcome screen can decline the bundled ad blocker. Once it is not
++  // offered, the external provider treats it as withdrawn and uninstalls it on
++  // the next launch. That is the one case where leaving it out is meant.
+   base::android::SharedPreferencesManager shared_prefs =
+       android::shared_preferences::GetChromeSharedPreferences();
+-  if (!shared_prefs.ReadBoolean("Chrome.Bare.BundledAdBlockerEnabled", true)) {
+-    return prefs;
+-  }
+-
+-  const base::FilePath crx = ExtractBundledCrx();
+-  if (crx.empty()) {
+-    return prefs;
+-  }
+-
+-  base::DictValue entry;
+-  entry.Set("external_crx", crx.value());
+-  entry.Set("external_version", kUBlockOriginVersion);
+-  prefs.Set(kUBlockOriginId, std::move(entry));
+-  return prefs;
++  state.offer_enabled =
++      shared_prefs.ReadBoolean("Chrome.Bare.BundledAdBlockerEnabled", true);
++  const bare_bundled_extensions::Plan plan =
++      bare_bundled_extensions::DecidePlan(state);
++
++  const base::FilePath crx = BundledCrxPath();
++  const bool crx_ready = plan != bare_bundled_extensions::Plan::kOfferNothing &&
++                         ExtractBundledCrx(crx);
++  return bare_bundled_extensions::BuildProviderPrefs(
++      plan, {kUBlockOriginId, kUBlockOriginVersion}, crx, crx_ready);
+ }
+ 
+ }  // namespace
+diff --git a/components/bare_bundled_extensions/BUILD.gn b/components/bare_bundled_extensions/BUILD.gn
+new file mode 100644
+index 00000000000..c83410e5e7a
+--- /dev/null
++++ b/components/bare_bundled_extensions/BUILD.gn
+@@ -0,0 +1,27 @@
++# Copyright 2026 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++import("//testing/test.gni")
++
++# Bare: the decisions behind the extensions Bare ships inside the apk, starting
++# with what the external provider is told.
++# Kept apart from chrome/browser/extensions so the rules can be tested on the
++# host in seconds. Nothing here touches the disk or the extension system.
++source_set("bare_bundled_extensions") {
++  sources = [
++    "bundled_extension_plan.cc",
++    "bundled_extension_plan.h",
++  ]
++  public_deps = [ "//base" ]
++}
++
++test("bare_bundled_extensions_unittests") {
++  sources = [ "bundled_extension_plan_unittest.cc" ]
++  deps = [
++    ":bare_bundled_extensions",
++    "//base",
++    "//base/test:run_all_unittests",
++    "//testing/gtest",
++  ]
++}
+diff --git a/components/bare_bundled_extensions/bundled_extension_plan.cc b/components/bare_bundled_extensions/bundled_extension_plan.cc
+new file mode 100644
+index 00000000000..14accae62ad
+--- /dev/null
++++ b/components/bare_bundled_extensions/bundled_extension_plan.cc
+@@ -0,0 +1,60 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/bare_bundled_extensions/bundled_extension_plan.h"
++
++#include <utility>
++
++namespace bare_bundled_extensions {
++
++namespace {
++
++// Keys the external provider reads; see ExternalProviderImpl.
++constexpr char kExternalCrx[] = "external_crx";
++constexpr char kExternalVersion[] = "external_version";
++constexpr char kKeepIfPresent[] = "keep_if_present";
++
++base::DictValue Offer(const base::FilePath& crx, const std::string& version) {
++  base::DictValue entry;
++  entry.Set(kExternalCrx, crx.value());
++  entry.Set(kExternalVersion, version);
++  return entry;
++}
++
++// Claims an installed extension without asking for anything to be installed.
++// keep_if_present means nothing happens if it is absent, and version 0 is older
++// than any installed copy, so nothing is reinstalled over it either. Both keys
++// still have to be present: the provider only counts an entry carrying
++// external_crx and external_version as a claim.
++base::DictValue Keep(const base::FilePath& crx) {
++  base::DictValue entry;
++  entry.Set(kExternalCrx, crx.value());
++  entry.Set(kExternalVersion, "0");
++  entry.Set(kKeepIfPresent, true);
++  return entry;
++}
++
++}  // namespace
++
++Plan DecidePlan(const ProfileState& state) {
++  return state.offer_enabled ? Plan::kOfferCurrent : Plan::kOfferNothing;
++}
++
++base::DictValue BuildProviderPrefs(Plan plan,
++                                   const Ids& ids,
++                                   const base::FilePath& crx,
++                                   bool crx_ready) {
++  base::DictValue prefs;
++  switch (plan) {
++    case Plan::kOfferNothing:
++      break;
++    case Plan::kOfferCurrent:
++      prefs.Set(ids.current,
++                crx_ready ? Offer(crx, ids.current_version) : Keep(crx));
++      break;
++  }
++  return prefs;
++}
++
++}  // namespace bare_bundled_extensions
+diff --git a/components/bare_bundled_extensions/bundled_extension_plan.h b/components/bare_bundled_extensions/bundled_extension_plan.h
+new file mode 100644
+index 00000000000..e1520adc236
+--- /dev/null
++++ b/components/bare_bundled_extensions/bundled_extension_plan.h
+@@ -0,0 +1,53 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef COMPONENTS_BARE_BUNDLED_EXTENSIONS_BUNDLED_EXTENSION_PLAN_H_
++#define COMPONENTS_BARE_BUNDLED_EXTENSIONS_BUNDLED_EXTENSION_PLAN_H_
++
++#include <string>
++
++#include "base/files/file_path.h"
++#include "base/values.h"
++
++namespace bare_bundled_extensions {
++
++// What the provider is told about the extension Bare ships.
++struct ProfileState {
++  // False once the welcome screen has declined the bundled blocker.
++  bool offer_enabled = true;
++};
++
++enum class Plan {
++  // Claim nothing. Anything Bare installed earlier is then withdrawn by the
++  // provider machinery, which is what declining is meant to do.
++  kOfferNothing,
++  // Offer the shipped extension.
++  kOfferCurrent,
++};
++
++Plan DecidePlan(const ProfileState& state);
++
++struct Ids {
++  std::string current;
++  std::string current_version;
++};
++
++// Builds the dictionary handed to the external provider once the file work for
++// `plan` has been attempted.
++//
++// `crx` is where the shipped crx is, or would be. `crx_ready` says whether it is
++// there and whole.
++//
++// A failure never shows up as a missing entry. A missing entry tells the
++// provider the extension was withdrawn, and it uninstalls it along with the
++// user's settings, so an I/O error would cost the user their blocker. A failure
++// claims what is installed instead, as something to keep but not to install.
++base::DictValue BuildProviderPrefs(Plan plan,
++                                   const Ids& ids,
++                                   const base::FilePath& crx,
++                                   bool crx_ready);
++
++}  // namespace bare_bundled_extensions
++
++#endif  // COMPONENTS_BARE_BUNDLED_EXTENSIONS_BUNDLED_EXTENSION_PLAN_H_
+diff --git a/components/bare_bundled_extensions/bundled_extension_plan_unittest.cc b/components/bare_bundled_extensions/bundled_extension_plan_unittest.cc
+new file mode 100644
+index 00000000000..85db4715509
+--- /dev/null
++++ b/components/bare_bundled_extensions/bundled_extension_plan_unittest.cc
+@@ -0,0 +1,67 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/bare_bundled_extensions/bundled_extension_plan.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace bare_bundled_extensions {
++namespace {
++
++const Ids kIds{"current", "1.2.3"};
++const base::FilePath kCrx(FILE_PATH_LITERAL("/data/bundled/current-1.2.3.crx"));
++
++bool Offers(const base::DictValue& prefs, const std::string& id) {
++  const base::DictValue* entry = prefs.FindDict(id);
++  return entry && entry->FindString("external_crx") &&
++         entry->FindString("external_version") &&
++         !entry->FindBool("keep_if_present").value_or(false) &&
++         *entry->FindString("external_version") != "0";
++}
++
++// A claim the provider honours without installing anything.
++bool Keeps(const base::DictValue& prefs, const std::string& id) {
++  const base::DictValue* entry = prefs.FindDict(id);
++  return entry && entry->FindString("external_crx") &&
++         entry->FindString("external_version") &&
++         *entry->FindString("external_version") == "0" &&
++         entry->FindBool("keep_if_present").value_or(false);
++}
++
++TEST(BundledExtensionPlanTest, AFreshProfileIsOfferedTheShippedExtension) {
++  EXPECT_EQ(Plan::kOfferCurrent, DecidePlan(ProfileState()));
++}
++
++TEST(BundledExtensionPlanTest, DecliningAtWelcomeOffersNothing) {
++  ProfileState state;
++  state.offer_enabled = false;
++  EXPECT_EQ(Plan::kOfferNothing, DecidePlan(state));
++}
++
++TEST(BundledExtensionPlanTest, OfferNothingIsAnEmptyDictionary) {
++  EXPECT_TRUE(BuildProviderPrefs(Plan::kOfferNothing, kIds, kCrx, true)
++                  .empty());
++}
++
++TEST(BundledExtensionPlanTest, AReadyCrxIsOfferedAtItsVersion) {
++  base::DictValue prefs =
++      BuildProviderPrefs(Plan::kOfferCurrent, kIds, kCrx, true);
++  ASSERT_TRUE(Offers(prefs, "current"));
++  EXPECT_EQ(kCrx.value(),
++            *prefs.FindDict("current")->FindString("external_crx"));
++  EXPECT_EQ("1.2.3",
++            *prefs.FindDict("current")->FindString("external_version"));
++  EXPECT_EQ(1u, prefs.size());
++}
++
++// The failure the provider used to read as a withdrawal.
++TEST(BundledExtensionPlanTest, AFileFailureKeepsTheInstalledCopy) {
++  base::DictValue prefs =
++      BuildProviderPrefs(Plan::kOfferCurrent, kIds, kCrx, false);
++  EXPECT_TRUE(Keeps(prefs, "current"));
++  EXPECT_EQ(1u, prefs.size());
++}
++
++}  // namespace
++}  // namespace bare_bundled_extensions

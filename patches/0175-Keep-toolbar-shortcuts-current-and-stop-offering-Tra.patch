@@ -1,0 +1,203 @@
+From 799f76df83482dc80c59fa2c37e42b3918989b38 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 11 Oct 2026 08:22:11 +0000
+Subject: [PATCH] Keep toolbar shortcuts current, and stop offering Translate
+
+Shortcuts placed on the toolbar were often greyed out: Share and Translate on
+a page that plainly had something to share. BareButtonDataActionAdapter asked
+the button's provider whether it could be pressed only when the visible tab
+changed. A tab that opened on the new tab page, where Share has nothing to
+offer, kept that answer after navigating to an ordinary page, until the user
+happened to switch tabs. Measured on a Pixel 3: after navigating such a tab to
+example.org both buttons were disabled; switching to another tab on the same
+site enabled them at once. The adapter now asks again when the tab's URL
+changes.
+
+Translate goes from the choices altogether. It needs a Google API key, which
+this build does not have, so even an enabled Translate button could not
+translate anything. A slot an earlier release let someone set to Translate
+falls back to its default, and a hold set to it does nothing, through the
+checks that already discard actions a build no longer offers.
+---
+ .../bare/BareButtonDataActionAdapter.java     |  7 +++++
+ .../settings/BareToolbarSettingsUnitTest.java |  2 +-
+ .../ui/bottombar/BareToolbarDefaults.java     |  5 +++-
+ .../bottombar/BareToolbarLayoutUnitTest.java  | 28 +++++++++++++------
+ .../bottombar/BareToolbarPrefsUnitTest.java   |  4 +--
+ .../BareToolbarSecondaryActionsUnitTest.java  | 16 +++++------
+ 6 files changed, 42 insertions(+), 20 deletions(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java
+index 06c8f8123cb..c12978e4657 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java
+@@ -109,6 +109,13 @@ public class BareButtonDataActionAdapter
+                         mTab = tab;
+                         refresh();
+                     }
++
++                    // Whether Share has something to share depends on the page, so a tab that
++                    // opened on the new tab page has to be asked again once it navigates.
++                    @Override
++                    public void onUrlUpdated(Tab tab) {
++                        refresh();
++                    }
+                 };
+ 
+         mRegistry.register(mActionId, mModel);
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java
+index 050d4635578..a6e2ac6c255 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java
+@@ -100,7 +100,7 @@ public class BareToolbarSettingsUnitTest {
+                     ActionId.APP_MENU,
+                     action);
+         }
+-        assertEquals(5, BareToolbarDefaults.CATALOGUE.length);
++        assertEquals(4, BareToolbarDefaults.CATALOGUE.length);
+     }
+ 
+     @Test
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
+index 6db543e41fa..ffd99374621 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
+@@ -96,12 +96,15 @@ public final class BareToolbarDefaults {
+      * <p>GLIC and AI Mode are absent for their own reason. They still exist as actions, because
+      * the shared slot they came from is upstream code this build keeps in step with, but they are
+      * Google surfaces that do nothing here and offering them as choices would be offering nothing.
++     *
++     * <p>Translate is absent too. It needs a Google API key, which this build does not
++     * have, so the button could be pressed but never translate anything. A slot that
++     * was given Translate by an earlier release falls back to its default.
+      */
+     public static final @ActionId int[] CATALOGUE = {
+         ActionId.HOME_BUTTON,
+         ActionId.INCOGNITO,
+         ActionId.SHARE,
+-        ActionId.TRANSLATE,
+         ActionId.BOOKMARK,
+     };
+ 
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java
+index 0b3b77f6517..499552d6a73 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java
+@@ -159,9 +159,9 @@ public class BareToolbarLayoutUnitTest {
+     }
+ 
+     @Test
+-    public void testConfigurationB_translateShare() {
+-        store(ActionId.TRANSLATE, ActionId.SHARE);
+-        assertBar(ActionId.TRANSLATE, ActionId.SHARE);
++    public void testConfigurationB_incognitoShare() {
++        store(ActionId.INCOGNITO, ActionId.SHARE);
++        assertBar(ActionId.INCOGNITO, ActionId.SHARE);
+     }
+ 
+     @Test
+@@ -171,9 +171,21 @@ public class BareToolbarLayoutUnitTest {
+     }
+ 
+     @Test
+-    public void testConfigurationD_shareTranslate() {
+-        store(ActionId.SHARE, ActionId.TRANSLATE);
+-        assertBar(ActionId.SHARE, ActionId.TRANSLATE);
++    public void testConfigurationD_shareBookmark() {
++        store(ActionId.SHARE, ActionId.BOOKMARK);
++        assertBar(ActionId.SHARE, ActionId.BOOKMARK);
++    }
++
++    @Test
++    public void testATranslateLeftByAnEarlierReleaseFallsBackToTheDefault() {
++        store(ActionId.TRANSLATE, ActionId.TRANSLATE);
++        mPrefs.writeInt(holdKey(BareToolbarSlot.HOME), ActionId.TRANSLATE);
++        BareToolbarLayout.invalidate();
++
++        assertBar(ActionId.HOME_BUTTON, ActionId.INCOGNITO);
++        assertEquals(
++                BareToolbarDefaults.NO_ACTION,
++                BareToolbarPrefs.getSecondaryAction(BareToolbarSlot.HOME));
+     }
+ 
+     @Test
+@@ -190,8 +202,8 @@ public class BareToolbarLayoutUnitTest {
+ 
+     @Test
+     public void testOnlyHomeStored() {
+-        store(ActionId.TRANSLATE, UNSET);
+-        assertBar(ActionId.TRANSLATE, ActionId.INCOGNITO);
++        store(ActionId.BOOKMARK, UNSET);
++        assertBar(ActionId.BOOKMARK, ActionId.INCOGNITO);
+     }
+ 
+     @Test
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java
+index fe4ff8cfadf..0ff62c0ae2c 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java
+@@ -156,14 +156,14 @@ public class BareToolbarPrefsUnitTest {
+     @Test
+     public void testResetForgetsEveryChoice() {
+         BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.HOME, ActionId.BOOKMARK);
+-        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.EXTRA, ActionId.TRANSLATE);
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.EXTRA, ActionId.INCOGNITO);
+         BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.HOME, ActionId.SHARE);
+         // A key only a build that allowed three configurable positions could have written.
+         mPrefs.writeInt(
+                 ChromePreferenceKeys.BOTTOM_BAR_SLOT_PRIMARY_ACTION.createKey(
+                         BareToolbarSlot.APP_MENU),
+                 ActionId.SHARE);
+-        assertBar(ActionId.BOOKMARK, ActionId.TRANSLATE);
++        assertBar(ActionId.BOOKMARK, ActionId.INCOGNITO);
+ 
+         BareToolbarPrefs.resetAll();
+ 
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSecondaryActionsUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSecondaryActionsUnitTest.java
+index de2d3658a53..b2ae0d734f3 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSecondaryActionsUnitTest.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSecondaryActionsUnitTest.java
+@@ -127,7 +127,7 @@ public class BareToolbarSecondaryActionsUnitTest {
+     public void testResetClearsHoldsAsWellAsTaps() {
+         BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.HOME, ActionId.BOOKMARK);
+         BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.HOME, ActionId.SHARE);
+-        BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.EXTRA, ActionId.TRANSLATE);
++        BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.EXTRA, ActionId.BOOKMARK);
+ 
+         BareToolbarPrefs.resetAll();
+ 
+@@ -205,11 +205,11 @@ public class BareToolbarSecondaryActionsUnitTest {
+ 
+     @Test
+     public void testAnActionThatCannotRunRightNowDoesNothing() {
+-        // Translate on a new tab page: the action exists and is registered, but has nothing to
+-        // press, so holding does nothing rather than something invented.
++        // Share on a new tab page: the action exists and is registered, but has nothing to press,
++        // so holding does nothing rather than something invented.
+         PropertyModel home = register(ActionId.HOME_BUTTON, true);
+-        register(ActionId.TRANSLATE, /* pressable= */ false);
+-        BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.HOME, ActionId.TRANSLATE);
++        register(ActionId.SHARE, /* pressable= */ false);
++        BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.HOME, ActionId.SHARE);
+ 
+         BareToolbarSecondaryActions actions = attach();
+         hold(home);
+@@ -221,15 +221,15 @@ public class BareToolbarSecondaryActionsUnitTest {
+     @Test
+     public void testTheActionIsLookedUpWhenHeldRatherThanWhenChosen() {
+         PropertyModel home = register(ActionId.HOME_BUTTON, true);
+-        PropertyModel translate = register(ActionId.TRANSLATE, /* pressable= */ false);
+-        BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.HOME, ActionId.TRANSLATE);
++        PropertyModel share = register(ActionId.SHARE, /* pressable= */ false);
++        BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.HOME, ActionId.SHARE);
+         BareToolbarSecondaryActions actions = attach();
+ 
+         hold(home);
+         assertEquals("unavailable at first", 0, mInvokedCount);
+ 
+         // The page changes and the action becomes available.
+-        translate.set(ActionProperties.ON_PRESS_CALLBACK, (Callback<View>) v -> mInvokedCount++);
++        share.set(ActionProperties.ON_PRESS_CALLBACK, (Callback<View>) v -> mInvokedCount++);
+         hold(home);
+         assertEquals("available now, without anything being reconfigured", 1, mInvokedCount);
+ 

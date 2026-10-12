@@ -1,4 +1,4 @@
-From c44bada77ae3165e629159defe3c888ac75fc881 Mon Sep 17 00:00:00 2001
+From 285838734d6e947b8e87476bf9f7aa87e61b16a3 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Sat, 22 Aug 2026 05:52:11 +0000
 Subject: [PATCH] Make Google sign-in and sync unreachable
@@ -35,24 +35,29 @@ Nothing reachable, nothing advertised, rather than nothing compiled.
 This also settles the forty-seven strings that name Chrome in a sign-in or sync
 context. They describe pages a user can no longer open, so they need no
 renaming.
+
+Migration note (156.0.8078.25): upstream added the routes /account/personalize,
+/googleServices/priceTracking and /googleServices/contextualSearch beside the two
+removed here. All five are left unrouted. MainSettings keeps upstream's new
+cancelable wrapper around the sign-in set-up, behind the same null check.
 ---
- .../android/java/res/xml/main_preferences.xml | 15 -----
- .../privacy/settings/PrivacySettings.java     | 51 ++------------
- .../chrome/browser/settings/MainSettings.java | 66 +++++++++++--------
- .../settings/SettingsFragmentRegistry.java    |  7 +-
- .../settings/SettingsNavigationImpl.java      | 12 ++--
- .../search/SearchIndexProviderRegistry.java   |  8 ---
- 6 files changed, 51 insertions(+), 108 deletions(-)
+ .../android/java/res/xml/main_preferences.xml | 15 ----
+ .../privacy/settings/PrivacySettings.java     | 51 ++-----------
+ .../chrome/browser/settings/MainSettings.java | 75 ++++++++++---------
+ .../settings/SettingsFragmentRegistry.java    | 23 +-----
+ .../settings/SettingsNavigationImpl.java      | 12 +--
+ .../search/SearchIndexProviderRegistry.java   |  6 --
+ 6 files changed, 55 insertions(+), 127 deletions(-)
 
 diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/java/res/xml/main_preferences.xml
-index e9c82691cf..97007db310 100644
+index 4b78d6fb095..d8edd9cf7ea 100644
 --- a/chrome/android/java/res/xml/main_preferences.xml
 +++ b/chrome/android/java/res/xml/main_preferences.xml
 @@ -11,21 +11,6 @@ found in the LICENSE file.
      <org.chromium.chrome.browser.ui.settings_promo_card.SettingsPromoCardPreference
          android:key="settings_promo_card"
          android:order="0" />
--    <PreferenceCategory
+-    <org.chromium.components.browser_ui.settings.ChromeBasePreferenceCategory
 -        android:key="account_and_google_services_section"
 -        android:order="1"
 -        android:title="@string/prefs_section_account_and_google_services"/>
@@ -67,14 +72,14 @@ index e9c82691cf..97007db310 100644
 -        android:icon="@drawable/ic_google_services_48dp_with_bg"
 -        android:fragment="org.chromium.chrome.browser.sync.settings.GoogleServicesSettings"/>
 -
-     <PreferenceCategory
+     <org.chromium.components.browser_ui.settings.ChromeBasePreferenceCategory
          android:key="basics_section"
          android:order="5"
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
-index 3aae34cd07..ace65a5d95 100644
+index 512f512a828..b0e01fb59a2 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
-@@ -13,7 +13,6 @@ import android.graphics.drawable.Drawable;
+@@ -14,7 +14,6 @@ import android.graphics.drawable.Drawable;
  import android.os.Bundle;
  import android.text.SpannableString;
  import android.text.SpannableStringBuilder;
@@ -82,7 +87,7 @@ index 3aae34cd07..ace65a5d95 100644
  import android.view.Menu;
  import android.view.MenuInflater;
  import android.view.MenuItem;
-@@ -54,10 +53,7 @@ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
+@@ -55,10 +54,7 @@ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
  import org.chromium.chrome.browser.settings.ChromeManagedPreferenceDelegate;
  import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
  import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
@@ -93,7 +98,7 @@ index 3aae34cd07..ace65a5d95 100644
  import org.chromium.chrome.browser.usage_stats.UsageStatsConsentDialog;
  import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
  import org.chromium.components.browser_ui.settings.SettingsFragment;
-@@ -243,8 +239,12 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+@@ -245,8 +241,12 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
              httpsFirstModeLegacySwitchPref.setSummary(getContext().getString(summaryId));
          }
  
@@ -107,7 +112,7 @@ index 3aae34cd07..ace65a5d95 100644
  
          Preference thirdPartyCookies = findPreference(PREF_THIRD_PARTY_COOKIES);
          if (thirdPartyCookies != null) {
-@@ -298,47 +298,6 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+@@ -311,47 +311,6 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
          return mPageTitle;
      }
  
@@ -116,7 +121,7 @@ index 3aae34cd07..ace65a5d95 100644
 -                new ClickableSpan() {
 -                    @Override
 -                    public void onClick(View view) {
--                        SettingsNavigationFactory.createSettingsNavigation()
+-                        SettingsNavigationFactory.createSettingsNavigation(requireContext())
 -                                .startSettings(
 -                                        getActivity(),
 -                                        GoogleServicesSettings.class,
@@ -129,7 +134,7 @@ index 3aae34cd07..ace65a5d95 100644
 -                new ClickableSpan() {
 -                    @Override
 -                    public void onClick(View view) {
--                        SettingsNavigationFactory.createSettingsNavigation()
+-                        SettingsNavigationFactory.createSettingsNavigation(requireContext())
 -                                .startSettings(
 -                                        getActivity(),
 -                                        ManageSyncSettings.class,
@@ -156,10 +161,10 @@ index 3aae34cd07..ace65a5d95 100644
      public boolean onPreferenceChange(Preference preference, Object newValue) {
          String key = preference.getKey();
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
-index e7086b160e..c625c564de 100644
+index 12a6b5cfd94..9ec19c3b7d3 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
-@@ -376,37 +376,45 @@ public class MainSettings extends ChromeBaseSettingsFragment
+@@ -377,42 +377,49 @@ public class MainSettings extends ChromeBaseSettingsFragment
  
          OneshotSupplierImpl<BottomSheetSigninAndHistorySyncCoordinator> signinCoordinatorSupplier =
                  new OneshotSupplierImpl<>();
@@ -172,54 +177,63 @@ index e7086b160e..c625c564de 100644
 -            // TODO(crbug.com/495349057): update this to use the new sign-in coordinator API with
 -            // suppliers.
 -            SupplierUtils.waitForAll(
--                    () -> {
--                        OneshotSupplierImpl<Profile> profileSupplier = new OneshotSupplierImpl<>();
--                        profileSupplier.set(getProfile());
--                        var l = SigninAndHistorySyncActivityLauncherImpl.get();
--                        mSigninCoordinator =
--                                l.createBottomSheetSigninCoordinatorAndObserveAddAccountResult(
--                                        SupplierUtils.asNonNull(mWindowAndroidSupplier).get(),
--                                        getActivity(),
--                                        mActivityResultTracker,
--                                        signInPreference,
--                                        DeviceLockActivityLauncherImpl.get(),
--                                        profileSupplier,
--                                        SupplierUtils.asNonNull(mBottomSheetControllerSupplier),
--                                        mModalDialogManagerSupplier.asNonNull().get(),
--                                        SupplierUtils.asNonNull(mSnackbarManagerSupplier).get(),
--                                        SigninAccessPoint.SETTINGS);
--                        signinCoordinatorSupplier.set(mSigninCoordinator);
--                    },
--                    mWindowAndroidSupplier,
--                    mModalDialogManagerSupplier,
--                    mSnackbarManagerSupplier);
+-                    mCallbackController.makeCancelable(
+-                            () -> {
+-                                OneshotSupplierImpl<Profile> profileSupplier =
+-                                        new OneshotSupplierImpl<>();
+-                                profileSupplier.set(getProfile());
+-                                var l = SigninAndHistorySyncActivityLauncherImpl.get();
+-                                mSigninCoordinator =
+-                                        l
+-                                                .createBottomSheetSigninCoordinatorAndObserveAddAccountResult(
+-                                                        SupplierUtils.asNonNull(
+-                                                                        mWindowAndroidSupplier)
+-                                                                .get(),
+-                                                        getActivity(),
+-                                                        mActivityResultTracker,
+-                                                        signInPreference,
+-                                                        DeviceLockActivityLauncherImpl.get(),
+-                                                        profileSupplier,
+-                                                        SupplierUtils.asNonNull(
+-                                                                mBottomSheetControllerSupplier),
+-                                                        SupplierUtils.asNonNull(
+-                                                                mModalDialogManagerSupplier),
+-                                                        mSnackbarManagerSupplier,
+-                                                        SigninAccessPoint.SETTINGS);
+-                                signinCoordinatorSupplier.set(mSigninCoordinator);
+-                            }),
+-                    mWindowAndroidSupplier);
 +        if (signInPreference != null) {
 +            if (SigninFeatureMap.getInstance().isActivitylessSigninAllEntryPointEnabled()) {
-+                // TODO(crbug.com/495349057): update this to use the new sign-in
-+                // coordinator API with suppliers.
++                // TODO(crbug.com/495349057): update this to use the new sign-in coordinator API with
++                // suppliers.
 +                SupplierUtils.waitForAll(
-+                        () -> {
-+                            OneshotSupplierImpl<Profile> profileSupplier =
-+                                    new OneshotSupplierImpl<>();
-+                            profileSupplier.set(getProfile());
-+                            var l = SigninAndHistorySyncActivityLauncherImpl.get();
-+                            mSigninCoordinator =
-+                                    l.createBottomSheetSigninCoordinatorAndObserveAddAccountResult(
-+                                            SupplierUtils.asNonNull(mWindowAndroidSupplier).get(),
-+                                            getActivity(),
-+                                            mActivityResultTracker,
-+                                            signInPreference,
-+                                            DeviceLockActivityLauncherImpl.get(),
-+                                            profileSupplier,
-+                                            SupplierUtils.asNonNull(mBottomSheetControllerSupplier),
-+                                            mModalDialogManagerSupplier.asNonNull().get(),
-+                                            SupplierUtils.asNonNull(mSnackbarManagerSupplier).get(),
-+                                            SigninAccessPoint.SETTINGS);
-+                            signinCoordinatorSupplier.set(mSigninCoordinator);
-+                        },
-+                        mWindowAndroidSupplier,
-+                        mModalDialogManagerSupplier,
-+                        mSnackbarManagerSupplier);
++                        mCallbackController.makeCancelable(
++                                () -> {
++                                    OneshotSupplierImpl<Profile> profileSupplier =
++                                            new OneshotSupplierImpl<>();
++                                    profileSupplier.set(getProfile());
++                                    var l = SigninAndHistorySyncActivityLauncherImpl.get();
++                                    mSigninCoordinator =
++                                            l
++                                                    .createBottomSheetSigninCoordinatorAndObserveAddAccountResult(
++                                                            SupplierUtils.asNonNull(
++                                                                            mWindowAndroidSupplier)
++                                                                    .get(),
++                                                            getActivity(),
++                                                            mActivityResultTracker,
++                                                            signInPreference,
++                                                            DeviceLockActivityLauncherImpl.get(),
++                                                            profileSupplier,
++                                                            SupplierUtils.asNonNull(
++                                                                    mBottomSheetControllerSupplier),
++                                                            SupplierUtils.asNonNull(
++                                                                    mModalDialogManagerSupplier),
++                                                            mSnackbarManagerSupplier,
++                                                            SigninAccessPoint.SETTINGS);
++                                    signinCoordinatorSupplier.set(mSigninCoordinator);
++                                }),
++                        mWindowAndroidSupplier);
 +            }
 +            signInPreference.initialize(
 +                    getProfile(),
@@ -235,45 +249,76 @@ index e7086b160e..c625c564de 100644
          cachePreferences();
          updateAutofillPreferences();
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsFragmentRegistry.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsFragmentRegistry.java
-index 11b718f277..73d6f07ee2 100644
+index 1ceaa24ed06..e608c6391e9 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsFragmentRegistry.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsFragmentRegistry.java
-@@ -45,8 +45,6 @@ import org.chromium.chrome.browser.search_engines.settings.SearchEngineSettings;
+@@ -35,8 +35,6 @@ import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsFrag
+ import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsReferrer;
+ import org.chromium.chrome.browser.autofill.settings.personal_context.AutofillPersonalContextFragment;
+ import org.chromium.chrome.browser.browsing_data.ClearBrowsingDataFragment;
+-import org.chromium.chrome.browser.commerce.PriceNotificationSettingsFragment;
+-import org.chromium.chrome.browser.contextualsearch.ContextualSearchSettingsFragment;
+ import org.chromium.chrome.browser.download.settings.DownloadSettings;
+ import org.chromium.chrome.browser.glic.GlicActorLoginPermissionsFragment;
+ import org.chromium.chrome.browser.glic.GlicNavigationUtils;
+@@ -66,11 +64,7 @@ import org.chromium.chrome.browser.safety_hub.SafetyHubNotificationsFragment;
+ import org.chromium.chrome.browser.safety_hub.SafetyHubPermissionsFragment;
+ import org.chromium.chrome.browser.search_engines.settings.SearchEngineSettings;
  import org.chromium.chrome.browser.search_engines.settings.SiteSearchSettings;
- import org.chromium.chrome.browser.settings.search.SearchResultsPreferenceFragment;
+-import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
  import org.chromium.chrome.browser.ssl.HttpsFirstModeSettingsFragment;
 -import org.chromium.chrome.browser.sync.settings.GoogleServicesSettings;
 -import org.chromium.chrome.browser.sync.settings.ManageSyncSettings;
- import org.chromium.chrome.browser.tasks.tab_management.TabArchiveSettingsFragment;
+-import org.chromium.chrome.browser.sync.settings.PersonalizeGoogleServicesSettings;
  import org.chromium.chrome.browser.tasks.tab_management.TabsSettings;
+ import org.chromium.chrome.browser.tasks.tab_management.archived_tabs.TabArchiveSettingsFragment;
  import org.chromium.chrome.browser.toolbar.adaptive.settings.AdaptiveToolbarSettingsFragment;
-@@ -101,8 +99,9 @@ public class SettingsFragmentRegistry {
+@@ -240,15 +234,9 @@ public class SettingsFragmentRegistry {
+ 
+         // You and Google
          //
-         // TODO(crbug.com/542745585): Handle /account differently based on local state
-         // since it's not a static page which is always available.
--        registerMapping("/account", ManageSyncSettings.class);
+-        // Both pages describe the signed in account, and a URL can be typed or replayed from
+-        // history long after the user signed out, so neither is reachable without one.
+-        registerMapping("/account", ManageSyncSettings.class)
+-                .availableWhen(SettingsFragmentRegistry::hasSignedInAccount);
+-        registerMapping("/account/personalize", PersonalizeGoogleServicesSettings.class)
+-                .availableWhen(SettingsFragmentRegistry::hasSignedInAccount);
 -        registerMapping("/googleServices", GoogleServicesSettings.class);
-+        // De-Googled build: neither page is routable. MainSettings drops the rows
-+        // that led here, but the routes stayed live, and a deep link or a hit in
+-        registerMapping("/googleServices/priceTracking", PriceNotificationSettingsFragment.class);
+-        registerMapping("/googleServices/contextualSearch", ContextualSearchSettingsFragment.class);
++        // De-Googled build: none of these pages is routable. MainSettings drops the
++        // rows that led here, but the routes stayed live, and a deep link or a hit in
 +        // settings search still opened them.
  
          // Basics
          registerMapping("/search", SearchEngineSettings.class);
+@@ -708,11 +696,6 @@ public class SettingsFragmentRegistry {
+     }
+ 
+     /** Whether {@code profile} has a signed in account for the account pages to describe. */
+-    private static boolean hasSignedInAccount(Profile profile) {
+-        IdentityManager identityManager =
+-                IdentityServicesProvider.get().getIdentityManager(profile);
+-        return identityManager != null && identityManager.hasPrimaryAccount();
+-    }
+ 
+     /** Returns the settings URL for a registered path, defaulting to the settings root. */
+     private static String settingsUrlForPath(@Nullable String path) {
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsNavigationImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsNavigationImpl.java
-index fdb209902b..ae2b707a34 100644
+index 02d8ae1836e..32a8ea431a3 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsNavigationImpl.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsNavigationImpl.java
-@@ -57,9 +57,6 @@ import org.chromium.chrome.browser.search_engines.settings.SearchEngineSettings;
+@@ -58,9 +58,6 @@ import org.chromium.chrome.browser.search_engines.settings.SearchEngineSettings;
  import org.chromium.chrome.browser.search_engines.settings.SiteSearchSettings;
  import org.chromium.chrome.browser.settings.search.SearchResultsPreferenceFragment;
  import org.chromium.chrome.browser.ssl.HttpsFirstModeSettingsFragment;
 -import org.chromium.chrome.browser.sync.settings.GoogleServicesSettings;
 -import org.chromium.chrome.browser.sync.settings.ManageSyncSettings;
 -import org.chromium.chrome.browser.sync.settings.PersonalizeGoogleServicesSettings;
- import org.chromium.chrome.browser.tasks.tab_management.TabArchiveSettingsFragment;
  import org.chromium.chrome.browser.tasks.tab_management.TabsSettings;
+ import org.chromium.chrome.browser.tasks.tab_management.archived_tabs.TabArchiveSettingsFragment;
  import org.chromium.chrome.browser.toolbar.adaptive.settings.AdaptiveToolbarSettingsFragment;
-@@ -330,7 +327,8 @@ public class SettingsNavigationImpl implements SettingsNavigation {
+@@ -344,7 +341,8 @@ public class SettingsNavigationImpl implements SettingsNavigation {
              case SettingsFragment.GLIC_PERMISSIONS:
                  return GlicActorLoginPermissionsFragment.class;
              case SettingsFragment.GOOGLE_SERVICES:
@@ -283,7 +328,7 @@ index fdb209902b..ae2b707a34 100644
              case SettingsFragment.GROUPED_WEBSITES:
                  return GroupedWebsitesSettings.class;
              case SettingsFragment.HOMEPAGE:
-@@ -348,7 +346,8 @@ public class SettingsNavigationImpl implements SettingsNavigation {
+@@ -362,7 +360,8 @@ public class SettingsNavigationImpl implements SettingsNavigation {
              case SettingsFragment.MAIN:
                  return null; // The main settings page.
              case SettingsFragment.MANAGE_SYNC:
@@ -293,7 +338,7 @@ index fdb209902b..ae2b707a34 100644
              case SettingsFragment.NON_CARD_PAYMENT_METHODS:
                  return NonCardPaymentMethodsManagementFragment.class;
              case SettingsFragment.PAGE_INFO_COOKIES:
-@@ -356,7 +355,8 @@ public class SettingsNavigationImpl implements SettingsNavigation {
+@@ -370,7 +369,8 @@ public class SettingsNavigationImpl implements SettingsNavigation {
              case SettingsFragment.PAYMENT_METHODS:
                  return AutofillPaymentMethodsFragment.class;
              case SettingsFragment.PERSONALIZE_GOOGLE_SERVICES:
@@ -304,21 +349,20 @@ index fdb209902b..ae2b707a34 100644
                  return PreloadPagesSettingsFragment.class;
              case SettingsFragment.PRELOAD_PAGES_EXTENDED:
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
-index 2a7909d697..267032cc0b 100644
+index efa9e6573d5..af9f00461c7 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
-@@ -44,10 +44,6 @@ import org.chromium.chrome.browser.search_engines.settings.SiteSearchSettings;
+@@ -46,9 +46,6 @@ import org.chromium.chrome.browser.search_engines.settings.SiteSearchSettings;
  import org.chromium.chrome.browser.settings.MainSettings;
  import org.chromium.chrome.browser.ssl.HttpsFirstModeSettingsFragment;
  import org.chromium.chrome.browser.sync.settings.AccountManagementFragment;
 -import org.chromium.chrome.browser.sync.settings.GoogleServicesSettings;
 -import org.chromium.chrome.browser.sync.settings.ManageSyncSettings;
 -import org.chromium.chrome.browser.sync.settings.PersonalizeGoogleServicesSettings;
--import org.chromium.chrome.browser.sync.settings.SignInPreference;
- import org.chromium.chrome.browser.tasks.tab_management.TabArchiveSettingsFragment;
  import org.chromium.chrome.browser.tasks.tab_management.TabsSettings;
+ import org.chromium.chrome.browser.tasks.tab_management.archived_tabs.TabArchiveSettingsFragment;
  import org.chromium.chrome.browser.toolbar.adaptive.settings.AdaptiveToolbarSettingsFragment;
-@@ -94,7 +90,6 @@ public final class SearchIndexProviderRegistry {
+@@ -96,7 +93,6 @@ public final class SearchIndexProviderRegistry {
                      LegalInformationSettings.SEARCH_INDEX_DATA_PROVIDER,
                      SearchEngineSettings.SEARCH_INDEX_DATA_PROVIDER,
                      SiteSearchSettings.SEARCH_INDEX_DATA_PROVIDER,
@@ -326,7 +370,7 @@ index 2a7909d697..267032cc0b 100644
                      SecureDnsSettings.SEARCH_INDEX_DATA_PROVIDER,
                      TabArchiveSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
                      ChosenObjectSettings.SEARCH_INDEX_DATA_PROVIDER,
-@@ -125,7 +120,6 @@ public final class SearchIndexProviderRegistry {
+@@ -128,7 +124,6 @@ public final class SearchIndexProviderRegistry {
                      AutofillTravelFragment.SEARCH_INDEX_DATA_PROVIDER,
                      ClearBrowsingDataFragment.SEARCH_INDEX_DATA_PROVIDER,
                      FinancialAccountsManagementFragment.SEARCH_INDEX_DATA_PROVIDER,
@@ -334,12 +378,11 @@ index 2a7909d697..267032cc0b 100644
                      HttpsFirstModeSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
                      LanguageSettings.SEARCH_INDEX_DATA_PROVIDER,
                      NonCardPaymentMethodsManagementFragment.SEARCH_INDEX_DATA_PROVIDER,
-@@ -133,8 +127,6 @@ public final class SearchIndexProviderRegistry {
+@@ -136,7 +131,6 @@ public final class SearchIndexProviderRegistry {
                      PrivacySettings.SEARCH_INDEX_DATA_PROVIDER,
                      SafetyCheckSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
                      TabsSettings.SEARCH_INDEX_DATA_PROVIDER,
 -                    ManageSyncSettings.SEARCH_INDEX_DATA_PROVIDER,
--                    SignInPreference.SEARCH_INDEX_DATA_PROVIDER,
                      ThemeSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
                      DownloadSettings.SEARCH_INDEX_DATA_PROVIDER,
                      DeveloperSettings.SEARCH_INDEX_DATA_PROVIDER,

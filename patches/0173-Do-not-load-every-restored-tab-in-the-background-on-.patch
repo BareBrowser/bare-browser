@@ -1,0 +1,37 @@
+From 415e87e81fadd1966d6377f623e0646ef50c9973 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 11 Oct 2026 07:23:40 +0000
+Subject: [PATCH] Do not load every restored tab in the background on a phone
+
+156 adds kDesktopAndroidBackgroundTabLoading to the desktop Android override
+block. Once tabs are restored after a restart, it hands every background tab
+to PerformanceManager's BackgroundTabLoadingPolicy to be loaded. Upstream's own
+comment says the behaviour is not wanted on mobile Android, but the block is
+compiled into every desktop Android build, and Bare is one that runs on phones.
+
+On a phone with a few dozen tabs that means a burst of page loads nobody
+asked for: data, battery and memory. The memory matters twice over, because
+memory pressure while Bare is in the background is what gets uBlock Origin's
+background page killed. The override is dropped, so restored tabs load when
+they are opened, as they did in 153. kLoadAllTabsAtStartup, which only creates
+the WebContents, is left as it was.
+---
+ chrome/browser/chrome_browser_field_trials.cc | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/chrome_browser_field_trials.cc b/chrome/browser/chrome_browser_field_trials.cc
+index 2d638f0cce2..a3341be4e13 100644
+--- a/chrome/browser/chrome_browser_field_trials.cc
++++ b/chrome/browser/chrome_browser_field_trials.cc
+@@ -279,8 +279,9 @@ void ChromeBrowserFieldTrials::RegisterFeatureOverrides(
+   // reloaded. This requires kLoadAllTabsAtStartup above to be enabled as well.
+   // This is not enabled elsewhere because the desktop behavior is not desirable
+   // on mobile Android.
+-  feature_overrides.EnableFeature(
+-      chrome::android::kDesktopAndroidBackgroundTabLoading);
++  // Bare: not enabled. This build runs on phones, where loading every
++  // restored tab in the background costs memory, data and battery, and the
++  // memory pressure it adds is what gets extension background pages killed.
+ 
+   // Enable the ability for extensions to override chrome pages.
+   // TODO(crbug.com/404069963): Remove flag when the feature is verified to be

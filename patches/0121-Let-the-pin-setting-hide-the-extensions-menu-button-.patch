@@ -1,4 +1,4 @@
-From 21073d1728793511060ae59b72ab41f0d7aa634d Mon Sep 17 00:00:00 2001
+From abf4aa1de72af55f6d700fafcc3f32b675c2999a Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Wed, 9 Sep 2026 00:55:39 +0000
 Subject: [PATCH] Let the pin setting hide the extensions menu button on a
@@ -34,12 +34,15 @@ its "Open extensions menu" entry, so the menu is still reachable.
 Patch 0115 draws the container into the captured toolbar through View.draw,
 which honours each child's own visibility, so a hidden button stays out of the
 bitmap as well.
+
+Migration note (156.0.8078.25): upstream now calls updateMenuIconVisibility() at the
+end of construction itself, so that call is no longer part of this patch.
 ---
- .../ExtensionsToolbarCoordinatorImpl.java     | 41 +++++++++++++++++++
- 1 file changed, 41 insertions(+)
+ .../ExtensionsToolbarCoordinatorImpl.java     | 36 +++++++++++++++++++
+ 1 file changed, 36 insertions(+)
 
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsToolbarCoordinatorImpl.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsToolbarCoordinatorImpl.java
-index 648049286f..294a163418 100644
+index 8858367251b..c76dacfc332 100644
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsToolbarCoordinatorImpl.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsToolbarCoordinatorImpl.java
 @@ -48,6 +48,7 @@ import org.chromium.content_public.browser.selection.SelectionDropdownMenuDelega
@@ -75,7 +78,7 @@ index 648049286f..294a163418 100644
      private boolean mIsDestroyed;
      private final ExtensionsToolbarBridge.Observer mExtensionsToolbarBridgeObserver =
              new ExtensionsToolbarBridge.Observer() {
-@@ -184,6 +203,9 @@ public class ExtensionsToolbarCoordinatorImpl
+@@ -188,6 +207,9 @@ public class ExtensionsToolbarCoordinatorImpl
                          () ->
                                  mContainer.getResources().getConfiguration().screenWidthDp
                                          < COMPACT_WINDOW_THRESHOLD_DP);
@@ -85,19 +88,7 @@ index 648049286f..294a163418 100644
          mPrefChangeRegistrar = PrefServiceUtil.createFor(profile);
          mPrefChangeRegistrar.addObserver(
                  Pref.PIN_EXTENSIONS_MENU_BUTTON, this::updateMenuButtonPinState);
-@@ -195,6 +217,11 @@ public class ExtensionsToolbarCoordinatorImpl
-         mLastIconWidthPx =
-                 context.getResources()
-                         .getDimensionPixelSize(R.dimen.extension_action_icon_canvas_width);
-+
-+        // Apply the preference once at startup. The observer above only fires when the value
-+        // changes, and a phone runs no width consumers, so without this the button would keep
-+        // the visibility it was inflated with until something happened to toggle the setting.
-+        updateMenuIconVisibility();
-     }
- 
-     @Override
-@@ -235,6 +262,13 @@ public class ExtensionsToolbarCoordinatorImpl
+@@ -240,6 +262,13 @@ public class ExtensionsToolbarCoordinatorImpl
              mLayoutChangeListener = null;
          }
  
@@ -111,7 +102,7 @@ index 648049286f..294a163418 100644
          mMenuButtonChangeProcessor.destroy();
  
          if (mPrefChangeRegistrar != null) {
-@@ -456,6 +490,13 @@ public class ExtensionsToolbarCoordinatorImpl
+@@ -459,6 +488,13 @@ public class ExtensionsToolbarCoordinatorImpl
              mExtensionsMenuCoordinator.setMenuButtonPinned(isMenuButtonPinned());
          }
  

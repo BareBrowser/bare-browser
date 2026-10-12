@@ -1,4 +1,4 @@
-From 719acaac9abc8449340c39451c89805aad698dd5 Mon Sep 17 00:00:00 2001
+From 67421c379da15969a515f149e73d91054982e8e5 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Thu, 20 Aug 2026 10:29:58 +0000
 Subject: [PATCH] Offer a download for streamed video, not just linked video
@@ -74,10 +74,10 @@ Pairing and remuxing come next.
  create mode 100644 chrome/browser/ui/android/bare_media_registry.h
 
 diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
-index c2ed6a95e7..bd3a80dc9b 100644
+index cb7f8481537..5a3d7f5e59e 100644
 --- a/chrome/android/BUILD.gn
 +++ b/chrome/android/BUILD.gn
-@@ -3055,6 +3055,7 @@ if (_is_default_toolchain) {
+@@ -3078,6 +3078,7 @@ if (_is_default_toolchain) {
        "java/src/org/chromium/chrome/browser/backup/ChromeBackupAgentImpl.java",
        "java/src/org/chromium/chrome/browser/backup/ChromeBackupWatcher.java",
        "java/src/org/chromium/chrome/browser/backup/DictPrefBackupSerializer.java",
@@ -86,22 +86,22 @@ index c2ed6a95e7..bd3a80dc9b 100644
        "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappBridge.java",
        "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappGeolocationBridge.java",
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
-index b3c00da261..f1b0b1297e 100644
+index 9274abb5edc..92531d15da5 100644
 --- a/chrome/android/chrome_java_sources.gni
 +++ b/chrome/android/chrome_java_sources.gni
-@@ -218,6 +218,7 @@ chrome_java_sources = [
+@@ -238,6 +238,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetProperties.java",
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetView.java",
    "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetViewBinder.java",
-   "java/src/org/chromium/chrome/browser/automotivetoolbar/AutomotiveBackButtonToolbarCoordinator.java",
-   "java/src/org/chromium/chrome/browser/automotivetoolbar/EdgeSwipeGestureDetector.java",
 +  "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
    "java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java",
    "java/src/org/chromium/chrome/browser/background_sync/BackgroundSyncBackgroundTask.java",
    "java/src/org/chromium/chrome/browser/background_sync/BackgroundSyncBackgroundTaskScheduler.java",
 diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
-index 79f16a2d3d..36c09cbf4d 100644
+index 51713b52d47..21d823ab713 100644
 --- a/chrome/android/java/res/values/ids.xml
 +++ b/chrome/android/java/res/values/ids.xml
-@@ -140,6 +140,7 @@ found in the LICENSE file.
+@@ -143,6 +143,7 @@ found in the LICENSE file.
      <item type="id" name="contextmenu_download_video_frame" />
      <item type="id" name="contextmenu_picture_in_picture" />
      <item type="id" name="contextmenu_save_audio" />
@@ -111,7 +111,7 @@ index 79f16a2d3d..36c09cbf4d 100644
  
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java
 new file mode 100644
-index 0000000000..b20692d953
+index 00000000000..b20692d9531
 --- /dev/null
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java
 @@ -0,0 +1,86 @@
@@ -202,48 +202,48 @@ index 0000000000..b20692d953
 +    }
 +}
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
-index 85700062b8..10bd338146 100644
+index d5771c5c0b9..40184c49097 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
-@@ -92,7 +92,8 @@ class ChromeContextMenuItem {
-         Item.TRANSLATE,
+@@ -89,7 +89,8 @@ class ChromeContextMenuItem {
          Item.CREATE_QR_CODE,
          Item.ASK_GEMINI,
+         Item.ASK_GEMINI_IMAGE,
 -        Item.SAVE_AUDIO
 +        Item.SAVE_AUDIO,
 +        Item.SAVE_DETECTED_VIDEO
      })
      @Retention(RetentionPolicy.SOURCE)
      public @interface Item {
-@@ -164,8 +165,9 @@ class ChromeContextMenuItem {
+@@ -162,8 +163,9 @@ class ChromeContextMenuItem {
          // Appended rather than grouped with SAVE_VIDEO: MENU_IDS and STRING_IDS are
          // indexed by these values, so inserting in the middle renumbers the rest.
-         int SAVE_AUDIO = 54;
-+        int SAVE_DETECTED_VIDEO = 55;
+         int SAVE_AUDIO = 55;
++        int SAVE_DETECTED_VIDEO = 56;
          // ALWAYS UPDATE!
--        int NUM_ENTRIES = 55;
-+        int NUM_ENTRIES = 56;
+-        int NUM_ENTRIES = 56;
++        int NUM_ENTRIES = 57;
      }
  
      /** Mapping from {@link Item} to the ID found in the ids.xml. */
-@@ -225,6 +227,7 @@ class ChromeContextMenuItem {
-         R.id.contextmenu_create_qr_code, // Item.CREATE_QR_CODE
+@@ -224,6 +226,7 @@ class ChromeContextMenuItem {
          R.id.contextmenu_ask_gemini, // Item.ASK_GEMINI
+         R.id.contextmenu_ask_gemini_image, // Item.ASK_GEMINI_IMAGE
          R.id.contextmenu_save_audio, // Item.SAVE_AUDIO
 +        R.id.contextmenu_save_detected_video, // Item.SAVE_DETECTED_VIDEO
      };
  
      /** Mapping from {@link Item} to the ID of the string that describes the action of the item. */
 @@ -284,6 +287,7 @@ class ChromeContextMenuItem {
-         R.string.contextmenu_create_qr_code, // Item.CREATE_QR_CODE
          R.string.glic_button_entrypoint_ask_gemini_label, // Item.ASK_GEMINI
+         R.string.glic_button_entrypoint_ask_gemini_label, // Item.ASK_GEMINI_IMAGE
          R.string.contextmenu_save_audio, // Item.SAVE_AUDIO
 +        R.string.contextmenu_save_video, // Item.SAVE_DETECTED_VIDEO
      };
  
      /**
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
-index aa73f2e04d..79e36eda33 100644
+index d4272bcbbad..d883c9f1591 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
 @@ -46,6 +46,7 @@ import org.chromium.base.shared_preferences.SharedPreferencesManager;
@@ -254,7 +254,7 @@ index aa73f2e04d..79e36eda33 100644
  import org.chromium.chrome.browser.bookmarks.BookmarkUtils;
  import org.chromium.chrome.browser.contextmenu.ChromeContextMenuItem.Item;
  import org.chromium.chrome.browser.contextmenu.ContextMenuCoordinator.ContextMenuItemType;
-@@ -960,6 +961,32 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+@@ -928,6 +929,32 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
              }
          }
  
@@ -287,7 +287,7 @@ index aa73f2e04d..79e36eda33 100644
          if (mParams.getOpenedFromHighlight()) {
              ModelList sharedHighlightingGroup = new ModelList();
              if (mMode == ContextMenuMode.NORMAL) {
-@@ -1226,6 +1253,17 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+@@ -1180,6 +1207,17 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
              } else if (mItemDelegate.startDownload(mParams.getSrcUrl(), /* isLink= */ false)) {
                  mNativeDelegate.startDownload(mParams.getSrcUrl(), /* isMedia= */ true);
              }
@@ -305,7 +305,7 @@ index aa73f2e04d..79e36eda33 100644
          } else if (itemId == R.id.contextmenu_save_video) {
              recordContextMenuSelection(ContextMenuUma.Action.SAVE_VIDEO);
              if (mIsDownloadRestrictedByPolicy) {
-@@ -1906,6 +1944,11 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+@@ -1881,6 +1919,11 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
                  && !LocaleManager.getInstance().needToCheckForSearchEnginePromo();
      }
  
@@ -318,7 +318,7 @@ index aa73f2e04d..79e36eda33 100644
      private Profile getProfile() {
          return Profile.fromWebContents(mItemDelegate.getWebContents());
 diff --git a/chrome/browser/ui/android/BUILD.gn b/chrome/browser/ui/android/BUILD.gn
-index 6e6c6ef911..d08bbb69bc 100644
+index c26e65db351..f545872877c 100644
 --- a/chrome/browser/ui/android/BUILD.gn
 +++ b/chrome/browser/ui/android/BUILD.gn
 @@ -59,6 +59,11 @@ if (is_android) {
@@ -332,8 +332,8 @@ index 6e6c6ef911..d08bbb69bc 100644
 +      "bare_media_registry.h",
        "context_menu_helper.cc",
        "context_menu_helper.h",
-     ]
-@@ -70,6 +75,8 @@ if (is_android) {
+       "extension_tab_context_menu_bridge.cc",
+@@ -72,6 +77,8 @@ if (is_android) {
        "//content/public/browser",
        "//extensions/buildflags",
        "//mojo/public/cpp/bindings",
@@ -344,7 +344,7 @@ index 6e6c6ef911..d08bbb69bc 100644
        "//ui/gfx/geometry",
 diff --git a/chrome/browser/ui/android/bare_media_registry.cc b/chrome/browser/ui/android/bare_media_registry.cc
 new file mode 100644
-index 0000000000..368a30eef9
+index 00000000000..93b22d8be34
 --- /dev/null
 +++ b/chrome/browser/ui/android/bare_media_registry.cc
 @@ -0,0 +1,196 @@
@@ -381,8 +381,8 @@ index 0000000000..368a30eef9
 +// Floors that keep ordinary page furniture out of the list. Sprites, icons,
 +// tracking pixels and interface sounds all sit comfortably below these;
 +// anything a person would actually mean to keep sits comfortably above.
-+constexpr base::ByteSize kMinImageSize = base::KiBU(40);
-+constexpr base::ByteSize kMinAudioVideoSize = base::KiBU(96);
++constexpr base::ByteSize kMinImageSize = base::KiB(40);
++constexpr base::ByteSize kMinAudioVideoSize = base::KiB(96);
 +
 +bool IsMediaMimeType(std::string_view mime) {
 +  return base::StartsWith(mime, "video/",
@@ -546,7 +546,7 @@ index 0000000000..368a30eef9
 +DEFINE_JNI(BareMediaRegistryBridge)
 diff --git a/chrome/browser/ui/android/bare_media_registry.h b/chrome/browser/ui/android/bare_media_registry.h
 new file mode 100644
-index 0000000000..e13e52f943
+index 00000000000..e13e52f943c
 --- /dev/null
 +++ b/chrome/browser/ui/android/bare_media_registry.h
 @@ -0,0 +1,78 @@
@@ -629,18 +629,18 @@ index 0000000000..e13e52f943
 +
 +#endif  // CHROME_BROWSER_UI_ANDROID_BARE_MEDIA_REGISTRY_H_
 diff --git a/chrome/browser/ui/tab_helpers.cc b/chrome/browser/ui/tab_helpers.cc
-index 446351a9d0..1bb1a34ad0 100644
+index f7e2862c79b..b2b0bd59685 100644
 --- a/chrome/browser/ui/tab_helpers.cc
 +++ b/chrome/browser/ui/tab_helpers.cc
-@@ -179,6 +179,7 @@
+@@ -147,6 +147,7 @@
+ #include "chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h"
+ #include "chrome/browser/facilitated_payments/ui/chrome_facilitated_payments_client.h"
  #include "chrome/browser/flags/android/chrome_feature_list.h"
- #include "chrome/browser/loader/from_gws_navigation_and_keep_alive_request_tab_helper.h"
- #include "chrome/browser/plugins/plugin_observer_android.h"
 +#include "chrome/browser/ui/android/bare_media_registry.h"
  #include "chrome/browser/ui/android/context_menu_helper.h"
  #include "chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_android.h"
  #include "components/content_capture/common/content_capture_features.h"
-@@ -679,6 +680,9 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents,
+@@ -534,6 +535,9 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents,
                            *web_contents));
    }
    ContextMenuHelper::CreateForWebContents(web_contents);
@@ -648,5 +648,5 @@ index 446351a9d0..1bb1a34ad0 100644
 +  // download for media the page never exposes as an element src.
 +  bare::BareMediaRegistry::CreateForWebContents(web_contents);
  
-   if (base::FeatureList::IsEnabled(finds::features::kChromeFinds)) {
-     if (auto* finds_service =
+   javascript_dialogs::TabModalDialogManager::CreateForWebContents(
+       web_contents,

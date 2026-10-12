@@ -1,4 +1,4 @@
-From ca2b5911c6793484317ff8fe64e5623eee24e39c Mon Sep 17 00:00:00 2001
+From f935b47f72b6f2c865bf6f265c03c1f0b8f718db Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Fri, 28 Aug 2026 22:43:11 +0000
 Subject: [PATCH] Let a sideways drag along the bar change brightness or volume
@@ -39,6 +39,11 @@ device is actually showing and starts there instead of jumping.
 Volume is the media stream in the steps the device actually has, without the
 system's own volume panel: the bar being dragged is the feedback, and a second
 slider appearing over it on every movement would be the louder of the two.
+
+Migration note (156.0.8078.25): upstream gave BottomBarView an onTouchEvent that
+always consumes, so touches in the bar's padding never reach the page
+(crbug.com/558675943). The swipe handling lives in that one method now and keeps
+consuming every touch, rather than returning false when no swipe is set.
 ---
  .../java/res/xml/bare_toolbar_preferences.xml |   7 +-
  .../settings/BareToolbarSettingsFragment.java |  55 +++++
@@ -51,10 +56,10 @@ slider appearing over it on every movement would be the louder of the two.
  .../ui/bottombar/BareToolbarSwipePrefs.java   |  48 ++++
  .../ui/bottombar/BareToolbarSwipeSlider.java  | 141 ++++++++++++
  .../ui/bottombar/BottomBarCoordinator.java    |   5 +
- .../browser/ui/bottombar/BottomBarView.java   | 153 +++++++++++++
- .../BottomBarViewBinderUnitTest.java          |  22 +-
+ .../browser/ui/bottombar/BottomBarView.java   | 167 +++++++++++++-
+ .../BottomBarViewBinderUnitTest.java          |  19 +-
  .../strings/android_chrome_strings.grd        |  12 +
- 14 files changed, 857 insertions(+), 13 deletions(-)
+ 14 files changed, 861 insertions(+), 20 deletions(-)
  create mode 100644 chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAction.java
  create mode 100644 chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAdjuster.java
  create mode 100644 chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeGestureUnitTest.java
@@ -62,7 +67,7 @@ slider appearing over it on every movement would be the louder of the two.
  create mode 100644 chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeSlider.java
 
 diff --git a/chrome/android/java/res/xml/bare_toolbar_preferences.xml b/chrome/android/java/res/xml/bare_toolbar_preferences.xml
-index abef8fe592..d87f99c1c0 100644
+index abef8fe592d..d87f99c1c00 100644
 --- a/chrome/android/java/res/xml/bare_toolbar_preferences.xml
 +++ b/chrome/android/java/res/xml/bare_toolbar_preferences.xml
 @@ -12,9 +12,14 @@ found in the LICENSE file.
@@ -82,7 +87,7 @@ index abef8fe592..d87f99c1c0 100644
  
  </PreferenceScreen>
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
-index 3b4ef3689c..87517aa1c8 100644
+index 3b4ef3689c9..87517aa1c87 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
 @@ -8,6 +8,7 @@ import android.content.Context;
@@ -176,10 +181,10 @@ index 3b4ef3689c..87517aa1c8 100644
       * Offers the buttons that can go in a position, with the one already there marked.
       *
 diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-index c69642c41d..4aec85765e 100644
+index a84ddf60d6d..af4eb309605 100644
 --- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
 +++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-@@ -149,6 +149,12 @@ public final class ChromePreferenceKeys {
+@@ -146,6 +146,12 @@ public final class ChromePreferenceKeys {
      public static final KeyPrefix BOTTOM_BAR_SLOT_PRIMARY_ACTION =
              new KeyPrefix("Chrome.BottomBar.SlotPrimaryAction.*");
  
@@ -192,7 +197,7 @@ index c69642c41d..4aec85765e 100644
      /** Whether Chrome is set as the default browser. Default value is false. */
      public static final String CHROME_DEFAULT_BROWSER = "applink.chrome_default_browser";
  
-@@ -1285,6 +1291,7 @@ public final class ChromePreferenceKeys {
+@@ -1263,6 +1269,7 @@ public final class ChromePreferenceKeys {
                  BOOKMARKS_VISUALS_PREF,
                  BOTTOM_BAR_GLIC_BUTTON_ENABLED,
                  BOTTOM_BAR_SLOT_PRIMARY_ACTION.pattern(),
@@ -201,7 +206,7 @@ index c69642c41d..4aec85765e 100644
                  CLIPBOARD_SHARED_URI_TIMESTAMP,
                  CLOUD_MANAGEMENT_CLIENT_ID,
 diff --git a/chrome/browser/ui/android/bottombar/BUILD.gn b/chrome/browser/ui/android/bottombar/BUILD.gn
-index bba5dca080..7c05b19532 100644
+index b335ba1e2e5..3fe0c8c7bb6 100644
 --- a/chrome/browser/ui/android/bottombar/BUILD.gn
 +++ b/chrome/browser/ui/android/bottombar/BUILD.gn
 @@ -65,6 +65,10 @@ android_library("java") {
@@ -215,7 +220,7 @@ index bba5dca080..7c05b19532 100644
      "java/src/org/chromium/chrome/browser/ui/bottombar/BottomBar.java",
      "java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarActionEligibility.java",
      "java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarAppMenu.java",
-@@ -133,6 +137,7 @@ robolectric_library("junit") {
+@@ -130,6 +134,7 @@ robolectric_library("junit") {
      "java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarActionRenderingUnitTest.java",
      "java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java",
      "java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java",
@@ -224,10 +229,10 @@ index bba5dca080..7c05b19532 100644
      "java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonContainerUnitTest.java",
      "java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonManagerUnitTest.java",
 diff --git a/chrome/browser/ui/android/bottombar/java/res/layout/bottom_bar_layout.xml b/chrome/browser/ui/android/bottombar/java/res/layout/bottom_bar_layout.xml
-index 08dcc3b87d..d603b04c13 100644
+index 291821d8003..6f26300971a 100644
 --- a/chrome/browser/ui/android/bottombar/java/res/layout/bottom_bar_layout.xml
 +++ b/chrome/browser/ui/android/bottombar/java/res/layout/bottom_bar_layout.xml
-@@ -100,4 +100,12 @@ found in the LICENSE file.
+@@ -102,4 +102,12 @@ found in the LICENSE file.
              android:layout="@layout/bottom_bar_generic_template" />
      </org.chromium.chrome.browser.ui.bottombar.BottomBarButtonContainer>
  
@@ -242,7 +247,7 @@ index 08dcc3b87d..d603b04c13 100644
  </org.chromium.chrome.browser.ui.bottombar.BottomBarView>
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAction.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAction.java
 new file mode 100644
-index 0000000000..2f801a116d
+index 00000000000..2f801a116da
 --- /dev/null
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAction.java
 @@ -0,0 +1,39 @@
@@ -287,7 +292,7 @@ index 0000000000..2f801a116d
 +}
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAdjuster.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAdjuster.java
 new file mode 100644
-index 0000000000..817779a68d
+index 00000000000..817779a68df
 --- /dev/null
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAdjuster.java
 @@ -0,0 +1,153 @@
@@ -446,7 +451,7 @@ index 0000000000..817779a68d
 +}
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeGestureUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeGestureUnitTest.java
 new file mode 100644
-index 0000000000..b52c9693c6
+index 00000000000..b52c9693c64
 --- /dev/null
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeGestureUnitTest.java
 @@ -0,0 +1,215 @@
@@ -667,7 +672,7 @@ index 0000000000..b52c9693c6
 +}
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipePrefs.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipePrefs.java
 new file mode 100644
-index 0000000000..3f4eab32d5
+index 00000000000..3f4eab32d51
 --- /dev/null
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipePrefs.java
 @@ -0,0 +1,48 @@
@@ -721,7 +726,7 @@ index 0000000000..3f4eab32d5
 +}
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeSlider.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeSlider.java
 new file mode 100644
-index 0000000000..5067aed839
+index 00000000000..5067aed8397
 --- /dev/null
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeSlider.java
 @@ -0,0 +1,141 @@
@@ -867,10 +872,10 @@ index 0000000000..5067aed839
 +    }
 +}
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
-index bd8a37a9fa..722e0c14fc 100644
+index cd139025279..e3cb66dbe21 100644
 --- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
-@@ -120,6 +120,11 @@ public class BottomBarCoordinator
+@@ -126,6 +126,11 @@ public class BottomBarCoordinator
          mTabSupplier = tabSupplier;
          mMcp = PropertyModelChangeProcessor.create(mModel, mView, BottomBarViewBinder::bind);
  
@@ -883,14 +888,13 @@ index bd8a37a9fa..722e0c14fc 100644
          // preference and goes away. This is the same route the bar already uses to hear about its
          // other setting, and the same one the address bar uses to move itself between top and
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java
-index 711f57a7e0..81836c8f34 100644
+index 7cf53c523dc..432e45d116d 100644
 --- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java
-@@ -11,9 +11,13 @@ import android.content.res.ColorStateList;
- import android.graphics.drawable.Drawable;
+@@ -13,9 +13,12 @@ import android.graphics.drawable.Drawable;
  import android.graphics.drawable.RippleDrawable;
  import android.util.AttributeSet;
-+import android.view.MotionEvent;
+ import android.view.MotionEvent;
 +import android.view.ViewConfiguration;
  import android.view.View;
  import android.widget.LinearLayout;
@@ -898,11 +902,11 @@ index 711f57a7e0..81836c8f34 100644
 +import androidx.annotation.VisibleForTesting;
 +
  import androidx.annotation.ColorInt;
+ import androidx.annotation.Px;
  
- import org.chromium.build.annotations.NullMarked;
-@@ -43,6 +47,19 @@ public class BottomBarView extends LinearLayout {
-     private int mNewTabPaddingEnd;
-     private int mNewTabPaddingBottom;
+@@ -55,20 +58,23 @@ public class BottomBarView extends LinearLayout {
+     private @Px int mNewTabPaddingBottom;
+     private float mDisabledAlpha;
  
 +    private BareToolbarSwipeSlider mSwipeSlider;
 +    private int mTouchSlop;
@@ -920,7 +924,21 @@ index 711f57a7e0..81836c8f34 100644
      public BottomBarView(Context context, @Nullable AttributeSet attributeSet) {
          super(context, attributeSet);
      }
-@@ -87,12 +104,147 @@ public class BottomBarView extends LinearLayout {
+ 
+-    @Override
+-    @SuppressLint("ClickableViewAccessibility")
+-    public boolean onTouchEvent(MotionEvent event) {
+-        // Consume touches in padding/empty space so they don't fall through to WebContents
+-        // and trigger Contextual Search or click interactions (crbug.com/558675943).
+-        // Done via onTouchEvent instead of clickable="true" so TalkBack doesn't announce the
+-        // entire bottom bar layout as a button.
+-        return true;
+-    }
+-
+     @Override
+     protected void onFinishInflate() {
+         super.onFinishInflate();
+@@ -111,6 +117,9 @@ public class BottomBarView extends LinearLayout {
                  };
          mOtherRipples = new RippleDrawable[mOtherContainers.length];
  
@@ -928,9 +946,10 @@ index 711f57a7e0..81836c8f34 100644
 +        mTouchSlop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
 +
          mNewTabPaddingStart = mNewTabButton.getPaddingStart();
-         mNewTabPaddingTop = mNewTabButton.getPaddingTop();
          mNewTabPaddingEnd = mNewTabButton.getPaddingEnd();
-         mNewTabPaddingBottom = mNewTabButton.getPaddingBottom();
+         applyDynamicDimensions(context);
+@@ -241,6 +250,143 @@ public class BottomBarView extends LinearLayout {
+         return mNewTabRippleNoBackground;
      }
  
 +    /** Lets a sideways drag change something. Null turns the gesture off. */
@@ -964,27 +983,31 @@ index 711f57a7e0..81836c8f34 100644
 +    }
 +
 +    @Override
++    @SuppressLint("ClickableViewAccessibility")
 +    public boolean onTouchEvent(MotionEvent event) {
++        // Consume touches in padding/empty space so they don't fall through to WebContents
++        // and trigger Contextual Search or click interactions (crbug.com/558675943).
++        // Done via onTouchEvent instead of clickable="true" so TalkBack doesn't announce the
++        // entire bottom bar layout as a button.
++        //
++        // A sideways drag that starts between the buttons reaches the bar here rather than
++        // through onInterceptTouchEvent, so it is followed from this method as well.
 +        switch (event.getActionMasked()) {
 +            case MotionEvent.ACTION_DOWN:
-+                // Reaches the bar itself only when the finger landed between the buttons.
 +                onGestureDown(event);
-+                return mSwipeAction != BareToolbarSwipeAction.OFF;
++                break;
 +            case MotionEvent.ACTION_MOVE:
-+                if (!mSwipeActive) {
-+                    if (!isHorizontalDrag(event)) return false;
-+                    beginSwipe(event);
-+                }
-+                updateSwipe(event);
-+                return true;
++                if (!mSwipeActive && isHorizontalDrag(event)) beginSwipe(event);
++                if (mSwipeActive) updateSwipe(event);
++                break;
 +            case MotionEvent.ACTION_UP:
 +            case MotionEvent.ACTION_CANCEL:
-+                if (!mSwipeActive) return false;
-+                endSwipe();
-+                return true;
++                if (mSwipeActive) endSwipe();
++                break;
 +            default:
-+                return false;
++                break;
 +        }
++        return true;
 +    }
 +
 +    /** Remembers where the finger landed and what a drag from here would do. */
@@ -1065,22 +1088,23 @@ index 711f57a7e0..81836c8f34 100644
 +        return mSwipeActive;
 +    }
 +
-     void setColorScheme(@BrandedColorScheme int colorScheme) {
-         Context context = getContext();
-         setBackgroundColor(BottomBarUtils.getBottomBarBackgroundColor(context, colorScheme));
-@@ -133,6 +285,7 @@ public class BottomBarView extends LinearLayout {
++
+     RippleDrawable[] getOtherRipplesForTesting() {
+         return mOtherRipples;
+     }
+@@ -278,6 +424,7 @@ public class BottomBarView extends LinearLayout {
          mNewTabContainer.setColorScheme(tint, colorScheme);
          mTabSwitcherContainer.setColorScheme(tint, colorScheme);
          mAppMenuContainer.setColorScheme(tint, colorScheme);
 +        mSwipeSlider.setColorScheme(colorScheme);
      }
  
-     /*package*/ void setNewTabBackgroundVisible(boolean visible) {
+     public void setNewTabBackgroundVisible(boolean visible) {
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarViewBinderUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarViewBinderUnitTest.java
-index 2fe021270a..1d1e76d070 100644
+index df52e8b23ff..d1e1f9eaf9b 100644
 --- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarViewBinderUnitTest.java
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarViewBinderUnitTest.java
-@@ -149,21 +149,19 @@ public class BottomBarViewBinderUnitTest {
+@@ -151,19 +151,20 @@ public class BottomBarViewBinderUnitTest {
  
      @Test
      public void testLayoutOrderMatchesManagerOrder() {
@@ -1097,10 +1121,7 @@ index 2fe021270a..1d1e76d070 100644
          assertEquals(R.id.extra_button_container, mBottomBarView.getChildAt(1).getId());
 -
 -        // 2: new tab container
--        View centerContainer = mBottomBarView.getChildAt(2);
--
 -        // 3: tab switcher container
--        View tabSwitcherContainer = mBottomBarView.getChildAt(3);
 -
 -        // 4: app_menu_button_container
 +        assertEquals(R.id.new_tab_button_container, mBottomBarView.getChildAt(2).getId());
@@ -1111,12 +1132,13 @@ index 2fe021270a..1d1e76d070 100644
 +        assertEquals(R.id.bottom_bar_swipe_slider, slider.getId());
 +        assertEquals(View.GONE, slider.getVisibility());
      }
- }
+ 
+     @Test
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index b25ecaad9d..d3bcd10f6b 100644
+index 5236c8b6fb5..d69b237526e 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -4257,6 +4257,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4234,6 +4234,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
        <message name="IDS_BARE_TOOLBAR_SETTINGS_RESET" desc="Button that puts the toolbar back to its original arrangement.">
          Reset toolbar
        </message>

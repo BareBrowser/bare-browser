@@ -1,4 +1,4 @@
-From a44afc25448b181b0517793c34104fe5545c9cc9 Mon Sep 17 00:00:00 2001
+From b8d49823b75d38549d91cf9886817d99f5a7fa39 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Tue, 18 Aug 2026 16:20:53 +0000
 Subject: [PATCH] Stop painting white while a page loads on a dark theme
@@ -32,13 +32,13 @@ is set to false so the content setting still defaults to BLOCK and nothing darke
 the user ticks the box; upstream true would have turned it on for everybody.
 Migration note (8010.27): the ThemeUtils.getBackgroundColor hunk is dropped. Upstream rewrote the method to read tab.getBackgroundColor(), which is fed by WebContents.onBackgroundColorChanged and falls back to the theme colour while transparent, so the render widget path this hunk worked around is gone. The features.cc comment now describes the flag as the auto-dark toggle rather than a white-flash fix, because the flash happens before the page paints. The tab_android.cc hunk keeps SK_ColorBLACK: following the selected theme colour would need a themed Context reachable from native code, which patch 0077 showed to be the unreliable part, and the white-flash comparison on device comes first.
 ---
- .../browser/compositor/CompositorViewHolder.java  | 10 +++++++---
+ .../browser/compositor/CompositorViewHolder.java  | 11 ++++++++---
  chrome/browser/android/tab_android.cc             | 15 +++++++++++++++
  .../content_settings/core/common/features.cc      | 15 +++++++++++++--
- 3 files changed, 35 insertions(+), 5 deletions(-)
+ 3 files changed, 36 insertions(+), 5 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
-index a01a69c7fe..be3752159a 100644
+index ae37843b68e..1fe7ebd9acf 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
 @@ -18,7 +18,6 @@ import static java.util.Collections.emptySet;
@@ -49,7 +49,7 @@ index a01a69c7fe..be3752159a 100644
  import android.graphics.Point;
  import android.graphics.Rect;
  import android.graphics.RectF;
-@@ -96,6 +95,7 @@ import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.SideUiSpecs;
+@@ -97,6 +96,7 @@ import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.UiUpdateRequest.
  import org.chromium.chrome.browser.ui.side_ui.SideUiObserver;
  import org.chromium.chrome.browser.ui.side_ui.SideUiStateProvider;
  import org.chromium.chrome.browser.ui.vertical_tabs.VerticalTabUtils;
@@ -57,27 +57,27 @@ index a01a69c7fe..be3752159a 100644
  import org.chromium.components.browser_ui.widget.TouchEventObserver;
  import org.chromium.components.browser_ui.widget.TouchEventProvider;
  import org.chromium.components.content_capture.OnscreenContentProvider;
-@@ -863,9 +863,13 @@ public class CompositorViewHolder extends FrameLayout
+@@ -874,8 +874,13 @@ public class CompositorViewHolder extends FrameLayout
      public void prepareForTabReparenting() {
          if (mHasDrawnOnce) return;
  
--        // Set the background to white while we wait for the first swap of buffers. This gets
-+        // Set a placeholder background while we wait for the first swap of buffers. This gets
-         // corrected inside the view.
+-        // Set the background to white while we wait for the first swap of buffers.
 -        mCompositorView.setBackgroundColor(Color.WHITE);
++        // Set a placeholder background while we wait for the first swap of buffers. This gets
++        // corrected inside the view.
 +        //
 +        // De-Googled build: follow the theme rather than always using white, which flashed on a
 +        // dark theme.
 +        mCompositorView.setBackgroundColor(
 +                ChromeColors.getPrimaryBackgroundColor(getContext(), false));
-     }
- 
-     @Override
+         // The removal scheduled by setControlContainer() may have already timed out if the
+         // activity was stopped before its first draw, so make sure one is pending.
+         scheduleTempBackgroundRemoval();
 diff --git a/chrome/browser/android/tab_android.cc b/chrome/browser/android/tab_android.cc
-index ec48143154..cdd925b459 100644
+index dc12c8e4e23..3eaeba43d02 100644
 --- a/chrome/browser/android/tab_android.cc
 +++ b/chrome/browser/android/tab_android.cc
-@@ -86,6 +86,7 @@
+@@ -85,6 +85,7 @@
  #include "content/public/browser/web_contents.h"
  #include "content/public/browser/web_contents_observer.h"
  #include "content/public/browser/web_contents_user_data.h"
@@ -85,7 +85,7 @@ index ec48143154..cdd925b459 100644
  #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
  #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
  #include "ui/android/view_android.h"
-@@ -360,6 +361,20 @@ void TabAndroid::InitWebContents(
+@@ -398,6 +399,20 @@ void TabAndroid::InitWebContents(
  
    night_mode::WebContentsThemeClient::CreateForWebContents(web_contents_.get());
  
@@ -107,7 +107,7 @@ index ec48143154..cdd925b459 100644
        web_contents_->GetMutableRendererPrefs(),
        Profile::FromBrowserContext(web_contents_->GetBrowserContext()));
 diff --git a/components/content_settings/core/common/features.cc b/components/content_settings/core/common/features.cc
-index 088951616f..0bb3a171a4 100644
+index 088951616f5..0bb3a171a42 100644
 --- a/components/content_settings/core/common/features.cc
 +++ b/components/content_settings/core/common/features.cc
 @@ -11,10 +11,21 @@ namespace content_settings {

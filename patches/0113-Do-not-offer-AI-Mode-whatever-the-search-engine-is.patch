@@ -1,4 +1,4 @@
-From 9c48d8dc7aa23af4fab3aabbf913d90209717ad2 Mon Sep 17 00:00:00 2001
+From af3abaee75d432b55d595812a8352b8e221b17b2 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Mon, 7 Sep 2026 07:19:57 +0000
 Subject: [PATCH] Do not offer AI Mode, whatever the search engine is
@@ -29,16 +29,16 @@ first run after an install uncovered.
 This is the same answer 0019 and 0025 already gave for the AI Mode bottom bar
 button.
 ---
- .../chromium/components/omnibox/OmniboxFeatures.java  |  5 ++++-
- components/omnibox/common/omnibox_features.cc         | 11 +++++++++--
- 2 files changed, 13 insertions(+), 3 deletions(-)
+ .../components/omnibox/OmniboxFeatures.java        |  5 ++++-
+ components/omnibox/common/omnibox_features.cc      | 14 ++++++++++----
+ 2 files changed, 14 insertions(+), 5 deletions(-)
 
 diff --git a/components/omnibox/common/android/java/src/org/chromium/components/omnibox/OmniboxFeatures.java b/components/omnibox/common/android/java/src/org/chromium/components/omnibox/OmniboxFeatures.java
-index 73260d7eec..e15c9c7423 100644
+index 8efdc931668..5ac564ba28c 100644
 --- a/components/omnibox/common/android/java/src/org/chromium/components/omnibox/OmniboxFeatures.java
 +++ b/components/omnibox/common/android/java/src/org/chromium/components/omnibox/OmniboxFeatures.java
-@@ -148,8 +148,11 @@ public class OmniboxFeatures {
-                     OmniboxFeatureList.OMNIBOX_SESSIONLESS_VOICE_SEARCH,
+@@ -164,8 +164,11 @@ public class OmniboxFeatures {
+                     OmniboxFeatureList.SUPPRESS_STATUS_ICON_DURING_HTTP_NAVIGATION,
                      FeatureState.ENABLED_IN_PROD);
  
 +    // Held off in Java as well as in omnibox_features.cc: this cached flag answers
@@ -48,14 +48,14 @@ index 73260d7eec..e15c9c7423 100644
 -            newFlag(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT, FeatureState.ENABLED_IN_PROD);
 +            newFlag(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT, FeatureState.DISABLED);
  
-     public static final BooleanCachedFeatureParam sMultiattachmentFusebox =
-             newBooleanParam(sOmniboxMultimodalInput, "multi_context", true);
+     public static final CachedFlag sOmniboxFuseboxPopupVariations =
+             newFlag(
 diff --git a/components/omnibox/common/omnibox_features.cc b/components/omnibox/common/omnibox_features.cc
-index 5bd6f9dfda..f94403d4cf 100644
+index 5da1084a4dd..dad40a60cff 100644
 --- a/components/omnibox/common/omnibox_features.cc
 +++ b/components/omnibox/common/omnibox_features.cc
-@@ -192,13 +192,20 @@ BASE_FEATURE(kHideAimEntrypointOnUserInput,
- BASE_FEATURE(kHideAimEntrypointForUrlSuggestions, DISABLED);
+@@ -194,7 +194,11 @@ BASE_FEATURE(kHideAimEntrypointOnUserInput,
+ BASE_FEATURE(kHideAimEntrypointForUrlSuggestions, ENABLED);
  
  // When enabled, the multimodal input button is shown in the Omnibox.
 -BASE_FEATURE(kOmniboxMultimodalInput, ENABLED);
@@ -65,11 +65,16 @@ index 5bd6f9dfda..f94403d4cf 100644
 +// patches 0019 and 0025 gave for the AI Mode bottom bar button.
 +BASE_FEATURE(kOmniboxMultimodalInput, DISABLED);
  
- // An additional gate to the behavior of OmniboxMultimodalInput on desktop.
- BASE_FEATURE(kAndroidDesktopAimGate, ENABLED);
+ // Enables popup variations (e.g. accordion menu) for mobile Fusebox.
+ BASE_FEATURE(kOmniboxFuseboxPopupVariations, DISABLED);
+@@ -204,9 +208,11 @@ BASE_FEATURE(kOmniboxFuseboxPopupVariations, DISABLED);
+ // attached.
+ BASE_FEATURE(kOmniboxDisableTabsForCanvas, ENABLED);
  
- // Enables the AIM entrypoint for third party search engines.
--BASE_FEATURE(kAim3pEntrypoint, ENABLED);
+-// Enables the AIM entrypoint for third party search engines. Held dark on
+-// Android until the Android entrypoint UI is implemented.
+-BASE_FEATURE(kAim3pEntrypoint, enable_if(!IS_ANDROID));
++// Enables the AIM entrypoint for third party search engines.
 +// Bare turns this off too. With it enabled, omnibox_field_trial.cc offers the
 +// entrypoint to a non-Google engine on the strength of the flag and the policy
 +// checks alone, so DuckDuckGo is not the protection it looks like.

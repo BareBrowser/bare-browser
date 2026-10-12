@@ -1,4 +1,4 @@
-From 4eb651d9c60beae99d2e8477692ebd2847f75da9 Mon Sep 17 00:00:00 2001
+From b56e6362fa8c49dd659a28b8fa1d965b60b703e4 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Sat, 5 Sep 2026 17:21:49 +0000
 Subject: [PATCH] Let a link open in the app that handles it
@@ -45,8 +45,8 @@ one URL was not reachable on that device and is untested on hardware.
  .../android/java/res/xml/main_preferences.xml |   4 +
  .../browser/bare/BareOpenInAppsMode.java      |  91 ++++++++
  .../ExternalNavigationDelegateImpl.java       |  32 ++-
- .../chrome/browser/settings/MainSettings.java |  53 +++++
- .../tabbed_mode/TabbedRootUiCoordinator.java  |  24 +-
+ .../chrome/browser/settings/MainSettings.java |  54 +++++
+ .../tabbed_mode/TabbedRootUiCoordinator.java  |  23 +-
  chrome/android/junit/BUILD.gn                 |   1 +
  .../bare/BareOpenInAppsModeUnitTest.java      | 162 ++++++++++++++
  chrome/browser/open_in_app/android/BUILD.gn   |   1 +
@@ -57,16 +57,16 @@ one URL was not reachable on that device and is untested on hardware.
  .../strings/android/browser_ui_strings.grd    |  21 ++
  .../ExternalNavigationDelegate.java           |  15 ++
  .../ExternalNavigationHandler.java            | 206 +++++++++++++++++-
- 16 files changed, 637 insertions(+), 33 deletions(-)
+ 16 files changed, 638 insertions(+), 32 deletions(-)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java
  create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java
  create mode 100644 chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/MenuOnlyOpenInAppEntryPoint.java
 
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
-index c6febd1cf1..f647ea2490 100644
+index d4d396d322f..10b93614467 100644
 --- a/chrome/android/chrome_java_sources.gni
 +++ b/chrome/android/chrome_java_sources.gni
-@@ -223,6 +223,7 @@ chrome_java_sources = [
+@@ -243,6 +243,7 @@ chrome_java_sources = [
    "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java",
    "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java",
    "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java",
@@ -75,7 +75,7 @@ index c6febd1cf1..f647ea2490 100644
    "java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java",
    "java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java",
 diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/java/res/xml/main_preferences.xml
-index f702f069f9..95cd2bebf7 100644
+index 45fd637734f..7f8b9781d2f 100644
 --- a/chrome/android/java/res/xml/main_preferences.xml
 +++ b/chrome/android/java/res/xml/main_preferences.xml
 @@ -83,6 +83,10 @@ found in the LICENSE file.
@@ -86,12 +86,12 @@ index f702f069f9..95cd2bebf7 100644
 +        android:key="bare_open_links_in_apps"
 +        android:order="21"
 +        android:title="@string/bare_open_links_in_apps_title"/>
-     <Preference
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
          android:key="notifications"
          android:order="22"
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java
 new file mode 100644
-index 0000000000..194736086b
+index 00000000000..194736086bd
 --- /dev/null
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java
 @@ -0,0 +1,91 @@
@@ -187,10 +187,10 @@ index 0000000000..194736086b
 +    private BareOpenInAppsMode() {}
 +}
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java
-index 5e2b27f237..287175d37e 100644
+index f29b0825640..5671664d424 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java
-@@ -29,6 +29,7 @@ import org.chromium.build.annotations.Nullable;
+@@ -28,6 +28,7 @@ import org.chromium.build.annotations.Nullable;
  import org.chromium.chrome.browser.ChromeTabbedActivity2;
  import org.chromium.chrome.browser.IntentHandler;
  import org.chromium.chrome.browser.actor.ActorKeyedServiceFactory;
@@ -198,7 +198,7 @@ index 5e2b27f237..287175d37e 100644
  import org.chromium.chrome.browser.browserservices.intents.WebappConstants;
  import org.chromium.chrome.browser.document.ChromeLauncherActivity;
  import org.chromium.chrome.browser.glic.GlicEnabling;
-@@ -346,7 +347,36 @@ public class ExternalNavigationDelegateImpl implements ExternalNavigationDelegat
+@@ -343,7 +344,36 @@ public class ExternalNavigationDelegateImpl implements ExternalNavigationDelegat
  
      @Override
      public boolean allowExternalNavigationForHttpProtocols(GURL url) {
@@ -237,18 +237,18 @@ index 5e2b27f237..287175d37e 100644
  
      /**
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
-index cef12613db..c453b0a4fa 100644
+index 1dd96d23a11..de7bfcd0b83 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
-@@ -23,6 +23,7 @@ import android.view.View;
+@@ -19,6 +19,7 @@ import android.provider.Settings;
+ import android.view.View;
  
- import androidx.annotation.VisibleForTesting;
  import androidx.lifecycle.Lifecycle;
 +import androidx.preference.ListPreference;
  import androidx.preference.Preference;
  import androidx.recyclerview.widget.RecyclerView.LayoutManager;
  
-@@ -45,6 +46,7 @@ import org.chromium.chrome.browser.autofill.settings.SettingsNavigationHelper;
+@@ -41,6 +42,7 @@ import org.chromium.chrome.browser.autofill.settings.SettingsNavigationHelper;
  import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsFragment;
  import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsMediator;
  import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsReferrer;
@@ -256,7 +256,15 @@ index cef12613db..c453b0a4fa 100644
  import org.chromium.chrome.browser.bare.BareUpdateCheck;
  import org.chromium.chrome.browser.device_lock.DeviceLockActivityLauncherImpl;
  import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
-@@ -123,6 +125,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
+@@ -53,6 +55,7 @@ import org.chromium.chrome.browser.password_manager.PasswordManagerHelper;
+ import org.chromium.chrome.browser.password_manager.PasswordManagerLauncher;
+ import org.chromium.chrome.browser.password_manager.settings.PasswordsPreference;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.preferences.Pref;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.safety_hub.SafetyHubMetricUtils;
+@@ -116,6 +119,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
      public static final String PREF_SIGN_IN = "sign_in";
      public static final String PREF_GOOGLE_SERVICES = "google_services";
      public static final String PREF_BARE_UPDATES = "bare_check_for_updates";
@@ -264,7 +272,7 @@ index cef12613db..c453b0a4fa 100644
      public static final String PREF_BASICS_SECTION = "basics_section";
      public static final String PREF_SEARCH_ENGINE = "search_engine";
      public static final String PREF_PASSWORDS = "passwords";
-@@ -419,6 +422,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
+@@ -424,6 +428,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
          }
  
          setUpUpdateRow();
@@ -272,7 +280,7 @@ index cef12613db..c453b0a4fa 100644
  
          cachePreferences();
          updateAutofillPreferences();
-@@ -645,6 +649,55 @@ public class MainSettings extends ChromeBaseSettingsFragment
+@@ -659,6 +664,55 @@ public class MainSettings extends ChromeBaseSettingsFragment
          return preferenceInAllPreferences;
      }
  
@@ -329,14 +337,12 @@ index cef12613db..c453b0a4fa 100644
       * The update row. Its summary is the only place a manual-mode user learns anything, so it
       * says what is known rather than staying blank: the newest release seen, or that nothing has
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
-index b285b25bad..38893bd6db 100644
+index c86a6f13be0..a9c1113ece6 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
-@@ -163,10 +163,9 @@ import org.chromium.chrome.browser.ntp_customization.theme.NtpSyncedThemeManager
- import org.chromium.chrome.browser.offlinepages.indicator.OfflineIndicatorControllerV2;
- import org.chromium.chrome.browser.offlinepages.indicator.OfflineIndicatorInProductHelpController;
- import org.chromium.chrome.browser.omnibox.LocationBarEmbedder;
--import org.chromium.chrome.browser.omnibox.OmniboxChipManager;
+@@ -171,8 +171,8 @@ import org.chromium.chrome.browser.omnibox.LocationBarEmbedder;
+ import org.chromium.chrome.browser.omnibox.OmniboxChipManager;
+ import org.chromium.chrome.browser.omnibox.OmniboxStub;
  import org.chromium.chrome.browser.omnibox.UrlFocusChangeListener;
 +import org.chromium.chrome.browser.open_in_app.MenuOnlyOpenInAppEntryPoint;
  import org.chromium.chrome.browser.open_in_app.OpenInAppUtils;
@@ -344,7 +350,7 @@ index b285b25bad..38893bd6db 100644
  import org.chromium.chrome.browser.pdf.PdfPageIphController;
  import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
  import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
-@@ -822,10 +821,6 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+@@ -901,10 +901,6 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
              mOpenInAppEntryPoint = null;
          }
  
@@ -355,7 +361,7 @@ index b285b25bad..38893bd6db 100644
          if (mSystemUiCoordinator != null) mSystemUiCoordinator.destroy();
  
          if (mOfflineIndicatorController != null) {
-@@ -1041,14 +1036,6 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+@@ -1134,14 +1130,6 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
      @EnsuresNonNull("mToolbarManager")
      protected void initializeToolbar() {
          mControlContainer = mActivity.findViewById(R.id.control_container);
@@ -368,9 +374,9 @@ index b285b25bad..38893bd6db 100644
 -            mOmniboxChipManager = new OmniboxChipManager(omniboxChipContainer, locationBarEmbedder);
 -        }
  
-         assert mFindToolbarManager != null;
          super.initializeToolbar();
-@@ -1172,11 +1159,12 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+         if (mControlContainer != null) {
+@@ -1294,11 +1282,12 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
          }
  
          if (OpenInAppUtils.isOpenInAppAvailable()) {
@@ -388,10 +394,10 @@ index b285b25bad..38893bd6db 100644
  
          if (AndroidSidePanelEnabledFn.isEnabled()
 diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
-index a4dde83904..fe2b551098 100644
+index 066f2bbcdde..495ab7b48c7 100644
 --- a/chrome/android/junit/BUILD.gn
 +++ b/chrome/android/junit/BUILD.gn
-@@ -431,6 +431,7 @@ if (is_android) {
+@@ -433,6 +433,7 @@ if (is_android) {
        "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarAppMenuUpdateBadgeControllerUnitTest.java",
        "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinatorUnitTest.java",
        "src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapterUnitTest.java",
@@ -401,7 +407,7 @@ index a4dde83904..fe2b551098 100644
        "src/org/chromium/chrome/browser/ChromeActionModeHandlerUnitTest.java",
 diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java
 new file mode 100644
-index 0000000000..eddb16d397
+index 00000000000..eddb16d397d
 --- /dev/null
 +++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java
 @@ -0,0 +1,162 @@
@@ -568,7 +574,7 @@ index 0000000000..eddb16d397
 +    }
 +}
 diff --git a/chrome/browser/open_in_app/android/BUILD.gn b/chrome/browser/open_in_app/android/BUILD.gn
-index e4e66a563c..fa6277f142 100644
+index e4e66a563cc..fa6277f142d 100644
 --- a/chrome/browser/open_in_app/android/BUILD.gn
 +++ b/chrome/browser/open_in_app/android/BUILD.gn
 @@ -7,6 +7,7 @@ import("//build/config/android/rules.gni")
@@ -581,7 +587,7 @@ index e4e66a563c..fa6277f142 100644
      "java/src/org/chromium/chrome/browser/open_in_app/OpenInAppMenuItemProvider.java",
 diff --git a/chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/MenuOnlyOpenInAppEntryPoint.java b/chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/MenuOnlyOpenInAppEntryPoint.java
 new file mode 100644
-index 0000000000..b501154f0e
+index 00000000000..b501154f0e9
 --- /dev/null
 +++ b/chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/MenuOnlyOpenInAppEntryPoint.java
 @@ -0,0 +1,26 @@
@@ -612,7 +618,7 @@ index 0000000000..b501154f0e
 +    }
 +}
 diff --git a/chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/OpenInAppUtils.java b/chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/OpenInAppUtils.java
-index 7bffc96c13..c51e432326 100644
+index 7bffc96c135..c51e4323265 100644
 --- a/chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/OpenInAppUtils.java
 +++ b/chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/OpenInAppUtils.java
 @@ -4,7 +4,7 @@
@@ -643,10 +649,10 @@ index 7bffc96c13..c51e432326 100644
  
      private OpenInAppUtils() {}
 diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-index 0915520333..db0ee03179 100644
+index 9f8cf1b3120..20f76c629ab 100644
 --- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
 +++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-@@ -458,6 +458,13 @@ public final class ChromePreferenceKeys {
+@@ -441,6 +441,13 @@ public final class ChromePreferenceKeys {
       */
      public static final String BARE_UPDATE_ACKED_TAG = "Chrome.Bare.UpdateAckedTag";
  
@@ -660,7 +666,7 @@ index 0915520333..db0ee03179 100644
      public static final String DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER =
              "Chrome.Download.UseExternalDownloadManager";
  
-@@ -1274,6 +1281,7 @@ public final class ChromePreferenceKeys {
+@@ -1253,6 +1260,7 @@ public final class ChromePreferenceKeys {
                  AUTOFILL_ASSISTANT_FIRST_TIME_LITE_SCRIPT_USER,
                  BARE_BUNDLED_AD_BLOCKER_ENABLED,
                  BARE_UPDATE_BADGE,
@@ -669,10 +675,10 @@ index 0915520333..db0ee03179 100644
                  BARE_UPDATE_LATEST_TAG,
                  BARE_UPDATE_ACKED_TAG,
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index cce99572a3..120ff3a5e4 100644
+index 0013c318561..65b513c7df4 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -4248,6 +4248,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4225,6 +4225,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
        <message name="IDS_TOOLBAR_SHORTCUT" desc="Title for toolbar shortcut toggle button in adaptive toolbar button preference page.">
          Toolbar shortcut
        </message>
@@ -692,7 +698,7 @@ index cce99572a3..120ff3a5e4 100644
          Toolbar
        </message>
 diff --git a/components/browser_ui/strings/android/browser_ui_strings.grd b/components/browser_ui/strings/android/browser_ui_strings.grd
-index 4bc1293d6e..3a59f06755 100644
+index 1917bfc291f..75e337c307a 100644
 --- a/components/browser_ui/strings/android/browser_ui_strings.grd
 +++ b/components/browser_ui/strings/android/browser_ui_strings.grd
 @@ -787,6 +787,27 @@
@@ -724,13 +730,13 @@ index 4bc1293d6e..3a59f06755 100644
          Stay
        </message>
 diff --git a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java
-index 25d10cedff..de8a7f9b56 100644
+index f1d222cf62d..c1de756ee9e 100644
 --- a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java
 +++ b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java
-@@ -215,4 +215,19 @@ public interface ExternalNavigationDelegate {
-      * @param url The {@link GURL} of the current page.
-      */
-     boolean allowExternalNavigationForHttpProtocols(GURL url);
+@@ -225,4 +225,19 @@ public interface ExternalNavigationDelegate {
+ 
+     /** Reparents the tab associated with this delegate to a new instance of the same PWA. */
+     default void reparentTabToSamePwa() {}
 +
 +    /**
 +     * Returns whether the user should be asked before this navigation leaves for an installed app.
@@ -748,10 +754,10 @@ index 25d10cedff..de8a7f9b56 100644
 +    }
  }
 diff --git a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
-index a7c588eb42..d91b7760ba 100644
+index 639ba19eb42..f747106bf30 100644
 --- a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
 +++ b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
-@@ -692,6 +692,9 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -702,6 +702,9 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
      private final ModalDialogManager mModalDialogManager;
      @VisibleForTesting protected @Nullable IncognitoDialogDelegate mIncognitoDialogDelegate;
  
@@ -761,7 +767,7 @@ index a7c588eb42..d91b7760ba 100644
      @VisibleForTesting
      protected @Nullable DigitalCredentialsWarningDialogDelegate
              mDigitalCredentialsWarningDialogDelegate;
-@@ -721,18 +724,6 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -736,18 +739,6 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
      public OverrideUrlLoadingResult shouldOverrideUrlLoading(ExternalNavigationParams params) {
          if (debug()) Log.i(TAG, "shouldOverrideUrlLoading called on " + params.getUrl().getSpec());
  
@@ -780,7 +786,7 @@ index a7c588eb42..d91b7760ba 100644
          Intent targetIntent;
          boolean isIntentUrl = UrlUtilities.hasIntentScheme(params.getUrl());
          // Perform generic parsing of the URI to turn it into an Intent.
-@@ -2048,6 +2039,24 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -2113,6 +2104,24 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
              }
          }
  
@@ -805,7 +811,7 @@ index a7c588eb42..d91b7760ba 100644
          return startActivity(
                  targetIntent,
                  params,
-@@ -2058,6 +2067,176 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -2123,6 +2132,176 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
                  intentTargetUrl);
      }
  
@@ -982,7 +988,7 @@ index a7c588eb42..d91b7760ba 100644
      private boolean shouldBlockExternalNavigationForHttpProtocols(
              boolean allowExternalNavigation,
              boolean shouldReturnAsResult,
-@@ -2187,6 +2366,9 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -2252,6 +2431,9 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
                  && mDigitalCredentialsWarningDialogDelegate.isShowing()) {
              mDigitalCredentialsWarningDialogDelegate.cancelDialog();
          }

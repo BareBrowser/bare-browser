@@ -1,0 +1,37 @@
+From bd60f9ae4e2188bb53a642667a7df333bb304e8b Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 11 Oct 2026 07:23:34 +0000
+Subject: [PATCH] Stop probing made-up hostnames on every launch
+
+Upstream now creates IntranetRedirectDetector on Android as well; until 156 it
+sat behind !IS_ANDROID. Seven seconds after start, and a second after every
+network change, it sends three HEAD requests to random seven to fifteen letter
+hostnames, to find out whether the resolver answers for names that do not
+exist.
+
+That is traffic the user never asked for, sent to their ISP's resolver on a
+schedule. What it feeds is the omnibox's guess about whether a single word
+typed into it might be an intranet host. The local state pref that already
+switches it off, kDNSInterceptionChecksEnabled, now defaults to false. The
+policy that can turn it back on is untouched.
+---
+ chrome/browser/intranet_redirect_detector.cc | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/intranet_redirect_detector.cc b/chrome/browser/intranet_redirect_detector.cc
+index 935d24eb60c..76c87e7f5a7 100644
+--- a/chrome/browser/intranet_redirect_detector.cc
++++ b/chrome/browser/intranet_redirect_detector.cc
+@@ -75,7 +75,11 @@ GURL IntranetRedirectDetector::RedirectOrigin() {
+ void IntranetRedirectDetector::RegisterPrefs(PrefRegistrySimple* registry) {
+   registry->RegisterStringPref(prefs::kLastKnownIntranetRedirectOrigin,
+                                std::string());
+-  registry->RegisterBooleanPref(prefs::kDNSInterceptionChecksEnabled, true);
++  // Bare: off by default. On Android this now runs on every launch and every
++  // network change, sending HEAD requests for made-up hostnames to whatever
++  // resolver the device uses. All it buys is the omnibox noticing an ISP that
++  // answers for names that do not exist.
++  registry->RegisterBooleanPref(prefs::kDNSInterceptionChecksEnabled, false);
+ }
+ 
+ void IntranetRedirectDetector::Restart() {

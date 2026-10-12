@@ -1,0 +1,46 @@
+From c887135759c468e52065bba7425c798811be13df Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 11 Oct 2026 07:23:39 +0000
+Subject: [PATCH] Keep the native new tab page on desktop-class Android
+
+156 turns kUseWebUiNtpAndroid on for desktop Android builds, which this is.
+It only takes effect on a device that reports FEATURE_PC and has Google as the
+search engine, so phones never see it. Where it does take effect it replaces
+the native new tab page with the WebUI one, and Bare's changes to the new tab
+page (the search box position, the hidden cards, the NOAI wordmark) live in the
+native one.
+
+Both the C++ default and the Java cached flag go back to off, so the two
+cannot disagree on the first launch after an install.
+---
+ chrome/browser/flags/android/chrome_feature_list.cc            | 3 ++-
+ .../org/chromium/chrome/browser/flags/ChromeFeatureList.java   | 2 +-
+ 2 files changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/flags/android/chrome_feature_list.cc b/chrome/browser/flags/android/chrome_feature_list.cc
+index af35f608ccf..ea9646d98bf 100644
+--- a/chrome/browser/flags/android/chrome_feature_list.cc
++++ b/chrome/browser/flags/android/chrome_feature_list.cc
+@@ -1007,7 +1007,8 @@ BASE_FEATURE(kUseAppTaskForCustomTabActivation, base::FEATURE_ENABLED_BY_DEFAULT
+ BASE_FEATURE(kUseLibunwindstackNativeUnwinderAndroid, base::FEATURE_ENABLED_BY_DEFAULT);
+ BASE_FEATURE(kUsePLinkInHelp, base::FEATURE_DISABLED_BY_DEFAULT);
+ BASE_FEATURE(kUseWebUiNtp3PDSE, base::FEATURE_DISABLED_BY_DEFAULT);
+-BASE_FEATURE(kUseWebUiNtpAndroid, BUILDFLAG(IS_DESKTOP_ANDROID) ? base::FEATURE_ENABLED_BY_DEFAULT : base::FEATURE_DISABLED_BY_DEFAULT);
++// Bare: the native new tab page carries Bare's own changes; the WebUI one does not.
++BASE_FEATURE(kUseWebUiNtpAndroid, base::FEATURE_DISABLED_BY_DEFAULT);
+ // Verify sign-in state on startup.
+ BASE_FEATURE(kVerifyStartupSigninState, base::FEATURE_ENABLED_BY_DEFAULT);
+ BASE_FEATURE(kVirtualKeyboardResizesContentTransientOvershootFix, base::FEATURE_ENABLED_BY_DEFAULT);
+diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
+index 5480d30e3ba..76d7f9761e1 100644
+--- a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
++++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
+@@ -1502,7 +1502,7 @@ public abstract class ChromeFeatureList {
+             newCachedFlag(USE_LIBUNWINDSTACK_NATIVE_UNWINDER_ANDROID, true);
+     public static final CachedFlag sUseWebUiNtp3PDSE = newCachedFlag(USE_WEB_UI_NTP_3P_DSE, false);
+     public static final CachedFlag sUseWebUiNtpAndroid =
+-            newCachedFlag(USE_WEB_UI_NTP_ANDROID, BuildConfig.IS_DESKTOP_ANDROID);
++            newCachedFlag(USE_WEB_UI_NTP_ANDROID, false);
+     public static final CachedFlag sVirtualKeyboardResizesContentTransientOvershootFix =
+             newCachedFlag(VIRTUAL_KEYBOARD_RESIZES_CONTENT_TRANSIENT_OVERSHOOT_FIX, true);
+     public static final CachedFlag sVirtualKeyboardTransientInnerHeightFix =
