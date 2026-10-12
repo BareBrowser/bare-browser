@@ -1,0 +1,374 @@
+From 137d1b538d2e1b7f54422ac29c4ee05587312729 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Mon, 12 Oct 2026 21:46:49 +0000
+Subject: [PATCH] Show a search engine's stored favicon instead of asking
+ Google for one
+
+Settings, Search engine draws an icon for every engine. One without a
+built-in icon, which is any engine a user adds and every site-search
+shortcut, fell back to LargeIconBridge's Google favicon server: a request to
+t0.gstatic.com/faviconV2 carrying the engine's site, whenever no icon for it
+was stored yet. Its own traffic annotation says it cannot be disabled by
+settings, and nothing in Bare had.
+
+Only the favicon stored from visiting the site is used now. An engine whose
+site has never been visited keeps the generic placeholder the screen already
+draws while it looks.
+---
+ .../settings/SearchEngineAdapterTest.java     |  2 +
+ .../settings/SearchEngineIconUtils.java       | 84 ++++---------------
+ .../settings/SiteSearchSettingsUnitTest.java  |  3 +
+ .../BaseSiteSearchMediatorUnitTest.java       |  2 +
+ .../ExpandableSiteSearchMediatorUnitTest.java |  3 +
+ .../CustomSearchEngineMediatorUnitTest.java   |  3 +
+ .../CustomSiteSearchCoordinatorUnitTest.java  |  2 +
+ .../CustomSiteSearchMediatorUnitTest.java     |  2 +
+ ...ensionSearchEngineCoordinatorUnitTest.java |  3 +
+ ...ExtensionSearchEngineMediatorUnitTest.java |  3 +
+ .../InactiveShortcutCoordinatorUnitTest.java  |  2 +
+ .../InactiveShortcutMediatorUnitTest.java     |  2 +
+ 12 files changed, 44 insertions(+), 67 deletions(-)
+
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineAdapterTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineAdapterTest.java
+index 37c6ca9f070..d875ebbd7fc 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineAdapterTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineAdapterTest.java
+@@ -79,6 +79,8 @@ public class SearchEngineAdapterTest {
+     @Before
+     public void setUp() {
+         LargeIconBridgeJni.setInstanceForTesting(mLargeIconBridgeNativeMock);
++        // Bare: icons now come from the local favicon store, which needs a native bridge.
++        doReturn(1L).when(mLargeIconBridgeNativeMock).init();
+         mActivityScenarioRule.getScenario().onActivity(activity -> mContext = activity);
+         doReturn(mSettingsDataProvider).when(mTemplateUrlService).createSettingsDataProvider();
+         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
+diff --git a/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineIconUtils.java b/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineIconUtils.java
+index 0fec6a7bd6f..2d64ec37c6c 100644
+--- a/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineIconUtils.java
++++ b/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineIconUtils.java
+@@ -14,9 +14,7 @@ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.search_engines.R;
+ import org.chromium.chrome.browser.ui.favicon.FaviconUtils;
+ import org.chromium.components.favicon.LargeIconBridge;
+-import org.chromium.components.favicon.LargeIconBridge.GoogleFaviconServerCallback;
+ import org.chromium.components.favicon.LargeIconBridge.LargeIconCallback;
+-import org.chromium.net.NetworkTrafficAnnotationTag;
+ import org.chromium.ui.modelutil.PropertyModel;
+ import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
+ import org.chromium.url.GURL;
+@@ -26,47 +24,15 @@ import java.util.Map;
+ /** Utilities for fetching search engine icons. */
+ @NullMarked
+ public class SearchEngineIconUtils {
+-    private static final NetworkTrafficAnnotationTag TRAFFIC_ANNOTATION =
+-            NetworkTrafficAnnotationTag.createComplete(
+-                    "search_engine_adapter",
+-                    """
+-                    semantics {
+-                        sender: 'SearchEngineAdapter'
+-                        description: 'Sends a request to a Google server to retrieve the favicon bitmap.'
+-                        trigger:
+-                            'A request is sent when the user opens search engine settings and Chrome does '
+-                            'not have a favicon.'
+-                        data: 'Search engine URL and desired icon size.'
+-                        destination: GOOGLE_OWNED_SERVICE
+-                        internal {
+-                            contacts {
+-                                email: 'chrome-signin-team@google.com'
+-                            }
+-                            contacts {
+-                                email: 'triploblastic@google.com'
+-                            }
+-                        }
+-                        user_data {
+-                            type: NONE
+-                        }
+-                        last_reviewed: '2023-12-04'
+-                    }
+-                    policy {
+-                        cookies_allowed: NO
+-                        policy_exception_justification: 'Not implemented.'
+-                        setting: 'This feature cannot be disabled by settings.'
+-                    }\
+-                    """);
+-
+     /**
+      * Updates the provided ImageView with the Search Engine icon. It checks the cache (if exists),
+-     * built-in resources, and falls back to fetching from the Google Server.
++     * built-in resources, and falls back to the favicon stored for the site.
+      *
+      * @param context Context for resources.
+      * @param logoView The ImageView to update.
+      * @param builtInIcon The built-in icon for the search engine, if available.
+      * @param pageUrl The web page URL associated with the search engine. This is used to query the
+-     *     local database or Google Favicon Server for the site's icon.
++     *     local favicon database for the site's icon.
+      * @param largeIconBridge The bridge to fetch icons.
+      * @param iconCache Optional: A map to store/retrieve fetched bitmaps.
+      */
+@@ -81,26 +47,26 @@ public class SearchEngineIconUtils {
+             return;
+         }
+ 
+-        // Use a placeholder image while trying to fetch the logo.
++        // Use a placeholder image unless the site's favicon is stored locally.
+         int uiElementSizeInPx =
+                 context.getResources().getDimensionPixelSize(R.dimen.search_engine_favicon_size);
+         logoView.setImageBitmap(
+                 FaviconUtils.createGenericFaviconBitmap(context, uiElementSizeInPx, null));
+ 
+-        fetchIconFromGoogleServer(
++        fetchStoredIcon(
+                 context, pageUrl, largeIconBridge, iconCache, logoView::setImageBitmap);
+     }
+ 
+     /**
+      * Updates the provided PropertyModel with the Search Engine icon. It checks the cache (if
+-     * exists), built-in resources, and falls back to fetching from the Google Server.
++     * exists), built-in resources, and falls back to the favicon stored for the site.
+      *
+      * @param context Context for resources.
+      * @param model The PropertyModel to update.
+      * @param propertyKey The key for the icon property in the model.
+      * @param builtInIcon The built-in icon for the search engine, if available.
+      * @param pageUrl The web page URL associated with the search engine. This is used to query the
+-     *     local database or Google Favicon Server for the site's icon.
++     *     local favicon database for the site's icon.
+      * @param largeIconBridge The bridge to fetch icons.
+      * @param iconCache Optional: A map to store/retrieve fetched bitmaps.
+      */
+@@ -117,14 +83,14 @@ public class SearchEngineIconUtils {
+             return;
+         }
+ 
+-        // Use a placeholder image while trying to fetch the logo.
++        // Use a placeholder image unless the site's favicon is stored locally.
+         int uiElementSizeInPx =
+                 context.getResources().getDimensionPixelSize(R.dimen.search_engine_favicon_size);
+         model.set(
+                 propertyKey,
+                 FaviconUtils.createGenericFaviconBitmap(context, uiElementSizeInPx, null));
+ 
+-        fetchIconFromGoogleServer(
++        fetchStoredIcon(
+                 context,
+                 pageUrl,
+                 largeIconBridge,
+@@ -152,10 +118,11 @@ public class SearchEngineIconUtils {
+         return false;
+     }
+ 
+-    // TODO(crbug.com/483929347): Replace this logic with the implementation from
+-    // SearchEngineService.java and have SearchEngineService call this class to prevent inconsistent
+-    // icons.
+-    private static void fetchIconFromGoogleServer(
++    // Bare: upstream asked Google's favicon server (t0.gstatic.com/faviconV2) for an engine
++    // without a built-in icon whenever none was stored, sending the engine's site to Google. Only
++    // the favicon already stored from visiting that site is used now; otherwise the placeholder
++    // stays.
++    private static void fetchStoredIcon(
+             Context context,
+             GURL pageUrl,
+             LargeIconBridge largeIconBridge,
+@@ -173,27 +140,10 @@ public class SearchEngineIconUtils {
+                         }
+                     }
+                 };
+-
+-        GoogleFaviconServerCallback googleServerCallback =
+-                (status) -> {
+-                    // Update the time the icon was last requested to avoid automatic eviction
+-                    // from cache.
+-                    largeIconBridge.touchIconFromGoogleServer(pageUrl);
+-                    // The search engine logo will be fetched from google servers, so the actual
+-                    // size of the image is controlled by LargeIconService configuration.
+-                    // minSizePx=1 is used to accept logo of any size.
+-                    largeIconBridge.getLargeIconForUrl(
+-                            pageUrl,
+-                            /* minSizePx= */ 1,
+-                            /* desiredSizePx= */ uiElementSizeInPx,
+-                            onFaviconAvailable);
+-                };
+-        // If the icon already exists in the cache no network request will be made, but the
+-        // callback will be triggered nonetheless.
+-        largeIconBridge.getLargeIconOrFallbackStyleFromGoogleServerSkippingLocalCache(
++        largeIconBridge.getLargeIconForUrl(
+                 pageUrl,
+-                /* shouldTrimPageUrlPath= */ true,
+-                TRAFFIC_ANNOTATION,
+-                googleServerCallback);
++                /* minSizePx= */ 1,
++                /* desiredSizePx= */ uiElementSizeInPx,
++                onFaviconAvailable);
+     }
+ }
+diff --git a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/SiteSearchSettingsUnitTest.java b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/SiteSearchSettingsUnitTest.java
+index be25c8f1e78..bd4226ed1e0 100644
+--- a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/SiteSearchSettingsUnitTest.java
++++ b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/SiteSearchSettingsUnitTest.java
+@@ -9,6 +9,7 @@ import static org.junit.Assert.assertNotNull;
+ import static org.junit.Assert.assertNull;
+ import static org.mockito.ArgumentMatchers.any;
+ import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.doReturn;
+ import static org.mockito.Mockito.never;
+ import static org.mockito.Mockito.times;
+ import static org.mockito.Mockito.verify;
+@@ -57,6 +58,8 @@ public class SiteSearchSettingsUnitTest {
+         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
+         when(mTemplateUrlService.createSettingsDataProvider()).thenReturn(mSettingsDataProvider);
+         LargeIconBridgeJni.setInstanceForTesting(mLargeIconBridgeJni);
++        // Bare: icons now come from the local favicon store, which needs a native bridge.
++        doReturn(1L).when(mLargeIconBridgeJni).init();
+         ExtensionUi.setBackendForTesting(mExtensionUiBackend);
+         ServiceLoaderUtil.setInstanceForTesting(
+                 ExtensionSearchEngineCoordinator.class, mExtensionSearchEngineCoordinator);
+diff --git a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/common/BaseSiteSearchMediatorUnitTest.java b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/common/BaseSiteSearchMediatorUnitTest.java
+index fdcd194a240..c937e38933c 100644
+--- a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/common/BaseSiteSearchMediatorUnitTest.java
++++ b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/common/BaseSiteSearchMediatorUnitTest.java
+@@ -92,6 +92,8 @@ public class BaseSiteSearchMediatorUnitTest {
+ 
+         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
+         LargeIconBridgeJni.setInstanceForTesting(mLargeIconBridgeJni);
++        // Bare: icons now come from the local favicon store, which needs a native bridge.
++        doReturn(1L).when(mLargeIconBridgeJni).init();
+         mModelList = new ModelList();
+ 
+         mMediator =
+diff --git a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/common/ExpandableSiteSearchMediatorUnitTest.java b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/common/ExpandableSiteSearchMediatorUnitTest.java
+index 6e189710a3b..670dac6d2ac 100644
+--- a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/common/ExpandableSiteSearchMediatorUnitTest.java
++++ b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/common/ExpandableSiteSearchMediatorUnitTest.java
+@@ -8,6 +8,7 @@ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertFalse;
+ import static org.junit.Assert.assertNotNull;
+ import static org.junit.Assert.assertTrue;
++import static org.mockito.Mockito.doReturn;
+ import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.withSettings;
+@@ -71,6 +72,8 @@ public class ExpandableSiteSearchMediatorUnitTest {
+         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
+         AimEligibilityServiceFactoryJni.setInstanceForTesting(mAimEligibilityNativesMock);
+         LargeIconBridgeJni.setInstanceForTesting(mLargeIconBridgeJni);
++        // Bare: icons now come from the local favicon store, which needs a native bridge.
++        doReturn(1L).when(mLargeIconBridgeJni).init();
+         mModelList = new ModelList();
+ 
+         mMediator =
+diff --git a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/custom_search_engine/CustomSearchEngineMediatorUnitTest.java b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/custom_search_engine/CustomSearchEngineMediatorUnitTest.java
+index 40ca1c4423f..e26f2572718 100644
+--- a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/custom_search_engine/CustomSearchEngineMediatorUnitTest.java
++++ b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/custom_search_engine/CustomSearchEngineMediatorUnitTest.java
+@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.search_engines.settings.custom_search_engine
+ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertNotNull;
+ import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.Mockito.doReturn;
+ import static org.mockito.Mockito.doAnswer;
+ import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.when;
+@@ -71,6 +72,8 @@ public class CustomSearchEngineMediatorUnitTest {
+         mResources = mContext.getResources();
+         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
+         LargeIconBridgeJni.setInstanceForTesting(mLargeIconBridgeJni);
++        // Bare: icons now come from the local favicon store, which needs a native bridge.
++        doReturn(1L).when(mLargeIconBridgeJni).init();
+ 
+         List<TemplateUrl> urls = new ArrayList<>();
+         urls.add(mTemplateUrl);
+diff --git a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/custom_site_search/CustomSiteSearchCoordinatorUnitTest.java b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/custom_site_search/CustomSiteSearchCoordinatorUnitTest.java
+index db0fc6e97e7..473c5326b26 100644
+--- a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/custom_site_search/CustomSiteSearchCoordinatorUnitTest.java
++++ b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/custom_site_search/CustomSiteSearchCoordinatorUnitTest.java
+@@ -77,6 +77,8 @@ public class CustomSiteSearchCoordinatorUnitTest {
+         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
+         AimEligibilityServiceFactoryJni.setInstanceForTesting(mAimEligibilityNativesMock);
+         LargeIconBridgeJni.setInstanceForTesting(mLargeIconBridgeJni);
++        // Bare: icons now come from the local favicon store, which needs a native bridge.
++        doReturn(1L).when(mLargeIconBridgeJni).init();
+ 
+         doAnswer(
+                         invocation -> {
+diff --git a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/custom_site_search/CustomSiteSearchMediatorUnitTest.java b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/custom_site_search/CustomSiteSearchMediatorUnitTest.java
+index a238ece10fb..172c462aefd 100644
+--- a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/custom_site_search/CustomSiteSearchMediatorUnitTest.java
++++ b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/custom_site_search/CustomSiteSearchMediatorUnitTest.java
+@@ -85,6 +85,8 @@ public class CustomSiteSearchMediatorUnitTest {
+         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
+         AimEligibilityServiceFactoryJni.setInstanceForTesting(mAimEligibilityNativesMock);
+         LargeIconBridgeJni.setInstanceForTesting(mLargeIconBridgeJni);
++        // Bare: icons now come from the local favicon store, which needs a native bridge.
++        doReturn(1L).when(mLargeIconBridgeJni).init();
+ 
+         mModelList = new ModelList();
+ 
+diff --git a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/extensions/ExtensionSearchEngineCoordinatorUnitTest.java b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/extensions/ExtensionSearchEngineCoordinatorUnitTest.java
+index a2ea497bd6f..ac769e00389 100644
+--- a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/extensions/ExtensionSearchEngineCoordinatorUnitTest.java
++++ b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/extensions/ExtensionSearchEngineCoordinatorUnitTest.java
+@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.search_engines.settings.extensions;
+ 
+ import static org.mockito.ArgumentMatchers.any;
+ import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.doReturn;
+ import static org.mockito.Mockito.doAnswer;
+ import static org.mockito.Mockito.verify;
+ 
+@@ -52,6 +53,8 @@ public class ExtensionSearchEngineCoordinatorUnitTest {
+         mContext = ApplicationProvider.getApplicationContext();
+         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
+         LargeIconBridgeJni.setInstanceForTesting(mLargeIconBridgeJni);
++        // Bare: icons now come from the local favicon store, which needs a native bridge.
++        doReturn(1L).when(mLargeIconBridgeJni).init();
+         ExtensionControlHandler.setFactoryForTesting(() -> mMockExtensionControlHandler);
+ 
+         doAnswer(
+diff --git a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/extensions/ExtensionSearchEngineMediatorUnitTest.java b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/extensions/ExtensionSearchEngineMediatorUnitTest.java
+index 39f9ca3404b..ccc25cba910 100644
+--- a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/extensions/ExtensionSearchEngineMediatorUnitTest.java
++++ b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/extensions/ExtensionSearchEngineMediatorUnitTest.java
+@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.search_engines.settings.extensions;
+ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertNotNull;
+ import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.Mockito.doReturn;
+ import static org.mockito.Mockito.doAnswer;
+ import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.when;
+@@ -70,6 +71,8 @@ public class ExtensionSearchEngineMediatorUnitTest {
+         mContext = RuntimeEnvironment.application;
+         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
+         LargeIconBridgeJni.setInstanceForTesting(mLargeIconBridgeJni);
++        // Bare: icons now come from the local favicon store, which needs a native bridge.
++        doReturn(1L).when(mLargeIconBridgeJni).init();
+         ExtensionControlHandler.setFactoryForTesting(() -> mMockExtensionControlHandler);
+ 
+         when(mSettingsDataProvider.getTemplateUrlsByCategory(TemplateUrlCategory.EXTENSION))
+diff --git a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/inactive_shortcut/InactiveShortcutCoordinatorUnitTest.java b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/inactive_shortcut/InactiveShortcutCoordinatorUnitTest.java
+index bf35a522c25..adc513d6741 100644
+--- a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/inactive_shortcut/InactiveShortcutCoordinatorUnitTest.java
++++ b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/inactive_shortcut/InactiveShortcutCoordinatorUnitTest.java
+@@ -82,6 +82,8 @@ public class InactiveShortcutCoordinatorUnitTest {
+         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
+         AimEligibilityServiceFactoryJni.setInstanceForTesting(mAimEligibilityNativesMock);
+         LargeIconBridgeJni.setInstanceForTesting(mLargeIconBridgeJni);
++        // Bare: icons now come from the local favicon store, which needs a native bridge.
++        doReturn(1L).when(mLargeIconBridgeJni).init();
+ 
+         doAnswer(
+                         invocation -> {
+diff --git a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/inactive_shortcut/InactiveShortcutMediatorUnitTest.java b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/inactive_shortcut/InactiveShortcutMediatorUnitTest.java
+index 28318c2b95e..65d7e9adf15 100644
+--- a/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/inactive_shortcut/InactiveShortcutMediatorUnitTest.java
++++ b/chrome/browser/search_engines/android/junit/src/org/chromium/chrome/browser/search_engines/settings/inactive_shortcut/InactiveShortcutMediatorUnitTest.java
+@@ -82,6 +82,8 @@ public class InactiveShortcutMediatorUnitTest {
+         doReturn(mPrefServiceMock).when(mUserPrefsJniMock).get(any(Profile.class));
+         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
+         LargeIconBridgeJni.setInstanceForTesting(mLargeIconBridgeJni);
++        // Bare: icons now come from the local favicon store, which needs a native bridge.
++        doReturn(1L).when(mLargeIconBridgeJni).init();
+         AimEligibilityServiceFactoryJni.setInstanceForTesting(mAimEligibilityNativesMock);
+ 
+         mModelList = new ModelList();

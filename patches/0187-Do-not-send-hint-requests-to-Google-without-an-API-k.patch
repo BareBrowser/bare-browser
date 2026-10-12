@@ -1,0 +1,137 @@
+From 1d40ce1e844a5d6eec15c3806a12b403567ebb49 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Mon, 12 Oct 2026 22:24:41 +0000
+Subject: [PATCH] Do not send hint requests to Google without an API key
+
+Measured on a Pixel 3 while checking the DNS-error fix: a navigation was
+followed by POST optimizationguide-pa.googleapis.com/v1:GetHints, sent over
+QUIC with the placeholder key dummytoken, the User-Agent and Accept-Language,
+and answered 400. A hints request carries the hosts and URLs it wants hints
+for.
+
+The hints manager's own fetches already require a Google API key
+(IsUserPermittedToFetchFromRemoteOptimizationGuide), but on-demand requests
+reach HintsFetcher directly: HintsManager::CanApplyOptimizationOnDemand has no
+such check, and the shopping service, page images and the annotation index call
+it. The check now sits in HintsFetcher::FetchOptimizationGuideServiceHints, which
+every path goes through, using the same rule and the same override switch.
+Without a key nothing is sent, and nothing that worked is lost: Google refuses
+the placeholder key.
+
+Upstream's fetcher tests set the override switch; a new test checks that
+nothing is requested without it.
+---
+ .../core/hints/hints_fetcher.cc               | 13 ++++++++++
+ .../core/hints/hints_fetcher_unittest.cc      | 25 +++++++++++++++++++
+ 2 files changed, 38 insertions(+)
+
+diff --git a/components/optimization_guide/core/hints/hints_fetcher.cc b/components/optimization_guide/core/hints/hints_fetcher.cc
+index d7505fb7e3e..2d3b6441efa 100644
+--- a/components/optimization_guide/core/hints/hints_fetcher.cc
++++ b/components/optimization_guide/core/hints/hints_fetcher.cc
+@@ -24,9 +24,11 @@
+ #include "components/optimization_guide/core/optimization_guide_prefs.h"
+ #include "components/optimization_guide/core/optimization_guide_util.h"
+ #include "components/optimization_guide/proto/hints.pb.h"
++#include "components/optimization_guide/core/optimization_guide_permissions_util.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/prefs/scoped_user_pref_update.h"
+ #include "components/variations/net/variations_http_headers.h"
++#include "google_apis/google_api_keys.h"
+ #include "net/base/load_flags.h"
+ #include "net/base/url_util.h"
+ #include "net/http/http_response_headers.h"
+@@ -213,6 +215,17 @@ bool HintsFetcher::FetchOptimizationGuideServiceHints(
+   DCHECK_GT(optimization_types.size(), 0u);
+   request_context_ = request_context;
+ 
++  // Bare: no request without a Google API key. The hints manager's own
++  // fetches already check for one, but on-demand callers (shopping, page
++  // images, the annotation index) reach this fetcher directly, and it sent the
++  // hosts it wanted hints for to optimizationguide-pa.googleapis.com with the
++  // placeholder key, which Google answers with a 400.
++  if (!ShouldSkipGoogleApiKeyConfigurationCheck() &&
++      !google_apis::HasAPIKeyConfigured()) {
++    std::move(hints_fetched_callback).Run(std::nullopt);
++    return false;
++  }
++
+   if (active_url_loader_) {
+     OPTIMIZATION_GUIDE_LOG(
+         optimization_guide_common::mojom::LogSource::HINTS,
+diff --git a/components/optimization_guide/core/hints/hints_fetcher_unittest.cc b/components/optimization_guide/core/hints/hints_fetcher_unittest.cc
+index ce5630ea36c..0a6defbb597 100644
+--- a/components/optimization_guide/core/hints/hints_fetcher_unittest.cc
++++ b/components/optimization_guide/core/hints/hints_fetcher_unittest.cc
+@@ -15,6 +15,7 @@
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/to_string.h"
+ #include "base/test/metrics/histogram_tester.h"
++#include "base/test/scoped_command_line.h"
+ #include "base/test/scoped_feature_list.h"
+ #include "base/test/simple_test_clock.h"
+ #include "base/test/task_environment.h"
+@@ -22,11 +23,13 @@
+ #include "components/optimization_guide/core/hints/store_update_data.h"
+ #include "components/optimization_guide/core/optimization_guide_enums.h"
+ #include "components/optimization_guide/core/optimization_guide_features.h"
++#include "components/optimization_guide/core/optimization_guide_permissions_util.h"
+ #include "components/optimization_guide/core/optimization_guide_prefs.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/prefs/scoped_user_pref_update.h"
+ #include "components/prefs/testing_pref_service.h"
+ #include "components/variations/scoped_variations_ids_provider.h"
++#include "google_apis/google_api_keys.h"
+ #include "net/base/url_util.h"
+ #include "net/http/http_request_headers.h"
+ #include "services/network/public/cpp/shared_url_loader_factory.h"
+@@ -47,6 +50,10 @@ class HintsFetcherTest : public testing::Test,
+         shared_url_loader_factory_(
+             base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+                 &test_url_loader_factory_)) {
++    // Bare: the fetcher refuses without a Google API key, which test builds do
++    // not have; these tests exercise the request itself.
++    scoped_command_line_.GetProcessCommandLine()->AppendSwitch(
++        kGoogleApiKeyConfigurationCheckOverrideSwitch);
+     scoped_list_.InitWithFeaturesAndParameters(
+         {{features::kOptimizationHints,
+           {{"persist_hints_to_disk",
+@@ -67,6 +74,14 @@ class HintsFetcherTest : public testing::Test,
+ 
+   ~HintsFetcherTest() override = default;
+ 
++  // Bare: undoes the API key override the fixture sets up.
++  void RemoveApiKeyCheckOverride() {
++    scoped_command_line_.GetProcessCommandLine()->RemoveSwitch(
++        kGoogleApiKeyConfigurationCheckOverrideSwitch);
++  }
++
++  int NumPendingRequests() { return test_url_loader_factory_.NumPending(); }
++
+   void OnHintsFetched(std::optional<std::unique_ptr<proto::GetHintsResponse>>
+                           get_hints_response) {
+     if (get_hints_response) {
+@@ -168,6 +183,7 @@ class HintsFetcherTest : public testing::Test,
+   variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
+       variations::VariationsIdsProvider::Mode::kUseSignedInState};
+   bool hints_fetched_ = false;
++  base::test::ScopedCommandLine scoped_command_line_;
+   base::test::ScopedFeatureList scoped_list_;
+   base::test::TaskEnvironment task_environment_;
+   std::unique_ptr<TestingPrefServiceSimple> pref_service_;
+@@ -219,6 +235,15 @@ TEST_P(HintsFetcherTest, FetchOptimizationGuideServiceHints) {
+       FetcherRequestStatus::kSuccess, 1);
+ }
+ 
++// Bare: without a Google API key nothing is requested.
++TEST_P(HintsFetcherTest, NoFetchWithoutApiKey) {
++  RemoveApiKeyCheckOverride();
++  ASSERT_FALSE(google_apis::HasAPIKeyConfigured());
++  EXPECT_FALSE(FetchHints({"foo.com"}, /*urls=*/{}));
++  EXPECT_EQ(0, NumPendingRequests());
++  EXPECT_FALSE(hints_fetched());
++}
++
+ // Tests to ensure that multiple hint fetches by the same object cannot be in
+ // progress simultaneously.
+ TEST_P(HintsFetcherTest, FetchInProgress) {

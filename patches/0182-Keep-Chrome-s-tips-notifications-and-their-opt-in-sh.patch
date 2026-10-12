@@ -1,0 +1,49 @@
+From 6df8badf964f7901f0a3f09d7c5020e590aa3442 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Mon, 12 Oct 2026 21:42:54 +0000
+Subject: [PATCH] Keep Chrome's tips notifications and their opt-in sheet off
+
+Chromium 156 turned kAndroidTipsNotifications on by default; at 153 it was
+off. On a phone, TabbedRootUiCoordinator then shows an unasked bottom sheet,
+"Get the most out of" the browser, when it comes back after more than four
+hours in the background, and the tips it offers include one that opens Safe
+Browsing settings, which this build cannot provide, and one for Google Lens.
+
+The feature is off again in native code, and the Java safe default is false
+to match, so the sheet cannot appear before native has answered either.
+---
+ .../org/chromium/chrome/browser/flags/ChromeFeatureList.java  | 4 +++-
+ components/segmentation_platform/public/features.cc           | 4 +++-
+ 2 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
+index 76d7f9761e1..03145ee2104 100644
+--- a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
++++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
+@@ -1770,8 +1770,10 @@ public abstract class ChromeFeatureList {
+             newMutableFlagWithSafeDefault(ANDROID_HANDLE_PDF_IN_IFRAME, false);
+     public static final MutableFlagWithSafeDefault sAndroidTabDeclutterArchiveOnDesktop =
+             newMutableFlagWithSafeDefault(ANDROID_TAB_DECLUTTER_ARCHIVE_ON_DESKTOP, false);
++    // Bare: false, matching the native default, so the opt-in sheet stays away before native
++    // has answered too.
+     public static final MutableFlagWithSafeDefault sAndroidTipsNotifications =
+-            newMutableFlagWithSafeDefault(ANDROID_TIPS_NOTIFICATIONS, true);
++            newMutableFlagWithSafeDefault(ANDROID_TIPS_NOTIFICATIONS, false);
+     public static final MutableFlagWithSafeDefault sAndroidTipsNotificationsV2 =
+             newMutableFlagWithSafeDefault(ANDROID_TIPS_NOTIFICATIONS_V2, false);
+     public static final MutableFlagWithSafeDefault sAndroidZoomImmersive =
+diff --git a/components/segmentation_platform/public/features.cc b/components/segmentation_platform/public/features.cc
+index 7bfafa91947..81433d7f6f0 100644
+--- a/components/segmentation_platform/public/features.cc
++++ b/components/segmentation_platform/public/features.cc
+@@ -185,7 +185,9 @@ constexpr base::FeatureParam<int> kMaxDefaultBrowserMagicStackIosImpressions{
+     "max_default_browser_magic_stack_ios_impressions",
+     /*default_value=*/6};
+ 
+-BASE_FEATURE(kAndroidTipsNotifications, base::FEATURE_ENABLED_BY_DEFAULT);
++// Bare: off. Its opt-in sheet appears unasked after four hours in the
++// background, and its tips lead to Safe Browsing settings and Google Lens.
++BASE_FEATURE(kAndroidTipsNotifications, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ constexpr base::FeatureParam<bool> kTrustAndSafety{&kAndroidTipsNotifications,
+                                                    "trust_and_safety",

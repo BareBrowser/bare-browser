@@ -1,4 +1,4 @@
-From b40aba98a6a4b846bc52365f84b1b3d62a35e381 Mon Sep 17 00:00:00 2001
+From d9140b2b75e3504a44cb738946c6308ee24166ae Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Sun, 11 Oct 2026 10:42:23 +0000
 Subject: [PATCH] Give the incognito window on a phone an extension window
@@ -6,28 +6,41 @@ Subject: [PATCH] Give the incognito window on a phone an extension window
 
 On a phone, incognito tabs open in the same activity as regular ones, and the
 incognito tab model gets a browser window of its own. The windowing features
-are added once, for the activity's regular profile, so that window never had
-an extension window controller. windows.getLastFocused() walks every browser
+are added once, for one profile, so one of the two windows never had an
+extension window controller. windows.getLastFocused() walks every browser
 window and hands each one's controller to CanOperateOnWindow, which reads
-through it. Called from an extension's incognito instance with an incognito
-tab open, that is a null dereference and the browser goes down. Measured on a
-Pixel 3 with uBlock Origin's incognito background page, on builds without this
-patch: SIGSEGV in windows_util::CanOperateOnWindow. The tabs API had the same
-blind spot: the incognito instance could not find the incognito tab it was
-running for.
+through it: a null dereference, and the browser goes down.
 
-The controller is now added for the incognito profile once its browser window
-exists, keyed on the incognito tab model, so the task removes it when the last
-incognito tab closes and the window goes with it, and adds it again for the
-next one. An activity that is incognito by itself already gets one from the
-regular call.
+Two cases. With the activity started in regular mode, the incognito window had
+no controller, and the crash came from an extension's incognito instance.
+Restored by Android with incognito selected, the features went to the
+incognito profile, because ChromeActivity took the current model's profile, so
+the regular window had none and any extension calling getLastFocused from a
+regular context crashed the browser. In that state uBlock Origin's regular
+instance also saw no windows and no tabs, and the extensions toolbar, built for
+the same profile, answered every regular tab with the hidden incognito one.
 
-After it, on the same phone: getLastFocused, getCurrent and getAll from the
-incognito instance return the incognito window, tabs.query finds the incognito
-tab, and the regular instance still sees only regular windows and tabs.
+The windowing features and the extensions toolbar now take the regular profile
+whenever the activity has a regular browser window, whichever model is
+selected; an activity that is incognito by itself has none and keeps its own.
+The incognito window gets its controller once it exists, keyed on the incognito
+tab model, so the task removes it when the last incognito tab closes and adds
+it again for the next one. getLastFocused and the tab groups query also skip a
+window without a controller, as the windows API already does elsewhere
+(crbug.com/501003339).
+
+Measured on a Pixel 3, incognito tab in front, HOME, am kill, relaunch: before,
+getLastFocused from the regular instance crashed the browser (SIGSEGV in
+windows_util::CanOperateOnWindow). After, each instance sees its own window
+and tabs, the popup in a regular tab describes that tab and the one in the
+incognito tab the incognito one, and nothing crashes.
 ---
  .../chrome/browser/ChromeTabbedActivity.java  | 49 +++++++++++++++++++
- 1 file changed, 49 insertions(+)
+ .../chrome/browser/app/ChromeActivity.java    | 13 +++++
+ .../browser/toolbar/ToolbarManager.java       | 10 +++-
+ .../api/tab_groups/tab_groups_api.cc          |  9 ++--
+ .../browser/extensions/api/tabs/tabs_api.cc   |  9 ++--
+ 5 files changed, 83 insertions(+), 7 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 index 9fc7f8f75b4..9c81bd8e00a 100644
@@ -103,3 +116,89 @@ index 9fc7f8f75b4..9c81bd8e00a 100644
      }
  
      private boolean shouldRemoveWindowWithZeroTabs(@TabClosingSource int closingSource) {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index f6e893178e8..c12d36a700e 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -1178,6 +1178,19 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+             // TODO(crbug.com/491791326): Handle multiple profiles for mobile.
+             Profile profile = tabModelSelector.getCurrentModel().getProfile();
+             assert profile != null;
++            // Bare: an activity restored with incognito selected still has its regular browser
++            // window, and the windowing features belong to that one. Taking the current model's
++            // profile here left the regular window without an extension window controller, so
++            // chrome.windows.getLastFocused() from a regular extension context read through null.
++            // An activity that is incognito by itself has no regular window and keeps its profile.
++            if (profile.isOffTheRecord()) {
++                Profile regularProfile =
++                        tabModelSelector.getModel(/* incognito= */ false).getProfile();
++                if (regularProfile != null
++                        && chromeAndroidTask.getNativeBrowserWindowPtr(regularProfile, this) != 0) {
++                    profile = regularProfile;
++                }
++            }
+             addWindowingFeatures(chromeAndroidTask, profile, activityWindowAndroid);
+ 
+             // 4. Make the ChromeAndroidTask available via OneshotSupplier.
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index 8c821ebeaf9..1ab44a4260e 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -2811,8 +2811,16 @@ public class ToolbarManager
+             ChromeAndroidTask task = mChromeAndroidTaskSupplier.get();
+             // ChromeAndroidTask is available only on Desktop Android.
+             if (task != null) {
+-                Profile tabModelProfile =
++                Profile currentModelProfile =
+                         assertNonNull(mTabModelSelector.getCurrentModel().getProfile());
++                // Bare: the same applies to the extensions toolbar. Built for the incognito profile
++                // after an incognito restore, it answered every regular tab with the hidden
++                // incognito one. Use the regular profile whenever this activity has its window.
++                Profile tabModelProfile =
++                        currentModelProfile.isOffTheRecord()
++                                        && task.getNativeBrowserWindowPtr(profile, mActivity) != 0
++                                ? profile
++                                : currentModelProfile;
+                 // Register as an Activity-scoped feature of {@link ChromeAndroidTask}. This ensures
+                 // its C++ UnownedUserData objects are destroyed prior to the host (BWI) when a
+                 // Profile is destroyed on mobile Android. Explicit destruction in
+diff --git a/chrome/browser/extensions/api/tab_groups/tab_groups_api.cc b/chrome/browser/extensions/api/tab_groups/tab_groups_api.cc
+index 36cb957c106..7e4bfda7db7 100644
+--- a/chrome/browser/extensions/api/tab_groups/tab_groups_api.cc
++++ b/chrome/browser/extensions/api/tab_groups/tab_groups_api.cc
+@@ -146,9 +146,12 @@ ExtensionFunction::ResponseAction TabGroupsQueryFunction::Run() {
+           return true;
+         }
+ 
+-        if (!BrowserExtensionWindowController::From(browser_window_interface)
+-                 ->IsVisibleToTabsAPIForExtension(
+-                     extension(), /*allow_dev_tools_windows=*/false)) {
++        // Bare: skip a window without a controller rather than reading
++        // through null (crbug.com/501003339).
++        WindowController* controller =
++            BrowserExtensionWindowController::From(browser_window_interface);
++        if (!controller || !controller->IsVisibleToTabsAPIForExtension(
++                               extension(), /*allow_dev_tools_windows=*/false)) {
+           return true;
+         }
+ 
+diff --git a/chrome/browser/extensions/api/tabs/tabs_api.cc b/chrome/browser/extensions/api/tabs/tabs_api.cc
+index 8599fed2dfb..cace283ac02 100644
+--- a/chrome/browser/extensions/api/tabs/tabs_api.cc
++++ b/chrome/browser/extensions/api/tabs/tabs_api.cc
+@@ -939,9 +939,12 @@ ExtensionFunction::ResponseAction WindowsGetLastFocusedFunction::Run() {
+   BrowserWindowInterface* last_focused_browser = nullptr;
+   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+       [&](BrowserWindowInterface* browser) {
+-        if (windows_util::CanOperateOnWindow(
+-                this, BrowserExtensionWindowController::From(browser),
+-                extractor.type_filters())) {
++        // Bare: some browser windows have no controller (crbug.com/501003339),
++        // as the query further down already allows for.
++        WindowController* controller =
++            BrowserExtensionWindowController::From(browser);
++        if (controller && windows_util::CanOperateOnWindow(
++                              this, controller, extractor.type_filters())) {
+           last_focused_browser = browser;
+           return false;  // Stop iterating.
+         }

@@ -1,4 +1,4 @@
-From 799f76df83482dc80c59fa2c37e42b3918989b38 Mon Sep 17 00:00:00 2001
+From da8915e3c43ffaab6ed25a276c8f49f00c0f74f5 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Sun, 11 Oct 2026 08:22:11 +0000
 Subject: [PATCH] Keep toolbar shortcuts current, and stop offering Translate
@@ -17,7 +17,10 @@ Translate goes from the choices altogether. It needs a Google API key, which
 this build does not have, so even an enabled Translate button could not
 translate anything. A slot an earlier release let someone set to Translate
 falls back to its default, and a hold set to it does nothing, through the
-checks that already discard actions a build no longer offers.
+checks that already discard actions a build no longer offers. Upstream's own
+address bar shortcut settings offered it too: AdaptiveToolbarFeatures now
+reports Translate as unavailable, so that screen, the shortcut predictor and
+the button no longer offer it, and its tests expect that.
 ---
  .../bare/BareButtonDataActionAdapter.java     |  7 +++++
  .../settings/BareToolbarSettingsUnitTest.java |  2 +-
@@ -25,7 +28,11 @@ checks that already discard actions a build no longer offers.
  .../bottombar/BareToolbarLayoutUnitTest.java  | 28 +++++++++++++------
  .../bottombar/BareToolbarPrefsUnitTest.java   |  4 +--
  .../BareToolbarSecondaryActionsUnitTest.java  | 16 +++++------
- 6 files changed, 42 insertions(+), 20 deletions(-)
+ .../adaptive/AdaptiveToolbarFeatures.java     | 11 ++------
+ .../AdaptiveToolbarFeaturesUnitTest.java      |  3 +-
+ .../AdaptiveToolbarStatePredictorTest.java    |  2 +-
+ ...nslateToolbarButtonControllerUnitTest.java |  6 ++--
+ 10 files changed, 52 insertions(+), 32 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java
 index 06c8f8123cb..c12978e4657 100644
@@ -201,3 +208,91 @@ index de2d3658a53..b2ae0d734f3 100644
          hold(home);
          assertEquals("available now, without anything being reconfigured", 1, mInvokedCount);
  
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java
+index 96add383038..261c52838e9 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java
+@@ -14,12 +14,9 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ import org.chromium.chrome.browser.glic.GlicEnabling;
+-import org.chromium.chrome.browser.preferences.Pref;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.readaloud.ReadAloudFeatures;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+-import org.chromium.components.prefs.PrefService;
+-import org.chromium.components.user_prefs.UserPrefs;
+ import org.chromium.ui.base.DeviceFormFactor;
+ 
+ import java.util.HashMap;
+@@ -160,11 +157,9 @@ public class AdaptiveToolbarFeatures {
+      * @return Whether the translate button is enabled by policy/preference.
+      */
+     public static boolean isTranslateEnabled(Profile profile) {
+-        PrefService prefService = UserPrefs.get(profile);
+-        if (prefService.isManagedPreference(Pref.OFFER_TRANSLATE_ENABLED)) {
+-            return prefService.getBoolean(Pref.OFFER_TRANSLATE_ENABLED);
+-        }
+-        return true;
++        // Bare: translation needs a Google API key this build does not have, so the shortcut
++        // settings stop offering Translate and a stored choice of it falls back to the default.
++        return false;
+     }
+ 
+     public static boolean isTabGroupingPageActionEnabled() {
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeaturesUnitTest.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeaturesUnitTest.java
+index 11ce7ce224c..87c39c2f0be 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeaturesUnitTest.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeaturesUnitTest.java
+@@ -95,7 +95,8 @@ public class AdaptiveToolbarFeaturesUnitTest {
+     public void testIsTranslateEnabled_UserModifiedAndDisabled() {
+         when(mPrefService.isManagedPreference(Pref.OFFER_TRANSLATE_ENABLED)).thenReturn(false);
+         when(mPrefService.getBoolean(Pref.OFFER_TRANSLATE_ENABLED)).thenReturn(false);
+-        assertTrue(AdaptiveToolbarFeatures.isTranslateEnabled(mProfile));
++        // Bare: translation needs a Google API key, so the shortcut is never offered.
++        assertFalse(AdaptiveToolbarFeatures.isTranslateEnabled(mProfile));
+     }
+ 
+     @Test
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictorTest.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictorTest.java
+index 61334ae921b..338dbfde2cf 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictorTest.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictorTest.java
+@@ -143,13 +143,13 @@ public class AdaptiveToolbarStatePredictorTest {
+                         List.of(
+                                 AdaptiveToolbarButtonVariant.VOICE,
+                                 AdaptiveToolbarButtonVariant.TRANSLATE));
++        // Bare: Translate is filtered out; translation needs a Google API key.
+         UiState expected =
+                 new UiState(
+                         true,
+                         new ArrayList<Integer>(
+                                 List.of(
+                                         AdaptiveToolbarButtonVariant.VOICE,
+-                                        AdaptiveToolbarButtonVariant.TRANSLATE,
+                                         AdaptiveToolbarButtonVariant.SHARE)),
+                         AdaptiveToolbarButtonVariant.AUTO,
+                         AdaptiveToolbarButtonVariant.VOICE);
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/TranslateToolbarButtonControllerUnitTest.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/TranslateToolbarButtonControllerUnitTest.java
+index 03b90c1b1c8..9c9704af445 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/TranslateToolbarButtonControllerUnitTest.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/TranslateToolbarButtonControllerUnitTest.java
+@@ -80,7 +80,8 @@ public class TranslateToolbarButtonControllerUnitTest {
+                         () -> mTab, mDrawable, "Translate button description", () -> mTracker);
+         ButtonData buttonData = translateToolbarButtonController.get(mTab);
+ 
+-        assertTrue(buttonData.canShow());
++        // Bare: never shown; translation needs a Google API key.
++        assertFalse(buttonData.canShow());
+         assertTrue(buttonData.isEnabled());
+         assertNotNull(buttonData.getButtonSpec());
+     }
+@@ -148,6 +149,7 @@ public class TranslateToolbarButtonControllerUnitTest {
+                         () -> mTab, mDrawable, "Translate button description", () -> mTracker);
+         ButtonData buttonData = translateToolbarButtonController.get(mTab);
+ 
+-        assertTrue(buttonData.canShow());
++        // Bare: never shown; translation needs a Google API key.
++        assertFalse(buttonData.canShow());
+     }
+ }

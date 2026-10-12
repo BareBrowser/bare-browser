@@ -1,4 +1,4 @@
-From 6aeb1181f65410f599bc03d18f64417228a4c363 Mon Sep 17 00:00:00 2001
+From 5922b6941e2d6c00fbb983d11d293cc1c56bdc7e Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Sun, 11 Oct 2026 07:23:32 +0000
 Subject: [PATCH] Keep the bundled blocker when its file cannot be prepared
@@ -24,20 +24,20 @@ the welcome screen works.
 Two smaller things in the same function. The crx used to be trusted as soon as
 a file of that name existed, so a launch interrupted halfway through writing it
 left a truncated file every later launch would reuse; it is now written beside
-the target and renamed into place, and an existing file is only reused if its
-size matches the asset. And the decision itself now lives in
+the target and renamed into place, and an existing file is only reused if it is
+the asset byte for byte. And the decision itself now lives in
 components/bare_bundled_extensions, which depends on //base only, so its cases
 have unit tests that run on the host.
 ---
  BUILD.gn                                      |  1 +
  chrome/browser/extensions/BUILD.gn            |  1 +
  chrome/browser/extensions/DEPS                |  1 +
- .../bare_bundled_extensions_loader.cc         | 92 ++++++++++---------
+ .../bare_bundled_extensions_loader.cc         | 93 ++++++++++---------
  components/bare_bundled_extensions/BUILD.gn   | 27 ++++++
  .../bundled_extension_plan.cc                 | 60 ++++++++++++
  .../bundled_extension_plan.h                  | 53 +++++++++++
- .../bundled_extension_plan_unittest.cc        | 67 ++++++++++++++
- 8 files changed, 260 insertions(+), 42 deletions(-)
+ .../bundled_extension_plan_unittest.cc        | 67 +++++++++++++
+ 8 files changed, 261 insertions(+), 42 deletions(-)
  create mode 100644 components/bare_bundled_extensions/BUILD.gn
  create mode 100644 components/bare_bundled_extensions/bundled_extension_plan.cc
  create mode 100644 components/bare_bundled_extensions/bundled_extension_plan.h
@@ -78,7 +78,7 @@ index 71589622bac..14ba168c220 100644
    "+components/crash/content/browser/error_reporting",
    "+components/guest_view/common",
 diff --git a/chrome/browser/extensions/bare_bundled_extensions_loader.cc b/chrome/browser/extensions/bare_bundled_extensions_loader.cc
-index 3bf563eccfe..5c888a4fea1 100644
+index 3bf563eccfe..4e7422edbd4 100644
 --- a/chrome/browser/extensions/bare_bundled_extensions_loader.cc
 +++ b/chrome/browser/extensions/bare_bundled_extensions_loader.cc
 @@ -14,6 +14,7 @@
@@ -144,7 +144,7 @@ index 3bf563eccfe..5c888a4fea1 100644
    }
  
    base::MemoryMappedFile::Region region;
-@@ -77,45 +81,49 @@ base::FilePath ExtractBundledCrx() {
+@@ -77,45 +81,50 @@ base::FilePath ExtractBundledCrx() {
      base::android::DumpLastOpenApkAssetFailure();
      LOG(ERROR) << "Bare: bundled extension asset missing: "
                 << kUBlockOriginAsset;
@@ -154,12 +154,6 @@ index 3bf563eccfe..5c888a4fea1 100644
 -
    base::File asset(fd);
 +
-+  // Already extracted by an earlier launch. Trust it only if it is whole.
-+  std::optional<int64_t> existing = base::GetFileSize(crx);
-+  if (existing && *existing == region.size) {
-+    return true;
-+  }
-+
    std::vector<uint8_t> contents(static_cast<size_t>(region.size));
    if (!asset.ReadAndCheck(region.offset, contents)) {
      LOG(ERROR) << "Bare: could not read bundled extension asset";
@@ -168,16 +162,23 @@ index 3bf563eccfe..5c888a4fea1 100644
    }
  
 -  if (!base::WriteFile(crx, contents)) {
+-    LOG(ERROR) << "Bare: could not write bundled extension to " << crx;
+-    return base::FilePath();
++  // Already extracted by an earlier launch. Trust it only if it is the asset
++  // byte for byte; a file of the right size can still be torn or altered.
++  std::optional<std::vector<uint8_t>> existing = base::ReadFileToBytes(crx);
++  if (existing && *existing == contents) {
++    return true;
+   }
+ 
+-  return crx;
 +  const base::FilePath partial = crx.AddExtension(FILE_PATH_LITERAL("partial"));
 +  if (!base::WriteFile(partial, contents) ||
 +      !base::ReplaceFile(partial, crx, nullptr)) {
-     LOG(ERROR) << "Bare: could not write bundled extension to " << crx;
--    return base::FilePath();
++    LOG(ERROR) << "Bare: could not write bundled extension to " << crx;
 +    base::DeleteFile(partial);
 +    return false;
-   }
--
--  return crx;
++  }
 +  return true;
  }
  

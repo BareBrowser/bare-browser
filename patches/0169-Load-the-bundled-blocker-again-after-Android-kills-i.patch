@@ -1,4 +1,4 @@
-From f92986ce8214cd077facf2011e385204da579bad Mon Sep 17 00:00:00 2001
+From f8b415dac33f3d35de7d4b1c2843e153b7d50177 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Sun, 11 Oct 2026 07:23:34 +0000
 Subject: [PATCH] Load the bundled blocker again after Android kills it
@@ -23,25 +23,32 @@ and an extension Chromium itself terminated for reloading too often, which it
 marks with a kReloadTooFrequent warning.
 
 Android reports a crash and an out-of-memory kill the same way, so whether an
-extension is broken or merely unlucky cannot be told from the termination. The
-backoff is what stops a broken one being restarted forever. It reuses
-CorruptedExtensionReinstaller's policy: the first attempt is immediate, later
-ones double from 100 ms up to 30 minutes, and an entry left alone for six hours
-starts over, so an occasional kill is undone at once and a crash loop settles at
-one attempt every half hour.
+extension is broken or merely unlucky cannot be told from one termination. What
+tells them apart is how long it stays up. RecoveryBackoff uses
+CorruptedExtensionReinstaller's policy, the first attempt immediate and later
+ones doubling from 100 ms up to 30 minutes, but a reload that stays up for a
+minute starts the next death's backoff over. So a working blocker that Android
+kills again and again, minutes apart, comes straight back every time, while one
+that dies as soon as it starts settles at one attempt every half hour. An entry
+left alone for six hours also starts over.
+
+Measured on a Pixel 3 with Page.crash on the background page: three kills a few
+seconds after each reload gave delays of 0, 0.1 and 0.2 s; a kill after more
+than a minute up gave 0 s again. Without the reset, the delay kept doubling
+across successful recoveries and passed 12 s after a handful of kills.
 ---
  chrome/browser/extensions/BUILD.gn            |   2 +
- .../bare_bundled_extension_recovery.cc        | 135 ++++++++++++++++++
+ .../bare_bundled_extension_recovery.cc        | 147 ++++++++++++++++++
  .../bare_bundled_extension_recovery.h         |  37 +++++
- .../bare_bundled_extensions_loader.cc         |  13 +-
+ .../bare_bundled_extensions_loader.cc         |  10 +-
  .../bare_bundled_extensions_loader.h          |   7 +
  .../extensions/external_provider_impl.cc      |   6 +-
- components/bare_bundled_extensions/BUILD.gn   |  17 ++-
+ components/bare_bundled_extensions/BUILD.gn   |  17 +-
  components/bare_bundled_extensions/DEPS       |   3 +
- .../recovery_policy.cc                        |  32 +++++
- .../bare_bundled_extensions/recovery_policy.h |  39 +++++
- .../recovery_policy_unittest.cc               |  85 +++++++++++
- 11 files changed, 368 insertions(+), 8 deletions(-)
+ .../recovery_policy.cc                        |  61 ++++++++
+ .../bare_bundled_extensions/recovery_policy.h |  80 ++++++++++
+ .../recovery_policy_unittest.cc               | 140 +++++++++++++++++
+ 11 files changed, 503 insertions(+), 7 deletions(-)
  create mode 100644 chrome/browser/extensions/bare_bundled_extension_recovery.cc
  create mode 100644 chrome/browser/extensions/bare_bundled_extension_recovery.h
  create mode 100644 components/bare_bundled_extensions/DEPS
@@ -64,10 +71,10 @@ index 72d5747cd1c..95237c7c366 100644
      "external_provider_impl.cc",
 diff --git a/chrome/browser/extensions/bare_bundled_extension_recovery.cc b/chrome/browser/extensions/bare_bundled_extension_recovery.cc
 new file mode 100644
-index 00000000000..823e7bbef2c
+index 00000000000..07ef09b1813
 --- /dev/null
 +++ b/chrome/browser/extensions/bare_bundled_extension_recovery.cc
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,147 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -97,7 +104,6 @@ index 00000000000..823e7bbef2c
 +#include "extensions/browser/warning_set.h"
 +#include "extensions/common/extension.h"
 +#include "extensions/common/mojom/manifest.mojom-shared.h"
-+#include "net/base/backoff_entry.h"
 +
 +namespace extensions {
 +
@@ -119,6 +125,13 @@ index 00000000000..823e7bbef2c
 +
 + private:
 +  // ExtensionRegistryObserver:
++  void OnExtensionLoaded(content::BrowserContext* browser_context,
++                         const Extension* extension) override {
++    if (IsClaimed(*extension)) {
++      BackoffFor(extension->id()).OnLoaded();
++    }
++  }
++
 +  void OnExtensionUnloaded(content::BrowserContext* browser_context,
 +                           const Extension* extension,
 +                           UnloadedExtensionReason reason) override {
@@ -143,19 +156,23 @@ index 00000000000..823e7bbef2c
 +           loader_->ClaimsExtension(extension.id());
 +  }
 +
++  bare_bundled_extensions::RecoveryBackoff& BackoffFor(const ExtensionId& id) {
++    std::unique_ptr<bare_bundled_extensions::RecoveryBackoff>& backoff =
++        backoff_[id];
++    if (!backoff) {
++      backoff = std::make_unique<bare_bundled_extensions::RecoveryBackoff>();
++    }
++    return *backoff;
++  }
++
 +  void Schedule(const ExtensionId& id) {
 +    if (pending_.contains(id)) {
 +      return;
 +    }
-+    std::unique_ptr<net::BackoffEntry>& entry = backoff_[id];
-+    if (!entry || entry->CanDiscard()) {
-+      entry = std::make_unique<net::BackoffEntry>(
-+          &bare_bundled_extensions::kRecoveryBackoffPolicy);
-+    }
-+    entry->InformOfRequest(false);
-+    const base::TimeDelta delay = entry->GetTimeUntilRelease();
++    bare_bundled_extensions::RecoveryBackoff& backoff = BackoffFor(id);
++    const base::TimeDelta delay = backoff.OnTerminated();
 +    LOG(WARNING) << "Bare: " << id << " was terminated; loading it again in "
-+                 << delay << " (attempt " << entry->failure_count() << ")";
++                 << delay << " (attempt " << backoff.failure_count() << ")";
 +    pending_.insert(id);
 +    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
 +        FROM_HERE,
@@ -187,7 +204,9 @@ index 00000000000..823e7bbef2c
 +
 +  raw_ptr<Profile> profile_;
 +  scoped_refptr<BareBundledExtensionsLoader> loader_;
-+  std::map<ExtensionId, std::unique_ptr<net::BackoffEntry>> backoff_;
++  std::map<ExtensionId,
++           std::unique_ptr<bare_bundled_extensions::RecoveryBackoff>>
++      backoff_;
 +  std::set<ExtensionId> pending_;
 +  base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
 +      observation_{this};
@@ -247,20 +266,10 @@ index 00000000000..fafffd0bdcd
 +
 +#endif  // CHROME_BROWSER_EXTENSIONS_BARE_BUNDLED_EXTENSION_RECOVERY_H_
 diff --git a/chrome/browser/extensions/bare_bundled_extensions_loader.cc b/chrome/browser/extensions/bare_bundled_extensions_loader.cc
-index f4bc98e6e10..62edd9e8aec 100644
+index 29d0b187e6b..8c53ace8bf0 100644
 --- a/chrome/browser/extensions/bare_bundled_extensions_loader.cc
 +++ b/chrome/browser/extensions/bare_bundled_extensions_loader.cc
-@@ -130,7 +130,8 @@ bool ExtractBundledCrx(const base::FilePath& crx) {
- 
-   // Already extracted by an earlier launch. Trust it only if it is whole.
-   std::optional<int64_t> existing = base::GetFileSize(crx);
--  if (existing && *existing == region.size) {
-+  if (existing && *existing >= 0 &&
-+      static_cast<uint64_t>(*existing) == region.size) {
-     return true;
-   }
- 
-@@ -249,7 +250,7 @@ std::optional<base::DictValue> ReadCarryOver(const base::FilePath& record) {
+@@ -250,7 +250,7 @@ std::optional<base::DictValue> ReadCarryOver(const base::FilePath& record) {
    if (record.empty() || !base::ReadFileToString(record, &json)) {
      return std::nullopt;
    }
@@ -269,7 +278,7 @@ index f4bc98e6e10..62edd9e8aec 100644
    if (!value || !value->is_dict()) {
      return std::nullopt;
    }
-@@ -481,6 +482,13 @@ BareBundledExtensionsLoader::BareBundledExtensionsLoader(Profile* profile)
+@@ -482,6 +482,13 @@ BareBundledExtensionsLoader::BareBundledExtensionsLoader(Profile* profile)
  
  BareBundledExtensionsLoader::~BareBundledExtensionsLoader() = default;
  
@@ -283,7 +292,7 @@ index f4bc98e6e10..62edd9e8aec 100644
  void BareBundledExtensionsLoader::StartLoading() {
    if (!profile_) {
      return;
-@@ -529,6 +537,7 @@ void BareBundledExtensionsLoader::OnCarriedOver(Plan plan, bool carried_over) {
+@@ -530,6 +537,7 @@ void BareBundledExtensionsLoader::OnCarriedOver(Plan plan, bool carried_over) {
  }
  
  void BareBundledExtensionsLoader::OnPrefsBuilt(base::DictValue prefs) {
@@ -405,10 +414,10 @@ index 00000000000..6a2f02e2180
 +]
 diff --git a/components/bare_bundled_extensions/recovery_policy.cc b/components/bare_bundled_extensions/recovery_policy.cc
 new file mode 100644
-index 00000000000..bca4e410b7b
+index 00000000000..32e40bd8b9a
 --- /dev/null
 +++ b/components/bare_bundled_extensions/recovery_policy.cc
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,61 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -440,13 +449,42 @@ index 00000000000..bca4e410b7b
 +    false,
 +};
 +
++RecoveryBackoff::RecoveryBackoff(const base::TickClock* clock)
++    : clock_(clock) {}
++
++RecoveryBackoff::~RecoveryBackoff() = default;
++
++void RecoveryBackoff::OnLoaded() {
++  loaded_at_ = Now();
++}
++
++base::TimeDelta RecoveryBackoff::OnTerminated() {
++  const bool stayed_up =
++      loaded_at_ && Now() - *loaded_at_ >= kHealthyUptime;
++  if (!entry_ || entry_->CanDiscard() || stayed_up) {
++    entry_ = std::make_unique<net::BackoffEntry>(&kRecoveryBackoffPolicy,
++                                                 clock_.get());
++  }
++  loaded_at_.reset();
++  entry_->InformOfRequest(false);
++  return entry_->GetTimeUntilRelease();
++}
++
++int RecoveryBackoff::failure_count() const {
++  return entry_ ? entry_->failure_count() : 0;
++}
++
++base::TimeTicks RecoveryBackoff::Now() const {
++  return clock_ ? clock_->NowTicks() : base::TimeTicks::Now();
++}
++
 +}  // namespace bare_bundled_extensions
 diff --git a/components/bare_bundled_extensions/recovery_policy.h b/components/bare_bundled_extensions/recovery_policy.h
 new file mode 100644
-index 00000000000..f5b2a8e2bf4
+index 00000000000..1ab2031ef4f
 --- /dev/null
 +++ b/components/bare_bundled_extensions/recovery_policy.h
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,80 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -454,6 +492,12 @@ index 00000000000..f5b2a8e2bf4
 +#ifndef COMPONENTS_BARE_BUNDLED_EXTENSIONS_RECOVERY_POLICY_H_
 +#define COMPONENTS_BARE_BUNDLED_EXTENSIONS_RECOVERY_POLICY_H_
 +
++#include <memory>
++#include <optional>
++
++#include "base/memory/raw_ptr.h"
++#include "base/time/tick_clock.h"
++#include "base/time/time.h"
 +#include "net/base/backoff_entry.h"
 +
 +namespace bare_bundled_extensions {
@@ -483,15 +527,50 @@ index 00000000000..f5b2a8e2bf4
 +// it starts settles at one attempt every half hour.
 +extern const net::BackoffEntry::Policy kRecoveryBackoffPolicy;
 +
++// How long a reloaded extension has to stay up for its next death to count as
++// a fresh one rather than another turn of the same crash loop.
++inline constexpr base::TimeDelta kHealthyUptime = base::Minutes(1);
++
++// The delays for one extension. Android killing a working extension now and
++// then is answered at once every time: once a reload has stayed up for
++// kHealthyUptime, the next termination starts the backoff over. Only an
++// extension that keeps dying soon after each reload climbs towards the
++// half-hour ceiling.
++class RecoveryBackoff {
++ public:
++  // |clock| is for tests; null means the real clock.
++  explicit RecoveryBackoff(const base::TickClock* clock = nullptr);
++  RecoveryBackoff(const RecoveryBackoff&) = delete;
++  RecoveryBackoff& operator=(const RecoveryBackoff&) = delete;
++  ~RecoveryBackoff();
++
++  // The extension is loaded, whether at startup or after a reload.
++  void OnLoaded();
++
++  // The extension was terminated. Returns how long to wait before loading it
++  // again.
++  base::TimeDelta OnTerminated();
++
++  // Terminations counted by the current backoff run.
++  int failure_count() const;
++
++ private:
++  base::TimeTicks Now() const;
++
++  raw_ptr<const base::TickClock> clock_;
++  std::unique_ptr<net::BackoffEntry> entry_;
++  std::optional<base::TimeTicks> loaded_at_;
++};
++
 +}  // namespace bare_bundled_extensions
 +
 +#endif  // COMPONENTS_BARE_BUNDLED_EXTENSIONS_RECOVERY_POLICY_H_
 diff --git a/components/bare_bundled_extensions/recovery_policy_unittest.cc b/components/bare_bundled_extensions/recovery_policy_unittest.cc
 new file mode 100644
-index 00000000000..8dc76d2b13c
+index 00000000000..a321730abfb
 --- /dev/null
 +++ b/components/bare_bundled_extensions/recovery_policy_unittest.cc
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,140 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -561,6 +640,61 @@ index 00000000000..8dc76d2b13c
 +  }
 +  EXPECT_LE(entry.GetTimeUntilRelease(), base::Minutes(30));
 +  EXPECT_GE(entry.GetTimeUntilRelease(), base::Minutes(27));
++}
++
++// The case that used to climb: Android kills a working extension again and
++// again, minutes apart. Every recovery stays immediate.
++TEST(RecoveryPolicyTest, AKillAfterAHealthySpellIsRecoveredAtOnce) {
++  base::SimpleTestTickClock clock;
++  RecoveryBackoff backoff(&clock);
++  for (int i = 0; i < 12; ++i) {
++    backoff.OnLoaded();
++    clock.Advance(kHealthyUptime + base::Seconds(1));
++    EXPECT_EQ(base::TimeDelta(), backoff.OnTerminated()) << "kill " << i;
++  }
++}
++
++TEST(RecoveryPolicyTest, AnExtensionThatDiesRightAfterEachReloadBacksOff) {
++  base::SimpleTestTickClock clock;
++  RecoveryBackoff backoff(&clock);
++  base::TimeDelta previous;
++  for (int i = 0; i < 8; ++i) {
++    backoff.OnLoaded();
++    clock.Advance(base::Seconds(3));
++    const base::TimeDelta delay = backoff.OnTerminated();
++    if (i > 0) {
++      EXPECT_GT(delay, previous) << "death " << i;
++    }
++    previous = delay;
++    clock.Advance(delay);
++  }
++  EXPECT_GE(previous, base::Seconds(5));
++}
++
++TEST(RecoveryPolicyTest, AHealthySpellEndsACrashLoop) {
++  base::SimpleTestTickClock clock;
++  RecoveryBackoff backoff(&clock);
++  for (int i = 0; i < 10; ++i) {
++    backoff.OnLoaded();
++    clock.Advance(base::Seconds(2));
++    clock.Advance(backoff.OnTerminated());
++  }
++  EXPECT_EQ(10, backoff.failure_count());
++  backoff.OnLoaded();
++  clock.Advance(kHealthyUptime);
++  EXPECT_EQ(base::TimeDelta(), backoff.OnTerminated());
++  EXPECT_EQ(1, backoff.failure_count());
++}
++
++TEST(RecoveryPolicyTest, ADeathWithoutASeenLoadDoesNotReset) {
++  base::SimpleTestTickClock clock;
++  RecoveryBackoff backoff(&clock);
++  backoff.OnLoaded();
++  clock.Advance(base::Seconds(1));
++  backoff.OnTerminated();
++  clock.Advance(base::Minutes(5));
++  // Terminated again with no load in between: still the same run.
++  EXPECT_GT(backoff.OnTerminated(), base::TimeDelta());
 +}
 +
 +TEST(RecoveryPolicyTest, AQuietSpellOfSixHoursStartsOver) {
