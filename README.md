@@ -20,16 +20,16 @@ powerful features like browser extensions and uBlock Origin. Bare also adds back
 playback, the ability to save media from sites that normally block it, support for choosing your
 preferred download manager, and much more.
 
-It is a patch series rather than a fork: 128 patches against one pinned revision of **Chromium
+It is a patch series rather than a fork: 140 patches against one pinned revision of **Chromium
 Desktop Android**, so what this repository holds is exactly the difference between stock Chromium
 and Bare, and nothing else.
 
 Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium project.
 
-- **Base:** Chromium `153.0.8010.27` (commit `ac9b84a0`)
+- **Base:** Chromium `156.0.8078.25` (commit `12282315`)
 - **Target:** `is_desktop_android = true`, `target_cpu = "arm64"` and `"arm"`
-- **Version:** `1.0.0-alpha.3`, versionCode `801000065` (arm64) / `801000060` (32-bit arm)
-- **Size:** 128 patches, 14,605 insertions across 341 files
+- **Version:** `1.0.0`, versionCode `801000075` (arm64) / `801000070` (32-bit arm)
+- **Size:** 140 patches, 15,824 insertions across 367 files
 
 ## What you get
 
@@ -38,8 +38,8 @@ Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium 
 - **[uBlock Origin](https://github.com/gorhill/uBlock), already installed.** The full version,
   not Lite, because Bare keeps Manifest V2 working. Shipped exactly as its author publishes
   it. Remove it like anything else if you would rather not have it.
-- **No telemetry, no AI, no sign-in prompts.** DuckDuckGo is the default from first launch. Two
-  things still reach a server on their own, and both are named in
+- **No telemetry, no AI, no sign-in prompts.** DuckDuckGo is the default from first launch. A
+  few things still reach a server on their own, and each is named in
   [Network behaviour](#network-behaviour) rather than glossed over.
 - **Save what a page is playing.** Long press a video or an audio player and Bare offers you the
   file, including on sites that stream in pieces and normally offer nothing at all.
@@ -98,7 +98,7 @@ patch series rather than a fork, so every change stays readable and reviewable.
 
 ## What the patches do
 
-A hundred and twenty-eight patches against one pinned Chromium revision: crash fixes, the
+A hundred and forty patches against one pinned Chromium revision: crash fixes, the
 extensions toolbar on phone layouts, every Google callback and AI surface removed, and the
 features Bare adds on top.
 
@@ -107,34 +107,52 @@ removed by build flag instead of by patch, and what is deliberately kept.
 
 ## Network behaviour
 
-Measured on a Pixel 3 running Android 12 and an Android 17 emulator, by watching the sockets
-opened under Bare's own uid on a wiped profile. What follows is what was actually observed, not
-what was intended.
+Measured on a Pixel 3 running Android 12, by watching the sockets opened under Bare's own uid
+and recording the browser's own network log. For 1.0.0 that covered a wiped profile from first
+launch through the welcome screen, a page load, a network change and several minutes idle. The
+same capture on 1.0.0-alpha.3 reached the same Google hosts. What follows is what was actually
+observed, not what was intended.
 
-**On a second and later start, with an established profile, one host is contacted without being
-asked: `update.googleapis.com`.** That is Chromium's component updater. It is kept deliberately,
-because the components left registered are the ones that carry security or web compatibility:
+**Chromium's component updater contacts `update.googleapis.com`**, from the first start onwards,
+and fetches the components it needs as signed packages over plain HTTP from Google's download
+host `edgedl.me.gvt1.com`. It is kept deliberately. These are the components registered in
+1.0.0, as `chrome://components` lists them:
 
 | Component | Why it stays |
 | --- | --- |
 | CRLSet | certificate revocation |
-| PKIMetadata | Certificate Transparency |
-| SSLErrorAssistant | quality of the TLS interstitial |
-| FileTypePolicies | download danger classification |
-| OriginTrials | web compatibility |
-| Widevine | DRM playback |
-| SafetyTips, CrowdDeny | lookalike-domain and abusive-notification lists, applied locally |
+| PKI Metadata | Certificate Transparency |
+| Certificate Error Assistant | quality of the TLS interstitial |
+| File Type Policies | download danger classification |
+| Origin Trials | web compatibility |
+| Safety Tips, Crowd Deny | lookalike-domain and abusive-notification lists, applied locally |
+| Actor Safety Lists, Captcha Providers | left registered: their purpose is not clear enough in the tree to remove them confidently |
 
 Registration tells Google an install exists, along with a component id, a version, an install
 date and a cohort. Twelve other components were dropped in patch 0085 for buying nothing here:
 the Privacy Sandbox set, Google's omnibox suggestion model, the optimization-hints feed, shopping
 and checkout heuristics, on-device AI history strings, and two Safe Browsing lists that nothing
-can consult. Three more, ActorSafetyLists, Indigo and CaptchaProvider, are still registered
-because their purpose is not clear enough in the tree to remove them confidently.
+can consult. There is no Widevine component on Android; protected video goes through the
+system's own DRM, below.
 
-**On the first run of a fresh profile there is more, and almost all of it is uBlock Origin**
-fetching the filter lists it ships enabled, from the list maintainers and their CDNs rather than
-from Google. That happens once and then on the extension's own schedule.
+**Widevine provisioning contacts `www.googleapis.com`.** A few seconds after startup on a fresh
+profile, Chromium has Android's MediaDrm provision two spare Widevine origin identifiers in
+advance, so that protected video can start without waiting, and the provisioning request goes to
+`www.googleapis.com/certificateprovisioning`. It happens whether or not any site ever plays
+protected video. By the code, a later start repeats it only once sites have used up the spare
+identifiers. This is Chromium's default (`kMediaDrmPreprovisioningAtStartup`), and 1.0.0 leaves it
+as it is.
+
+**On the first run of a fresh profile, most of the rest is uBlock Origin** fetching the filter
+lists it ships enabled, from the list maintainers and their CDNs rather than from Google:
+`pgl.yoyo.org`, `ublockorigin.github.io`, `ublockorigin.pages.dev`, `malware-filter.pages.dev`,
+`cdn.jsdelivr.net` and `publicsuffix.org`. That happens once and then on the extension's own
+schedule.
+
+**uBlock Origin updates itself from its author.** Its manifest points Chromium's extension updater
+at `cdn.jsdelivr.net` (`gh/gorhill/uBlock@master/dist/chromium/update.xml`), which is checked
+about every five hours, and a newer release downloads from `github.com`. Earlier releases shipped
+the Chrome Web Store copy, which checked `clients2.google.com` instead.
 
 **The update check contacts GitHub**, and only after the welcome screen has been completed and an
 update preference stored. It is at most one request a day, to a public release feed. It sends two
@@ -143,6 +161,10 @@ which version is asking. What it carries beyond that is nothing that identifies 
 no cookies, no installation identifier, no device model, no Android build. The platform default
 User-Agent would have carried the model and the build, so it is replaced. Choosing manual means
 nothing leaves the device until the Check for updates row is tapped.
+
+**If you make Google your search engine**, focusing the address bar prerenders
+`www.google.com/search/warmup.html` (Chromium's `kPrewarm`). With DuckDuckGo or any other engine
+it never fires.
 
 **What no longer happens**, each verified by re-running the same capture:
 
@@ -159,6 +181,10 @@ nothing leaves the device until the Check for updates row is tapped.
   the cached answer was stale. Patch 0093 stops the read from reaching the network, so the answer
   now comes from the cache. Visiting Google sites and signing in to them is unaffected.
 - No Safe Browsing traffic. There was never any: see below.
+The 1.0.0 capture reached none of the hosts in this list.
+
+Chromium 156 also started sending HEAD requests to three random hostnames after launch and after
+every network change, to detect DNS interception. Patch 0170 turns that check off.
 
 Traffic from Android itself and from Google Play Services is separate from all of this and is not
 affected by anything Bare does.
@@ -212,7 +238,7 @@ git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git ~/dep
 mkdir -p /work/chromium && cd /work/chromium
 fetch --nohooks android
 cd src
-git checkout ac9b84a0b321cc741e9eb650f29e7177b68f0f48
+git checkout 1228231501697ff7a4a0150ea8ae6df37bb99331
 gclient sync -D --force --reset
 ./build/install-build-deps.sh --android
 ```
@@ -261,8 +287,8 @@ enable_openxr = false
 disable_fieldtrial_testing_config = true
 
 chrome_public_manifest_package = "org.barebrowser"
-android_override_version_code = "801000065"
-android_override_version_name = "1.0.0-alpha.3"
+android_override_version_code = "801000075"
+android_override_version_name = "1.0.0"
 ```
 
 The last two lines are what `tools/version.py gn arm64` emits, and they matter: they are written into
@@ -274,7 +300,7 @@ patches here are inert. [docs/build-constraints.md](docs/build-constraints.md) h
 behaviours that came from that file rather than from the code.
 
 The 32-bit build differs in exactly three lines: `target_cpu = "arm"`, the version code
-`801000060` that `tools/version.py gn arm` emits, and `clang_use_default_sample_profile = false`,
+`801000070` that `tools/version.py gn arm` emits, and `clang_use_default_sample_profile = false`,
 which stops GN demanding an AFDO profile this checkout never syncs.
 
 ```bash
@@ -288,7 +314,7 @@ autoninja -C out/Bare chrome_public_apk
 carries a signature only its key can produce. Everything else should match:
 
 ```bash
-tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-1.0.0-alpha.3.apk
+tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-1.0.0.apk
 ```
 
 See [BUILDING.md](BUILDING.md) for the rest of the workflow, including versioning and how
@@ -305,7 +331,7 @@ person as the file, so on its own it proves nothing about where the file came fr
 **Is it genuinely Bare?** Check who signed it. Nothing signed by any other key is Bare.
 
 ```bash
-apksigner verify --print-certs Bare-1.0.0-alpha.3.apk
+apksigner verify --print-certs Bare-1.0.0.apk
 ```
 
     SHA-256  ae:2a:0e:7f:b7:a1:32:ec:51:7d:26:a8:e7:c8:3d:27
@@ -324,7 +350,7 @@ can produce it, but everything else is. Follow [Build it yourself](#build-it-you
 including the version arguments, then compare:
 
 ```bash
-tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-1.0.0-alpha.3.apk
+tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-1.0.0.apk
 ```
 
 It hashes every entry except the signature, so two builds of the same source agree whoever signed
@@ -400,6 +426,14 @@ them. [What has been measured, and what has not](docs/reproducibility.md).
 - **Third-party autofill can stop being offered** until you navigate away and back. Bitwarden has
   been seen to go quiet mid-session with no error anywhere; the silent early return that causes
   it is known, the reason it triggers is not.
+- **More tools and Developer tools are missing from the app menu on a phone.** Chromium 156
+  turns the More tools submenu and the DevTools entry on only for tablet-width windows, and Bare
+  keeps that gate as upstream ships it. On a phone-width window neither appears. The tablet case
+  has not been checked on a tablet.
+- **Request desktop site now says Chrome OS.** In desktop-site mode Chromium 156 sends a Chrome OS
+  user agent (`X11; CrOS x86_64 14541.0.0`) and a matching platform hint, where earlier releases
+  said desktop Linux. Bare leaves it as upstream ships it, so a site that treats Chrome OS
+  differently from Linux will do so here.
 - **No x86 build**, so an emulator cannot install it. arm64 and armeabi-v7a are both released.
 
 ## Not done yet

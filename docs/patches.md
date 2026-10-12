@@ -22,7 +22,6 @@ themselves are in [`patches/`](../patches); this is the summary of what each one
 | 0015 | Remove the sign-in first-run screen | Promoted a sign-in this build cannot do, and claimed data is sent to Google |
 | 0016 | Stop showing the NTP sign-in card | "Get better content": sign in to personalise a feed this build cannot use |
 | 0017 | Remove the Chrome tips module | A carousel of Google promos: history sync, sign-in, passwords, Safe Browsing |
-| 0018 | Remove the web app restore promo | Restores apps from devices "connected to this account", impossible here |
 | 0019 | Remove the Ask Gemini button | The bottom bar's extra slot resolved to Gemini, which demands account verification |
 | 0020 | Remove the avatar sign-in button | "Signed out. Opens options to sign in." on every new tab page |
 | 0021 | Stop offering Gemini as a toolbar shortcut | Otherwise the button removed in 0019 could be put back from Settings |
@@ -44,7 +43,6 @@ themselves are in [`patches/`](../patches); this is the summary of what each one
 | 0037 | Round the search engine icon in the omnibox | The rounding provider was built and updated but never attached to the view |
 | 0038 | Rename the browser to Bare | Launcher, widgets, About page and the menu description |
 | 0039 | Use the Bare icon | Legacy, adaptive and monochrome variants in every density |
-| 0040 | Stop badging settings rows as new | "New" appeared beside Address bar and Appearance on every fresh profile |
 | 0041 | Skip the first run experience | It opened a second Activity that only showed a spinner |
 | 0042 | Add the Bare welcome screen | One-time welcome layered over the browser, not its own Activity |
 | 0043 | Let supported sites keep playing media in the background | Opt-in, off by default; the page is told it is still visible so it does not pause itself |
@@ -76,7 +74,7 @@ themselves are in [`patches/`](../patches); this is the summary of what each one
 | 0070 | Turn off Glic, the Gemini integration | Every Glic surface asks one class first, so closing that gate removes all of them at once |
 | 0071 | Cover the activity relaunch when the theme changes | Switching theme recreates the activity, which flashed the outgoing colours on the way through |
 | 0072 | Rename the browser in eleven more strings | The strings the earlier renaming passes missed |
-| 0073 | Make Google sign-in and sync unreachable | Five ways in: the settings rows, two deep-link routes and the settings-search entries |
+| 0073 | Make Google sign-in and sync unreachable | The settings rows, the sign-in and Google services deep-link routes (five since Chromium 156) and the settings-search entries |
 | 0074 | Look for Bare's own updates on GitHub | One plain request to the public release feed, no identifier and nothing scheduled; automatic or manual |
 | 0075 | Stop the launch splash flashing white on a dark theme | Android resolves the splash against the system's night mode, before any of the browser runs |
 | 0076 | Let the current page row reach the omnibox on phones | The desktop Android target hid share, copy and edit for the page you are on |
@@ -102,7 +100,7 @@ themselves are in [`patches/`](../patches); this is the summary of what each one
 | 0096 | Keep the Start circle off the welcome footer | The column needed more height than a Pixel 3 has, so the spacer collapsed and the circle ran past the padding reserved for the footer, which was pinned to the frame and took no part in the layout |
 | 0097 | Give incognito its extension background pages back | The incognito ProcessManager waited for an embedder callback that Android does not have, so a split-mode extension allowed in incognito never got a background page and never filtered |
 | 0098 | Let the bundled blocker work in incognito without being asked | uBlock Origin starts with incognito access and nothing else does; the default is applied once, using the same preference the chrome://extensions toggle writes, so turning it off keeps it off |
-| 0099 | Let Android retry lower GLES versions instead of losing the GPU | Upstream answers yes to a SwiftShader fallback Android never builds, which switches off the ES-version retry, so a driver that refuses an ES3 context left the GPU process dead instead of walking down to 3.0 or 2.0 |
+| 0099 | Let Android retry lower GLES versions instead of losing the GPU | Upstream switches off the ES-version retry as if a software renderer would catch the failure, but Android never builds one, so a driver that refuses an ES3 context left the GPU process dead instead of walking down to 3.0 or 2.0 |
 | 0100 | Give the bottom bar slots so its buttons can move later | Fixed positions became named slots, with nothing visible changing yet |
 | 0101 | Let the bottom bar show the toolbar buttons it does not have | An adapter drives a bar button from the same provider the toolbar uses, so both stay in step |
 | 0102 | Let the toolbar be arranged from settings | Which button sits in which slot, chosen rather than fixed |
@@ -133,6 +131,20 @@ themselves are in [`patches/`](../patches); this is the summary of what each one
 | 0127 | Put two annotations and a javadoc back on what they describe | Two insertions landed between a javadoc and the declaration it belonged to |
 | 0128 | Name Google's help centre as Google's | The rename caught the anchor text and left the link pointing at Google |
 | 0129 | Say that the update check sends the version, because it does | Two comments claimed the request carried no version; the User-Agent has always carried one |
+| 0166 | Report Chromium's version, not Bare's, from version_info | Chromium 156 took the browser version from the APK's version name, so "1.0.0" crashed startup and would have made the User-Agent say Chrome/1.0.0 |
+| 0167 | Keep the bundled blocker when its file cannot be prepared | One failed write while unpacking uBlock Origin made Chromium uninstall it, settings and all |
+| 0168 | Ship uBlock Origin 1.75.0 and move profiles over to it | The Web Store copy is gone; the author's own build has a different id, so existing settings are carried across and a removal is honoured |
+| 0169 | Load the bundled blocker again after Android kills it | Android's memory killer could stop uBlock Origin's background page and leave filtering off until a restart |
+| 0170 | Stop probing made-up hostnames on every launch | Chromium 156 started sending requests to random hostnames after launch and on every network change |
+| 0171 | Keep Glic off on desktop Android, in native code too | A compiled-in override turned Gemini in Chrome on for every Desktop Android build, phones included |
+| 0172 | Keep the native new tab page on desktop-class Android | Chromium 156 swapped in a web new tab page on Android PCs |
+| 0173 | Do not load every restored tab in the background on a phone | A desktop override loaded all restored tabs at once, and the memory pressure is what kills uBlock Origin |
+| 0174 | Let an unpinned extension open from the extensions menu on a phone | Tapping an unpinned extension closed the menu and opened nothing |
+| 0175 | Keep toolbar shortcuts current, and stop offering Translate | A shortcut kept the state of the page the tab started on; Translate cannot work without a Google API key |
+| 0176 | Rename the browser in four strings new in 156 | Four reachable strings new in Chromium 156 said Chrome |
+| 0177 | Show the welcome switches as Start will save them | After Android restored the app, the Ad blocker switch could show off while Start saved it on |
+| 0178 | Give the incognito window on a phone an extension window controller | An extension's incognito instance asking for the current window crashed the browser |
+| 0179 | Open an extension's popup in the incognito tab it was opened from | The popup in an incognito tab described the last regular tab instead |
 
 Patches 0001 and 0002 are bug fixes that happen to be prerequisites. 0003 is a usability fix.
 0004 through 0010 are the de-Googling, as are 0014 through 0021. 0011 through 0013 fix
@@ -152,6 +164,22 @@ that was clipped round rather than drawn round.
 dropped during the move to 153.0.8010.27 when upstream changed that animation underneath it. The
 numbers after it were already in use elsewhere, so renumbering the series would have broken every
 reference to them. The gap is the honest record of a patch that existed and no longer does.
+
+**There are no patches 0018 and 0040 either.** Both were dropped during the move to
+156.0.8078.25 because upstream removed what they changed: PwaRestorePromoUtils.java, which 0018
+edited, and the "New" labels and their helper, which 0040 took out of the main settings page.
+0130 to 0165 are not in this series: those numbers belong to work on other branches, and new
+patches start at 0166.
+
+0166 through 0179 came with the move to Chromium 156. 0166 is the one the move itself required:
+upstream changed where the browser version comes from, and Bare would not start without it.
+0167 through 0169 make the bundled uBlock Origin dependable: it survives a failed unpack, it moves
+from the delisted Web Store copy to the author's own build without losing settings, and it comes
+back when Android kills its background page. 0170 through 0173 answer new upstream behaviour: a
+DNS-interception probe, Gemini in Chrome and a web new tab page switched on for Desktop Android,
+and background loading of every restored tab. 0174, 0175 and 0179 fix problems reported against
+the previous release, and 0176 finishes the naming for the strings 156 added. 0177 and 0178 fix
+two bugs the previous release already had, found while testing this one.
 
 0100 through 0105 build the arrangeable toolbar, one step at a time: slots first, then a way to
 drive a bar button from the toolbar's own provider, then the settings screen, then a drag and a
