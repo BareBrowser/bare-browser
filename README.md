@@ -20,7 +20,7 @@ powerful features like browser extensions and uBlock Origin. Bare also adds back
 playback, the ability to save media from sites that normally block it, support for choosing your
 preferred download manager, and much more.
 
-It is a patch series rather than a fork: 140 patches against one pinned revision of **Chromium
+It is a patch series rather than a fork: 150 patches against one pinned revision of **Chromium
 Desktop Android**, so what this repository holds is exactly the difference between stock Chromium
 and Bare, and nothing else.
 
@@ -29,7 +29,7 @@ Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium 
 - **Base:** Chromium `156.0.8078.25` (commit `12282315`)
 - **Target:** `is_desktop_android = true`, `target_cpu = "arm64"` and `"arm"`
 - **Version:** `1.0.0`, versionCode `801000075` (arm64) / `801000070` (32-bit arm)
-- **Size:** 140 patches, 15,824 insertions across 367 files
+- **Size:** 150 patches, 16,249 insertions across 394 files
 
 ## What you get
 
@@ -93,13 +93,14 @@ second device to test on, and it changes nothing about the browser either way.
 
 Chromium's Desktop Android build supports real browser extensions, which mobile Chrome does
 not. That makes it a genuinely better browser to live in, but it still ships Google's AI
-stack, phones home on a schedule, and hands your links to other apps. Bare fixes that as a
-patch series rather than a fork, so every change stays readable and reviewable.
+stack, phones home on a schedule, and hands your links to other apps. Bare removes that as a
+patch series rather than a fork, so every change stays readable and reviewable, and
+[Network behaviour](#network-behaviour) lists what still reaches a server.
 
 ## What the patches do
 
-A hundred and forty patches against one pinned Chromium revision: crash fixes, the
-extensions toolbar on phone layouts, every Google callback and AI surface removed, and the
+A hundred and fifty patches against one pinned Chromium revision: crash fixes, the
+extensions toolbar on phone layouts, Google callbacks and AI surfaces removed, and the
 features Bare adds on top.
 
 **[The full list, patch by patch, is in docs/patches.md](docs/patches.md)** along with what is
@@ -109,9 +110,9 @@ removed by build flag instead of by patch, and what is deliberately kept.
 
 Measured on a Pixel 3 running Android 12, by watching the sockets opened under Bare's own uid
 and recording the browser's own network log. For 1.0.0 that covered a wiped profile from first
-launch through the welcome screen, a page load, a network change and several minutes idle. The
-same capture on 1.0.0-alpha.3 reached the same Google hosts. What follows is what was actually
-observed, not what was intended.
+launch through the welcome screen, a network change and several minutes idle, then several
+sites, a page that fails to resolve, and the Languages and Search engine settings. What follows
+is what was actually observed, not what was intended.
 
 **Chromium's component updater contacts `update.googleapis.com`**, from the first start onwards,
 and fetches the components it needs as signed packages over plain HTTP from Google's download
@@ -126,21 +127,22 @@ host `edgedl.me.gvt1.com`. It is kept deliberately. These are the components reg
 | File Type Policies | download danger classification |
 | Origin Trials | web compatibility |
 | Safety Tips, Crowd Deny | lookalike-domain and abusive-notification lists, applied locally |
-| Actor Safety Lists, Captcha Providers | left registered: their purpose is not clear enough in the tree to remove them confidently |
+| Captcha Providers | left registered: its purpose is not clear enough in the tree to remove it confidently |
 
 Registration tells Google an install exists, along with a component id, a version, an install
 date and a cohort. Twelve other components were dropped in patch 0085 for buying nothing here:
 the Privacy Sandbox set, Google's omnibox suggestion model, the optimization-hints feed, shopping
 and checkout heuristics, on-device AI history strings, and two Safe Browsing lists that nothing
-can consult. There is no Widevine component on Android; protected video goes through the
+can consult. Actor Safety Lists, the site lists of the Gemini agent this build keeps off, was
+dropped in 0188. There is no Widevine component on Android; protected video goes through the
 system's own DRM, below.
 
-**Widevine provisioning contacts `www.googleapis.com`.** A few seconds after startup on a fresh
+**Widevine provisioning contacts `www.googleapis.com`.** About a minute after startup on a fresh
 profile, Chromium has Android's MediaDrm provision two spare Widevine origin identifiers in
 advance, so that protected video can start without waiting, and the provisioning request goes to
-`www.googleapis.com/certificateprovisioning`. It happens whether or not any site ever plays
-protected video. By the code, a later start repeats it only once sites have used up the spare
-identifiers. This is Chromium's default (`kMediaDrmPreprovisioningAtStartup`), and 1.0.0 leaves it
+`www.googleapis.com/certificateprovisioning`. If there is no connection then, it tries again when
+the network comes back. It happens whether or not any site ever plays protected video. By the
+code, a later start repeats it only once sites have used up the spare identifiers. This is Chromium's default (`kMediaDrmPreprovisioningAtStartup`), and 1.0.0 leaves it
 as it is.
 
 **On the first run of a fresh profile, most of the rest is uBlock Origin** fetching the filter
@@ -151,8 +153,11 @@ schedule.
 
 **uBlock Origin updates itself from its author.** Its manifest points Chromium's extension updater
 at `cdn.jsdelivr.net` (`gh/gorhill/uBlock@master/dist/chromium/update.xml`), which is checked
-about every five hours, and a newer release downloads from `github.com`. Earlier releases shipped
-the Chrome Web Store copy, which checked `clients2.google.com` instead.
+about every five hours. That request carries what Chromium's extension updater always sends: the
+extension's id and version, the browser's version, the operating system and architecture, the
+interface language and the User-Agent. A newer release downloads from `github.com`, served from
+`release-assets.githubusercontent.com`. Earlier releases shipped the Chrome Web Store copy, which
+checked `clients2.google.com` instead.
 
 **The update check contacts GitHub**, and only after the welcome screen has been completed and an
 update preference stored. It is at most one request a day, to a public release feed. It sends two
@@ -162,9 +167,10 @@ no cookies, no installation identifier, no device model, no Android build. The p
 User-Agent would have carried the model and the build, so it is replaced. Choosing manual means
 nothing leaves the device until the Check for updates row is tapped.
 
-**If you make Google your search engine**, focusing the address bar prerenders
-`www.google.com/search/warmup.html` (Chromium's `kPrewarm`). With DuckDuckGo or any other engine
-it never fires.
+**If you make Google your search engine**, more of Chromium's Google-only behaviour switches on
+with it: focusing the address bar prerenders `www.google.com/search/warmup.html` (`kPrewarm`), the
+AI Mode eligibility check asks `www.google.com/async/folae`, and the new tab page shows the
+Discover feed. With DuckDuckGo or any other engine none of them happens.
 
 **What no longer happens**, each verified by re-running the same capture:
 
@@ -181,6 +187,19 @@ it never fires.
   the cached answer was stale. Patch 0093 stops the read from reaching the network, so the answer
   now comes from the cache. Visiting Google sites and signing in to them is unaffected.
 - No Safe Browsing traffic. There was never any: see below.
+- No lookup of `google.com` at Google Public DNS when a site cannot be found. Chromium resolved
+  it against `8.8.8.8` over plain UDP to diagnose the failure, outside the user's Secure DNS
+  setting; 0180 turns that probe off, and the error page still says the address could not be
+  found.
+- No request to `translate.googleapis.com` from Settings, Languages, which fetched the list of
+  languages Google can translate; 0181 keeps the list built into Chromium.
+- No icons for search engines from Google's favicon server (`t0.gstatic.com`), which Settings,
+  Search engine asked for any engine without a built-in icon; 0183 uses the icon stored from
+  visiting the site, or a placeholder.
+- No hint requests to `optimizationguide-pa.googleapis.com`, which some features sent with the
+  hosts of the pages involved even though the request could only be refused; 0187 stops them
+  without an API key.
+
 The 1.0.0 capture reached none of the hosts in this list.
 
 Chromium 156 also started sending HEAD requests to three random hostnames after launch and after
@@ -375,8 +394,9 @@ them. [What has been measured, and what has not](docs/reproducibility.md).
   first run. An existing profile has `kDefaultSearchProviderData` persisted and
   `DefaultSearchManager` prefers it, so upgrading over an older install keeps Google until you
   change it in Settings → Search engine.
-- **The New Tab Page still has Discover.** The Google logo, the promo cards and the AI Mode
-  button are gone; Discover remains.
+- **Discover returns with Google as the search engine.** The Google logo, the promo cards and the
+  AI Mode button are gone, and with DuckDuckGo or another engine the feed is hidden too; choosing
+  Google brings Discover back.
 - **External downloads lose your sign-in.** With "Use an external download manager" on, a file
   that requires you to be signed in will fail in the other app: the interception point in
   `ChromeDownloadManagerDelegate` carries no cookie. Passing credentials needs a different
@@ -426,14 +446,19 @@ them. [What has been measured, and what has not](docs/reproducibility.md).
 - **Third-party autofill can stop being offered** until you navigate away and back. Bitwarden has
   been seen to go quiet mid-session with no error anywhere; the silent early return that causes
   it is known, the reason it triggers is not.
-- **More tools and Developer tools are missing from the app menu on a phone.** Chromium 156
-  turns the More tools submenu and the DevTools entry on only for tablet-width windows, and Bare
-  keeps that gate as upstream ships it. On a phone-width window neither appears. The tablet case
-  has not been checked on a tablet.
+- **Developer tools on a phone are desktop tools in a narrow window.** They open from the app
+  menu, and View page source and Inspect work as on a tablet. The panels lay out at the screen's
+  width and the console takes the on-screen keyboard, but DevTools is made for a mouse, small
+  targets included, and landscape has not been checked.
 - **Request desktop site now says Chrome OS.** In desktop-site mode Chromium 156 sends a Chrome OS
   user agent (`X11; CrOS x86_64 14541.0.0`) and a matching platform hint, where earlier releases
-  said desktop Linux. Bare leaves it as upstream ships it, so a site that treats Chrome OS
-  differently from Linux will do so here.
+  said desktop Linux. Its client hints do not match it: the architecture hint says arm while the
+  User-Agent says x86_64, and the bitness hint says 64 even on the 32-bit build. Bare leaves both
+  as upstream ships them, so a site that treats Chrome OS differently from Linux will do so here,
+  and the mismatch is something a site could notice.
+- **Settings still offers Google Translate.** Languages has "Offer to send pages in other languages
+  to Google Translate", but translation needs a Google API key this build does not have, so the
+  offer never appears and nothing is sent.
 - **No x86 build**, so an emulator cannot install it. arm64 and armeabi-v7a are both released.
 
 ## Not done yet
@@ -445,9 +470,10 @@ Each is described in [docs/build-constraints.md](docs/build-constraints.md):
   the flags are coupled in both directions and there is no GN-only configuration that works
 - `build_with_model_execution`, `enable_supervised_users`, `enable_offline_pages`, each
   blocked by a single GN `assert()`
-- The New Tab Page still carries Discover. The AI Mode button is gone: 0025 turned it off by
-  default and 0113 stopped it depending on the search engine. Its Google logo is gone as a side
-  effect of 0014, the NTP logo follows the default search engine
+- The New Tab Page can still carry Discover, when Google is the search engine; with any other
+  engine the feed is hidden. The AI Mode button is gone: 0025 turned it off by default and 0113
+  stopped it depending on the search engine. Its Google logo is gone as a side effect of 0014,
+  the NTP logo follows the default search engine
 - ARCore, Cardboard and Daydream manifest entries persist from library manifests, though their
   code is gone
 

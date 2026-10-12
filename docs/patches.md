@@ -128,23 +128,33 @@ themselves are in [`patches/`](../patches); this is the summary of what each one
 | 0124 | Let policy refuse a download before another app is offered it | The external handoff ran above the blocklist check, and the chooser still offered Bare itself |
 | 0125 | Keep the page here when there is nowhere to ask about leaving | Ask launched without asking when no Activity could host the dialog |
 | 0126 | Clear the pending flag when there is nothing left to delete | An interrupted exit could leave the flag set for good once the selection was emptied |
-| 0127 | Put two annotations and a javadoc back on what they describe | Two insertions landed between a javadoc and the declaration it belonged to |
+| 0127 | Put two annotations and a javadoc back on what they describe | An insertion landed between a javadoc and the declaration it belonged to; the second it fixed was in a file Chromium 156 deleted |
 | 0128 | Name Google's help centre as Google's | The rename caught the anchor text and left the link pointing at Google |
 | 0129 | Say that the update check sends the version, because it does | Two comments claimed the request carried no version; the User-Agent has always carried one |
-| 0166 | Report Chromium's version, not Bare's, from version_info | Chromium 156 took the browser version from the APK's version name, so "1.0.0" crashed startup and would have made the User-Agent say Chrome/1.0.0 |
+| 0166 | Report Chromium's version, not Bare's, from version_info | Chromium 156 took the browser version from the APK's version name: a development name crashed startup, and a release would have said Chrome/1.0.0 |
 | 0167 | Keep the bundled blocker when its file cannot be prepared | One failed write while unpacking uBlock Origin made Chromium uninstall it, settings and all |
 | 0168 | Ship uBlock Origin 1.75.0 and move profiles over to it | The Web Store copy is gone; the author's own build has a different id, so existing settings are carried across and a removal is honoured |
-| 0169 | Load the bundled blocker again after Android kills it | Android's memory killer could stop uBlock Origin's background page and leave filtering off until a restart |
+| 0169 | Load the bundled blocker again after Android kills it | Android's memory killer could stop uBlock Origin's background page and leave filtering off until a restart; a blocker that keeps working comes straight back every time |
 | 0170 | Stop probing made-up hostnames on every launch | Chromium 156 started sending requests to random hostnames after launch and on every network change |
 | 0171 | Keep Glic off on desktop Android, in native code too | A compiled-in override turned Gemini in Chrome on for every Desktop Android build, phones included |
 | 0172 | Keep the native new tab page on desktop-class Android | Chromium 156 swapped in a web new tab page on Android PCs |
-| 0173 | Do not load every restored tab in the background on a phone | A desktop override loaded all restored tabs at once, and the memory pressure is what kills uBlock Origin |
+| 0173 | Do not load restored tabs in the background on a phone | A desktop override loaded restored tabs a few at a time without being opened, and memory pressure is what kills uBlock Origin |
 | 0174 | Let an unpinned extension open from the extensions menu on a phone | Tapping an unpinned extension closed the menu and opened nothing |
-| 0175 | Keep toolbar shortcuts current, and stop offering Translate | A shortcut kept the state of the page the tab started on; Translate cannot work without a Google API key |
+| 0175 | Keep toolbar shortcuts current, and stop offering Translate | A shortcut kept the state of the page the tab started on; Translate cannot work without a Google API key and is gone from both shortcut screens |
 | 0176 | Rename the browser in four strings new in 156 | Four reachable strings new in Chromium 156 said Chrome |
 | 0177 | Show the welcome switches as Start will save them | After Android restored the app, the Ad blocker switch could show off while Start saved it on |
-| 0178 | Give the incognito window on a phone an extension window controller | An extension's incognito instance asking for the current window crashed the browser |
+| 0178 | Give the incognito window on a phone an extension window controller | windows.getLastFocused() crashed the browser on a window without a controller, after an incognito tab opened or after Android restored the app in incognito |
 | 0179 | Open an extension's popup in the incognito tab it was opened from | The popup in an incognito tab described the last regular tab instead |
+| 0180 | Do not ask Google's DNS servers about google.com when a site cannot be found | A DNS error made Chromium resolve google.com at 8.8.8.8 over plain UDP, outside the user's Secure DNS setting |
+| 0181 | Keep the built-in translate language list instead of fetching Google's | Opening Settings, Languages fetched translate.googleapis.com |
+| 0182 | Keep Chrome's tips notifications and their opt-in sheet off | Chromium 156 showed an unasked sheet after four hours away, leading to Safe Browsing settings and Google Lens |
+| 0183 | Show a search engine's stored favicon instead of asking Google for one | Settings, Search engine asked Google's favicon server for any engine without a built-in icon |
+| 0184 | Give Exit an icon in the app menu | Exit was the only top-level menu row without one |
+| 0185 | Open Developer tools on phones too | DevTools was limited to tablet-width windows, and its frontend was laid out too small to read on a phone |
+| 0186 | Let a light page keep its own canvas on a dark theme | With a dark theme, pages without a background showed their dark text on black, even with site darkening off |
+| 0187 | Do not send hint requests to Google without an API key | Some features sent page hosts to optimizationguide-pa.googleapis.com, which could only refuse them |
+| 0188 | Stop registering the Actor Safety Lists component | It only serves the Gemini agent, which this build keeps off |
+| 0189 | Keep account preview data off | Chromium 156 turned on a per-profile service that fetches account data from Google |
 
 Patches 0001 and 0002 are bug fixes that happen to be prerequisites. 0003 is a usability fix.
 0004 through 0010 are the de-Googling, as are 0014 through 0021. 0011 through 0013 fix
@@ -177,9 +187,17 @@ upstream changed where the browser version comes from, and Bare would not start 
 from the delisted Web Store copy to the author's own build without losing settings, and it comes
 back when Android kills its background page. 0170 through 0173 answer new upstream behaviour: a
 DNS-interception probe, Gemini in Chrome and a web new tab page switched on for Desktop Android,
-and background loading of every restored tab. 0174, 0175 and 0179 fix problems reported against
-the previous release, and 0176 finishes the naming for the strings 156 added. 0177 and 0178 fix
-two bugs the previous release already had, found while testing this one.
+and background loading of restored tabs. 0174, 0175 and 0179 fix problems reported against the
+previous release, and 0176 finishes the naming for the strings 156 added. 0177 and 0178 fix two
+bugs the previous release already had, found while testing this one.
+
+0180 through 0189 came out of checking that work and the requests that followed it. 0180,
+0181, 0183 and 0187 each stop a request to Google that nothing in Bare had covered: a DNS
+diagnosis, a language list, search engine icons and optimization hints. 0182 and 0189 switch off
+two things Chromium 156 turned on, a tips prompt and an account data service, and 0188 drops a
+component only the Gemini agent used. 0184 and 0185 are requests: an icon for Exit, and Developer
+tools on phones. 0186 fixes how 0033 kept the white flash away, which left light pages without a
+background unreadable on a dark theme.
 
 0100 through 0105 build the arrangeable toolbar, one step at a time: slots first, then a way to
 drive a bar button from the toolbar's own provider, then the settings screen, then a drag and a
@@ -211,7 +229,7 @@ These go in `args.gn` rather than a patch:
 
 ```gn
 use_mlkit_for_aicore = false          # ML Kit + AICore (on-device Gemini Nano bridge)
-enable_glic_internal_resources = false # Gemini-in-Chrome surface
+enable_glic_internal_resources = false # Glic resources only Chrome-branded builds carry; 0070 and 0171 turn Glic off
 enable_reporting = false               # Reporting API / Network Error Logging
 enable_service_discovery = false       # local device discovery
 enable_mdns = false                    # mDNS
