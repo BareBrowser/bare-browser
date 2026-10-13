@@ -155,8 +155,13 @@ themselves are in [`patches/`](../patches); this is the summary of what each one
 | 0187 | Do not send hint requests to Google without an API key | Some features sent page hosts to optimizationguide-pa.googleapis.com, which could only refuse them |
 | 0188 | Stop registering the Actor Safety Lists component | It only serves the Gemini agent, which this build keeps off |
 | 0189 | Keep account preview data off | Chromium 156 turned on a per-profile service that fetches account data from Google |
-| 0190 | Do not flag the bundled uBlock Origin as being of unknown origin | Since the move to the author's own build, every profile was told Bare could not verify where the blocker it installed itself came from |
+| 0190 | Ask once when an extension is added, instead of warning about it afterwards | Chromium flagged every extension from outside the Chrome Web Store for review, the uBlock Origin Bare ships included; the risk is now stated in the dialog that adds one |
 | 0191 | Lay out the extensions page for a phone | chrome://extensions was drawn 980px wide and shrunk to fit, so its text came out about a third of its size |
+| 0192 | Turn the welcome into five short pages | One crowded screen became five pages; it also offers notifications instead of Chromium's startup prompt, and comes back after every update |
+| 0193 | Remove Discover | With Google as the engine every new tab asked discover-pa.googleapis.com for a feed it could not get |
+| 0194 | Show the plain Google logo instead of fetching the doodle | With Google as the engine every new tab asked www.google.com/async/ddljson for the day's doodle |
+| 0195 | Stop the new tab page promoting themes | A new tab could open a sheet nobody asked for |
+| 0196 | Put the extension actions on the page, and add Load CRX | Loading an extension was hidden behind a Developer mode switch, and a downloaded .crx could not be installed at all |
 
 Patches 0001 and 0002 are bug fixes that happen to be prerequisites. 0003 is a usability fix.
 0004 through 0010 are the de-Googling, as are 0014 through 0021. 0011 through 0013 fix
@@ -201,9 +206,12 @@ component only the Gemini agent used. 0184 and 0185 are requests: an icon for Ex
 tools on phones. 0186 fixes how 0033 kept the white flash away, which left light pages without a
 background unreadable on a dark theme.
 
-0190 and 0191 came from using that build. Chromium's safety check flags any extension that does
-not update from the Chrome Web Store, so it flagged the uBlock Origin Bare ships; 0190 leaves out
-only the copy Bare's own provider installed. 0191 gives the extensions page a phone layout.
+0190 through 0196 came from using that build. Chromium's safety check flags any extension that
+does not update from the Chrome Web Store, which with no store to ask meant every extension,
+the uBlock Origin Bare ships included; 0190 replaces those warnings with one plain statement of
+the risk when an extension is added. 0191 and 0196 make the extensions page usable on a phone and
+add Load CRX. 0192 rebuilds the welcome. 0193 through 0195 quiet the new tab page when Google is
+the search engine: no Discover request, no doodle request, no theme promotion.
 
 0100 through 0105 build the arrangeable toolbar, one step at a time: slots first, then a way to
 drive a bar button from the toolbar's own provider, then the settings screen, then a drag and a

@@ -20,7 +20,7 @@ powerful features like browser extensions and uBlock Origin. Bare also adds back
 playback, the ability to save media from sites that normally block it, support for choosing your
 preferred download manager, and much more.
 
-It is a patch series rather than a fork: 152 patches against one pinned revision of **Chromium
+It is a patch series rather than a fork: 157 patches against one pinned revision of **Chromium
 Desktop Android**, so what this repository holds is exactly the difference between stock Chromium
 and Bare, and nothing else.
 
@@ -29,7 +29,7 @@ Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium 
 - **Base:** Chromium `156.0.8078.25` (commit `12282315`)
 - **Target:** `is_desktop_android = true`, `target_cpu = "arm64"` and `"arm"`
 - **Version:** `1.0.0`, versionCode `801000075` (arm64) / `801000070` (32-bit arm)
-- **Size:** 152 patches, 16,439 insertions across 404 files
+- **Size:** 157 patches, 18,327 insertions across 440 files
 
 ## What you get
 
@@ -38,9 +38,15 @@ Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium 
 - **[uBlock Origin](https://github.com/gorhill/uBlock), already installed.** The full version,
   not Lite, because Bare keeps Manifest V2 working. Shipped exactly as its author publishes
   it. Remove it like anything else if you would rather not have it. Its page in Extensions says
-  it is not from the Chrome Web Store, which is true: the store stopped carrying it. Chromium
-  would also warn that it cannot verify where it came from; Bare drops that warning for the copy
-  it installed itself, and every other extension gets it as before.
+  it is not from the Chrome Web Store, which is true: the store stopped carrying it.
+- **Extensions from a file.** The Extensions page has Load unpacked, Load CRX for a signed `.crx`
+  you have downloaded, and Update, with no Developer mode switch in the way. Bare cannot check
+  whether an extension is safe, so it says so once, in the dialog that adds one, instead of
+  flagging extensions from outside the Chrome Web Store afterwards.
+- **A short welcome.** Five pages for the search engine, the ad blocker, where the address bar
+  sits, downloads, background audio, notifications, the default browser and updates. It comes
+  back after each update, starting from what you already chose, so a new choice is asked about
+  rather than made for you.
 - **No telemetry, no AI, no sign-in prompts.** DuckDuckGo is the default from first launch. A
   few things still reach a server on their own, and each is named in
   [Network behaviour](#network-behaviour) rather than glossed over.
@@ -102,7 +108,7 @@ patch series rather than a fork, so every change stays readable and reviewable, 
 
 ## What the patches do
 
-A hundred and fifty patches against one pinned Chromium revision: crash fixes, the
+A hundred and fifty-seven patches against one pinned Chromium revision: crash fixes, the
 extensions toolbar on phone layouts, Google callbacks and AI surfaces removed, and the
 features Bare adds on top.
 
@@ -171,9 +177,9 @@ User-Agent would have carried the model and the build, so it is replaced. Choosi
 nothing leaves the device until the Check for updates row is tapped.
 
 **If you make Google your search engine**, more of Chromium's Google-only behaviour switches on
-with it: focusing the address bar prerenders `www.google.com/search/warmup.html` (`kPrewarm`), the
-AI Mode eligibility check asks `www.google.com/async/folae`, and the new tab page shows the
-Discover feed. With DuckDuckGo or any other engine none of them happens.
+with it: focusing the address bar prerenders `www.google.com/search/warmup.html` (`kPrewarm`), and
+the AI Mode eligibility check asks `www.google.com/async/folae`. With DuckDuckGo or any other
+engine neither happens. The new tab page shows the plain Google logo either way.
 
 **What no longer happens**, each verified by re-running the same capture:
 
@@ -199,6 +205,9 @@ Discover feed. With DuckDuckGo or any other engine none of them happens.
 - No icons for search engines from Google's favicon server (`t0.gstatic.com`), which Settings,
   Search engine asked for any engine without a built-in icon; 0183 uses the icon stored from
   visiting the site, or a placeholder.
+- No Discover feed and no doodle on the new tab page with Google as the engine. Each new tab
+  asked `discover-pa.googleapis.com` for a feed it could not get and `www.google.com/async/ddljson`
+  for the day's doodle; 0193 turns Discover off and 0194 keeps the built-in logo.
 - No hint requests to `optimizationguide-pa.googleapis.com`, which some features sent with the
   hosts of the pages involved even though the request could only be refused; 0187 stops them
   without an API key.
@@ -397,9 +406,6 @@ them. [What has been measured, and what has not](docs/reproducibility.md).
   first run. An existing profile has `kDefaultSearchProviderData` persisted and
   `DefaultSearchManager` prefers it, so upgrading over an older install keeps Google until you
   change it in Settings → Search engine.
-- **Discover returns with Google as the search engine.** The Google logo, the promo cards and the
-  AI Mode button are gone, and with DuckDuckGo or another engine the feed is hidden too; choosing
-  Google brings Discover back.
 - **External downloads lose your sign-in.** With "Use an external download manager" on, a file
   that requires you to be signed in will fail in the other app: the interception point in
   `ChromeDownloadManagerDelegate` carries no cookie. Passing credentials needs a different
@@ -465,7 +471,8 @@ them. [What has been measured, and what has not](docs/reproducibility.md).
 - **Notices on the Extensions page are cut off at a large zoom.** The page itself reflows to the
   screen, but Chromium's notice bar is never narrower than 288 pixels, so on a phone with Default
   zoom above about 125% its right edge runs off the screen.
-- **No x86 build**, so an emulator cannot install it. arm64 and armeabi-v7a are both released.
+- **No x86 build**, so an x86 emulator cannot install it; an arm64 one can. arm64 and
+  armeabi-v7a are both released.
 
 ## Not done yet
 
@@ -476,10 +483,6 @@ Each is described in [docs/build-constraints.md](docs/build-constraints.md):
   the flags are coupled in both directions and there is no GN-only configuration that works
 - `build_with_model_execution`, `enable_supervised_users`, `enable_offline_pages`, each
   blocked by a single GN `assert()`
-- The New Tab Page can still carry Discover, when Google is the search engine; with any other
-  engine the feed is hidden. The AI Mode button is gone: 0025 turned it off by default and 0113
-  stopped it depending on the search engine. Its Google logo is gone as a side effect of 0014,
-  the NTP logo follows the default search engine
 - ARCore, Cardboard and Daydream manifest entries persist from library manifests, though their
   code is gone
 
