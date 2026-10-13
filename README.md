@@ -458,7 +458,8 @@ them. [What has been measured, and what has not](docs/reproducibility.md).
 - **Developer tools on a phone are desktop tools in a narrow window.** They open from the app
   menu, and View page source and Inspect work as on a tablet. The panels lay out at the screen's
   width and the console takes the on-screen keyboard, but DevTools is made for a mouse, small
-  targets included, and landscape has not been checked.
+  targets included. In landscape the panels sit side by side and stay readable, but with the
+  keyboard up only a couple of console lines are left in view.
 - **Request desktop site now says Chrome OS.** In desktop-site mode Chromium 156 sends a Chrome OS
   user agent (`X11; CrOS x86_64 14541.0.0`) and a matching platform hint, where earlier releases
   said desktop Linux. Its client hints do not match it: the architecture hint says arm while the
