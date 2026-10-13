@@ -20,7 +20,7 @@ powerful features like browser extensions and uBlock Origin. Bare also adds back
 playback, the ability to save media from sites that normally block it, support for choosing your
 preferred download manager, and much more.
 
-It is a patch series rather than a fork: 150 patches against one pinned revision of **Chromium
+It is a patch series rather than a fork: 152 patches against one pinned revision of **Chromium
 Desktop Android**, so what this repository holds is exactly the difference between stock Chromium
 and Bare, and nothing else.
 
@@ -29,7 +29,7 @@ Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium 
 - **Base:** Chromium `156.0.8078.25` (commit `12282315`)
 - **Target:** `is_desktop_android = true`, `target_cpu = "arm64"` and `"arm"`
 - **Version:** `1.0.0`, versionCode `801000075` (arm64) / `801000070` (32-bit arm)
-- **Size:** 150 patches, 16,249 insertions across 394 files
+- **Size:** 152 patches, 16,439 insertions across 404 files
 
 ## What you get
 
@@ -37,7 +37,10 @@ Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium 
   phone. Pin the ones you use to the toolbar.
 - **[uBlock Origin](https://github.com/gorhill/uBlock), already installed.** The full version,
   not Lite, because Bare keeps Manifest V2 working. Shipped exactly as its author publishes
-  it. Remove it like anything else if you would rather not have it.
+  it. Remove it like anything else if you would rather not have it. Its page in Extensions says
+  it is not from the Chrome Web Store, which is true: the store stopped carrying it. Chromium
+  would also warn that it cannot verify where it came from; Bare drops that warning for the copy
+  it installed itself, and every other extension gets it as before.
 - **No telemetry, no AI, no sign-in prompts.** DuckDuckGo is the default from first launch. A
   few things still reach a server on their own, and each is named in
   [Network behaviour](#network-behaviour) rather than glossed over.
@@ -459,6 +462,9 @@ them. [What has been measured, and what has not](docs/reproducibility.md).
 - **Settings still offers Google Translate.** Languages has "Offer to send pages in other languages
   to Google Translate", but translation needs a Google API key this build does not have, so the
   offer never appears and nothing is sent.
+- **Notices on the Extensions page are cut off at a large zoom.** The page itself reflows to the
+  screen, but Chromium's notice bar is never narrower than 288 pixels, so on a phone with Default
+  zoom above about 125% its right edge runs off the screen.
 - **No x86 build**, so an emulator cannot install it. arm64 and armeabi-v7a are both released.
 
 ## Not done yet
