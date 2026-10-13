@@ -1,0 +1,217 @@
+From 0b755e6b48a97c2b50f28b5f38b55800850cb40b Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Tue, 13 Oct 2026 00:42:18 +0000
+Subject: [PATCH] Ask once when an extension is added, instead of warning about
+ it afterwards
+
+Chromium's extension safety check flags any packed extension that does
+not update from the Chrome Web Store and asks the user to review it.
+Bare has no store API key and no Safe Browsing, so where an extension
+updates from was all the check had to go on. Since 1.75.0 Bare ships
+uBlock Origin as its author publishes it, updating from the author's
+release feed, and every profile was told Bare "can't verify where this
+extension comes from" about the blocker Bare itself installed. An
+extension the user added from a file got the same warning, long after
+they had chosen it.
+
+On Android those review warnings are gone. The risk is stated where the
+choice is made: the dialog that adds an extension says Bare can't check
+whether it is safe, and its button reads "I understand the risk, add".
+Cancel adds nothing. The Source line on the extensions page still says
+"Not from Chrome Web Store", and Remove works as before.
+
+The loader also keeps track of which extension Bare's own provider
+installed, so the shipped uBlock Origin can be told apart from a file
+that carries its id.
+---
+ .../extension_info_generator.cc               |  7 +++++
+ .../bare_bundled_extensions_loader.cc         | 30 +++++++++++++++++++
+ .../bare_bundled_extensions_loader.h          | 17 +++++++++++
+ .../extensions/external_provider_impl.cc      |  1 +
+ .../extension_install_dialog_view_android.cc  | 13 +++++++-
+ .../ExtensionInstallDialogBridge.java         | 16 ++++++++++
+ 6 files changed, 83 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/extensions/api/developer_private/extension_info_generator.cc b/chrome/browser/extensions/api/developer_private/extension_info_generator.cc
+index d4ef0e322ba..5fe3b931f45 100644
+--- a/chrome/browser/extensions/api/developer_private/extension_info_generator.cc
++++ b/chrome/browser/extensions/api/developer_private/extension_info_generator.cc
+@@ -605,6 +605,7 @@ void ExtensionInfoGenerator::FillExtensionInfo(const Extension& extension,
+     info.controlled_info->text =
+         l10n_util::GetStringUTF8(IDS_EXTENSIONS_INSTALL_LOCATION_ENTERPRISE);
+   } else {
++#if !BUILDFLAG(IS_ANDROID)
+     // Create Safety Hub information for any non-enterprise extension.
+     developer::SafetyCheckWarningReason warning_reason =
+         ExtensionSafetyCheckUtils::GetSafetyCheckWarningReason(extension,
+@@ -615,6 +616,12 @@ void ExtensionInfoGenerator::FillExtensionInfo(const Extension& extension,
+           ExtensionSafetyCheckUtils::GetSafetyCheckWarningStrings(
+               warning_reason, state);
+     }
++#endif  // !BUILDFLAG(IS_ANDROID)
++    // Bare: no review warnings. Without a store or Safe Browsing to ask, the
++    // check has nothing to go on but where an extension updates from, so it
++    // flagged every extension not from the Chrome Web Store, including the
++    // uBlock Origin Bare ships, long after the user had chosen to add it. The
++    // risk is stated once instead, in the dialog that adds the extension.
+   }
+ 
+   bool is_enabled = state == developer::ExtensionState::kEnabled;
+diff --git a/chrome/browser/extensions/bare_bundled_extensions_loader.cc b/chrome/browser/extensions/bare_bundled_extensions_loader.cc
+index 8c53ace8bf0..52922927797 100644
+--- a/chrome/browser/extensions/bare_bundled_extensions_loader.cc
++++ b/chrome/browser/extensions/bare_bundled_extensions_loader.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "base/memory/raw_ptr.h"
++#include "base/supports_user_data.h"
+ #include "base/scoped_observation.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "chrome/browser/extensions/extension_util.h"
+@@ -541,4 +542,33 @@ void BareBundledExtensionsLoader::OnPrefsBuilt(base::DictValue prefs) {
+   LoadFinished(std::move(prefs));
+ }
+ 
++namespace {
++
++const char kLoaderKey[] = "BareBundledExtensionsLoader";
++
++struct LoaderHolder : public base::SupportsUserData::Data {
++  explicit LoaderHolder(scoped_refptr<BareBundledExtensionsLoader> loader)
++      : loader(std::move(loader)) {}
++  scoped_refptr<BareBundledExtensionsLoader> loader;
++};
++
++}  // namespace
++
++void RememberBundledExtensionsLoader(
++    Profile* profile,
++    scoped_refptr<BareBundledExtensionsLoader> loader) {
++  profile->SetUserData(kLoaderKey,
++                       std::make_unique<LoaderHolder>(std::move(loader)));
++}
++
++bool IsProvisionedByBare(content::BrowserContext* context,
++                         const Extension& extension) {
++  if (extension.location() != mojom::ManifestLocation::kExternalPref) {
++    return false;
++  }
++  const auto* holder =
++      static_cast<const LoaderHolder*>(context->GetUserData(kLoaderKey));
++  return holder && holder->loader->ClaimsExtension(extension.id());
++}
++
+ }  // namespace extensions
+diff --git a/chrome/browser/extensions/bare_bundled_extensions_loader.h b/chrome/browser/extensions/bare_bundled_extensions_loader.h
+index aa5166a3aca..4cdb650c7fb 100644
+--- a/chrome/browser/extensions/bare_bundled_extensions_loader.h
++++ b/chrome/browser/extensions/bare_bundled_extensions_loader.h
+@@ -5,6 +5,7 @@
+ #ifndef CHROME_BROWSER_EXTENSIONS_BARE_BUNDLED_EXTENSIONS_LOADER_H_
+ #define CHROME_BROWSER_EXTENSIONS_BARE_BUNDLED_EXTENSIONS_LOADER_H_
+ 
++#include "base/memory/scoped_refptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/values.h"
+ #include "chrome/browser/extensions/external_loader.h"
+@@ -19,6 +20,8 @@ class BrowserContext;
+ 
+ namespace extensions {
+ 
++class Extension;
++
+ // Offers the extensions Bare ships inside the apk to the external provider
+ // machinery.
+ //
+@@ -54,6 +57,20 @@ class BareBundledExtensionsLoader : public ExternalLoader {
+   base::DictValue last_prefs_;
+ };
+ 
++// Keeps `loader` with `profile`, for IsProvisionedByBare(). Call once, when the
++// provider is created.
++void RememberBundledExtensionsLoader(
++    Profile* profile,
++    scoped_refptr<BareBundledExtensionsLoader> loader);
++
++// Whether `extension` is a copy that Bare's own provider installed in `context`
++// and still offers. The id comes from the provider's entry, and Chromium checks
++// that a crx installed or updated under that id is signed with the key the id
++// is derived from, so this is uBlock Origin as its author signs it. A copy the
++// user installed some other way, or one loaded unpacked, is not.
++bool IsProvisionedByBare(content::BrowserContext* context,
++                         const Extension& extension);
++
+ // Gives the bundled blocker incognito access the first time it is seen, and
+ // never again. Safe to call on every startup.
+ void ApplyBundledExtensionIncognitoDefault(content::BrowserContext* context);
+diff --git a/chrome/browser/extensions/external_provider_impl.cc b/chrome/browser/extensions/external_provider_impl.cc
+index 57ea4ec4441..055119107ea 100644
+--- a/chrome/browser/extensions/external_provider_impl.cc
++++ b/chrome/browser/extensions/external_provider_impl.cc
+@@ -959,6 +959,7 @@ void ExternalProviderImpl::CreateExternalProviders(
+       Extension::NO_FLAGS));
+   ApplyBundledExtensionIncognitoDefault(profile);
+   ApplyBundledExtensionCarryOver(profile);
++  RememberBundledExtensionsLoader(profile, bare_loader);
+   StartBundledExtensionRecovery(profile, bare_loader);
+ #endif
+ 
+diff --git a/chrome/browser/ui/android/extensions/extension_install_dialog_view_android.cc b/chrome/browser/ui/android/extensions/extension_install_dialog_view_android.cc
+index 8bf04e5863a..c8a162f3621 100644
+--- a/chrome/browser/ui/android/extensions/extension_install_dialog_view_android.cc
++++ b/chrome/browser/ui/android/extensions/extension_install_dialog_view_android.cc
+@@ -142,6 +142,16 @@ void ExtensionInstallDialogViewAndroid::OnStoreLinkClicked(
+ void ExtensionInstallDialogViewAndroid::BuildPropertyModel() {
+   JNIEnv* env = base::android::AttachCurrentThread();
+ 
++  // Bare: there is no store to vouch for what is being added, and no review
++  // afterwards, so adding an extension is where the risk is stated and
++  // accepted.
++  const bool is_install =
++      prompt_->type() == InstallPromptData::INSTALL_PROMPT;
++  if (is_install) {
++    Java_ExtensionInstallDialogBridge_withRiskWarning(
++        env, java_object_, std::u16string(u"Bare can't check whether an extension is safe. Add it only if you trust where it came from."));
++  }
++
+   bool has_permissions = prompt_->GetPermissionCount() > 0;
+   if (has_permissions) {
+     std::u16string permissions_heading = prompt_->GetPermissionsHeading();
+@@ -192,7 +202,8 @@ void ExtensionInstallDialogViewAndroid::BuildPropertyModel() {
+ 
+   Java_ExtensionInstallDialogBridge_buildDialog(
+       env, java_object_, prompt_->GetDialogTitle(), prompt_->icon().AsBitmap(),
+-      prompt_->GetAcceptButtonLabel(), prompt_->GetAbortButtonLabel());
++      is_install ? std::u16string(u"I understand the risk, add") : prompt_->GetAcceptButtonLabel(),
++      prompt_->GetAbortButtonLabel());
+ }
+ 
+ }  // namespace extensions
+diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionInstallDialogBridge.java b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionInstallDialogBridge.java
+index b9b705521bc..18cf5ec6de1 100644
+--- a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionInstallDialogBridge.java
++++ b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionInstallDialogBridge.java
+@@ -116,6 +116,22 @@ public class ExtensionInstallDialogBridge implements ModalDialogProperties.Contr
+         }
+     }
+ 
++    /**
++     * Bare: puts a warning at the top of the dialog, above anything the extension asks for.
++     *
++     * @param warning What Bare cannot check about the extension.
++     */
++    @CalledByNative
++    public void withRiskWarning(@JniType("std::u16string") final String warning) {
++        View contentView = getContentView();
++        LinearLayout scrollViewContainer = contentView.findViewById(R.id.scroll_view_container);
++        // The same style as the permissions heading, so the warning lines up with it.
++        TextView warningView = new TextView(mContext, null, 0, R.style.AlertDialogContent);
++        warningView.setText(warning);
++        warningView.setTextAppearance(R.style.TextAppearance_TextMedium_Primary);
++        scrollViewContainer.addView(warningView, 0);
++    }
++
+     /**
+      * Populates the permissions section of the dialog.
+      *
