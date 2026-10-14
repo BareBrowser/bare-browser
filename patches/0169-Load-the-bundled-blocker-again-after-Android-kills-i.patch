@@ -1,41 +1,45 @@
-From 32f420b5ba36722b570433c8ff0a97f467bc8a36 Mon Sep 17 00:00:00 2001
+From d4ac991c57f374e59463765708637221b14576df Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Sun, 11 Oct 2026 07:23:34 +0000
 Subject: [PATCH] Load the bundled blocker again after Android kills it
 
-When Android's low memory killer takes the process uBlock Origin's background
-page runs in, Chromium marks the extension terminated. That is neither
-disabled nor removed and writes no preference, but filtering stops, and on
-Android nothing brings it back short of restarting the browser. Upstream's
-own recovery, ReloadIfTerminated, needs a frame belonging to the extension,
-which cannot be created while it is unloaded, and the service that restarts
-force-installed extensions on desktop is compiled out here. This was the
-"uBlock Origin randomly stops working" report: the extension renderer has no
-binding as a Manifest V2 background page, so it is among the first things the
-killer takes while Bare is in the background.
+When Android's low memory killer takes the process uBlock Origin's
+background page runs in, Chromium marks the extension terminated. That
+is neither disabled nor removed and writes no preference, but filtering
+stops, and on Android nothing brings it back short of restarting the
+browser. Upstream's own recovery, ReloadIfTerminated, needs a frame
+belonging to the extension, which cannot be created while it is
+unloaded, and the service that restarts force-installed extensions on
+desktop is compiled out here. This was the "uBlock Origin randomly stops
+working" report: the extension renderer has no binding as a Manifest V2
+background page, so it is among the first things the killer takes while
+Bare is in the background.
 
 BundledExtensionRecovery watches for an extension being unloaded as
-terminated and loads it again with ReloadExtensionWithQuietFailure. It only
-touches extensions the bundled loader still claims at the location it installs
-to, so nothing the user installed is affected and a blocker the user removed or
-declined is never claimed. It also leaves alone anything with a disable reason,
-and an extension Chromium itself terminated for reloading too often, which it
-marks with a kReloadTooFrequent warning.
+terminated and loads it again with ReloadExtensionWithQuietFailure. It
+only touches extensions the bundled loader still claims at the location
+it installs to, so nothing the user installed is affected and a blocker
+the user removed or declined is never claimed. It also leaves alone
+anything with a disable reason, and an extension Chromium itself
+terminated for reloading too often, which it marks with a
+kReloadTooFrequent warning.
 
-Android reports a crash and an out-of-memory kill the same way, so whether an
-extension is broken or merely unlucky cannot be told from one termination. What
-tells them apart is how long it stays up. RecoveryBackoff uses
-CorruptedExtensionReinstaller's policy, the first attempt immediate and later
-ones doubling from 100 ms up to 30 minutes, but a reload that stays up for a
-minute starts the next death's backoff over. So a working blocker that Android
-kills again and again, minutes apart, comes straight back every time, while one
-that dies as soon as it starts settles at one attempt every half hour. An entry
-left alone for six hours also starts over.
+Android reports a crash and an out-of-memory kill the same way, so
+whether an extension is broken or merely unlucky cannot be told from one
+termination. What tells them apart is how long it stays up.
+RecoveryBackoff uses CorruptedExtensionReinstaller's policy, the first
+attempt immediate and later ones doubling from 100 ms up to 30 minutes,
+but a reload that stays up for a minute starts the next death's backoff
+over. So a working blocker that Android kills again and again, minutes
+apart, comes straight back every time, while one that dies as soon as it
+starts settles at one attempt every half hour. An entry left alone for
+six hours also starts over.
 
-Measured on a Pixel 3 with Page.crash on the background page: three kills a few
-seconds after each reload gave delays of 0, 0.1 and 0.2 s; a kill after more
-than a minute up gave 0 s again. Without the reset, the delay kept doubling
-across successful recoveries and passed 12 s after a handful of kills.
+Measured on a Pixel 3 with Page.crash on the background page: three
+kills a few seconds after each reload gave delays of 0, 0.1 and 0.2 s; a
+kill after more than a minute up gave 0 s again. Without the reset, the
+delay kept doubling across successful recoveries and passed 12 s after a
+handful of kills.
 ---
  chrome/browser/extensions/BUILD.gn            |   2 +
  .../bare_bundled_extension_recovery.cc        | 147 ++++++++++++++++++

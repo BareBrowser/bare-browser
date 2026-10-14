@@ -1,36 +1,48 @@
-From 6a519e373027f76b78276705c77515a9e4641b27 Mon Sep 17 00:00:00 2001
+From 3e00891b489a09e14ea319712ba95a78a060ae84 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Mon, 12 Oct 2026 21:48:13 +0000
 Subject: [PATCH] Open Developer tools on phones too
 
-Chromium 156 turns the DevTools frontend on for desktop Android builds, but
-DevToolsWindowAndroid.isDevToolsAvailable also requires a tablet-width window,
-and the More tools submenu that holds the entry exists only where submenus are
-on, which on Bare means tablets. On a phone there was no way in: no menu entry,
-no View page source or Inspect in the context menu, and the keyboard shortcuts
-did nothing. Upstream gives no reason for the width limit beyond keeping the
-entry points consistent.
+Chromium 156 turns the DevTools frontend on for desktop Android builds,
+but DevToolsWindowAndroid.isDevToolsAvailable also requires a
+tablet-width window, and the More tools submenu that holds the entry
+exists only where submenus are on, which on Bare means tablets. On a
+phone there was no way in: no menu entry, no View page source or Inspect
+in the context menu, and the keyboard shortcuts did nothing. Upstream
+gives no reason for the width limit beyond keeping the entry points
+consistent.
 
-The width requirement is gone, and the phone menu, which has no submenus, gets
-a Developer tools row of its own under the same conditions as the submenu's,
-with the code icon Chromium already ships.
+The width requirement is gone, and the phone menu, which has no
+submenus, gets a Developer tools row of its own under the same
+conditions as the submenu's, with the code icon Chromium already ships.
 
 The frontend opens in its own full-screen activity, but it declares no
-viewport, so a phone's mobile viewport style laid it out 980px wide and shrank
-it to about 40%, too small to read. DevTools pages now get the default viewport
-style tablets already use, which lays a page out at the screen's width, and
-the frontend's own narrow layout takes it from there.
+viewport, so a phone's mobile viewport style laid it out 980px wide and
+shrank it to about 40%, too small to read. DevTools pages now get the
+default viewport style tablets already use, which lays a page out at the
+screen's width, and the frontend's own narrow layout takes it from
+there.
 
-Measured on a Pixel 3 in portrait: the menu shows Developer tools on web pages
-and not on native ones; the frontend lays out 392 CSS pixels wide at scale 1;
-the Elements panel shows the tree with styles below it; the Console evaluates
-document.title with the on-screen keyboard; Back closes DevTools and it opens
-again. Landscape was not tried.
+Measured on a Pixel 3 in portrait: the menu shows Developer tools on web
+pages and not on native ones; the frontend lays out 392 CSS pixels wide
+at scale 1; the Elements panel shows the tree with styles below it; the
+Console evaluates document.title with the on-screen keyboard; Back
+closes DevTools and it opens again. In landscape the panels sit side by
+side, 785 pixels wide; with the keyboard up only a couple of console
+lines stay in view.
+
+On Android the frontend gets no remote base, and devtools://remote/ is
+not served. With them, DevTools fetched its translations and CSS
+documentation from chrome-devtools-frontend.appspot.com, for instance
+when it offered to switch to the browser's language. It now keeps to the
+English files built into the browser.
 ---
  .../TabbedAppMenuPropertiesDelegate.java      | 18 +++++++++++++++
  .../browser/chrome_content_browser_client.cc  | 22 +++++++++++++++++++
  .../devtools/DevToolsWindowAndroid.java       |  6 ++---
- 3 files changed, 43 insertions(+), 3 deletions(-)
+ chrome/browser/devtools/devtools_window.cc    |  7 ++++++
+ .../webui/devtools/devtools_ui_data_source.cc |  8 +++++++
+ 5 files changed, 58 insertions(+), 3 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
 index 7a28c7eea16..026dbf3dfdd 100644
@@ -139,3 +151,56 @@ index c96056e2843..a29841dc095 100644
      }
  
      public static boolean isDevToolsAllowedFor(
+diff --git a/chrome/browser/devtools/devtools_window.cc b/chrome/browser/devtools/devtools_window.cc
+index 7613579e79c..8b8b46e6b5e 100644
+--- a/chrome/browser/devtools/devtools_window.cc
++++ b/chrome/browser/devtools/devtools_window.cc
+@@ -1441,8 +1441,15 @@ GURL DevToolsWindow::GetDevToolsURL(Profile* profile,
+                                     bool browser_connection) {
+   std::string url;
+ 
++#if BUILDFLAG(IS_ANDROID)
++  // Bare: no remote base on Android. With one, the frontend fetches its
++  // translations and CSS documentation from chrome-devtools-frontend.appspot.com;
++  // without one it keeps to the English files built into the browser.
++  std::string remote_base = "?";
++#else
+   std::string remote_base =
+       "?remoteBase=" + DevToolsUI::GetRemoteBaseURL().spec();
++#endif
+ 
+   const std::string valid_frontend =
+       frontend_url.empty() ? chrome::kChromeUIDevToolsURL : frontend_url;
+diff --git a/chrome/browser/ui/webui/devtools/devtools_ui_data_source.cc b/chrome/browser/ui/webui/devtools/devtools_ui_data_source.cc
+index 31bea976c80..52b23586441 100644
+--- a/chrome/browser/ui/webui/devtools/devtools_ui_data_source.cc
++++ b/chrome/browser/ui/webui/devtools/devtools_ui_data_source.cc
+@@ -18,6 +18,7 @@
+ #include "base/strings/strcat.h"
+ #include "base/strings/string_util.h"
+ #include "base/task/thread_pool.h"
++#include "build/build_config.h"
+ #include "chrome/browser/devtools/devtools_ui_bindings.h"
+ #include "chrome/browser/devtools/url_constants.h"
+ #include "chrome/common/chrome_paths.h"
+@@ -185,6 +186,12 @@ void DevToolsDataSource::StartDataRequest(
+   remote_path_prefix += "/";
+   if (base::StartsWith(path, remote_path_prefix,
+                        base::CompareCase::INSENSITIVE_ASCII)) {
++#if BUILDFLAG(IS_ANDROID)
++    // Bare: devtools://remote/ is served from chrome-devtools-frontend.appspot.com.
++    // On Android DevTools uses only what is built in.
++    std::move(callback).Run(CreateNotFoundResponse());
++    return;
++#else
+     if (MaybeHandleCustomRequest(path.substr(remote_path_prefix.length()),
+                                  &callback)) {
+       return;
+@@ -201,6 +208,7 @@ void DevToolsDataSource::StartDataRequest(
+       std::move(callback).Run(CreateNotFoundResponse());
+     }
+     return;
++#endif  // BUILDFLAG(IS_ANDROID)
+   }
+ 
+   // Serve request to devtools://custom from custom URL.

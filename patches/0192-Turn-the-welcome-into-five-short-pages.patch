@@ -1,4 +1,4 @@
-From 860f76dee72022d20f8652c0142d1efe83518d1c Mon Sep 17 00:00:00 2001
+From 2bb9b201b938ead04f413056067a7f58f348fbee Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Tue, 13 Oct 2026 01:43:11 +0000
 Subject: [PATCH] Turn the welcome into five short pages
@@ -24,8 +24,11 @@ From Android 13 the row asks through Android's permission dialog. Where
 Android will no longer ask, and before Android 13, it shows whether they
 are on and opens Android's settings for Bare. Chromium's own prompt at
 startup is gone, so it is no longer the first thing a new install sees.
-A download or an incognito tab can still ask, under Chromium's rules for
-when.
+Chromium's own requests when a download starts or an incognito tab opens
+stay off, since they wait for a field trial setting this build does not
+have. Someone who skips the row is not asked again until the welcome
+after the next update, and Android's settings for Bare can turn
+notifications on at any time.
 
 The welcome now comes back after every update, a reinstall of the same
 version included, since two builds of one release share a version name;
@@ -63,8 +66,8 @@ such, and no longer reach the browser behind the welcome.
  .../java/res/values/bare_welcome_colors.xml   |   20 +-
  .../values/channel_constants.xml              |   54 +-
  .../browser/bare/BareWelcomeOverlay.java      | 2044 +++++++++++------
- .../tabbed_mode/TabbedRootUiCoordinator.java  |    6 +-
- 28 files changed, 2298 insertions(+), 822 deletions(-)
+ .../tabbed_mode/TabbedRootUiCoordinator.java  |    7 +-
+ 28 files changed, 2299 insertions(+), 822 deletions(-)
  create mode 100644 chrome/android/java/res/drawable-nodpi/bare_welcome_logo.png
  create mode 100644 chrome/android/java/res/drawable/bare_welcome_bridge.xml
  create mode 100644 chrome/android/java/res/drawable/bare_welcome_bridge_cloud_a.xml
@@ -4548,10 +4551,10 @@ index 54a9478cd10..c1e7929dd35 100644
 -    }
  }
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
-index a9c1113ece6..99bccab01ea 100644
+index a9c1113ece6..49759fbf0b7 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
-@@ -2958,9 +2958,9 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+@@ -2958,9 +2958,10 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
          mNotificationPermissionController =
                  new NotificationPermissionController(mWindowAndroid, rationaleUIDelegateSupplier);
          NotificationPermissionController.attach(mWindowAndroid, mNotificationPermissionController);
@@ -4559,8 +4562,9 @@ index a9c1113ece6..99bccab01ea 100644
 -            return true;
 -        }
 +        // Bare: no prompt at startup. The welcome offers notifications on the page that says what
-+        // they are for; the controller stays attached for the requests a download or an incognito
-+        // tab makes.
++        // they are for. The controller stays attached because other code looks it up, but the
++        // requests a download or an incognito tab would make are off: they wait for a field trial
++        // parameter that this build never sets.
  
          assert mAdvancedProtectionCoordinator != null;
          if (mAdvancedProtectionCoordinator.showMessageOnStartupIfNeeded()) {

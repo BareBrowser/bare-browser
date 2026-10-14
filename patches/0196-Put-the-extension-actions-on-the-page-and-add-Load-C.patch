@@ -1,4 +1,4 @@
-From 4c89ce40e04ff33931511666e0902a0c3717d405 Mon Sep 17 00:00:00 2001
+From 44fc553df558aeb73a991877727b8dc214bf3c50 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
 Date: Tue, 13 Oct 2026 02:10:06 +0000
 Subject: [PATCH] Put the extension actions on the page, and add Load CRX
@@ -10,21 +10,32 @@ existing profiles, since Load unpacked needs it; a policy can still turn
 it off.
 
 Load CRX opens the system file picker for a .crx, checks that the file
-is a signed extension of a sane size, and installs it through Chromium's
-usual installer and confirmation. A file that cannot be read, is not an
-extension or is damaged gets a plain message and installs nothing. A
-.crx carrying the id of the uBlock Origin Bare ships is turned away, so
-a file cannot replace that copy in place. Community Extensions is not
-ready, and says so when tapped. Load unpacked now shows the same add
-dialog before it loads a folder.
+is a packaged extension of a sane size (signed with whatever key its
+author chose), and installs it through Chromium's usual installer and
+confirmation. A file that cannot be read, is not an extension or is
+damaged gets a plain message and installs nothing. A .crx carrying the
+id of the uBlock Origin Bare ships is turned away, so a file cannot
+replace that copy in place. Community Extensions is not ready, and says
+so when tapped. Load unpacked now shows the same add dialog before it
+loads a folder.
+
+A second tap on Load CRX or Load unpacked while one is already open does
+nothing. The browser keeps hold of the request before it shows the
+picker, since Android answers at once, from inside the call, when a
+picker cannot open. A file dropped on the page is not installed on
+Android, and the page offers no drop target there: a dropped .zip would
+load without the add dialog, and a dropped .crx would take the settings
+page's silent update path.
 ---
- .../developer_private_functions.cc            | 196 ++++++++++++++++++
- .../developer_private_functions.h             |  52 +++++
+ .../developer_private_functions.cc            | 233 +++++++++++++++++-
+ .../developer_private_functions.h             |  52 ++++
  .../browser/extensions/extension_service.cc   |   7 +
+ .../resources/extensions/manager.html.ts      |   2 +-
+ .../browser/resources/extensions/manager.ts   |   7 +
  .../browser/resources/extensions/service.ts   |   4 +
- .../browser/resources/extensions/toolbar.css  |  51 ++---
+ .../browser/resources/extensions/toolbar.css  |  51 ++--
  .../resources/extensions/toolbar.html.ts      |  30 +--
- .../browser/resources/extensions/toolbar.ts   |  90 ++++----
+ .../browser/resources/extensions/toolbar.ts   | 108 ++++----
  .../ui/webui/extensions/extensions_ui.cc      |   6 +
  .../webui/extensions/extensions_ui_prefs.cc   |   9 +-
  .../extensions/api/developer_private.webidl   |   6 +
@@ -33,13 +44,21 @@ dialog before it loads a folder.
  extensions/browser/unpacked_installer.h       |  15 ++
  .../histograms/metadata/extensions/enums.xml  |   1 +
  .../definitions/developer_private.d.ts        |   1 +
- 15 files changed, 387 insertions(+), 103 deletions(-)
+ 17 files changed, 445 insertions(+), 109 deletions(-)
 
 diff --git a/chrome/browser/extensions/api/developer_private/developer_private_functions.cc b/chrome/browser/extensions/api/developer_private/developer_private_functions.cc
-index 0f416f02ae6..cc3208186a7 100644
+index 0f416f02ae6..6a6396d1069 100644
 --- a/chrome/browser/extensions/api/developer_private/developer_private_functions.cc
 +++ b/chrome/browser/extensions/api/developer_private/developer_private_functions.cc
-@@ -31,6 +31,9 @@
+@@ -21,6 +21,7 @@
+ #include "base/strings/strcat.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "base/task/thread_pool.h"
+ #include "chrome/browser/devtools/devtools_window.h"
+ #include "chrome/browser/extensions/api/developer_private/developer_private_api.h"
+@@ -31,6 +32,9 @@
  #include "chrome/browser/extensions/devtools_util.h"
  #include "chrome/browser/extensions/extension_commands_global_registry.h"
  #include "chrome/browser/extensions/extension_management.h"
@@ -49,7 +68,7 @@ index 0f416f02ae6..cc3208186a7 100644
  #include "chrome/browser/extensions/extension_service.h"
  #include "chrome/browser/extensions/extension_tab_util.h"
  #include "chrome/browser/extensions/extension_ui_util.h"
-@@ -56,7 +59,9 @@
+@@ -56,7 +60,9 @@
  #include "components/signin/public/base/signin_switches.h"
  #include "components/sync/base/features.h"
  #include "content/public/common/drop_data.h"
@@ -59,7 +78,49 @@ index 0f416f02ae6..cc3208186a7 100644
  #include "extensions/browser/disable_reason.h"
  #include "extensions/browser/extension_file_task_runner.h"
  #include "extensions/browser/extension_prefs.h"
-@@ -1013,12 +1018,39 @@ void DeveloperPrivateLoadUnpackedFunction::StartFileLoad(
+@@ -361,8 +367,9 @@ base::expected<void, std::string> SetDroppedPath(
+ // Returns whether the filename perceived to the user ends with the extension.
+ // Just using `path` is not enough because it might be a content URI that
+ // doesn't have the `display_name` as a suffix.
+-bool MatchesExtension(ui::FileInfo& file_info,
+-                      base::FilePath::StringViewType extension) {
++[[maybe_unused]] bool MatchesExtension(
++    ui::FileInfo& file_info,
++    base::FilePath::StringViewType extension) {
+   return file_info.display_name.empty()
+              ? file_info.path.MatchesExtension(extension)
+              : file_info.display_name.MatchesExtension(extension);
+@@ -940,9 +947,11 @@ ExtensionFunction::ResponseAction DeveloperPrivateLoadUnpackedFunction::Run() {
+     return RespondLater();
+   }
+ 
+-  ShowSelectFileDialog();
++  // Bare: the reference is taken before the dialog, because on Android the
++  // dialog can cancel, respond and release before SelectFile() returns.
+   AddRef();  // Balanced in Finish.
+-  return RespondLater();
++  ShowSelectFileDialog();
++  return did_respond() ? AlreadyResponded() : RespondLater();
+ }
+ 
+ void DeveloperPrivateLoadUnpackedFunction::ShowSelectFileDialog() {
+@@ -989,7 +998,14 @@ void DeveloperPrivateLoadUnpackedFunction::FileSelected(
+ }
+ 
+ void DeveloperPrivateLoadUnpackedFunction::FileSelectionCanceled() {
+-  select_file_dialog_.reset();
++  // Bare: on Android this can run inside the dialog's own SelectFile(), when
++  // a picker is already showing and the new one cannot open. Let the dialog go
++  // once that call has returned rather than destroying it under itself.
++  if (select_file_dialog_) {
++    select_file_dialog_->ListenerDestroyed();
++    base::SequencedTaskRunner::GetCurrentDefault()->ReleaseSoon(
++        FROM_HERE, std::move(select_file_dialog_));
++  }
+   // This isn't really an error, but we should keep it like this for
+   // backward compatibility.
+   Finish(Error(kFileSelectionCanceled));
+@@ -1013,12 +1029,39 @@ void DeveloperPrivateLoadUnpackedFunction::StartFileLoad(
    installer->set_be_noisy_on_failure(!fail_quietly_);
    installer->set_completion_callback(base::BindOnce(
        &DeveloperPrivateLoadUnpackedFunction::OnLoadComplete, this));
@@ -99,7 +160,7 @@ index 0f416f02ae6..cc3208186a7 100644
  void DeveloperPrivateLoadUnpackedFunction::OnLoadComplete(
      const Extension* extension,
      const base::FilePath& file_path,
-@@ -1027,6 +1059,12 @@ void DeveloperPrivateLoadUnpackedFunction::OnLoadComplete(
+@@ -1027,6 +1070,12 @@ void DeveloperPrivateLoadUnpackedFunction::OnLoadComplete(
      Finish(NoArguments());
      return;
    }
@@ -112,7 +173,7 @@ index 0f416f02ae6..cc3208186a7 100644
  
    if (!populate_error_) {
      Finish(Error(base::UTF16ToUTF8(error)));
-@@ -1056,6 +1094,164 @@ void DeveloperPrivateLoadUnpackedFunction::Finish(
+@@ -1056,6 +1105,173 @@ void DeveloperPrivateLoadUnpackedFunction::Finish(
    Release();  // Balanced in Run().
  }
  
@@ -148,14 +209,16 @@ index 0f416f02ae6..cc3208186a7 100644
 +  // A plain open, not a writable one, so the picker grants one read rather than
 +  // lasting access to the file.
 +  select_file_dialog_->SetAcceptTypes({u".crx"});
++  // Before SelectFile(): on Android a picker that cannot open cancels from
++  // inside it, and the cancel responds and releases.
++  AddRef();  // Balanced in Finish().
 +  ui::SelectFileDialog::FileTypeInfo file_type_info;
 +  select_file_dialog_->SelectFile(
 +      ui::SelectFileDialog::SELECT_OPEN_FILE,
 +      /*title=*/std::u16string(),
 +      base::FilePath(), &file_type_info, 0, base::FilePath::StringType(),
 +      platform_util::GetTopLevel(web_contents->GetNativeView()));
-+  AddRef();  // Balanced in Finish().
-+  return RespondLater();
++  return did_respond() ? AlreadyResponded() : RespondLater();
 +}
 +
 +void DeveloperPrivateLoadCrxFunction::FileSelected(
@@ -171,7 +234,14 @@ index 0f416f02ae6..cc3208186a7 100644
 +}
 +
 +void DeveloperPrivateLoadCrxFunction::FileSelectionCanceled() {
-+  select_file_dialog_.reset();
++  // Bare: on Android this can run inside the dialog's own SelectFile(), when
++  // a picker is already showing and the new one cannot open. Let the dialog go
++  // once that call has returned rather than destroying it under itself.
++  if (select_file_dialog_) {
++    select_file_dialog_->ListenerDestroyed();
++    base::SequencedTaskRunner::GetCurrentDefault()->ReleaseSoon(
++        FROM_HERE, std::move(select_file_dialog_));
++  }
 +  Finish(NoArguments());
 +}
 +
@@ -277,6 +347,27 @@ index 0f416f02ae6..cc3208186a7 100644
  DeveloperPrivateInstallDroppedFileFunction::
      DeveloperPrivateInstallDroppedFileFunction() = default;
  DeveloperPrivateInstallDroppedFileFunction::
+@@ -1082,6 +1298,12 @@ DeveloperPrivateInstallDroppedFileFunction::Run() {
+     return RespondNow(Error("No dragged path"));
+   }
+ 
++#if BUILDFLAG(IS_ANDROID)
++  // Bare: a dropped .zip loads without the dialog that states the risk and
++  // lists what the extension can do, and a dropped .crx takes the settings
++  // page's silent update path. Load CRX and Load unpacked ask first.
++  return RespondNow(Error("Use Load CRX or Load unpacked to add an extension."));
++#else
+   if (MatchesExtension(file, FILE_PATH_LITERAL(".zip"))) {
+     ExtensionRegistrar* registrar = ExtensionRegistrar::Get(browser_context());
+     ZipFileInstaller::Create(
+@@ -1111,6 +1333,7 @@ DeveloperPrivateInstallDroppedFileFunction::Run() {
+   // the load succeeded or failed. For now, that's unnecessary, and just adds
+   // complexity.
+   return RespondNow(NoArguments());
++#endif  // BUILDFLAG(IS_ANDROID)
+ }
+ 
+ DeveloperPrivateNotifyDragInstallInProgressFunction::
 diff --git a/chrome/browser/extensions/api/developer_private/developer_private_functions.h b/chrome/browser/extensions/api/developer_private/developer_private_functions.h
 index 187c9cf3cf7..9ed2362f578 100644
 --- a/chrome/browser/extensions/api/developer_private/developer_private_functions.h
@@ -384,6 +475,44 @@ index dc48e016ebe..39141a7e544 100644
    SetCurrentDeveloperMode(
        util::GetBrowserContextId(profile),
        profile->GetPrefs()->GetBoolean(prefs::kExtensionsUIDeveloperMode));
+diff --git a/chrome/browser/resources/extensions/manager.html.ts b/chrome/browser/resources/extensions/manager.html.ts
+index 2d8fea7941d..032f614294c 100644
+--- a/chrome/browser/resources/extensions/manager.html.ts
++++ b/chrome/browser/resources/extensions/manager.html.ts
+@@ -9,7 +9,7 @@ import type {ExtensionsManagerElement} from './manager.js';
+ export function getHtml(this: ExtensionsManagerElement) {
+   // clang-format off
+   return html`<!--_html_template_start_-->
+-<extensions-drop-overlay ?drag-enabled="${this.inDevMode}">
++<extensions-drop-overlay ?drag-enabled="${this.isDropEnabled_()}">
+ </extensions-drop-overlay>
+ <extensions-toolbar id="toolbar" ?in-dev-mode="${this.inDevMode}"
+     ?can-load-unpacked="${this.canLoadUnpacked}"
+diff --git a/chrome/browser/resources/extensions/manager.ts b/chrome/browser/resources/extensions/manager.ts
+index 522e280c936..e8bc9805d16 100644
+--- a/chrome/browser/resources/extensions/manager.ts
++++ b/chrome/browser/resources/extensions/manager.ts
+@@ -28,6 +28,7 @@ import type {CrViewManagerElement} from 'chrome://resources/cr_elements/cr_view_
+ import {I18nMixinLit} from 'chrome://resources/cr_elements/i18n_mixin_lit.js';
+ import {assert, assertNotReached, assertNotReachedCase} from 'chrome://resources/js/assert.js';
+ import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
++import {isAndroid} from 'chrome://resources/js/platform.js';
+ import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
+ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+ import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+@@ -211,6 +212,12 @@ export class ExtensionsManagerElement extends ExtensionsManagerElementBase {
+    */
+   private navigationListener_: number|null = null;
+ 
++  // Bare: no drop target on Android. A dropped file would install without the
++  // dialog that Load CRX and Load unpacked show, and the browser refuses it there.
++  protected isDropEnabled_(): boolean {
++    return this.inDevMode && !isAndroid;
++  }
++
+   override connectedCallback() {
+     super.connectedCallback();
+ 
 diff --git a/chrome/browser/resources/extensions/service.ts b/chrome/browser/resources/extensions/service.ts
 index b70ac01c6aa..8de71b85708 100644
 --- a/chrome/browser/resources/extensions/service.ts
@@ -556,7 +685,7 @@ index f2de5b086dd..8d60b4f2f92 100644
    // clang-format on
  }
 diff --git a/chrome/browser/resources/extensions/toolbar.ts b/chrome/browser/resources/extensions/toolbar.ts
-index 178a09a2e5a..a04a84406d1 100644
+index 178a09a2e5a..399f6ec1b5e 100644
 --- a/chrome/browser/resources/extensions/toolbar.ts
 +++ b/chrome/browser/resources/extensions/toolbar.ts
 @@ -3,16 +3,14 @@
@@ -625,7 +754,7 @@ index 178a09a2e5a..a04a84406d1 100644
        showPackDialog_: {type: Boolean},
  
        /**
-@@ -109,8 +118,9 @@ export class ExtensionsToolbarElement extends ExtensionsToolbarElementBase {
+@@ -109,24 +118,19 @@ export class ExtensionsToolbarElement extends ExtensionsToolbarElementBase {
    accessor narrow: boolean = false;
    accessor canLoadUnpacked: boolean|undefined;
  
@@ -634,9 +763,12 @@ index 178a09a2e5a..a04a84406d1 100644
 +  protected accessor messageTitle_: string = '';
 +  protected accessor messageBody_: string = '';
    private accessor isUpdating_: boolean = false;
++  // Bare: true while Load CRX or Load unpacked has a picker or dialog open, so
++  // a second tap does not start another one on top of it.
++  private loading_: boolean = false;
  
    override firstUpdated(changedProperties: PropertyValues<this>) {
-@@ -118,15 +128,6 @@ export class ExtensionsToolbarElement extends ExtensionsToolbarElementBase {
+     super.firstUpdated(changedProperties);
      this.setAttribute('role', 'banner');
    }
  
@@ -652,24 +784,20 @@ index 178a09a2e5a..a04a84406d1 100644
    focusSearchInput() {
      this.$.toolbar.getSearchField().showAndFocus();
    }
-@@ -135,48 +136,32 @@ export class ExtensionsToolbarElement extends ExtensionsToolbarElementBase {
+@@ -135,51 +139,47 @@ export class ExtensionsToolbarElement extends ExtensionsToolbarElementBase {
      return this.$.toolbar.getSearchField().isSearchFocused();
    }
  
 -  protected shouldDisableDevMode_(): boolean {
 -    return this.devModeControlledByPolicy || this.isChildAccount;
 -  }
--
++  // Bare: the actions are always shown, so there is no Developer mode switch
++  // and no drawer to open and close.
+ 
 -  protected getTooltipText_(): string {
 -    return this.i18n(
 -        this.isChildAccount ? 'controlledSettingChildRestriction' :
 -                              'controlledSettingPolicy');
--  }
-+  // Bare: the actions are always shown, so there is no Developer mode switch
-+  // and no drawer to open and close.
- 
--  protected getIcon_(): string {
--    return this.isChildAccount ? 'cr20:family-link' : 'cr20:domain';
 +  /** Shows a short message with an OK button. */
 +  protected showMessage_(title: string, body: string) {
 +    this.messageTitle_ = title;
@@ -677,12 +805,30 @@ index 178a09a2e5a..a04a84406d1 100644
 +    this.$.messageDialog.showModal();
    }
  
+-  protected getIcon_(): string {
+-    return this.isChildAccount ? 'cr20:family-link' : 'cr20:domain';
++  protected onMessageDialogOkClick_() {
++    this.$.messageDialog.close();
+   }
+ 
 -  protected onDevModeToggleChange_(e: CustomEvent<boolean>) {
 -    this.delegate.setProfileInDevMode(e.detail);
 -    chrome.metricsPrivate.recordUserAction(
 -        'Options_ToggleDeveloperMode_' + (e.detail ? 'Enabled' : 'Disabled'));
-+  protected onMessageDialogOkClick_() {
-+    this.$.messageDialog.close();
++  protected onLoadCrxClick_() {
++    if (this.loading_) {
++      return;
++    }
++    this.loading_ = true;
++    this.delegate.loadCrx()
++        .then(error => {
++          if (error) {
++            this.showMessage_(this.i18n('toolbarLoadCrxFailed'), error);
++          }
++        })
++        .finally(() => {
++          this.loading_ = false;
++        });
    }
  
 -  private onInDevModeChanged_(_current: boolean, previous: boolean) {
@@ -698,14 +844,8 @@ index 178a09a2e5a..a04a84406d1 100644
 -      if (previous === undefined) {
 -        drawer.hidden = true;
 -        return;
-+  protected onLoadCrxClick_() {
-+    this.delegate.loadCrx().then(error => {
-+      if (error) {
-+        this.showMessage_(this.i18n('toolbarLoadCrxFailed'), error);
-       }
-+    });
-+  }
- 
+-      }
+-
 -      listenOnce(drawer, 'transitionend', () => {
 -        if (!this.inDevMode) {
 -          drawer.hidden = true;
@@ -720,7 +860,24 @@ index 178a09a2e5a..a04a84406d1 100644
    }
  
    protected onLoadUnpackedClick_() {
-@@ -201,7 +186,6 @@ export class ExtensionsToolbarElement extends ExtensionsToolbarElementBase {
++    if (this.loading_) {
++      return;
++    }
++    this.loading_ = true;
+     this.delegate.loadUnpacked()
+         .then((success) => {
+           if (success) {
+@@ -190,6 +190,9 @@ export class ExtensionsToolbarElement extends ExtensionsToolbarElementBase {
+         })
+         .catch(loadError => {
+           this.fire('load-error', loadError);
++        })
++        .finally(() => {
++          this.loading_ = false;
+         });
+     chrome.metricsPrivate.recordUserAction('Options_LoadUnpackedExtension');
+   }
+@@ -201,7 +204,6 @@ export class ExtensionsToolbarElement extends ExtensionsToolbarElementBase {
  
    protected onPackDialogClose_() {
      this.showPackDialog_ = false;

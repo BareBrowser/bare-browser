@@ -1,0 +1,36 @@
+From 76c32e1176b03c46e39ec2470d34f51dc22900d5 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 14 Oct 2026 04:20:46 +0000
+Subject: [PATCH] Show a dialog's content when it is wrapped to scroll
+
+A modal dialog whose custom content scrolls could open with only its
+title and buttons. Whether the scrolling container shows is worked out
+from the wrap setting, but changing that setting did not work it out
+again; it waited for some later property to do so. The binder applies
+properties in no fixed order, so when the wrap setting came last the
+container stayed hidden. That hid the risk sentence and the permission
+list in the dialog that adds an extension, on some devices and not
+others.
+
+Changing the wrap setting now updates what is shown, as every other
+setter does.
+---
+ .../components/browser_ui/modaldialog/ModalDialogView.java   | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/components/browser_ui/modaldialog/android/java/src/org/chromium/components/browser_ui/modaldialog/ModalDialogView.java b/components/browser_ui/modaldialog/android/java/src/org/chromium/components/browser_ui/modaldialog/ModalDialogView.java
+index dffd2393671..dcb5197f7bd 100644
+--- a/components/browser_ui/modaldialog/android/java/src/org/chromium/components/browser_ui/modaldialog/ModalDialogView.java
++++ b/components/browser_ui/modaldialog/android/java/src/org/chromium/components/browser_ui/modaldialog/ModalDialogView.java
+@@ -480,6 +480,11 @@ public class ModalDialogView extends BoundedLinearLayout implements View.OnClick
+             mCustomViewContainer.addView(view);
+         }
+         mCustomViewContainer.setVisibility(wasVisible);
++        // Bare: whether the scroll view shows depends on this setting, and nothing
++        // else recalculates it if this is the last property the binder applies.
++        // The binder's order is not fixed, so without this a dialog could show
++        // its title and buttons with its content hidden.
++        updateContentVisibility();
+     }
+ 
+     /**

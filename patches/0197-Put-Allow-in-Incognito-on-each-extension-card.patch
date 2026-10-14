@@ -1,0 +1,174 @@
+From f2c5e5b102ff66184455f018e3f6c99c735ee595 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 14 Oct 2026 04:20:19 +0000
+Subject: [PATCH] Put Allow in Incognito on each extension card
+
+Whether an extension runs in Incognito could only be changed from its
+details page. Each card now has an Allow in Incognito switch of its own,
+for extensions installed later too.
+
+It is the same setting as the switch on the details page, changed the
+same way, so the two always agree and the choice survives a restart. It
+starts from whatever Chromium already has for the extension, and adding
+an extension does not turn it on. Like the details page, it only appears
+for extensions Chromium lets run in Incognito, and only when the profile
+can open Incognito at all. For an extension installed by policy the card
+shows the state but leaves the change to the details page, which explains
+that it may wait for a restart.
+---
+ chrome/browser/resources/extensions/item.css  | 10 ++++++++
+ .../browser/resources/extensions/item.html.ts | 11 +++++++++
+ chrome/browser/resources/extensions/item.ts   | 23 +++++++++++++++++++
+ .../resources/extensions/item_list.html.ts    |  6 +++--
+ .../browser/resources/extensions/item_list.ts |  3 +++
+ .../resources/extensions/manager.html.ts      |  1 +
+ 6 files changed, 52 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/resources/extensions/item.css b/chrome/browser/resources/extensions/item.css
+index b4d8faf687c..3083b2422f9 100644
+--- a/chrome/browser/resources/extensions/item.css
++++ b/chrome/browser/resources/extensions/item.css
+@@ -203,6 +203,16 @@ cr-tooltip-icon {
+   margin-inline-start: 8px;
+ }
+ 
++/* Bare: the card's Allow in Incognito switch, a row of its own above the
++   buttons, lined up with them and with the enable switch below it. */
++#incognito-row {
++  border-top: var(--cr-separator-line);
++  box-sizing: border-box;
++  gap: 12px;
++  min-height: var(--cr-section-min-height);
++  padding-inline: 20px;
++}
++
+ #source-indicator {
+   margin-inline-start: 24px;
+   margin-top: 24px;
+diff --git a/chrome/browser/resources/extensions/item.html.ts b/chrome/browser/resources/extensions/item.html.ts
+index de143736336..411c6d028ae 100644
+--- a/chrome/browser/resources/extensions/item.html.ts
++++ b/chrome/browser/resources/extensions/item.html.ts
+@@ -156,6 +156,17 @@ export function getHtml(this: ItemElement) {
+       </div>
+     </div>
+   </div>
++  ${this.showIncognitoToggle_() ? html`
++    <div id="incognito-row" class="layout-horizontal-center cr-secondary-text">
++      <span id="incognito-label" class="flex">$i18n{itemAllowIncognito}</span>
++      <cr-toggle id="incognitoToggle" aria-labelledby="incognito-label"
++          aria-describedby="a11yAssociation"
++          ?checked="${this.data.incognitoAccess.isActive}"
++          ?disabled="${this.isIncognitoToggleDisabled_()}"
++          @change="${this.onAllowIncognitoChange_}">
++      </cr-toggle>
++    </div>
++  ` : ''}
+   <div id="button-strip" class="layout-horizontal-center cr-secondary-text">
+     <div class="layout-horizontal-center flex">
+       <cr-button id="detailsButton" @click="${this.onDetailsClick_}"
+diff --git a/chrome/browser/resources/extensions/item.ts b/chrome/browser/resources/extensions/item.ts
+index 055bedcb693..1eb014a030a 100644
+--- a/chrome/browser/resources/extensions/item.ts
++++ b/chrome/browser/resources/extensions/item.ts
+@@ -158,6 +158,7 @@ export class ExtensionsItemElement extends ExtensionsItemElementBase {
+ 
+       // Whether or not dev mode is enabled.
+       inDevMode: {type: Boolean},
++      incognitoAvailable: {type: Boolean},
+       safetyCheckShowing: {type: Boolean},
+ 
+       // The underlying ExtensionInfo itself. Public for use in declarative
+@@ -174,6 +175,7 @@ export class ExtensionsItemElement extends ExtensionsItemElementBase {
+ 
+   accessor delegate: ItemDelegate|null = null;
+   accessor inDevMode: boolean = false;
++  accessor incognitoAvailable: boolean = false;
+   accessor safetyCheckShowing: boolean = false;
+   accessor data: chrome.developerPrivate.ExtensionInfo =
+       createDummyExtensionInfo();
+@@ -257,6 +259,27 @@ export class ExtensionsItemElement extends ExtensionsItemElementBase {
+     this.$.enableToggle.checked = this.isEnabled_();
+   }
+ 
++  // Bare: the same condition as the details page. Chromium decides which kinds
++  // of extension can run in Incognito, and a profile can have Incognito turned
++  // off altogether.
++  protected showIncognitoToggle_(): boolean {
++    return this.incognitoAvailable && this.data.incognitoAccess.isEnabled;
++  }
++
++  // Bare: an extension installed by policy can have the change held back until
++  // restart, which the details page explains; the card only shows the state.
++  protected isIncognitoToggleDisabled_(): boolean {
++    return !!this.data.controlledInfo;
++  }
++
++  protected onAllowIncognitoChange_(e: Event) {
++    assert(this.delegate);
++    const toggle = e.target as CrToggleElement;
++    this.delegate.setItemAllowedIncognito(this.data.id, toggle.checked);
++    // Show what Chromium reports; the change comes back as an update to data.
++    toggle.checked = this.data.incognitoAccess.isActive;
++  }
++
+   protected onErrorsClick_() {
+     if (this.data.installWarnings && this.data.installWarnings.length > 0) {
+       this.fire('show-install-warnings', this.data.installWarnings);
+diff --git a/chrome/browser/resources/extensions/item_list.html.ts b/chrome/browser/resources/extensions/item_list.html.ts
+index 054f137ce30..12ca9166365 100644
+--- a/chrome/browser/resources/extensions/item_list.html.ts
++++ b/chrome/browser/resources/extensions/item_list.html.ts
+@@ -70,7 +70,8 @@ export function getHtml(this: ExtensionsItemListElement) {
+               ?safety-check-showing="${
+                   this.hasSafetyCheckTriggeringExtension_()}"
+               .delegate="${this.delegate as ServiceInterface}"
+-              ?in-dev-mode="${this.inDevMode}">
++              ?in-dev-mode="${this.inDevMode}"
++              ?incognito-available="${this.incognitoAvailable}">
+           </extensions-item>
+         `, 6)}
+       </div>
+@@ -84,7 +85,8 @@ export function getHtml(this: ExtensionsItemListElement) {
+         ${asyncMap(this.filteredApps_, item => html`
+           <extensions-item id="${item.id}" .data="${item}"
+               .delegate="${this.delegate as ServiceInterface}"
+-              ?in-dev-mode="${this.inDevMode}">
++              ?in-dev-mode="${this.inDevMode}"
++              ?incognito-available="${this.incognitoAvailable}">
+           </extensions-item>
+         `, 6)}
+       </div>
+diff --git a/chrome/browser/resources/extensions/item_list.ts b/chrome/browser/resources/extensions/item_list.ts
+index c0a7ca6092b..6778b3bc1fc 100644
+--- a/chrome/browser/resources/extensions/item_list.ts
++++ b/chrome/browser/resources/extensions/item_list.ts
+@@ -47,6 +47,8 @@ export class ExtensionsItemListElement extends ExtensionsItemListElementBase {
+         reflect: true,
+       },
+ 
++      incognitoAvailable: {type: Boolean},
++
+       isMv2DeprecationNoticeDismissed: {
+         type: Boolean,
+         notify: true,
+@@ -107,6 +109,7 @@ export class ExtensionsItemListElement extends ExtensionsItemListElementBase {
+   accessor extensions: chrome.developerPrivate.ExtensionInfo[] = [];
+   accessor delegate: ItemDelegate = new DummyItemDelegate();
+   accessor inDevMode: boolean = false;
++  accessor incognitoAvailable: boolean = false;
+   accessor isMv2DeprecationNoticeDismissed: boolean = false;
+   accessor extensionsPinnedByDefault: boolean = false;
+   accessor filter: string = '';
+diff --git a/chrome/browser/resources/extensions/manager.html.ts b/chrome/browser/resources/extensions/manager.html.ts
+index 032f614294c..9fb68db9dbb 100644
+--- a/chrome/browser/resources/extensions/manager.html.ts
++++ b/chrome/browser/resources/extensions/manager.html.ts
+@@ -49,6 +49,7 @@ ${this.showDrawer_ ? html`
+   <cr-view-manager id="viewManager" role="main">
+     <extensions-item-list id="itemsList" .delegate="${this.delegate}"
+         ?in-dev-mode="${this.inDevMode}"
++        ?incognito-available="${this.incognitoAvailable_}"
+         ?is-mv2-deprecation-notice-dismissed="${
+             this.isMv2DeprecationNoticeDismissed}"
+         .filter="${this.filter}" ?hidden="${!this.didInitPage_}" slot="view"
