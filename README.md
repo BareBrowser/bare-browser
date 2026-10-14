@@ -43,7 +43,9 @@ Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium 
   you have downloaded, and Update, with no Developer mode switch in the way. Bare cannot check
   whether an extension is safe, so it says so once, in the dialog that adds one, instead of
   flagging extensions from outside the Chrome Web Store afterwards. Each extension's card has an
-  Allow in Incognito switch, the same setting as the one on its details page.
+  Allow in Incognito switch, the same setting as the one on its details page. On a new profile
+  uBlock Origin starts allowed in Incognito; every other extension starts off until you turn it
+  on.
 - **A short welcome.** Five pages for the search engine, the ad blocker, where the address bar
   sits, downloads, background audio, notifications, the default browser and updates. It comes
   back after each update, starting from what you already chose, so a new choice is asked about
@@ -109,7 +111,7 @@ patch series rather than a fork, so every change stays readable and reviewable, 
 
 ## What the patches do
 
-A hundred and fifty-seven patches against one pinned Chromium revision: crash fixes, the
+A hundred and sixty patches against one pinned Chromium revision: crash fixes, the
 extensions toolbar on phone layouts, Google callbacks and AI surfaces removed, and the
 features Bare adds on top.
 
@@ -181,12 +183,11 @@ nothing leaves the device until the Check for updates row is tapped.
 **If you make Google your search engine**, more of Chromium's Google-only behaviour switches on
 with it. Focusing the address bar asks `www.google.com/complete/search` for suggestions before you
 type anything. By the code, Chromium also preconnects to `www.google.com` from time to time,
-prefetches search results, prerenders `www.google.com/search/warmup.html` on focus (`kPrewarm`)
-and asks `www.google.com/async/folae` whether AI Mode is available, and on Google pages that
-publish cross-origin speculation rules it can prefetch through Google's private prefetch proxy,
-`tunnel.googlezip.net`. With DuckDuckGo or any other engine none of this happens. With Google, the
-new tab page shows the plain Google logo; with DuckDuckGo it shows DuckDuckGo's, from
-`staticcdn.duckduckgo.com`.
+prefetches search results, prerenders `www.google.com/search/warmup.html` on focus (`kPrewarm`),
+asks `www.google.com/async/folae` whether AI Mode is available, and sends a word you tap on a
+page to `www.google.com/s` for Touch to Search. With DuckDuckGo or any other engine none of this
+happens. With Google, the new tab page shows the plain Google logo; with DuckDuckGo it shows
+DuckDuckGo's, from `staticcdn.duckduckgo.com`.
 
 **Some things reach Google only when you do them:**
 
@@ -194,18 +195,29 @@ new tab page shows the plain Google logo; with DuckDuckGo it shows DuckDuckGo's,
   checking connectivity against `clients4.google.com` and `www.google.com`.
 - **A site you allow to send push notifications** registers with Google's push service, through
   Google Play services, as web push does in Chrome. The subscription it gets back names
-  `google.com` as its endpoint.
+  `google.com` as its endpoint. The messages themselves are never delivered: patch 0007 removes
+  the receiver they would arrive through.
+- **A Google or YouTube page that publishes cross-origin speculation rules** can have Chromium
+  prefetch the pages it names through Google's private prefetch proxy, `tunnel.googlezip.net`,
+  after checking it can reach `dns-tunnel-check.googlezip.net` and `tls-tunnel-check.googlezip.net`.
+  This depends on the page you are on, not on your search engine.
+- **A payment form that asks for a shipping address** loads address formats from
+  `chromium-i18n.appspot.com` when you edit the address.
+- **chrome://metrics-internals** can fetch a variations seed from Google if you open it and ask
+  for one.
 - **An extension installed from the Chrome Web Store** checks for updates at
   `clients2.google.com`, about every five hours, like any other copy of Chromium. Chromium's daily
   request for Web Store metadata about installed extensions is not made: it needs an API key this
   build does not have.
-- **A custom home page** may get its icon from Google's favicon server, `t0.gstatic.com`. This is
-  read from the code and was not captured.
+- **A custom home page** may get its icon from Google's favicon server, `t0.gstatic.com`.
 
-Extension update checks and downloads that do not go to the Chrome Web Store, uBlock Origin's
-included, carry any cookies the browser holds for those hosts, as upstream Chromium sends them.
-So if you are signed in to GitHub in Bare, uBlock Origin's downloads from `github.com` carry that
-session.
+The proxy, the payment form, metrics-internals, the home page icon and Touch to Search above are
+read from the code and were not captured.
+
+Extension update checks that do not go to the Chrome Web Store carry any cookies the browser
+holds for that host, as upstream Chromium sends them; for uBlock Origin that is `cdn.jsdelivr.net`.
+The downloads that follow go without cookies, unless the server refuses one with 401 or 403 and
+Chromium tries again with them.
 
 **What no longer happens**, each checked with a capture of the browser's network log:
 
@@ -456,7 +468,9 @@ them. [What has been measured, and what has not](docs/reproducibility.md).
   had trusted an earlier self-built Bare you will see "browser signature does not match"
   instead, because release builds are signed with a different key than local ones: delete the
   stale entry, then trust it again.
-- **Web Push is gone**, as a consequence of removing the GCM channel in patch 0007.
+- **Web Push messages are not delivered**, as a consequence of removing the GCM channel in patch
+  0007. A site you allow to send push notifications can still subscribe, and that registers with
+  Google through Play services (see [Network behaviour](#network-behaviour)).
 - **Password managers need one setting turned on.** Chromium uses its own autofill by default
   and never consults Android's autofill framework, so Bitwarden, 1Password and similar are
   simply never asked. Turn on Settings → Autofill options → use another service and they work.
@@ -517,12 +531,16 @@ them. [What has been measured, and what has not](docs/reproducibility.md).
   installed extension updates it, as Chromium's settings page does; if the new version asks for
   more, Chromium disables it and shows its own re-enable dialog. A folder whose manifest key gives
   the ID of an installed extension takes that extension's place and storage. An extension loaded
-  from a folder reads that folder again on later starts without asking. The add dialog's risk
-  sentence and the Load CRX errors are in English only.
-- **Notifications are only offered on the welcome.** Bare does not ask at startup, and Chromium's
-  own requests when a download starts or an incognito tab opens stay off, so if you skip the row
-  on Android 13 or later, downloads show no notifications until you allow them on the welcome after
-  the next update or in Android's settings for Bare.
+  from a folder reads that folder again on later starts without asking.
+- **Some extension page text is in English only**, whatever Bare's language: the add dialog's
+  risk sentence and its "I understand the risk, add" button, the Load CRX and Community
+  Extensions buttons and the "coming soon" message, and the messages for a refused file, a
+  dropped file and a copy of uBlock Origin.
+- **Bare does not ask for notifications on its own.** It does not ask at startup, and Chromium's
+  own requests when a download starts or an incognito tab opens stay off. So if you skip the row
+  on the welcome on Android 13 or later, downloads show no notifications until you allow them:
+  on the welcome after the next update, in Android's settings for Bare, or when a site asks to
+  send notifications and you allow it, which brings up Android's own permission dialog.
 - **YouTube can take about four seconds to start a video you open from another video.** Measured
   with uBlock Origin on and its lists current: each change of video inside m.youtube.com waited
   about 4 s, against about a second or less with uBlock Origin off for the site. Opening a video
