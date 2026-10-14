@@ -150,7 +150,7 @@ themselves are in [`patches/`](../patches); this is the summary of what each one
 | 0182 | Keep Chrome's tips notifications and their opt-in sheet off | Chromium 156 showed an unasked sheet after four hours away, leading to Safe Browsing settings and Google Lens |
 | 0183 | Show a search engine's stored favicon instead of asking Google for one | Settings, Search engine asked Google's favicon server for any engine without a built-in icon |
 | 0184 | Give Exit an icon in the app menu | Exit was the only top-level menu row without one |
-| 0185 | Open Developer tools on phones too | DevTools was limited to tablet-width windows, and its frontend was laid out too small to read on a phone |
+| 0185 | Open Developer tools on phones too | DevTools was limited to tablet-width windows, its frontend was laid out too small to read on a phone, and it fetched translations from chrome-devtools-frontend.appspot.com |
 | 0186 | Let a light page keep its own canvas on a dark theme | With a dark theme, pages without a background showed their dark text on black, even with site darkening off |
 | 0187 | Do not send hint requests to Google without an API key | Some features sent page hosts to optimizationguide-pa.googleapis.com, which could only refuse them |
 | 0188 | Stop registering the Actor Safety Lists component | It only serves the Gemini agent, which this build keeps off |
@@ -162,6 +162,9 @@ themselves are in [`patches/`](../patches); this is the summary of what each one
 | 0194 | Show the plain Google logo instead of fetching the doodle | With Google as the engine every new tab asked www.google.com/async/ddljson for the day's doodle |
 | 0195 | Stop the new tab page promoting themes | A new tab could open a sheet nobody asked for |
 | 0196 | Put the extension actions on the page, and add Load CRX | Loading an extension was hidden behind a Developer mode switch, and a downloaded .crx could not be installed at all |
+| 0197 | Put Allow in Incognito on each extension card | Whether an extension runs in Incognito could only be changed from its details page |
+| 0198 | Show a dialog's content when it is wrapped to scroll | The dialog that adds an extension could show only its title and buttons, hiding the risk sentence and the permissions |
+| 0199 | Do not download the translate ranker model without an API key | Every tab's translate client could fetch a model from www.gstatic.com that nothing without a key uses |
 
 Patches 0001 and 0002 are bug fixes that happen to be prerequisites. 0003 is a usability fix.
 0004 through 0010 are the de-Googling, as are 0014 through 0021. 0011 through 0013 fix
@@ -210,8 +213,14 @@ background unreadable on a dark theme.
 does not update from the Chrome Web Store, which with no store to ask meant every extension,
 the uBlock Origin Bare ships included; 0190 replaces those warnings with one plain statement of
 the risk when an extension is added. 0191 and 0196 make the extensions page usable on a phone and
-add Load CRX. 0192 rebuilds the welcome. 0193 through 0195 quiet the new tab page when Google is
-the search engine: no Discover request, no doodle request, no theme promotion.
+add Load CRX. 0192 rebuilds the welcome. 0193 and 0194 quiet the new tab page when Google is the
+search engine: no Discover request and no doodle request. 0195 stops the new tab page's theme sheet
+whatever the engine; Chromium's smaller in-product hint about customising is left as it is.
+
+0197 through 0199 came from testing that build further. 0197 puts the Allow in Incognito switch on
+each extension's card. 0198 fixes Chromium's modal dialog, which could hide the content of the
+dialog that adds an extension on some devices. 0199 stops the translate ranker downloading a model
+without an API key, the last translate request.
 
 0100 through 0105 build the arrangeable toolbar, one step at a time: slots first, then a way to
 drive a bar button from the toolbar's own provider, then the settings screen, then a drag and a

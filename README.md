@@ -20,7 +20,7 @@ powerful features like browser extensions and uBlock Origin. Bare also adds back
 playback, the ability to save media from sites that normally block it, support for choosing your
 preferred download manager, and much more.
 
-It is a patch series rather than a fork: 157 patches against one pinned revision of **Chromium
+It is a patch series rather than a fork: 160 patches against one pinned revision of **Chromium
 Desktop Android**, so what this repository holds is exactly the difference between stock Chromium
 and Bare, and nothing else.
 
@@ -29,7 +29,7 @@ Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium 
 - **Base:** Chromium `156.0.8078.25` (commit `12282315`)
 - **Target:** `is_desktop_android = true`, `target_cpu = "arm64"` and `"arm"`
 - **Version:** `1.0.0`, versionCode `801000075` (arm64) / `801000070` (32-bit arm)
-- **Size:** 157 patches, 18,327 insertions across 440 files
+- **Size:** 160 patches, 18,465 insertions across 450 files
 
 ## What you get
 
@@ -39,10 +39,11 @@ Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium 
   not Lite, because Bare keeps Manifest V2 working. Shipped exactly as its author publishes
   it. Remove it like anything else if you would rather not have it. Its page in Extensions says
   it is not from the Chrome Web Store, which is true: the store stopped carrying it.
-- **Extensions from a file.** The Extensions page has Load unpacked, Load CRX for a signed `.crx`
+- **Extensions from a file.** The Extensions page has Load unpacked, Load CRX for a packaged `.crx`
   you have downloaded, and Update, with no Developer mode switch in the way. Bare cannot check
   whether an extension is safe, so it says so once, in the dialog that adds one, instead of
-  flagging extensions from outside the Chrome Web Store afterwards.
+  flagging extensions from outside the Chrome Web Store afterwards. Each extension's card has an
+  Allow in Incognito switch, the same setting as the one on its details page.
 - **A short welcome.** Five pages for the search engine, the ad blocker, where the address bar
   sits, downloads, background audio, notifications, the default browser and updates. It comes
   back after each update, starting from what you already chose, so a new choice is asked about
@@ -158,7 +159,8 @@ as it is.
 lists it ships enabled, from the list maintainers and their CDNs rather than from Google:
 `pgl.yoyo.org`, `ublockorigin.github.io`, `ublockorigin.pages.dev`, `malware-filter.pages.dev`,
 `cdn.jsdelivr.net` and `publicsuffix.org`. That happens once and then on the extension's own
-schedule.
+schedule. uBlock Origin is installed and fetching these while the welcome screen is still asking
+whether you want an ad blocker; turning the switch off removes it, with its settings.
 
 **uBlock Origin updates itself from its author.** Its manifest points Chromium's extension updater
 at `cdn.jsdelivr.net` (`gh/gorhill/uBlock@master/dist/chromium/update.xml`), which is checked
@@ -177,16 +179,40 @@ User-Agent would have carried the model and the build, so it is replaced. Choosi
 nothing leaves the device until the Check for updates row is tapped.
 
 **If you make Google your search engine**, more of Chromium's Google-only behaviour switches on
-with it: focusing the address bar prerenders `www.google.com/search/warmup.html` (`kPrewarm`), and
-the AI Mode eligibility check asks `www.google.com/async/folae`. With DuckDuckGo or any other
-engine neither happens. The new tab page shows the plain Google logo either way.
+with it. Focusing the address bar asks `www.google.com/complete/search` for suggestions before you
+type anything. By the code, Chromium also preconnects to `www.google.com` from time to time,
+prefetches search results, prerenders `www.google.com/search/warmup.html` on focus (`kPrewarm`)
+and asks `www.google.com/async/folae` whether AI Mode is available, and on Google pages that
+publish cross-origin speculation rules it can prefetch through Google's private prefetch proxy,
+`tunnel.googlezip.net`. With DuckDuckGo or any other engine none of this happens. With Google, the
+new tab page shows the plain Google logo; with DuckDuckGo it shows DuckDuckGo's, from
+`staticcdn.duckduckgo.com`.
 
-**What no longer happens**, each verified by re-running the same capture:
+**Some things reach Google only when you do them:**
 
-- No Firebase or InstanceID registration. A fresh profile previously fetched two FCM tokens for
-  Chromium's cloud-policy invalidation projects and kept them in shared preferences as durable
-  identifiers. Patches 0081 and 0086 removed both consumers; the token files are no longer
-  created at all.
+- **Settings, Help & feedback** opens Google's Chrome help centre at `support.google.com`, after
+  checking connectivity against `clients4.google.com` and `www.google.com`.
+- **A site you allow to send push notifications** registers with Google's push service, through
+  Google Play services, as web push does in Chrome. The subscription it gets back names
+  `google.com` as its endpoint.
+- **An extension installed from the Chrome Web Store** checks for updates at
+  `clients2.google.com`, about every five hours, like any other copy of Chromium. Chromium's daily
+  request for Web Store metadata about installed extensions is not made: it needs an API key this
+  build does not have.
+- **A custom home page** may get its icon from Google's favicon server, `t0.gstatic.com`. This is
+  read from the code and was not captured.
+
+Extension update checks and downloads that do not go to the Chrome Web Store, uBlock Origin's
+included, carry any cookies the browser holds for those hosts, as upstream Chromium sends them.
+So if you are signed in to GitHub in Bare, uBlock Origin's downloads from `github.com` carry that
+session.
+
+**What no longer happens**, each checked with a capture of the browser's network log:
+
+- No Firebase or InstanceID registration on its own. A fresh profile previously fetched two FCM
+  tokens for Chromium's cloud-policy invalidation projects and kept them in shared preferences as
+  durable identifiers. Patches 0081 and 0086 removed both consumers; the token files are no longer
+  created at all. A site you allow to send push notifications still registers, as above.
 - No lookup against `accounts.google.com`, from the omnibox or at startup. Typing in the address
   bar used to reach GAIA ListAccounts to decide whether to personalise suggestions. Separately, a
   fresh profile used to POST to ListAccounts about a tenth of a second into every cold start,
@@ -211,6 +237,13 @@ engine neither happens. The new tab page shows the plain Google logo either way.
 - No hint requests to `optimizationguide-pa.googleapis.com`, which some features sent with the
   hosts of the pages involved even though the request could only be refused; 0187 stops them
   without an API key.
+- No translate ranker model from `www.gstatic.com`. Every tab's translate client could download
+  it on a fresh profile, for a decision translation without an API key never asks for; 0199 gives
+  it no URL without a key. A capture from the moment the browser starts showed no request to
+  `www.gstatic.com`.
+- No translations or CSS documentation for Developer tools from
+  `chrome-devtools-frontend.appspot.com`, which the frontend fetched when offered the browser's
+  language; 0185 keeps it to the English files built in.
 
 The 1.0.0 capture reached none of the hosts in this list.
 
@@ -474,6 +507,27 @@ them. [What has been measured, and what has not](docs/reproducibility.md).
   zoom above about 125% its right edge runs off the screen.
 - **No x86 build**, so an x86 emulator cannot install it; an arm64 one can. arm64 and
   armeabi-v7a are both released.
+- **Developer mode is always on**, because Load unpacked needs it. Extension cards show their ID
+  and background pages, extension errors are collected, and an extension loaded from a folder is
+  never disabled for coming from outside a store. Dropping a file on the Extensions page installs
+  nothing on Android; Load CRX and Load unpacked ask first.
+- **Community Extensions is a placeholder.** The button says it is coming soon and does nothing
+  else.
+- **Some extension installs skip Bare's risk sentence.** Loading a `.crx` with the same ID as an
+  installed extension updates it, as Chromium's settings page does; if the new version asks for
+  more, Chromium disables it and shows its own re-enable dialog. A folder whose manifest key gives
+  the ID of an installed extension takes that extension's place and storage. An extension loaded
+  from a folder reads that folder again on later starts without asking. The add dialog's risk
+  sentence and the Load CRX errors are in English only.
+- **Notifications are only offered on the welcome.** Bare does not ask at startup, and Chromium's
+  own requests when a download starts or an incognito tab opens stay off, so if you skip the row
+  on Android 13 or later, downloads show no notifications until you allow them on the welcome after
+  the next update or in Android's settings for Bare.
+- **YouTube can take about four seconds to start a video you open from another video.** Measured
+  with uBlock Origin on and its lists current: each change of video inside m.youtube.com waited
+  about 4 s, against about a second or less with uBlock Origin off for the site. Opening a video
+  page directly was not slowed. Which filter causes it was not narrowed down; it comes from the
+  filter lists, not from Bare's code.
 
 ## Not done yet
 
@@ -491,7 +545,8 @@ Each is described in [docs/build-constraints.md](docs/build-constraints.md):
 
 Worth knowing before anyone patches them: a public (non-Chrome-branded) Chromium build already
 sends no usage metrics, no URL-keyed metrics and no crash reports, because upstream withholds
-those endpoints from forks. Translate is likewise disabled without a Google API key. Details and
+those endpoints from forks. Translate is likewise disabled without a Google API key; 0181 and
+0199 stop the two requests it still made, for its language list and its ranker model. Details and
 evidence are in [docs/build-constraints.md](docs/build-constraints.md).
 
 ## Repository layout
@@ -523,8 +578,8 @@ therefore subject to its **BSD-3-Clause** licence. See the
 
 **[uBlock Origin](https://github.com/gorhill/uBlock)**, by Raymond Hill and contributors, is
 licensed under the **GPL-3.0** and ships inside the apk. It is the extension exactly as its
-author publishes it: downloaded from the Chrome Web Store, unmodified, not repackaged and not
-re-signed, so it keeps its original extension id and his signature. The licence text travels
+author publishes it: downloaded from his release on GitHub, unmodified, not repackaged and not
+re-signed, so it keeps his signature and the extension id that comes with his key. The licence text travels
 inside it, the corresponding source is the upstream release, and provenance and checksum are in
 [third_party/ublock_origin](third_party/ublock_origin). Bundling it beside a BSD project is mere
 aggregation; uBlock Origin remains under the GPL and Bare's licence does not touch it. Bare is
