@@ -28,6 +28,7 @@ Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium 
 
 - **Base:** Chromium `156.0.8078.25` (commit `12282315`)
 - **Target:** `is_desktop_android = true`, `target_cpu = "arm64"` and `"arm"`
+- **Runs on:** Android 10 or later, on arm64 or 32-bit arm; there is no x86 build
 - **Version:** `1.0.0`, versionCode `801000075` (arm64) / `801000070` (32-bit arm)
 - **Size:** 160 patches, 18,465 insertions across 450 files
 
@@ -45,11 +46,18 @@ Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium 
   flagging extensions from outside the Chrome Web Store afterwards. Each extension's card has an
   Allow in Incognito switch, the same setting as the one on its details page. On a new profile
   uBlock Origin starts allowed in Incognito; every other extension starts off until you turn it
-  on.
+  on. Developer mode stays on underneath, so cards show IDs and background pages, and an
+  extension loaded from a folder is never disabled for coming from outside a store. The risk
+  sentence is skipped when a `.crx` updates an extension that is already installed, and a folder
+  whose manifest key gives an installed extension's ID takes over that extension and its storage.
+  An extension loaded from a folder is read from it again on later starts without asking. The
+  dialog's sentence and button, the new buttons and their messages are in English only.
 - **A short welcome.** Five pages for the search engine, the ad blocker, where the address bar
   sits, downloads, background audio, notifications, the default browser and updates. It comes
   back after each update, starting from what you already chose, so a new choice is asked about
-  rather than made for you.
+  rather than made for you. Bare does not ask for notifications anywhere else: on Android 13 or
+  later, skip that row and downloads show no notifications until you allow them on the welcome
+  after the next update, in Android's settings, or when a site asks and you agree.
 - **No telemetry, no AI, no sign-in prompts.** DuckDuckGo is the default from first launch. A
   few things still reach a server on their own, and each is named in
   [Network behaviour](#network-behaviour) rather than glossed over.
@@ -58,7 +66,8 @@ Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium 
 - **Video keeps playing in the background.** Lock the phone or switch apps and the audio carries
   on, for sites that support it.
 - **Your download manager, if you want one.** Hand downloads to 1DM or similar instead of the
-  browser, or leave it off and keep them in Bare.
+  browser, or leave it off and keep them in Bare. The other app does not get your sign-in to the
+  site, so a file that needs it may fail there.
 - **Links open in the browser, not in apps.** A Reddit or YouTube result stays where you are.
   Phone numbers and email links still open the right app.
 - **Video that behaves.** H.264 and AAC are included. Fullscreen follows your rotation lock
@@ -188,6 +197,11 @@ asks `www.google.com/async/folae` whether AI Mode is available, and sends a word
 page to `www.google.com/s` for Touch to Search. With DuckDuckGo or any other engine none of this
 happens. With Google, the new tab page shows the plain Google logo; with DuckDuckGo it shows
 DuckDuckGo's, from `staticcdn.duckduckgo.com`.
+
+**Request desktop site sends a Chrome OS User-Agent** (`X11; CrOS x86_64 14541.0.0`), as
+Chromium 156 does, where earlier releases said desktop Linux. Its client hints do not match: the
+architecture hint says arm, and the bitness hint says 64 even on the 32-bit build. A site can
+notice the difference.
 
 **Some things reach Google only when you do them:**
 
@@ -431,121 +445,6 @@ tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-1.0.0.apk
 
 It hashes every entry except the signature, so two builds of the same source agree whoever signed
 them. [What has been measured, and what has not](docs/reproducibility.md).
-
-## Known limitations
-
-- **Extension popups can be cropped.** Extensions auto-size their popup to content and may
-  request a width wider than a phone screen. `kMaxSize` in
-  `chrome/browser/ui/android/extensions/extension_action_popup_contents.cc` is hardcoded to
-  800dp. Two attempts to bound it failed; the second stopped popups rendering entirely, so
-  both were reverted. Needs instrumenting rather than guessing.
-- **The omnibox is squeezed** when several extensions are pinned. `ToolbarPhone` has none of
-  the `ToolbarWidthConsumer` negotiation `ToolbarTablet` uses. Unpinning all but one extension
-  works around it.
-- **Links leave for an app only when you say so.** Patch 0005 kept every `http(s)` navigation
-  in the browser; 0107 turned that into a setting, Never by default, and 0110 judges a web page
-  wrapped in an `intent://` as the page rather than the wrapper. On Never, an OAuth flow or deep
-  link that expects an app handoff will not get one, and the app menu is the way to reach the
-  app. `tel:`, `mailto:` and `sms:` are untouched by any of it.
-- **The DuckDuckGo default only applies to new profiles.** Patch 0014 seeds the default at
-  first run. An existing profile has `kDefaultSearchProviderData` persisted and
-  `DefaultSearchManager` prefers it, so upgrading over an older install keeps Google until you
-  change it in Settings → Search engine.
-- **External downloads lose your sign-in.** With "Use an external download manager" on, a file
-  that requires you to be signed in will fail in the other app: the interception point in
-  `ChromeDownloadManagerDelegate` carries no cookie. Passing credentials needs a different
-  interception layer, not an extra argument. The setting's own summary says so.
-- **Passkeys work, but only through a third-party password manager, and only after you trust
-  Bare once.** Two different APIs are involved. Google's own path,
-  `Fido.FIDO2_PRIVILEGED_API`, is restricted to Google-signed browsers, so a self-built
-  Chromium is refused with `ApiException: 17`; passkeys held in Google Password Manager are
-  therefore out of reach, and no patch here can change that. Android's Credential Manager is a
-  separate path and it does reach third-party providers such as Bitwarden, 1Password and Proton
-  Pass. Those providers only complete a passkey for a browser they recognise, keyed on package
-  name plus signing certificate, and Bare is not on any published list yet. The first attempt
-  fails with "browser is not recognized"; choose **Trust** when prompted, or add
-  `org.barebrowser` by hand under Bitwarden → Settings → Autofill → **Privileged apps**. If you
-  had trusted an earlier self-built Bare you will see "browser signature does not match"
-  instead, because release builds are signed with a different key than local ones: delete the
-  stale entry, then trust it again.
-- **Web Push messages are not delivered**, as a consequence of removing the GCM channel in patch
-  0007. A site you allow to send push notifications can still subscribe, and that registers with
-  Google through Play services (see [Network behaviour](#network-behaviour)).
-- **Password managers need one setting turned on.** Chromium uses its own autofill by default
-  and never consults Android's autofill framework, so Bitwarden, 1Password and similar are
-  simply never asked. Turn on Settings → Autofill options → use another service and they work.
-  This is upstream behaviour, not something these patches introduce; the availability check
-  also refuses Google's own autofill service, so the path is third-party only.
-- **A custom search engine has no logo on the new tab page.** Engines added by hand carry no
-  logo image, so the page shows none. Cosmetic only.
-- **A downloaded adaptive stream arrives as two files.** Sites that stream video split the sound
-  into a separate track, so Bare offers the video and the audio as two downloads and leaves you
-  to put them together. Joining them in the browser means demuxing and remuxing both, which is
-  built out of pieces already in the tree but is not built yet.
-- **Segmented HLS and DASH offer nothing.** A `.m3u8` or `.mpd` is a list of where the pieces
-  are, and a lone `.ts` or `.m4s` segment is not playable on its own, so both are refused rather
-  than handed over as a download that would disappoint. Assembling a segmented stream is the same
-  missing job as above.
-- **This is not a YouTube downloader.** YouTube keeps audio and video in separate streams and
-  asks for them in ranges Bare does not reassemble, so it will not produce a usable file there.
-  [Seal](https://github.com/JunkFood02/Seal), a yt-dlp front end, is the right tool for that.
-- **On a site that never reloads, the offered video may be one you scrolled past.** Feeds navigate
-  without loading a new document, so what the tab fetched accumulates, and Bare offers whichever
-  video it pulled the most of. Usually that is the one you watched. Not always.
-- **Protected streaming is unproven.** Widevine is detected, and a DRM test page reports it
-  as the available key system, but paid playback has never been exercised end to end. Treat
-  Netflix and the like as untested rather than working.
-- **DRM-protected media cannot be downloaded**, and nothing here tries. Everything Bare offers is
-  a file the page already fetched in the clear.
-- **The first incognito tab of a session is slow to appear**, showing a blank panel or a fade
-  before it settles. Measured, understood, not yet fixed.
-- **Third-party autofill can stop being offered** until you navigate away and back. Bitwarden has
-  been seen to go quiet mid-session with no error anywhere; the silent early return that causes
-  it is known, the reason it triggers is not.
-- **Developer tools on a phone are desktop tools in a narrow window.** They open from the app
-  menu, and View page source and Inspect work as on a tablet. The panels lay out at the screen's
-  width and the console takes the on-screen keyboard, but DevTools is made for a mouse, small
-  targets included. In landscape the panels sit side by side and stay readable, but with the
-  keyboard up only a couple of console lines are left in view.
-- **Request desktop site now says Chrome OS.** In desktop-site mode Chromium 156 sends a Chrome OS
-  user agent (`X11; CrOS x86_64 14541.0.0`) and a matching platform hint, where earlier releases
-  said desktop Linux. Its client hints do not match it: the architecture hint says arm while the
-  User-Agent says x86_64, and the bitness hint says 64 even on the 32-bit build. Bare leaves both
-  as upstream ships them, so a site that treats Chrome OS differently from Linux will do so here,
-  and the mismatch is something a site could notice.
-- **Settings still offers Google Translate.** Languages has "Offer to send pages in other languages
-  to Google Translate", but translation needs a Google API key this build does not have, so the
-  offer never appears and nothing is sent.
-- **Notices on the Extensions page are cut off at a large zoom.** The page itself reflows to the
-  screen, but Chromium's notice bar is never narrower than 288 pixels, so on a phone with Default
-  zoom above about 125% its right edge runs off the screen.
-- **No x86 build**, so an x86 emulator cannot install it; an arm64 one can. arm64 and
-  armeabi-v7a are both released.
-- **Developer mode is always on**, because Load unpacked needs it. Extension cards show their ID
-  and background pages, extension errors are collected, and an extension loaded from a folder is
-  never disabled for coming from outside a store. Dropping a file on the Extensions page installs
-  nothing on Android; Load CRX and Load unpacked ask first.
-- **Community Extensions is a placeholder.** The button says it is coming soon and does nothing
-  else.
-- **Some extension installs skip Bare's risk sentence.** Loading a `.crx` with the same ID as an
-  installed extension updates it, as Chromium's settings page does; if the new version asks for
-  more, Chromium disables it and shows its own re-enable dialog. A folder whose manifest key gives
-  the ID of an installed extension takes that extension's place and storage. An extension loaded
-  from a folder reads that folder again on later starts without asking.
-- **Some extension page text is in English only**, whatever Bare's language: the add dialog's
-  risk sentence and its "I understand the risk, add" button, the Load CRX and Community
-  Extensions buttons and the "coming soon" message, and the messages for a refused file, a
-  dropped file and a copy of uBlock Origin.
-- **Bare does not ask for notifications on its own.** It does not ask at startup, and Chromium's
-  own requests when a download starts or an incognito tab opens stay off. So if you skip the row
-  on the welcome on Android 13 or later, downloads show no notifications until you allow them:
-  on the welcome after the next update, in Android's settings for Bare, or when a site asks to
-  send notifications and you allow it, which brings up Android's own permission dialog.
-- **YouTube can take about four seconds to start a video you open from another video.** Measured
-  with uBlock Origin on and its lists current: each change of video inside m.youtube.com waited
-  about 4 s, against about a second or less with uBlock Origin off for the site. Opening a video
-  page directly was not slowed. Which filter causes it was not narrowed down; it comes from the
-  filter lists, not from Bare's code.
 
 ## Not done yet
 
