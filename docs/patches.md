@@ -166,6 +166,7 @@ themselves are in [`patches/`](../patches); this is the summary of what each one
 | 0198 | Show a dialog's content when it is wrapped to scroll | The dialog that adds an extension could show only its title and buttons, hiding the risk sentence and the permissions |
 | 0199 | Do not download the translate ranker model without an API key | Every tab's translate client could fetch a model from www.gstatic.com that nothing without a key uses |
 | 0201 | Skip the GPU Landlock sandbox on Samsung phones on Android 17 | Samsung's One UI 9 kernels free the Landlock ruleset while it is in use and the phone reboots (#82). Temporary, until Samsung fixes the kernel |
+| 0202 | Let the GPU Landlock policy read /system/lib64 | On Android 16 and later the GPU process could not load libmedia_jni.so, so Widevine video never played. Landlock stays on |
 
 Patches 0001 and 0002 are bug fixes that happen to be prerequisites. 0003 is a usability fix.
 0004 through 0010 are the de-Googling, as are 0014 through 0021. 0011 through 0013 fix
