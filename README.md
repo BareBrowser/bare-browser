@@ -20,7 +20,7 @@ powerful features like browser extensions and uBlock Origin. Bare also adds back
 playback, the ability to save media from sites that normally block it, support for choosing your
 preferred download manager, and much more.
 
-It is a patch series rather than a fork: 160 patches against one pinned revision of **Chromium
+It is a patch series rather than a fork: 164 patches against one pinned revision of **Chromium
 Desktop Android**, so what this repository holds is exactly the difference between stock Chromium
 and Bare, and nothing else.
 
@@ -30,7 +30,7 @@ Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium 
 - **Target:** `is_desktop_android = true`, `target_cpu = "arm64"` and `"arm"`
 - **Runs on:** Android 10 or later, on arm64 or 32-bit arm; there is no x86 build
 - **Version:** `1.0.0`, versionCode `801000075` (arm64) / `801000070` (32-bit arm)
-- **Size:** 160 patches, 18,465 insertions across 450 files
+- **Size:** 164 patches, 19,250 insertions across 469 files
 
 ## What you get
 
@@ -163,7 +163,7 @@ profile, Chromium has Android's MediaDrm provision two spare Widevine origin ide
 advance, so that protected video can start without waiting, and the provisioning request goes to
 `www.googleapis.com/certificateprovisioning`. If there is no connection then, it tries again when
 the network comes back. It happens whether or not any site ever plays protected video. By the
-code, a later start repeats it only once sites have used up the spare identifiers. This is Chromium's default (`kMediaDrmPreprovisioningAtStartup`), and 1.0.0 leaves it
+code, a later start repeats it only once sites have used up the spare identifiers. This is Chromium's default (`kMediaDrmPreprovisioningAtStartup`), and Bare leaves it
 as it is.
 
 **On the first run of a fresh profile, most of the rest is uBlock Origin** fetching the filter
@@ -202,6 +202,18 @@ DuckDuckGo's, from `staticcdn.duckduckgo.com`.
 Chromium 156 does, where earlier releases said desktop Linux. Its client hints do not match: the
 architecture hint says arm, and the bitness hint says 64 even on the 32-bit build. A site can
 notice the difference.
+
+**The Chrome Web Store gets that desktop User-Agent at the phone's width.** With a phone
+User-Agent the store swaps "Add to Chrome" for "Add to Desktop", which sends the extension to a
+signed-in desktop Chrome instead of installing it. So `chromewebstore.google.com` is asked for its
+desktop pages and keeps its own phone layout. Earlier releases did this with a stored desktop-site
+setting that covered every `google.com` site; 1.0.1 removes that setting once, on first launch.
+
+**Developer options can change the User-Agent.** Default sends the strings described here. The
+other choices are Chrome on five platforms, Edge, Firefox and Safari, or a typed string, and they
+apply after a restart. Chrome and Edge send client hints that match; Firefox, Safari and a typed
+string send none, as those browsers don't. While one is chosen, Request desktop site is greyed
+out. Sites can still tell this is Bare from `navigator.platform` and similar signals.
 
 **Some things reach Google only when you do them:**
 
