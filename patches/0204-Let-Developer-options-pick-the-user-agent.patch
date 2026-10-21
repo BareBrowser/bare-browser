@@ -1,0 +1,1020 @@
+From b046d6d264eb362f478a162f5aae9ae92f9025e2 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 21 Oct 2026 00:36:04 +0000
+Subject: [PATCH 204/204] Let Developer options pick the user agent
+
+Settings > Developer options gets a User agent row. Default keeps the
+string Bare sends today. The other choices are Chrome on Android, Linux,
+Windows, Mac and ChromeOS, Edge on Windows, Firefox on Windows and
+Android, Safari on Mac and iPhone, and Other for a typed string.
+
+The choice is saved as a preference and handed to native code as a
+switch when the browser starts, so it applies after a restart, which the
+settings page offers straight away. It covers every request the browser
+makes: pages, subresources, service workers and extensions.
+
+Chrome and Edge choices send matching client hints, with their own
+brand, platform and mobile bit. Firefox, Safari and Other send no
+Sec-CH-UA headers, as those browsers don't; that takes one check in the
+browser and one in Blink for an empty brand list.
+
+While a choice is active it replaces desktop mode. The Desktop site menu
+item is greyed out and no site is switched to the desktop user agent,
+except the Chrome Web Store, which keeps its rule from the previous
+patch so extensions still install.
+
+Firefox and Safari strings are pinned and need refreshing with each
+Chromium upgrade. Chrome and Edge follow the version Bare is built on.
+Sites can still tell the difference through navigator.platform,
+navigator.vendor and navigator.userAgentData, and the settings page
+says so.
+---
+ chrome/android/chrome_java_sources.gni        |   1 +
+ .../java/res/xml/developer_preferences.xml    |   8 +
+ .../AppMenuPropertiesDelegateImpl.java        |   8 +-
+ .../init/ProcessInitializationHandler.java    |   2 +
+ .../tracing/settings/DeveloperSettings.java   | 111 ++++++++++++
+ .../tracing/settings/UserAgentPresets.java    | 130 ++++++++++++++
+ .../browser/android/content/content_utils.cc  |   5 +-
+ chrome/browser/content_settings/BUILD.gn      |   1 +
+ ...ktop_site_web_contents_observer_android.cc |   7 +
+ .../preferences/ChromePreferenceKeys.java     |  11 ++
+ .../desktop_site/DesktopSiteUtils.java        |   8 +
+ .../strings/android_chrome_strings.grd        |  63 +++++++
+ components/embedder_support/BUILD.gn          |   2 +
+ .../bare_user_agent_presets_unittest.cc       | 119 +++++++++++++
+ components/embedder_support/switches.cc       |   6 +
+ components/embedder_support/switches.h        |   2 +
+ .../embedder_support/user_agent_utils.cc      | 159 ++++++++++++++++++
+ .../embedder_support/user_agent_utils.h       |   9 +
+ content/browser/client_hints/client_hints.cc  |   7 +
+ .../core/loader/frame_fetch_context.cc        |   5 +-
+ 20 files changed, 660 insertions(+), 4 deletions(-)
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/UserAgentPresets.java
+ create mode 100644 components/embedder_support/bare_user_agent_presets_unittest.cc
+
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 2e1b80dcfc7..04df5560802 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -1305,6 +1305,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/tracing/TracingNotificationManager.java",
+   "java/src/org/chromium/chrome/browser/tracing/TracingNotificationServiceImpl.java",
+   "java/src/org/chromium/chrome/browser/tracing/settings/DeveloperSettings.java",
++  "java/src/org/chromium/chrome/browser/tracing/settings/UserAgentPresets.java",
+   "java/src/org/chromium/chrome/browser/tracing/settings/TracingCategoriesSettings.java",
+   "java/src/org/chromium/chrome/browser/tracing/settings/TracingSettings.java",
+   "java/src/org/chromium/chrome/browser/translate/TranslateUtils.java",
+diff --git a/chrome/android/java/res/xml/developer_preferences.xml b/chrome/android/java/res/xml/developer_preferences.xml
+index 32688add769..96f5bdda00b 100644
+--- a/chrome/android/java/res/xml/developer_preferences.xml
++++ b/chrome/android/java/res/xml/developer_preferences.xml
+@@ -12,6 +12,14 @@ found in the LICENSE file.
+         android:fragment="org.chromium.chrome.browser.tracing.settings.TracingSettings"
+         android:key="tracing"
+         android:title="Tracing" />
++    <org.chromium.components.browser_ui.settings.ChromeBasePreference
++        android:key="user_agent"
++        android:title="@string/bare_user_agent_title" />
++    <org.chromium.components.browser_ui.settings.TextMessagePreference
++        android:key="user_agent_note"
++        android:title="@string/bare_user_agent_note"
++        app:allowDividerAbove="false"
++        app:allowDividerBelow="false" />
+     <org.chromium.components.browser_ui.settings.TextMessagePreference
+         android:layout_width="match_parent"
+         android:layout_height="wrap_content"
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
+index b45eb786561..5a3fabf1d79 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
+@@ -68,6 +68,7 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+ import org.chromium.chrome.browser.tasks.tab_management.GroupWindowChecker;
+ import org.chromium.chrome.browser.tasks.tab_management.TabGroupUiUtils;
+ import org.chromium.chrome.browser.toolbar.ToolbarManager;
++import org.chromium.chrome.browser.tracing.settings.UserAgentPresets;
+ import org.chromium.chrome.browser.translate.TranslateUtils;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuBookmarkItemProperties;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler;
+@@ -1088,13 +1089,17 @@ public abstract class AppMenuPropertiesDelegateImpl implements AppMenuProperties
+         assumeNonNull(currentTab.getWebContents());
+         boolean isRequestDesktopSite =
+                 currentTab.getWebContents().getNavigationController().getUseDesktopUserAgent();
++        // A user agent picked in Developer options replaces desktop mode.
++        boolean userAgentPreset = UserAgentPresets.isActive();
+ 
+         PropertyModel model =
+                 AppMenuItemUtils.buildModelForMenuItemWithCheckbox(
+                         mContext,
+                         mAppMenuItemTheme,
+                         R.id.request_desktop_site_id,
+-                        R.string.menu_request_desktop_site,
++                        userAgentPreset
++                                ? R.string.bare_menu_desktop_site_user_agent_set
++                                : R.string.menu_request_desktop_site,
+                         showIcon ? R.drawable.ic_desktop_windows : 0,
+                         R.id.request_desktop_site_check_id,
+                         isRequestDesktopSite,
+@@ -1107,6 +1112,7 @@ public abstract class AppMenuPropertiesDelegateImpl implements AppMenuProperties
+                 isRequestDesktopSite
+                         ? mContext.getString(R.string.menu_request_desktop_site_on)
+                         : mContext.getString(R.string.menu_request_desktop_site_off));
++        if (userAgentPreset) model.set(AppMenuItemProperties.ENABLED, false);
+ 
+         return new ListItem(AppMenuItemType.TITLE_BUTTON, model);
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
+index 3ef66e72a59..fab17b404fe 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
+@@ -105,6 +105,7 @@ import org.chromium.chrome.browser.sync.SyncErrorNotifier;
+ import org.chromium.chrome.browser.tab.state.PersistedTabData;
+ import org.chromium.chrome.browser.tab.state.ShoppingPersistedTabData;
+ import org.chromium.chrome.browser.tabmodel.TabPersistentStoreImpl;
++import org.chromium.chrome.browser.tracing.settings.UserAgentPresets;
+ import org.chromium.chrome.browser.ui.cars.DrivingRestrictionsManager;
+ import org.chromium.chrome.browser.ui.color.ColorProviderBridgeImpl;
+ import org.chromium.chrome.browser.ui.enterprise_signals_disclaimer.EnterpriseSignalsDisclaimerAckSyncer;
+@@ -278,6 +279,7 @@ public class ProcessInitializationHandler {
+         warmUpSharedPrefs();
+ 
+         DeviceUtils.updateDeviceSpecificUserAgentSwitch(ContextUtils.getApplicationContext());
++        UserAgentPresets.appendSwitches();
+         // ChromeLifetimeController is pure Java and safe to initialize pre-native. It is
+         // initialized early so that ApplicationLifetime.terminate() can restart the process
+         // if a locale change occurs before post-native initialization.
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/DeveloperSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/DeveloperSettings.java
+index fc8ecbcf1ce..c5b2dd38545 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/DeveloperSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/DeveloperSettings.java
+@@ -6,6 +6,13 @@ package org.chromium.chrome.browser.tracing.settings;
+ 
+ import android.content.Context;
+ import android.os.Bundle;
++import android.text.InputType;
++import android.widget.EditText;
++import android.widget.FrameLayout;
++import android.widget.Toast;
++
++import androidx.appcompat.app.AlertDialog;
++import androidx.preference.Preference;
+ 
+ import org.chromium.base.ResettersForTesting;
+ import org.chromium.base.TriState;
+@@ -19,6 +26,7 @@ import org.chromium.base.version_info.VersionInfo;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.lifetime.ApplicationLifetime;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
+@@ -32,6 +40,7 @@ import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
+ public class DeveloperSettings extends ChromeBaseSettingsFragment
+         implements EmbeddableSettingsPage {
+     private static final String UI_PREF_BETA_STABLE_HINT = "beta_stable_hint";
++    private static final String UI_PREF_USER_AGENT = "user_agent";
+ 
+     // Non-translated strings:
+     private static final String MSG_DEVELOPER_OPTIONS_TITLE = "Developer options";
+@@ -67,6 +76,108 @@ public class DeveloperSettings extends ChromeBaseSettingsFragment
+         if (shouldRemoveBetaStableHint()) {
+             getPreferenceScreen().removePreference(findPreference(UI_PREF_BETA_STABLE_HINT));
+         }
++
++        Preference userAgent = findPreference(UI_PREF_USER_AGENT);
++        if (userAgent != null) {
++            userAgent.setOnPreferenceClickListener(
++                    preference -> {
++                        showUserAgentChooser();
++                        return true;
++                    });
++        }
++        updateUserAgentSummary();
++    }
++
++    private String userAgentLabel(String id, String custom) {
++        if (id.equals(UserAgentPresets.CUSTOM)) return custom;
++        return getString(UserAgentPresets.LABELS[UserAgentPresets.indexOf(id)]);
++    }
++
++    private void updateUserAgentSummary() {
++        Preference userAgent = findPreference(UI_PREF_USER_AGENT);
++        if (userAgent == null) return;
++        String saved = UserAgentPresets.getSaved();
++        String savedCustom = UserAgentPresets.getSavedCustom();
++        String label = userAgentLabel(saved, savedCustom);
++        boolean pending =
++                !saved.equals(UserAgentPresets.getActive())
++                        || (saved.equals(UserAgentPresets.CUSTOM)
++                                && !savedCustom.equals(UserAgentPresets.getActiveCustom()));
++        userAgent.setSummary(
++                pending ? getString(R.string.bare_user_agent_after_restart, label) : label);
++    }
++
++    private void showUserAgentChooser() {
++        String[] labels = new String[UserAgentPresets.LABELS.length];
++        for (int i = 0; i < labels.length; i++) {
++            labels[i] = getString(UserAgentPresets.LABELS[i]);
++        }
++        new AlertDialog.Builder(requireContext(), R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                .setTitle(R.string.bare_user_agent_title)
++                .setSingleChoiceItems(
++                        labels,
++                        UserAgentPresets.indexOf(UserAgentPresets.getSaved()),
++                        (dialog, which) -> {
++                            dialog.dismiss();
++                            String id = UserAgentPresets.IDS[which];
++                            if (id.equals(UserAgentPresets.CUSTOM)) {
++                                showCustomUserAgentDialog();
++                            } else {
++                                onUserAgentChosen(id, null);
++                            }
++                        })
++                .setNegativeButton(android.R.string.cancel, null)
++                .show();
++    }
++
++    private void showCustomUserAgentDialog() {
++        Context context = requireContext();
++        EditText input = new EditText(context);
++        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
++        input.setHint(R.string.bare_user_agent_custom_hint);
++        input.setText(UserAgentPresets.getSavedCustom());
++        FrameLayout container = new FrameLayout(context);
++        int padding =
++                context.getResources().getDimensionPixelSize(R.dimen.dialog_padding_sides);
++        container.setPadding(padding, 0, padding, 0);
++        container.addView(input);
++        new AlertDialog.Builder(context, R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                .setTitle(R.string.bare_user_agent_other)
++                .setView(container)
++                .setPositiveButton(
++                        android.R.string.ok,
++                        (dialog, which) -> {
++                            String custom = input.getText().toString().trim();
++                            if (!UserAgentPresets.isValidCustom(custom)) {
++                                Toast.makeText(
++                                                context,
++                                                R.string.bare_user_agent_invalid,
++                                                Toast.LENGTH_LONG)
++                                        .show();
++                                return;
++                            }
++                            onUserAgentChosen(UserAgentPresets.CUSTOM, custom);
++                        })
++                .setNegativeButton(android.R.string.cancel, null)
++                .show();
++    }
++
++    private void onUserAgentChosen(String id, @Nullable String custom) {
++        UserAgentPresets.save(id, custom);
++        updateUserAgentSummary();
++        boolean matchesRunning =
++                id.equals(UserAgentPresets.getActive())
++                        && (!id.equals(UserAgentPresets.CUSTOM)
++                                || UserAgentPresets.getSavedCustom()
++                                        .equals(UserAgentPresets.getActiveCustom()));
++        if (matchesRunning) return;
++        new AlertDialog.Builder(requireContext(), R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                .setMessage(R.string.bare_user_agent_restart_message)
++                .setPositiveButton(
++                        R.string.bare_user_agent_restart,
++                        (dialog, which) -> ApplicationLifetime.terminate(/* restart= */ true))
++                .setNegativeButton(R.string.bare_user_agent_later, null)
++                .show();
+     }
+ 
+     private static boolean shouldRemoveBetaStableHint() {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/UserAgentPresets.java b/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/UserAgentPresets.java
+new file mode 100644
+index 00000000000..d887ebb5a68
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/UserAgentPresets.java
+@@ -0,0 +1,130 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.tracing.settings;
++
++import android.text.TextUtils;
++
++import org.chromium.base.CommandLine;
++import org.chromium.base.shared_preferences.SharedPreferencesManager;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++/**
++ * The user agents offered in Developer options. The saved choice is passed to native code as a
++ * switch before it starts, so a change applies after a restart.
++ */
++@NullMarked
++public final class UserAgentPresets {
++    /** Same names as embedder_support::kBareUserAgentPreset and kBareUserAgentCustom. */
++    public static final String SWITCH_PRESET = "bare-user-agent-preset";
++
++    public static final String SWITCH_CUSTOM = "bare-user-agent-custom";
++
++    static final String DEFAULT = "";
++    static final String CUSTOM = "custom";
++
++    /** Menu order. Native code knows every id except the default. */
++    static final String[] IDS = {
++        DEFAULT,
++        "chrome-android",
++        "chrome-linux",
++        "chrome-windows",
++        "chrome-mac",
++        "chrome-chromeos",
++        "edge-windows",
++        "firefox-windows",
++        "firefox-android",
++        "safari-mac",
++        "safari-iphone",
++        CUSTOM,
++    };
++
++    static final int[] LABELS = {
++        R.string.bare_user_agent_default,
++        R.string.bare_user_agent_chrome_android,
++        R.string.bare_user_agent_chrome_linux,
++        R.string.bare_user_agent_chrome_windows,
++        R.string.bare_user_agent_chrome_mac,
++        R.string.bare_user_agent_chrome_chromeos,
++        R.string.bare_user_agent_edge_windows,
++        R.string.bare_user_agent_firefox_windows,
++        R.string.bare_user_agent_firefox_android,
++        R.string.bare_user_agent_safari_mac,
++        R.string.bare_user_agent_safari_iphone,
++        R.string.bare_user_agent_other,
++    };
++
++    private UserAgentPresets() {}
++
++    /** Adds the switches for the saved choice. Runs before native code is loaded. */
++    public static void appendSwitches() {
++        String id = getSaved();
++        if (id.equals(DEFAULT)) return;
++        CommandLine commandLine = CommandLine.getInstance();
++        if (id.equals(CUSTOM)) {
++            String custom = getSavedCustom();
++            if (!isValidCustom(custom)) return;
++            commandLine.appendSwitchWithValue(SWITCH_CUSTOM, custom);
++        }
++        commandLine.appendSwitchWithValue(SWITCH_PRESET, id);
++    }
++
++    /** Whether this process runs with a user agent other than the default. */
++    public static boolean isActive() {
++        return CommandLine.getInstance().hasSwitch(SWITCH_PRESET);
++    }
++
++    static String getActive() {
++        String id = CommandLine.getInstance().getSwitchValue(SWITCH_PRESET);
++        return id == null ? DEFAULT : id;
++    }
++
++    static String getActiveCustom() {
++        String custom = CommandLine.getInstance().getSwitchValue(SWITCH_CUSTOM);
++        return custom == null ? "" : custom;
++    }
++
++    static String getSaved() {
++        String id =
++                ChromeSharedPreferences.getInstance()
++                        .readString(ChromePreferenceKeys.BARE_USER_AGENT_PRESET, DEFAULT);
++        return id == null || indexOf(id) < 0 ? DEFAULT : id;
++    }
++
++    static String getSavedCustom() {
++        String custom =
++                ChromeSharedPreferences.getInstance()
++                        .readString(ChromePreferenceKeys.BARE_USER_AGENT_CUSTOM, "");
++        return custom == null ? "" : custom.trim();
++    }
++
++    static void save(String id, @Nullable String custom) {
++        SharedPreferencesManager prefs = ChromeSharedPreferences.getInstance();
++        prefs.writeString(ChromePreferenceKeys.BARE_USER_AGENT_PRESET, id);
++        if (custom != null) {
++            prefs.writeString(ChromePreferenceKeys.BARE_USER_AGENT_CUSTOM, custom.trim());
++        }
++    }
++
++    static int indexOf(String id) {
++        for (int i = 0; i < IDS.length; i++) {
++            if (IDS[i].equals(id)) return i;
++        }
++        return -1;
++    }
++
++    /** A user agent goes into an HTTP header, so printable ASCII only. */
++    static boolean isValidCustom(@Nullable String custom) {
++        if (TextUtils.isEmpty(custom)) return false;
++        for (int i = 0; i < custom.length(); i++) {
++            char c = custom.charAt(i);
++            if (c < 0x20 || c > 0x7e) return false;
++        }
++        return true;
++    }
++}
+diff --git a/chrome/browser/android/content/content_utils.cc b/chrome/browser/android/content/content_utils.cc
+index d0867dc6555..fb20aecc970 100644
+--- a/chrome/browser/android/content/content_utils.cc
++++ b/chrome/browser/android/content/content_utils.cc
+@@ -30,8 +30,11 @@ static void JNI_ContentUtils_SetUserAgentOverride(
+ 
+   // Note: Any updates to desktop overrides here should also be applied to
+   // DESKTOP form factor defaults in embedder_support::GetUserAgentMetadata.
++  // A user-agent preset from Developer options does not apply here: the
++  // desktop override is what the Chrome Web Store gets, and it has to look
++  // like this browser to offer installs.
+   const blink::UserAgentMetadata metadata =
+-      embedder_support::GetUserAgentMetadata();
++      embedder_support::GetDefaultUserAgentMetadata();
+ 
+   blink::UserAgentOverride spoofed_ua;
+   spoofed_ua.ua_string_override =
+diff --git a/chrome/browser/content_settings/BUILD.gn b/chrome/browser/content_settings/BUILD.gn
+index 5778004befe..0d17ad67b1a 100644
+--- a/chrome/browser/content_settings/BUILD.gn
++++ b/chrome/browser/content_settings/BUILD.gn
+@@ -112,6 +112,7 @@ source_set("impl") {
+     deps += [
+       "//chrome/browser/notifications",
+       "//chrome/browser/notifications:notifications_java_enum_srcjar",
++      "//components/embedder_support:user_agent",
+     ]
+   } else {
+     sources += [
+diff --git a/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc b/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
+index 300d2e5d201..4d9408f879c 100644
+--- a/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
++++ b/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
+@@ -21,6 +21,7 @@
+ #include "chrome/common/chrome_switches.h"
+ #include "components/content_settings/core/common/content_settings_utils.h"
+ #include "components/content_settings/core/common/pref_names.h"
++#include "components/embedder_support/user_agent_utils.h"
+ #include "components/prefs/pref_service.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
+@@ -99,6 +100,12 @@ void RequestDesktopSiteWebContentsObserverAndroid::DidStartNavigation(
+ 
+   desktop_mode |= ShouldRequestDesktopWebStore(host_content_settings_map_, url);
+ 
++  // With a user-agent preset from Developer options the preset decides, and
++  // only the store rule above still applies.
++  if (embedder_support::IsUserAgentPresetActive()) {
++    desktop_mode = ShouldRequestDesktopWebStore(host_content_settings_map_, url);
++  }
++
+   // Override UA for renderer initiated navigation only. UA override for browser
+   // initiated navigation is handled on Java side. This is to workaround known
+   // issues crbug.com/40801643 and crbug.com/40799177.
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index f7e57cc1f0b..b98fc4948a5 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -399,6 +399,15 @@ public final class ChromePreferenceKeys {
+     public static final String WEBSTORE_DESKTOP_SITE_CLEARED =
+             "Chrome.Extensions.WebstoreDesktopSiteCleared";
+ 
++    /**
++     * De-Googled build: the user agent picked in Developer options, as a preset id, or empty for
++     * the default. "custom" takes its string from {@link #BARE_USER_AGENT_CUSTOM}.
++     */
++    public static final String BARE_USER_AGENT_PRESET = "Bare.UserAgent.Preset";
++
++    /** De-Googled build: the user agent string typed under Other in Developer options. */
++    public static final String BARE_USER_AGENT_CUSTOM = "Bare.UserAgent.Custom";
++
+     /**
+      * De-Googled build: package name of the chosen external download manager, or empty to ask
+      * every time. A package that is no longer installed falls back to asking.
+@@ -1283,6 +1292,8 @@ public final class ChromePreferenceKeys {
+                 BARE_UPDATE_REMINDER,
+                 DOWNLOAD_EXTERNAL_MANAGER_PACKAGE,
+                 DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,
++                BARE_USER_AGENT_CUSTOM,
++                BARE_USER_AGENT_PRESET,
+                 WEBSTORE_DESKTOP_SITE_CLEARED,
+                 WEBSTORE_DESKTOP_SITE_SEEDED,
+                 AUTOFILL_ASSISTANT_PROACTIVE_HELP_ENABLED,
+diff --git a/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtils.java b/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtils.java
+index 9af8936fd4e..b34ee50a7a4 100644
+--- a/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtils.java
++++ b/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtils.java
+@@ -57,6 +57,9 @@ public class DesktopSiteUtils {
+      * desktop request still fits the phone.
+      */
+     private static final String CHROME_WEB_STORE_HOST = "chromewebstore.google.com";
++
++    /** Set at startup when the user picked a user agent in Developer options. */
++    private static final String USER_AGENT_PRESET_SWITCH = "bare-user-agent-preset";
+     // Global defaults experiment constants.
+     private static @Nullable DisplayMetrics sDisplayMetrics;
+     @VisibleForTesting static @TriState int sDesktopUAAllowedOnExternalDisplayForOem;
+@@ -234,6 +237,11 @@ public class DesktopSiteUtils {
+             return true;
+         }
+ 
++        // A user agent picked in Developer options decides by itself.
++        if (CommandLine.getInstance().hasSwitch(USER_AGENT_PRESET_SWITCH)) {
++            return false;
++        }
++
+         // If domain/global setting is enabled and window setting should not
+         // apply, override the user agent.
+         if (readRequestDesktopSiteContentSettings(profile, url)
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index f794dc5c043..f49b8fc5f0a 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -1139,6 +1139,69 @@ For example, some websites may respond to this request by showing you ads that a
+       <message name="IDS_BARE_CLEAR_ON_EXIT_HEADER" desc="Explanation at the top of the Clear on exit screen.">
+         Exit closes Bare. Anything selected here is deleted first. With more than one window open, Exit closes this window. Bookmarks, extensions and settings are never deleted.
+       </message>
++      <message name="IDS_BARE_USER_AGENT_TITLE" desc="Title of the Developer options row that picks which browser Bare identifies as. [CHAR_LIMIT=32]">
++        User agent
++      </message>
++      <message name="IDS_BARE_USER_AGENT_NOTE" desc="Note under the User agent row in Developer options.">
++        Sites see the chosen browser in the user agent, and for Chrome and Edge in client hints too. They can still find other signs that this is Bare. A change applies after Bare restarts.
++      </message>
++      <message name="IDS_BARE_USER_AGENT_DEFAULT" desc="User agent choice that keeps the browser's own user agent. [CHAR_LIMIT=32]">
++        Default
++      </message>
++      <message name="IDS_BARE_USER_AGENT_CHROME_ANDROID" desc="User agent choice; a browser and operating system name, not translated." translateable="false">
++        Chrome on Android
++      </message>
++      <message name="IDS_BARE_USER_AGENT_CHROME_LINUX" desc="User agent choice; a browser and operating system name, not translated." translateable="false">
++        Chrome on Linux
++      </message>
++      <message name="IDS_BARE_USER_AGENT_CHROME_WINDOWS" desc="User agent choice; a browser and operating system name, not translated." translateable="false">
++        Chrome on Windows
++      </message>
++      <message name="IDS_BARE_USER_AGENT_CHROME_MAC" desc="User agent choice; a browser and operating system name, not translated." translateable="false">
++        Chrome on Mac
++      </message>
++      <message name="IDS_BARE_USER_AGENT_CHROME_CHROMEOS" desc="User agent choice; a browser and operating system name, not translated." translateable="false">
++        Chrome on ChromeOS
++      </message>
++      <message name="IDS_BARE_USER_AGENT_EDGE_WINDOWS" desc="User agent choice; a browser and operating system name, not translated." translateable="false">
++        Edge on Windows
++      </message>
++      <message name="IDS_BARE_USER_AGENT_FIREFOX_WINDOWS" desc="User agent choice; a browser and operating system name, not translated." translateable="false">
++        Firefox on Windows
++      </message>
++      <message name="IDS_BARE_USER_AGENT_FIREFOX_ANDROID" desc="User agent choice; a browser and operating system name, not translated." translateable="false">
++        Firefox on Android
++      </message>
++      <message name="IDS_BARE_USER_AGENT_SAFARI_MAC" desc="User agent choice; a browser and operating system name, not translated." translateable="false">
++        Safari on Mac
++      </message>
++      <message name="IDS_BARE_USER_AGENT_SAFARI_IPHONE" desc="User agent choice; a browser and operating system name, not translated." translateable="false">
++        Safari on iPhone
++      </message>
++      <message name="IDS_BARE_USER_AGENT_OTHER" desc="User agent choice that lets the user type any user agent string. [CHAR_LIMIT=32]">
++        Other…
++      </message>
++      <message name="IDS_BARE_USER_AGENT_CUSTOM_HINT" desc="Placeholder in the field where the user types a user agent string.">
++        User agent string
++      </message>
++      <message name="IDS_BARE_USER_AGENT_INVALID" desc="Shown when a typed user agent string cannot be sent in a request.">
++        This user agent can't be used. Use letters, numbers and punctuation on one line.
++      </message>
++      <message name="IDS_BARE_USER_AGENT_AFTER_RESTART" desc="Summary of the User agent row when a new choice is waiting for a restart.">
++        <ph name="CHOICE">%1$s<ex>Chrome on Windows</ex></ph>, after a restart
++      </message>
++      <message name="IDS_BARE_USER_AGENT_RESTART_MESSAGE" desc="Dialog text after the user picks a different user agent.">
++        Restart Bare to use the new user agent.
++      </message>
++      <message name="IDS_BARE_USER_AGENT_RESTART" desc="Button that restarts the browser to apply a new user agent. [CHAR_LIMIT=20]">
++        Restart
++      </message>
++      <message name="IDS_BARE_USER_AGENT_LATER" desc="Button that closes the restart dialog without restarting. [CHAR_LIMIT=20]">
++        Later
++      </message>
++      <message name="IDS_BARE_MENU_DESKTOP_SITE_USER_AGENT_SET" desc="App menu item shown greyed out in place of Desktop site while a user agent from Developer options is in use. [CHAR_LIMIT=40]">
++        Desktop site (UA set)
++      </message>
+       <message name="IDS_CLEAR_BROWSING_DATA_TITLE" desc="Title of the Delete Browsing Data screen. [CHAR_LIMIT=32]">
+         Delete browsing data
+       </message>
+diff --git a/components/embedder_support/BUILD.gn b/components/embedder_support/BUILD.gn
+index 847ba42327e..82194248d5e 100644
+--- a/components/embedder_support/BUILD.gn
++++ b/components/embedder_support/BUILD.gn
+@@ -73,6 +73,7 @@ source_set("unit_tests") {
+     "origin_trials/component_updater_utils_unittest.cc",
+     "origin_trials/origin_trial_policy_impl_unittest.cc",
+     "origin_trials/origin_trials_settings_storage_unittest.cc",
++    "bare_user_agent_presets_unittest.cc",
+     "user_agent_utils_unittest.cc",
+   ]
+ 
+@@ -118,3 +119,4 @@ source_set("unit_tests") {
+   # enable the diagnostic by removing this line.
+   configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+ }
++
+diff --git a/components/embedder_support/bare_user_agent_presets_unittest.cc b/components/embedder_support/bare_user_agent_presets_unittest.cc
+new file mode 100644
+index 00000000000..79fa17a0c86
+--- /dev/null
++++ b/components/embedder_support/bare_user_agent_presets_unittest.cc
+@@ -0,0 +1,119 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <string>
++
++#include "base/command_line.h"
++#include "base/strings/strcat.h"
++#include "base/test/scoped_command_line.h"
++#include "components/embedder_support/switches.h"
++#include "components/embedder_support/user_agent_utils.h"
++#include "components/version_info/version_info.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
++
++namespace embedder_support {
++namespace {
++
++bool HasBrand(const blink::UserAgentBrandList& brands,
++              const std::string& name) {
++  for (const auto& brand : brands) {
++    if (brand.brand == name) {
++      return true;
++    }
++  }
++  return false;
++}
++
++class BareUserAgentPresetTest : public testing::Test {
++ protected:
++  void SetSwitch(const char* name, const std::string& value) {
++    command_line_.GetProcessCommandLine()->AppendSwitchASCII(name, value);
++  }
++
++  base::test::ScopedCommandLine command_line_;
++};
++
++TEST_F(BareUserAgentPresetTest, NoPresetKeepsDefault) {
++  EXPECT_FALSE(IsUserAgentPresetActive());
++  EXPECT_EQ(GetUserAgentMetadata(), GetDefaultUserAgentMetadata());
++}
++
++TEST_F(BareUserAgentPresetTest, FirefoxSendsNoClientHints) {
++  SetSwitch(kBareUserAgentPreset, "firefox-windows");
++  EXPECT_TRUE(IsUserAgentPresetActive());
++  EXPECT_EQ(GetUserAgent(),
++            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) "
++            "Gecko/20100101 Firefox/158.0");
++  EXPECT_TRUE(GetUserAgentMetadata().brand_version_list.empty());
++  EXPECT_TRUE(GetUserAgentMetadata(true).brand_version_list.empty());
++  EXPECT_FALSE(GetDefaultUserAgentMetadata().brand_version_list.empty());
++}
++
++TEST_F(BareUserAgentPresetTest, ChromeWindowsMatchesItsClientHints) {
++  SetSwitch(kBareUserAgentPreset, "chrome-windows");
++  const std::string ua = GetUserAgent();
++  EXPECT_NE(ua.find("(Windows NT 10.0; Win64; x64)"), std::string::npos);
++  EXPECT_NE(ua.find(GetProductAndVersion()), std::string::npos);
++  EXPECT_EQ(ua.find("Mobile"), std::string::npos);
++
++  const blink::UserAgentMetadata metadata = GetUserAgentMetadata();
++  EXPECT_EQ(metadata.platform, "Windows");
++  EXPECT_FALSE(metadata.mobile);
++  EXPECT_TRUE(HasBrand(metadata.brand_version_list, "Google Chrome"));
++  EXPECT_TRUE(HasBrand(metadata.brand_version_list, "Chromium"));
++  EXPECT_TRUE(HasBrand(metadata.brand_full_version_list, "Google Chrome"));
++
++  const blink::UserAgentMetadata low_entropy = GetUserAgentMetadata(true);
++  EXPECT_EQ(low_entropy.platform, "Windows");
++  EXPECT_TRUE(low_entropy.full_version.empty());
++  EXPECT_TRUE(low_entropy.brand_full_version_list.empty());
++}
++
++TEST_F(BareUserAgentPresetTest, EdgeAddsItsToken) {
++  SetSwitch(kBareUserAgentPreset, "edge-windows");
++  EXPECT_TRUE(GetUserAgent().ends_with(base::StrCat(
++      {" Edg/", version_info::GetMajorVersionNumber(), ".0.0.0"})));
++  EXPECT_TRUE(
++      HasBrand(GetUserAgentMetadata().brand_version_list, "Microsoft Edge"));
++}
++
++TEST_F(BareUserAgentPresetTest, ChromeAndroidIsMobile) {
++  SetSwitch(kBareUserAgentPreset, "chrome-android");
++  EXPECT_TRUE(GetUserAgent().ends_with(" Mobile Safari/537.36"));
++  const blink::UserAgentMetadata metadata = GetUserAgentMetadata();
++  EXPECT_TRUE(metadata.mobile);
++  EXPECT_EQ(metadata.platform, "Android");
++}
++
++TEST_F(BareUserAgentPresetTest, CustomString) {
++  SetSwitch(kBareUserAgentPreset, "custom");
++  SetSwitch(kBareUserAgentCustom, "  Test/1.0 (Example)  ");
++  EXPECT_TRUE(IsUserAgentPresetActive());
++  EXPECT_EQ(GetUserAgent(), "Test/1.0 (Example)");
++  EXPECT_TRUE(GetUserAgentMetadata().brand_version_list.empty());
++}
++
++TEST_F(BareUserAgentPresetTest, InvalidCustomFallsBackToDefault) {
++  SetSwitch(kBareUserAgentPreset, "custom");
++  SetSwitch(kBareUserAgentCustom, "bad\nvalue");
++  EXPECT_FALSE(IsUserAgentPresetActive());
++  EXPECT_EQ(GetUserAgent().find("bad"), std::string::npos);
++}
++
++TEST_F(BareUserAgentPresetTest, UnknownPresetIsIgnored) {
++  SetSwitch(kBareUserAgentPreset, "netscape");
++  EXPECT_FALSE(IsUserAgentPresetActive());
++  EXPECT_EQ(GetUserAgentMetadata(), GetDefaultUserAgentMetadata());
++}
++
++TEST_F(BareUserAgentPresetTest, UserAgentSwitchWins) {
++  SetSwitch(kBareUserAgentPreset, "firefox-windows");
++  SetSwitch(kUserAgent, "Switch/1.0");
++  EXPECT_FALSE(IsUserAgentPresetActive());
++  EXPECT_EQ(GetUserAgent(), "Switch/1.0");
++}
++
++}  // namespace
++}  // namespace embedder_support
+diff --git a/components/embedder_support/switches.cc b/components/embedder_support/switches.cc
+index af1185607e4..60ea9dd986a 100644
+--- a/components/embedder_support/switches.cc
++++ b/components/embedder_support/switches.cc
+@@ -33,4 +33,10 @@ const char kUseMobileUserAgent[] = "use-mobile-user-agent";
+ // A string used to override the default user agent with a custom one.
+ const char kUserAgent[] = "user-agent";
+ 
++// The user agent picked in Bare's Developer options, set by the browser at
++// startup from the saved choice. Its value names a preset; "custom" takes the
++// string from --bare-user-agent-custom.
++const char kBareUserAgentPreset[] = "bare-user-agent-preset";
++const char kBareUserAgentCustom[] = "bare-user-agent-custom";
++
+ }  // namespace embedder_support
+diff --git a/components/embedder_support/switches.h b/components/embedder_support/switches.h
+index 82680be35c7..49cd46f3400 100644
+--- a/components/embedder_support/switches.h
++++ b/components/embedder_support/switches.h
+@@ -19,6 +19,8 @@ extern const char kOriginTrialPublicKey[];
+ extern const char kShortReportingDelay[];
+ extern const char kUseMobileUserAgent[];
+ extern const char kUserAgent[];
++extern const char kBareUserAgentPreset[];
++extern const char kBareUserAgentCustom[];
+ 
+ }  // namespace embedder_support
+ 
+diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
+index e699a6a394f..b1cc1174d13 100644
+--- a/components/embedder_support/user_agent_utils.cc
++++ b/components/embedder_support/user_agent_utils.cc
+@@ -477,15 +477,153 @@ std::optional<std::string> GetUserAgentFromCommandLine() {
+   return std::nullopt;
+ }
+ 
++// Defined further down; the presets below report the real Android version.
++std::string GetPlatformVersion();
++
++namespace {
++
++struct UserAgentPreset {
++  std::string user_agent;
++  // Unset for browsers that send no client hints.
++  std::optional<blink::UserAgentMetadata> metadata;
++};
++
++// Firefox and Safari strings are pinned and need refreshing with each Chromium
++// upgrade. Chrome and Edge follow the version this build is on.
++constexpr char kFirefoxWindowsUserAgent[] =
++    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 "
++    "Firefox/158.0";
++constexpr char kFirefoxAndroidUserAgent[] =
++    "Mozilla/5.0 (Android 10; Mobile; rv:158.0) Gecko/158.0 Firefox/158.0";
++constexpr char kSafariMacUserAgent[] =
++    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
++    "(KHTML, like Gecko) Version/27.0.1 Safari/605.1.15";
++constexpr char kSafariIPhoneUserAgent[] =
++    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) "
++    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 "
++    "Safari/604.1";
++
++blink::UserAgentMetadata BrandedMetadata(const std::string& brand,
++                                         const std::string& platform,
++                                         const std::string& platform_version,
++                                         bool mobile) {
++  const std::string major(version_info::GetMajorVersionNumber());
++  const std::string full(version_info::GetVersionNumber());
++  int seed = 0;
++  base::StringToInt(major, &seed);
++
++  blink::UserAgentMetadata metadata;
++  metadata.brand_version_list = GenerateBrandVersionList(
++      seed, brand, major, blink::UserAgentBrandVersionType::kMajorVersion);
++  metadata.brand_full_version_list = GenerateBrandVersionList(
++      seed, brand, full, blink::UserAgentBrandVersionType::kFullVersion);
++  metadata.full_version = full;
++  metadata.platform = platform;
++  metadata.platform_version = platform_version;
++  metadata.mobile = mobile;
++  if (mobile) {
++    metadata.architecture = GetCpuArchitecture();
++    metadata.bitness = GetCpuBitness();
++    metadata.model = BuildModelInfo();
++  } else {
++    metadata.architecture = "x86";
++    metadata.bitness = "64";
++  }
++  metadata.form_factors = GetFormFactorsClientHint(metadata, mobile);
++  return metadata;
++}
++
++std::optional<UserAgentPreset> GetUserAgentPreset() {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (!command_line->HasSwitch(kBareUserAgentPreset)) {
++    return std::nullopt;
++  }
++  const std::string id = command_line->GetSwitchValueASCII(kBareUserAgentPreset);
++  const std::string chrome = GetProductAndVersion();
++  const std::string windows_ua =
++      BuildUserAgentFromOSAndProduct("Windows NT 10.0; Win64; x64", chrome);
++
++  if (id == "chrome-android") {
++    return UserAgentPreset{
++        BuildUserAgentFromOSAndProduct("Linux; Android 10; K",
++                                       chrome + " Mobile"),
++        BrandedMetadata("Google Chrome", "Android", GetPlatformVersion(),
++                        /*mobile=*/true)};
++  }
++  if (id == "chrome-linux") {
++    return UserAgentPreset{
++        BuildUserAgentFromOSAndProduct("X11; Linux x86_64", chrome),
++        BrandedMetadata("Google Chrome", "Linux", "", /*mobile=*/false)};
++  }
++  if (id == "chrome-windows") {
++    return UserAgentPreset{windows_ua,
++                           BrandedMetadata("Google Chrome", "Windows", "19.0.0",
++                                           /*mobile=*/false)};
++  }
++  if (id == "chrome-mac") {
++    return UserAgentPreset{
++        BuildUserAgentFromOSAndProduct("Macintosh; Intel Mac OS X 10_15_7",
++                                       chrome),
++        BrandedMetadata("Google Chrome", "macOS", "27.0.1", /*mobile=*/false)};
++  }
++  if (id == "chrome-chromeos") {
++    return UserAgentPreset{
++        BuildUserAgentFromOSAndProduct("X11; CrOS x86_64 14541.0.0", chrome),
++        BrandedMetadata("Google Chrome", "Chrome OS", "14541.0.0",
++                        /*mobile=*/false)};
++  }
++  if (id == "edge-windows") {
++    return UserAgentPreset{
++        base::StrCat({windows_ua, " Edg/",
++                      version_info::GetMajorVersionNumber(), ".0.0.0"}),
++        BrandedMetadata("Microsoft Edge", "Windows", "19.0.0",
++                        /*mobile=*/false)};
++  }
++  if (id == "firefox-windows") {
++    return UserAgentPreset{kFirefoxWindowsUserAgent, std::nullopt};
++  }
++  if (id == "firefox-android") {
++    return UserAgentPreset{kFirefoxAndroidUserAgent, std::nullopt};
++  }
++  if (id == "safari-mac") {
++    return UserAgentPreset{kSafariMacUserAgent, std::nullopt};
++  }
++  if (id == "safari-iphone") {
++    return UserAgentPreset{kSafariIPhoneUserAgent, std::nullopt};
++  }
++  if (id == "custom") {
++    std::string custom =
++        command_line->GetSwitchValueASCII(kBareUserAgentCustom);
++    base::TrimWhitespaceASCII(custom, base::TRIM_ALL, &custom);
++    if (!custom.empty() && net::HttpUtil::IsValidHeaderValue(custom)) {
++      return UserAgentPreset{custom, std::nullopt};
++    }
++    LOG(WARNING) << "Ignored invalid custom user agent";
++  }
++  return std::nullopt;
++}
++
++}  // namespace
++
+ std::string GetUserAgent() {
+   std::optional<std::string> custom_ua = GetUserAgentFromCommandLine();
+   if (custom_ua.has_value()) {
+     return custom_ua.value();
+   }
+ 
++  if (std::optional<UserAgentPreset> preset = GetUserAgentPreset()) {
++    return preset->user_agent;
++  }
++
+   return GetUserAgentInternal();
+ }
+ 
++bool IsUserAgentPresetActive() {
++  return !GetUserAgentFromCommandLine().has_value() &&
++         GetUserAgentPreset().has_value();
++}
++
+ const blink::UserAgentBrandList GetUserAgentBrandMajorVersionList(
+     std::optional<blink::UserAgentBrandVersion> additional_brand_version) {
+   return GetUserAgentBrandMajorVersionListInternal(additional_brand_version);
+@@ -661,6 +799,27 @@ std::string GetPlatformForUAMetadata() {
+ }
+ 
+ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch) {
++  if (!GetUserAgentFromCommandLine().has_value()) {
++    if (std::optional<UserAgentPreset> preset = GetUserAgentPreset()) {
++      // An empty brand list is what tells the client hints code to send no
++      // Sec-CH-UA headers, as Firefox and Safari do.
++      if (!preset->metadata.has_value()) {
++        return blink::UserAgentMetadata();
++      }
++      if (!only_low_entropy_ch) {
++        return *preset->metadata;
++      }
++      blink::UserAgentMetadata low_entropy;
++      low_entropy.brand_version_list = preset->metadata->brand_version_list;
++      low_entropy.mobile = preset->metadata->mobile;
++      low_entropy.platform = preset->metadata->platform;
++      return low_entropy;
++    }
++  }
++  return GetDefaultUserAgentMetadata(only_low_entropy_ch);
++}
++
++blink::UserAgentMetadata GetDefaultUserAgentMetadata(bool only_low_entropy_ch) {
+   blink::UserAgentMetadata metadata;
+ 
+   // Low entropy client hints.
+diff --git a/components/embedder_support/user_agent_utils.h b/components/embedder_support/user_agent_utils.h
+index 7b4e9ca1cf4..21ad90c8a28 100644
+--- a/components/embedder_support/user_agent_utils.h
++++ b/components/embedder_support/user_agent_utils.h
+@@ -38,6 +38,15 @@ std::string GetUserAgent();
+ // populate the low entropy client hints.
+ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch = false);
+ 
++// GetUserAgentMetadata() as it would be without a user-agent preset from
++// Bare's Developer options.
++blink::UserAgentMetadata GetDefaultUserAgentMetadata(
++    bool only_low_entropy_ch = false);
++
++// Whether the user picked a user agent other than the default in Bare's
++// Developer options. Desktop-site requests then leave the choice alone.
++bool IsUserAgentPresetActive();
++
+ // Returns a list of form-factors compliant with
+ // https://wicg.github.io/ua-client-hints/#sec-ch-ua-form-factors.
+ std::vector<std::string> GetFormFactorsClientHint(
+diff --git a/content/browser/client_hints/client_hints.cc b/content/browser/client_hints/client_hints.cc
+index 1eae0a9aa96..8e2c473f806 100644
+--- a/content/browser/client_hints/client_hints.cc
++++ b/content/browser/client_hints/client_hints.cc
+@@ -708,6 +708,13 @@ void UpdateNavigationRequestClientUaHeadersImpl(
+     disable_due_to_custom_ua = !ua_metadata.has_value();
+   }
+ 
++  if (!disable_due_to_custom_ua && !ua_metadata.has_value()) {
++    ua_metadata = delegate->GetUserAgentMetadata();
++    // Bare's user-agent presets for Firefox and Safari leave the brand list
++    // empty; those browsers send no UA client hints.
++    disable_due_to_custom_ua = ua_metadata->brand_version_list.empty();
++  }
++
+   if (!disable_due_to_custom_ua) {
+     if (!ua_metadata.has_value())
+       ua_metadata = delegate->GetUserAgentMetadata();
+diff --git a/third_party/blink/renderer/core/loader/frame_fetch_context.cc b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
+index e2c5e2f39dc..8bd463fe1a2 100644
+--- a/third_party/blink/renderer/core/loader/frame_fetch_context.cc
++++ b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
+@@ -731,8 +731,9 @@ void FrameFetchContext::AddClientHintsIfNecessary(
+             holdback_ect.value())));
+   }
+ 
+-  // Only send User Agent hints if the info is available
+-  if (ua) {
++  // Only send User Agent hints if the info is available. An empty brand list
++  // comes from a user-agent preset for a browser that sends none.
++  if (ua && !ua->brand_version_list.empty()) {
+     bool ua_changed = !last_ua_ || *last_ua_ != *ua;
+     if (ua_changed) {
+       last_ua_ = *ua;
+-- 
+2.34.1
+
