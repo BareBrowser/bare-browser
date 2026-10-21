@@ -81,7 +81,7 @@ that `build/android/chromium-debug.keystore` provides by default. That keystore
 is checked into Chromium and public, so anything signed with it can be replaced
 by an APK anyone can build.
 
-    tools/sign-release.sh out/Bare-arm64/apks/ChromePublic.apk Bare-1.0.0.apk
+    tools/sign-release.sh out/Bare-arm64/apks/ChromePublic.apk Bare-<version>-arm64-v8a.apk
 
 The key sits outside this repo and its password is in the macOS login keychain,
 read only when it signs. Neither is ever written where the build or

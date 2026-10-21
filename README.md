@@ -29,8 +29,8 @@ Built and used on a Pixel 10 Pro XL. Not affiliated with Google or the Chromium 
 - **Base:** Chromium `156.0.8078.25` (commit `12282315`)
 - **Target:** `is_desktop_android = true`, `target_cpu = "arm64"` and `"arm"`
 - **Runs on:** Android 10 or later, on arm64 or 32-bit arm; there is no x86 build
-- **Version:** `1.0.0`, versionCode `801000075` (arm64) / `801000070` (32-bit arm)
-- **Size:** 164 patches, 19,250 insertions across 469 files
+- **Version:** `1.0.1`, versionCode `801000115` (arm64) / `801000110` (32-bit arm)
+- **Size:** 164 patches, 19,249 insertions across 469 files
 
 ## What you get
 
@@ -206,14 +206,15 @@ notice the difference.
 **The Chrome Web Store gets that desktop User-Agent at the phone's width.** With a phone
 User-Agent the store swaps "Add to Chrome" for "Add to Desktop", which sends the extension to a
 signed-in desktop Chrome instead of installing it. So `chromewebstore.google.com` is asked for its
-desktop pages and keeps its own phone layout. Earlier releases did this with a stored desktop-site
+desktop pages. Extension pages then fit the phone's width; the store's front page and category
+pages are still laid out for a desktop, so some rows run off the side. Earlier releases did this with a stored desktop-site
 setting that covered every `google.com` site; 1.0.1 removes that setting once, on first launch.
 
 **Developer options can change the User-Agent.** Default sends the strings described here. The
 other choices are Chrome on five platforms, Edge, Firefox and Safari, or a typed string, and they
 apply after a restart. Chrome and Edge send client hints that match; Firefox, Safari and a typed
 string send none, as those browsers don't. While one is chosen, Request desktop site is greyed
-out. Sites can still tell this is Bare from `navigator.platform` and similar signals.
+out. Sites can still tell it isn't really that browser, from `navigator.platform` and similar signals.
 
 **Some things reach Google only when you do them:**
 
@@ -389,12 +390,13 @@ enable_openxr = false
 disable_fieldtrial_testing_config = true
 
 chrome_public_manifest_package = "org.barebrowser"
-android_override_version_code = "801000075"
-android_override_version_name = "1.0.0"
+android_override_version_code = "801000115"
+android_override_version_name = "1.0.1"
 ```
 
-The last two lines are what `tools/version.py gn arm64` emits, and they matter: they are written into
-the manifest, so a build without them will not match the release.
+The last two lines are what `tools/version.py gn arm64` emits at this release (run it to get them, rather
+than trusting the numbers here), and they matter: they are written into the manifest, so a build
+without them will not match the release.
 
 `disable_fieldtrial_testing_config` matters as much. Without it the build follows
 `testing/variations/fieldtrial_testing_config.json` instead of the code defaults, and several
@@ -402,7 +404,7 @@ patches here are inert. [docs/build-constraints.md](docs/build-constraints.md) h
 behaviours that came from that file rather than from the code.
 
 The 32-bit build differs in exactly three lines: `target_cpu = "arm"`, the version code
-`801000070` that `tools/version.py gn arm` emits, and `clang_use_default_sample_profile = false`,
+`801000110` that `tools/version.py gn arm` emits, and `clang_use_default_sample_profile = false`,
 which stops GN demanding an AFDO profile this checkout never syncs.
 
 ```bash
@@ -416,7 +418,7 @@ autoninja -C out/Bare chrome_public_apk
 carries a signature only its key can produce. Everything else should match:
 
 ```bash
-tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-1.0.0.apk
+tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-1.0.1-arm64-v8a.apk
 ```
 
 See [BUILDING.md](BUILDING.md) for the rest of the workflow, including versioning and how
@@ -433,7 +435,7 @@ person as the file, so on its own it proves nothing about where the file came fr
 **Is it genuinely Bare?** Check who signed it. Nothing signed by any other key is Bare.
 
 ```bash
-apksigner verify --print-certs Bare-1.0.0.apk
+apksigner verify --print-certs Bare-1.0.1-arm64-v8a.apk
 ```
 
     SHA-256  ae:2a:0e:7f:b7:a1:32:ec:51:7d:26:a8:e7:c8:3d:27
@@ -452,7 +454,7 @@ can produce it, but everything else is. Follow [Build it yourself](#build-it-you
 including the version arguments, then compare:
 
 ```bash
-tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-1.0.0.apk
+tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-1.0.1-arm64-v8a.apk
 ```
 
 It hashes every entry except the signature, so two builds of the same source agree whoever signed
