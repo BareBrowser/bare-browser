@@ -22,13 +22,13 @@ On Android 14+, the intent requests `MediaProjectionConfig.createConfigForDefaul
 
 This is full-display **video**, not a tab picker or system-audio implementation. Microphone and camera requests remain separate. The existing Android `WINDOW` transport is reused, so JavaScript may report `displaySurface: "window"` even when the display is being captured. Sites that require another surface type may refuse it. Android 10 can run Bare but cannot use this fallback. This patch does not change Bare's package identity, signing, update behavior or build configuration.
 
-## Validation status
+## Validation
 
-An earlier downstream version of the capture code, including the nested `DisplayListener` annotation correction folded into this patch, built successfully in ARM64 APKs. The downstream user reported success on a phone. That is not a device/version matrix or a claim that every case below passed.
+On 2026-10-25, Bare plus patch 0205 built successfully for ARM64 from commit `382c268b8356e5a9541670f7ece881e89ecad3fa`. The test APK, version `1.0.1-pr127.1`, changed only the package/version GN arguments for side-by-side installation; it contained no downstream profile source changes.
 
-**This upstream extraction has not been built or tested.** It moves the dialog strings into GRIT, changes the failure title to cover failures after startup, and removes downstream diagnostic branding. The unit-test sources are prepared, not reported as passing. There is no reported tablet result, 32-bit build result or Android-version coverage matrix. The contribution remains a draft pending validation of Bare plus this patch alone.
+The user installed this PR build on their Huawei tablet and confirmed screen sharing works. Automated unit tests were not run; the checklist below is available for further regression coverage.
 
-## Manual validation before ready for review
+## Repeating the checks
 
 Prepare a separate Linux Chromium checkout using [BUILDING.md](../BUILDING.md), apply the complete Bare series including 0205, and configure it for Desktop Android. Do not apply the downstream capture patches as well. Build `chrome_public_apk` using that checkout's normal build command; a successful APK build does not run unit tests.
 
