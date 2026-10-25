@@ -169,6 +169,7 @@ themselves are in [`patches/`](../patches); this is the summary of what each one
 | 0202 | Let the GPU Landlock policy read Android's system libraries | On Android 16 and later phones whose kernel has Landlock, the GPU process could not load libmedia_jni.so from /system/lib64 or /system/lib, so Widevine video never played. Landlock stays on. Tested on an Android 17 emulator; the 32-bit path is untested on a device |
 | 0203 | Show the Chrome Web Store at phone width | 0024's stored desktop setting covered all of google.com; the store now gets the desktop user agent from code, extension pages fit the phone's width while the front and category pages stay desktop-width, and the old setting is removed once |
 | 0204 | Let Developer options pick the user agent | Default, five Chrome choices, Edge, Firefox, Safari or a typed string, with matching client hints; applies after a restart |
+| 0205 | Enable full-display screen sharing | Public MediaProjection fallback on Android 11+, with website disclosure, Android consent and bounded startup; no tab picker or system audio. [Limits and pending validation](screen-sharing.md) |
 
 Patches 0001 and 0002 are bug fixes that happen to be prerequisites. 0003 is a usability fix.
 0004 through 0010 are the de-Googling, as are 0014 through 0021. 0011 through 0013 fix

@@ -1,0 +1,1452 @@
+From: giuseppegrilli <giugrilli@gmail.com>
+Date: Sun, 25 Oct 2026 16:48:02 +0000
+Subject: [PATCH] Enable full-display screen sharing through Android MediaProjection
+
+Public Desktop Android builds cancel getDisplayMedia when no service-loaded
+picker exists. Offer a full-display fallback through public Android APIs,
+with a website disclosure followed by the real MediaProjection consent.
+
+Keep native capture-policy checks, foreground notification and stop paths.
+Own one request across Activity recreation and native teardown, transfer the
+grant before picker completion, and bound startup waits. An unconsumed native
+handoff fails closed until process restart rather than risking grant reuse.
+
+Handle full-display rotation before Android 14 and reject unsupported I420
+frames instead of entering the pinned native implementation's NOTIMPLEMENTED
+callback. Reports stay local and omit URLs, account data and intent contents.
+
+Only Android 11+ full-display video is supported: no tab picker or system
+audio. The existing WINDOW transport can report displaySurface as window.
+
+Update capture unit-test sources and put browser dialog strings in GRIT.
+See docs/screen-sharing.md in the Bare repository for validation status and
+manual checks. This upstream extraction has not been built or tested.
+---
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -1384,6 +1384,7 @@
++    "java/src/org/chromium/chrome/browser/media/FullScreenCapturePicker.java",
+     "java/src/org/chromium/chrome/browser/media/MediaCapturePickerDelegate.java",
+     "java/src/org/chromium/chrome/browser/media/MediaCapturePickerHeadlessFragment.java",
+     "java/src/org/chromium/chrome/browser/media/MediaCapturePickerInvoker.java",
+     "java/src/org/chromium/chrome/browser/media/MediaCapturePickerManager.java",
+     "java/src/org/chromium/chrome/browser/media/MediaCapturePickerManagerBridge.java",
+     "java/src/org/chromium/chrome/browser/media/MediaCapturePickerTabObserver.java",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/media/FullScreenCapturePicker.java b/chrome/android/java/src/org/chromium/chrome/browser/media/FullScreenCapturePicker.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/media/FullScreenCapturePicker.java
+@@ -0,0 +1,260 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.media;
++
++import android.app.Activity;
++import android.app.AlertDialog;
++import android.content.ClipData;
++import android.content.ClipboardManager;
++import android.content.Context;
++import android.content.Intent;
++import android.media.projection.MediaProjectionConfig;
++import android.media.projection.MediaProjectionManager;
++import android.os.Build;
++
++import androidx.activity.result.ActivityResult;
++import androidx.fragment.app.FragmentActivity;
++
++import org.chromium.base.ContextUtils;
++import org.chromium.base.Log;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.media.MediaCapturePickerHeadlessFragment.CaptureAction;
++import org.chromium.content_public.browser.WebContents;
++import org.chromium.content_public.browser.WebContentsObserver;
++import org.chromium.content_public.browser.media.capture.ScreenCapture;
++import org.chromium.content_public.browser.media.capture.ScreenCaptureSession;
++import org.chromium.ui.base.WindowAndroid;
++
++import java.lang.ref.WeakReference;
++
++/** Public Android consent fallback for builds without a proprietary picker delegate. */
++@NullMarked
++final class FullScreenCapturePicker {
++    private static final String TAG = "FullScreenCapture";
++
++    static boolean allowsFullDisplay(MediaCapturePickerManager.Params params) {
++        // excludeSelfBrowserSurface excludes a tab choice, not a whole-display choice.
++        return params.allowedCaptureLevel == AllowedScreenCaptureLevel.DESKTOP
++                && !params.captureThisTab
++                && !params.excludeMonitorTypeSurfaces;
++    }
++
++    static void show(
++            Context context,
++            MediaCapturePickerManager.Params params,
++            MediaCapturePickerManager.Delegate delegate) {
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || !allowsFullDisplay(params)) {
++            showFailure(
++                    params.webContents,
++                    context.getString(R.string.bare_capture_unavailable));
++            delegate.onCancel();
++            return;
++        }
++        Activity activity = ContextUtils.activityFromContext(context);
++        if (!(activity instanceof FragmentActivity) || activity.isFinishing()) {
++            delegate.onCancel();
++            return;
++        }
++        WeakReference<WebContents> contents = new WeakReference<>(params.webContents);
++        ScreenCaptureSession session =
++                ScreenCaptureSession.acquire(report -> showFailure(contents.get(), report));
++        if (session == null) {
++            showFailure(
++                    params.webContents,
++                    context.getString(R.string.bare_capture_busy));
++            delegate.onCancel();
++            return;
++        }
++        new Request(params, delegate, session).showDisclosure(activity);
++    }
++
++    private static void showFailure(@Nullable WebContents webContents, String report) {
++        Log.w(TAG, "%s", report);
++        if (webContents == null || webContents.isDestroyed()) return;
++        WindowAndroid window = webContents.getTopLevelNativeWindow();
++        if (window == null) return;
++        Context context = window.getContext().get();
++        Activity activity = context == null ? null : ContextUtils.activityFromContext(context);
++        if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
++        try {
++            new AlertDialog.Builder(activity)
++                    .setTitle(R.string.bare_capture_failure_title)
++                    .setMessage(report)
++                    .setPositiveButton(android.R.string.ok, null)
++                    .setNeutralButton(
++                            R.string.bare_capture_copy_report,
++                            (dialog, which) -> {
++                                ClipboardManager clipboard =
++                                        (ClipboardManager)
++                                                activity.getSystemService(Context.CLIPBOARD_SERVICE);
++                                if (clipboard != null) {
++                                    clipboard.setPrimaryClip(
++                                            ClipData.newPlainText(
++                                                    activity.getString(R.string.bare_capture_report_label),
++                                                    report));
++                                }
++                            })
++                    .show();
++        } catch (RuntimeException error) {
++            // The requesting activity may have disappeared before the UI task ran.
++            Log.w(TAG, "Cannot show capture report: %s", error.getClass().getSimpleName());
++        }
++    }
++
++    private static final class Request {
++        private final MediaCapturePickerManager.Params mParams;
++        private final MediaCapturePickerManager.Delegate mDelegate;
++        private final ScreenCaptureSession mSession;
++        private final WebContentsObserver mObserver;
++        private @Nullable AlertDialog mDialog;
++        private boolean mPromptLaunched;
++        private boolean mFinished;
++
++        Request(
++                MediaCapturePickerManager.Params params,
++                MediaCapturePickerManager.Delegate delegate,
++                ScreenCaptureSession session) {
++            mParams = params;
++            mDelegate = delegate;
++            mSession = session;
++            mObserver =
++                    new WebContentsObserver(params.webContents) {
++                        @Override
++                        public void webContentsDestroyed() {
++                            cancel();
++                        }
++
++                        @Override
++                        public void onTopLevelNativeWindowChanged(@Nullable WindowAndroid window) {
++                            if (!mPromptLaunched) cancel();
++                        }
++                    };
++            if (delegate instanceof MediaCapturePickerManagerBridge bridge) {
++                bridge.setOnRequestDestroyed(this::cancel);
++            }
++        }
++
++        private boolean isAlive() {
++            return !mParams.webContents.isDestroyed()
++                    && (!(mDelegate instanceof MediaCapturePickerManagerBridge bridge)
++                            || bridge.isRequestAlive());
++        }
++
++        void showDisclosure(Activity activity) {
++            if (mFinished || !isAlive()) {
++                cancel();
++                return;
++            }
++            try {
++                mDialog =
++                        new AlertDialog.Builder(activity)
++                                .setTitle(R.string.bare_capture_disclosure_title)
++                                .setMessage(
++                                        activity.getString(
++                                                R.string.bare_capture_disclosure, mParams.appName))
++                                .setNegativeButton(android.R.string.cancel, (dialog, which) -> cancel())
++                                .setPositiveButton(
++                                        R.string.bare_capture_continue, (dialog, which) -> launchPrompt())
++                                .setOnCancelListener(dialog -> cancel())
++                                .create();
++                mDialog.show();
++            } catch (RuntimeException error) {
++                mSession.fail("Disclosure: " + error.getClass().getSimpleName());
++                cancel();
++            }
++        }
++
++        private void launchPrompt() {
++            if (mFinished || !isAlive()) {
++                cancel();
++                return;
++            }
++            WindowAndroid window = mParams.webContents.getTopLevelNativeWindow();
++            Context context = window == null ? null : window.getContext().get();
++            Activity activity = context == null ? null : ContextUtils.activityFromContext(context);
++            if (!(activity instanceof FragmentActivity fragmentActivity)) {
++                cancel();
++                return;
++            }
++            try {
++                MediaProjectionManager manager =
++                        (MediaProjectionManager)
++                                activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE);
++                if (manager == null) {
++                    mSession.fail("MediaProjection service is unavailable");
++                    cancel();
++                    return;
++                }
++                Intent intent =
++                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
++                                ? manager.createScreenCaptureIntent(
++                                        MediaProjectionConfig.createConfigForDefaultDisplay())
++                                : manager.createScreenCaptureIntent();
++                MediaCapturePickerHeadlessFragment fragment =
++                        MediaCapturePickerHeadlessFragment.getInstance(fragmentActivity);
++                mPromptLaunched = true;
++                mSession.record("Android consent opened");
++                fragment.startAndroidCapturePrompt(this::onResult, intent);
++            } catch (RuntimeException error) {
++                mPromptLaunched = false;
++                mSession.fail("Android consent: " + error.getClass().getSimpleName());
++                cancel();
++            }
++        }
++
++        private void onResult(@CaptureAction int action, ActivityResult result) {
++            mPromptLaunched = false;
++            if (mFinished) {
++                mSession.release();
++                return;
++            }
++            if (!isAlive()
++                    || action == CaptureAction.CAPTURE_CANCELLED
++                    || result.getResultCode() != Activity.RESULT_OK
++                    || result.getData() == null) {
++                cancel();
++                return;
++            }
++            mSession.record("Android consent granted");
++            if (!ScreenCapture.onFullDisplayPick(mParams.webContents, result, mSession)) {
++                mSession.fail("Another pending native capture owns the handoff");
++                cancel();
++                return;
++            }
++            // Native completion can synchronously destroy the picker bridge.
++            finish();
++            mDelegate.onPickWindow();
++            MediaCapturePickerManager.recordResult(MediaCapturePickerManager.Result.WINDOW_SELECTED);
++        }
++
++        private void finish() {
++            mFinished = true;
++            mObserver.observe(null);
++            if (mDelegate instanceof MediaCapturePickerManagerBridge bridge) {
++                bridge.setOnRequestDestroyed(null);
++            }
++            if (mDialog != null) {
++                try {
++                    mDialog.dismiss();
++                } catch (RuntimeException error) {
++                    Log.w(TAG, "Disclosure activity no longer exists");
++                }
++                mDialog = null;
++            }
++        }
++
++        private void cancel() {
++            if (mFinished) return;
++            finish();
++            // Keep ownership until the old Android prompt returns, even after navigation.
++            // Its result must never be delivered to a newer request.
++            if (!mPromptLaunched) mSession.release();
++            if (isAlive()) mDelegate.onCancel();
++            MediaCapturePickerManager.recordResult(MediaCapturePickerManager.Result.CANCELLED);
++        }
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/media/MediaCapturePickerHeadlessFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/media/MediaCapturePickerHeadlessFragment.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/media/MediaCapturePickerHeadlessFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/media/MediaCapturePickerHeadlessFragment.java
+@@ -9,6 +9,7 @@
+ import android.content.Intent;
+ import android.media.projection.MediaProjectionManager;
+ import android.os.Bundle;
++import android.util.SparseArray;
+ 
+ import androidx.activity.result.ActivityResult;
+ import androidx.activity.result.ActivityResultLauncher;
+@@ -26,14 +27,12 @@
+ import java.lang.annotation.RetentionPolicy;
+ import java.lang.annotation.Target;
+ 
+-/**
+- * Headless fragment used to invoke the MediaProjection API.
+- *
+- * <p>This is created on a per-Activity basis.
+- */
++/** Headless fragment used to invoke the MediaProjection API, once per Activity task. */
+ @NullMarked
+ public class MediaCapturePickerHeadlessFragment extends Fragment {
+     private static final String TAG = "MediaCapturePickerHeadlessFragment";
++    // Survives Activity recreation, not process death. A result after process death is ignored.
++    private static final SparseArray<Delegate> sPendingDelegates = new SparseArray<>();
+ 
+     @Retention(RetentionPolicy.SOURCE)
+     @Target(ElementType.TYPE_USE)
+@@ -54,14 +53,13 @@
+ 
+     private MediaProjectionManager mMediaProjectionManager;
+     private ActivityResultLauncher<Intent> mLauncher;
+-    /* package */ @Nullable Delegate mNextDelegate;
++    private int mTaskId;
+ 
+     public static MediaCapturePickerHeadlessFragment getInstance(FragmentActivity activity) {
+         FragmentManager fragmentManager = activity.getSupportFragmentManager();
+         var fragment =
+                 (MediaCapturePickerHeadlessFragment)
+                         fragmentManager.findFragmentByTag(MediaCapturePickerHeadlessFragment.TAG);
+-
+         if (fragment == null) {
+             fragment = new MediaCapturePickerHeadlessFragment();
+             fragmentManager
+@@ -75,32 +73,56 @@
+     @Override
+     public void onCreate(@Nullable Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+-
++        mTaskId = requireActivity().getTaskId();
+         mMediaProjectionManager =
+                 (MediaProjectionManager)
+                         requireActivity().getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+-
+         mLauncher =
+                 registerForActivityResult(
+                         new ActivityResultContracts.StartActivityForResult(),
+-                        result -> {
+-                            assert mNextDelegate != null;
+-                            if (result.getResultCode() == Activity.RESULT_OK
+-                                    && result.getData() != null) {
+-                                // There is currently no way to differentiate between window and
+-                                // screen sharing.
+-                                mNextDelegate.onPicked(CaptureAction.CAPTURE_WINDOW, result);
+-                            } else {
+-                                mNextDelegate.onPicked(CaptureAction.CAPTURE_CANCELLED, result);
+-                            }
+-                            mNextDelegate = null;
+-                        });
++                        this::onResult);
++    }
++
++    private void onResult(ActivityResult result) {
++        Delegate delegate = sPendingDelegates.get(mTaskId);
++        sPendingDelegates.remove(mTaskId);
++        if (delegate == null) return;
++        if (result.getResultCode() == Activity.RESULT_OK && result.getData() != null) {
++            delegate.onPicked(CaptureAction.CAPTURE_WINDOW, result);
++        } else {
++            delegate.onPicked(CaptureAction.CAPTURE_CANCELLED, result);
++        }
++    }
++
++    void dispatchResultForTesting(@CaptureAction int action, ActivityResult result) {
++        Delegate delegate = sPendingDelegates.get(mTaskId);
++        sPendingDelegates.remove(mTaskId);
++        if (delegate != null) delegate.onPicked(action, result);
+     }
+ 
+     public void startAndroidCapturePrompt(Delegate delegate, @Nullable Intent intent) {
+-        assert mNextDelegate == null;
+-        mNextDelegate = delegate;
+-        mLauncher.launch(
+-                intent != null ? intent : mMediaProjectionManager.createScreenCaptureIntent());
++        if (sPendingDelegates.get(mTaskId) != null) {
++            delegate.onPicked(
++                    CaptureAction.CAPTURE_CANCELLED,
++                    new ActivityResult(Activity.RESULT_CANCELED, null));
++            return;
++        }
++        sPendingDelegates.put(mTaskId, delegate);
++        try {
++            mLauncher.launch(
++                    intent != null ? intent : mMediaProjectionManager.createScreenCaptureIntent());
++        } catch (RuntimeException error) {
++            sPendingDelegates.remove(mTaskId);
++            throw error;
++        }
++    }
++
++    @Override
++    public void onDestroy() {
++        Activity activity = getActivity();
++        if (activity == null || !activity.isChangingConfigurations()) {
++            onResult(new ActivityResult(Activity.RESULT_CANCELED, null));
++        }
++        super.onDestroy();
+     }
+ }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/media/MediaCapturePickerInvoker.java b/chrome/android/java/src/org/chromium/chrome/browser/media/MediaCapturePickerInvoker.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/media/MediaCapturePickerInvoker.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/media/MediaCapturePickerInvoker.java
+@@ -71,10 +71,7 @@
+             delegate.onCancel();
+             return;
+         }
+-        Log.e(TAG, "PickerInvoker: No PickerDelegate, cancel request");
+-        MediaCapturePickerManager.recordPreShowFailure(
+-                MediaCapturePickerManager.PreShowFailure.PICKER_DELEGATE_NULL_ERROR);
+-        delegate.onCancel();
++        FullScreenCapturePicker.show(context, params, delegate);
+     }
+ 
+     private static void onPickAndroidCapturePrompt(
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/media/MediaCapturePickerManagerBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/media/MediaCapturePickerManagerBridge.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/media/MediaCapturePickerManagerBridge.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/media/MediaCapturePickerManagerBridge.java
+@@ -12,6 +12,7 @@
+ import org.chromium.blink.mojom.PreferredDisplaySurface;
+ import org.chromium.blink.mojom.WindowAudioPreference;
+ import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
+ import org.chromium.content_public.browser.WebContents;
+ 
+ /** Glue for the media capture picker dialog UI code and communication with the native backend. */
+@@ -20,6 +21,16 @@
+     private static final String TAG = "MediaCapture";
+ 
+     private long mNativeMediaCapturePickerManagerBridge;
++    private @Nullable Runnable mOnRequestDestroyed;
++
++    boolean isRequestAlive() {
++        return mNativeMediaCapturePickerManagerBridge != 0;
++    }
++
++    void setOnRequestDestroyed(@Nullable Runnable callback) {
++        mOnRequestDestroyed = callback;
++        if (callback != null && !isRequestAlive()) callback.run();
++    }
+ 
+     /**
+      * Constructor, taking a pointer to the native instance.
+@@ -81,13 +92,15 @@
+     @CalledByNative
+     private void destroy() {
+         mNativeMediaCapturePickerManagerBridge = 0;
++        Runnable callback = mOnRequestDestroyed;
++        mOnRequestDestroyed = null;
++        if (callback != null) callback.run();
+     }
+ 
+     @Override
+     public void onPickTab(WebContents webContents, boolean audioShare) {
++        if (!isRequestAlive()) return;
+         Log.d(TAG, "PickerManagerBridge on pick tab");
+-        // We know `mNativeMediaCapturePickerManagerBridge` is non-zero because
+-        // `destroy` will only be called after the dialog is dismissed.
+         assert mNativeMediaCapturePickerManagerBridge != 0;
+         MediaCapturePickerManagerBridgeJni.get()
+                 .onPickTab(mNativeMediaCapturePickerManagerBridge, webContents, audioShare);
+@@ -95,9 +108,8 @@
+ 
+     @Override
+     public void onPickWindow() {
++        if (!isRequestAlive()) return;
+         Log.d(TAG, "PickerManagerBridge on pick window");
+-        // We know `mNativeMediaCapturePickerManagerBridge` is non-zero because
+-        // `destroy` will only be called after the dialog is dismissed.
+         assert mNativeMediaCapturePickerManagerBridge != 0;
+         MediaCapturePickerManagerBridgeJni.get()
+                 .onPickWindow(mNativeMediaCapturePickerManagerBridge);
+@@ -105,9 +117,8 @@
+ 
+     @Override
+     public void onPickScreen() {
++        if (!isRequestAlive()) return;
+         Log.d(TAG, "PickerManagerBridge on pick screen");
+-        // We know `mNativeMediaCapturePickerManagerBridge` is non-zero because
+-        // `destroy` will only be called after the dialog is dismissed.
+         assert mNativeMediaCapturePickerManagerBridge != 0;
+         MediaCapturePickerManagerBridgeJni.get()
+                 .onPickScreen(mNativeMediaCapturePickerManagerBridge);
+@@ -115,17 +126,15 @@
+ 
+     @Override
+     public void onCancel() {
++        if (!isRequestAlive()) return;
+         Log.d(TAG, "PickerManagerBridge on cancel");
+-        // We know `mNativeMediaCapturePickerManagerBridge` is non-zero because
+-        // `destroy` will only be called after the dialog is dismissed.
+         assert mNativeMediaCapturePickerManagerBridge != 0;
+         MediaCapturePickerManagerBridgeJni.get().onCancel(mNativeMediaCapturePickerManagerBridge);
+     }
+ 
+     @Override
+     public boolean shouldFilterWebContents(WebContents webContents) {
+-        // We know `mNativeMediaCapturePickerManagerBridge` is non-zero because
+-        // `destroy` will only be called after the dialog is dismissed.
++        if (!isRequestAlive()) return true;
+         assert mNativeMediaCapturePickerManagerBridge != 0;
+         return MediaCapturePickerManagerBridgeJni.get()
+                 .shouldFilterWebContents(mNativeMediaCapturePickerManagerBridge, webContents);
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/media/MediaCapturePickerInvokerTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/media/MediaCapturePickerInvokerTest.java
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/media/MediaCapturePickerInvokerTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/media/MediaCapturePickerInvokerTest.java
+@@ -5,6 +5,8 @@
+ package org.chromium.chrome.browser.media;
+ 
+ import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
+ import static org.mockito.Mockito.doReturn;
+ import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.verify;
+@@ -110,6 +112,41 @@
+                 AllowedScreenCaptureLevel.DESKTOP);
+     }
+ 
++    private Params fullDisplayParams(
++            int level, boolean thisTab, boolean excludeSelf, boolean excludeMonitor) {
++        return new Params(
++                mock(WebContents.class), "example.test", "example.test", false, false,
++                0, 0, thisTab, excludeSelf, excludeMonitor, level);
++    }
++
++    @Test
++    public void testFullDisplayRespectsCapturePolicy() {
++        for (int level : new int[] {
++                AllowedScreenCaptureLevel.DISALLOWED,
++                AllowedScreenCaptureLevel.SAME_ORIGIN,
++                AllowedScreenCaptureLevel.TAB,
++                AllowedScreenCaptureLevel.WINDOW}) {
++            assertFalse(FullScreenCapturePicker.allowsFullDisplay(
++                    fullDisplayParams(level, false, false, false)));
++        }
++        assertTrue(FullScreenCapturePicker.allowsFullDisplay(
++                fullDisplayParams(AllowedScreenCaptureLevel.DESKTOP, false, false, false)));
++    }
++
++    @Test
++    public void testFullDisplayDoesNotSubstituteForRequiredTabOrExcludedMonitor() {
++        assertFalse(FullScreenCapturePicker.allowsFullDisplay(
++                fullDisplayParams(AllowedScreenCaptureLevel.DESKTOP, true, false, false)));
++        assertFalse(FullScreenCapturePicker.allowsFullDisplay(
++                fullDisplayParams(AllowedScreenCaptureLevel.DESKTOP, false, false, true)));
++    }
++
++    @Test
++    public void testExcludeSelfBrowserSurfaceDoesNotExcludeMonitor() {
++        assertTrue(FullScreenCapturePicker.allowsFullDisplay(
++                fullDisplayParams(AllowedScreenCaptureLevel.DESKTOP, false, true, false)));
++    }
++
+     @Before
+     public void setUp() {
+         mActivityScenarioRule.getScenario().onActivity(activity -> mActivity = activity);
+@@ -130,7 +167,7 @@
+         MediaCapturePickerInvoker.show(mActivity, mediaCaptureParams(), mDelegate);
+         MediaCapturePickerHeadlessFragment fragment =
+                 MediaCapturePickerHeadlessFragment.getInstance((FragmentActivity) mActivity);
+-        fragment.mNextDelegate.onPicked(
++        fragment.dispatchResultForTesting(
+                 CaptureAction.CAPTURE_CANCELLED,
+                 new ActivityResult(Activity.RESULT_CANCELED, null));
+         verify(mDelegate).onCancel();
+@@ -147,7 +184,7 @@
+         MediaCapturePickerInvoker.show(mActivity, mediaCaptureParams(), mDelegate);
+         MediaCapturePickerHeadlessFragment fragment =
+                 MediaCapturePickerHeadlessFragment.getInstance((FragmentActivity) mActivity);
+-        fragment.mNextDelegate.onPicked(
++        fragment.dispatchResultForTesting(
+                 CaptureAction.CAPTURE_WINDOW, new ActivityResult(Activity.RESULT_OK, new Intent()));
+         verify(tab).loadIfNeeded(/* forceBackingSize= */ true);
+         verify(mDelegate).onPickTab(mTabWebContents, true);
+@@ -164,7 +201,7 @@
+         MediaCapturePickerInvoker.show(mActivity, mediaCaptureParams(), mDelegate);
+         MediaCapturePickerHeadlessFragment fragment =
+                 MediaCapturePickerHeadlessFragment.getInstance((FragmentActivity) mActivity);
+-        fragment.mNextDelegate.onPicked(
++        fragment.dispatchResultForTesting(
+                 CaptureAction.CAPTURE_WINDOW, new ActivityResult(Activity.RESULT_OK, new Intent()));
+         verify(tab).loadIfNeeded(/* forceBackingSize= */ true);
+         verify(mDelegate).onPickTab(mTabWebContents, false);
+@@ -177,7 +214,7 @@
+         MediaCapturePickerInvoker.show(mActivity, params, mDelegate);
+         MediaCapturePickerHeadlessFragment fragment =
+                 MediaCapturePickerHeadlessFragment.getInstance((FragmentActivity) mActivity);
+-        fragment.mNextDelegate.onPicked(
++        fragment.dispatchResultForTesting(
+                 CaptureAction.CAPTURE_WINDOW, new ActivityResult(Activity.RESULT_OK, new Intent()));
+         verify(mDelegate).onPickWindow();
+         assertEquals(params.webContents, mPickerDelegate.getStoppedWebContents());
+@@ -190,7 +227,7 @@
+         MediaCapturePickerInvoker.show(mActivity, params, mDelegate);
+         MediaCapturePickerHeadlessFragment fragment =
+                 MediaCapturePickerHeadlessFragment.getInstance((FragmentActivity) mActivity);
+-        fragment.mNextDelegate.onPicked(
++        fragment.dispatchResultForTesting(
+                 CaptureAction.CAPTURE_SCREEN, new ActivityResult(Activity.RESULT_OK, new Intent()));
+         verify(mDelegate).onPickScreen();
+         assertEquals(params.webContents, mPickerDelegate.getStoppedWebContents());
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -1202,6 +1202,30 @@
+       <message name="IDS_BARE_MENU_DESKTOP_SITE_USER_AGENT_SET" desc="App menu item shown greyed out in place of Desktop site while a user agent from Developer options is in use. [CHAR_LIMIT=40]">
+         Desktop site (UA set)
+       </message>
++      <message name="IDS_BARE_CAPTURE_UNAVAILABLE" desc="Shown when the public full-display picker cannot satisfy a screen-sharing request.">
++        Full-display capture is not available for this request.
++      </message>
++      <message name="IDS_BARE_CAPTURE_BUSY" desc="Shown when another screen-sharing request still owns Android capture consent or an active capture.">
++        Another capture or Android consent dialog is still active. Stop it first.
++      </message>
++      <message name="IDS_BARE_CAPTURE_FAILURE_TITLE" desc="Title of the dialog reporting a screen-sharing failure.">
++        Screen sharing failed
++      </message>
++      <message name="IDS_BARE_CAPTURE_COPY_REPORT" desc="Button that copies the local screen-sharing diagnostic report. [CHAR_LIMIT=32]">
++        Copy report
++      </message>
++      <message name="IDS_BARE_CAPTURE_REPORT_LABEL" desc="Clipboard label for a screen-sharing diagnostic report.">
++        Capture report
++      </message>
++      <message name="IDS_BARE_CAPTURE_DISCLOSURE_TITLE" desc="Title of the warning before requesting Android's full-display capture consent.">
++        Share your entire screen?
++      </message>
++      <message name="IDS_BARE_CAPTURE_DISCLOSURE" desc="Warning identifying the website requesting full-display sharing, before Android asks for consent.">
++        <ph name="SITE">%1$s<ex>example.com</ex></ph> will see everything on this display, including other apps and notifications. Android will ask for permission next. System audio is not included. Stop sharing from the website or Android's capture notification.
++      </message>
++      <message name="IDS_BARE_CAPTURE_CONTINUE" desc="Button that proceeds from the full-display warning to Android's capture consent. [CHAR_LIMIT=20]">
++        Continue
++      </message>
+       <message name="IDS_CLEAR_BROWSING_DATA_TITLE" desc="Title of the Delete Browsing Data screen. [CHAR_LIMIT=32]">
+         Delete browsing data
+       </message>
+diff --git a/content/public/android/BUILD.gn b/content/public/android/BUILD.gn
+--- a/content/public/android/BUILD.gn
++++ b/content/public/android/BUILD.gn
+@@ -456,6 +456,7 @@
+     sources += [
+       "java/src/org/chromium/content_public/browser/media/capture/ImageHandler.java",
+       "java/src/org/chromium/content_public/browser/media/capture/ScreenCapture.java",
++      "java/src/org/chromium/content_public/browser/media/capture/ScreenCaptureSession.java",
+     ]
+     deps += [ "//third_party/androidx:androidx_activity_activity_java" ]
+   }
+diff --git a/content/public/android/java/src/org/chromium/content_public/browser/media/capture/ScreenCapture.java b/content/public/android/java/src/org/chromium/content_public/browser/media/capture/ScreenCapture.java
+--- a/content/public/android/java/src/org/chromium/content_public/browser/media/capture/ScreenCapture.java
++++ b/content/public/android/java/src/org/chromium/content_public/browser/media/capture/ScreenCapture.java
+@@ -6,6 +6,7 @@
+ 
+ import static org.chromium.build.NullUtil.assumeNonNull;
+ 
++import android.app.Activity;
+ import android.content.ComponentCallbacks;
+ import android.content.Context;
+ import android.content.res.Configuration;
+@@ -20,6 +21,8 @@
+ import android.os.ConditionVariable;
+ import android.os.Handler;
+ import android.os.Looper;
++import android.util.DisplayMetrics;
++import android.view.Display;
+ import android.view.WindowManager;
+ 
+ import androidx.activity.result.ActivityResult;
+@@ -53,10 +56,19 @@
+     private static class PickState {
+         final WebContents mWebContents;
+         final ActivityResult mActivityResult;
++        final @Nullable ScreenCaptureSession mSession;
+ 
+         PickState(WebContents webContents, ActivityResult activityResult) {
++            this(webContents, activityResult, null);
++        }
++
++        PickState(
++                WebContents webContents,
++                ActivityResult activityResult,
++                @Nullable ScreenCaptureSession session) {
+             mWebContents = webContents;
+             mActivityResult = activityResult;
++            mSession = session;
+         }
+     }
+ 
+@@ -118,6 +130,12 @@
+     private @Nullable MediaProjection mMediaProjection;
+ 
+     private @Nullable VirtualDisplay mVirtualDisplay;
++    private @Nullable ScreenCaptureSession mSession;
++    private @Nullable DisplayManager mDisplayManager;
++    private DisplayManager.@Nullable DisplayListener mDisplayListener;
++    private String mStage = "native startup";
++    private boolean mStopping;
++    private boolean mReceivedFrame;
+ 
+     // We need to store multiple ImageHandlers here because the native side may still be using
+     // Images from the previous ImageHandler when we do a resize. Once all the Images are no longer
+@@ -167,7 +185,31 @@
+         assert oldPickState == null;
+     }
+ 
++    /** Transfers a real Android grant to the native capturer without replacing another grant. */
++    public static boolean onFullDisplayPick(
++            WebContents webContents, ActivityResult result, ScreenCaptureSession session) {
++        if (webContents.isDestroyed()
++                || result.getResultCode() != Activity.RESULT_OK
++                || result.getData() == null) return false;
++        PickState state = new PickState(webContents, result, session);
++        if (!sNextPickState.compareAndSet(null, state)) return false;
++        session.record("waiting for native capture");
++        new Handler(Looper.getMainLooper())
++                .postDelayed(
++                        () -> {
++                            if (sNextPickState.compareAndSet(state, null)) {
++                                // No source ID is attached to this upstream single-slot handoff.
++                                // Fail closed: never let a late old capturer consume a newer grant.
++                                session.fail(
++                                        "Native handoff timed out. Restart this browser before retrying.");
++                            }
++                        },
++                        30_000);
++        return true;
++    }
++
+     public static void resetStaticStateForTesting() {
++        ScreenCaptureSession.resetForTesting(); // IN-TEST
+         sLatch.close();
+         sNextPickState.set(null);
+     }
+@@ -209,21 +251,50 @@
+     @RequiresApi(Build.VERSION_CODES.R)
+     @CalledByNative
+     boolean startCapture() {
++        boolean started = false;
++        try {
++            started = startCaptureImpl();
++            if (!started && mNativeDesktopCapturerAndroid != 0) {
++                reportFailure("Could not complete " + mStage);
++            }
++            return started;
++        } catch (RuntimeException error) {
++            reportFailure(mStage + ": " + error.getClass().getSimpleName());
++            return false;
++        } finally {
++            if (!started) {
++                // Native Start() handles a false return; do not also call native onStop().
++                mStopping = true;
++                cleanupOSResources();
++                cleanupJavaResources();
++            }
++        }
++    }
++
++    @RequiresApi(Build.VERSION_CODES.R)
++    private boolean startCaptureImpl() {
+         final PickState pickState = sNextPickState.getAndSet(null);
+-        assert pickState != null;
++        if (pickState == null) return false;
++        mSession = pickState.mSession;
+ 
+         final ActivityResult activityResult = pickState.mActivityResult;
+         assert activityResult.getData() != null;
+ 
+         // We need to wait for the foreground service to start before trying to use the
+         // MediaProjection API. It's okay to block here since we are on the desktop capturer thread.
+-        sLatch.block();
++        recordStage("waiting for foreground service");
++        if (!sLatch.block(15_000)) {
++            reportFailure("MediaProjection foreground service did not start within 15 seconds");
++            return false;
++        }
++        recordStage("foreground service ready");
+         if (mNativeDesktopCapturerAndroid == 0) return false;
+ 
+         final WebContents webContents = pickState.mWebContents;
+         // Store a local reference to context. This avoids issues such as context becoming null
+         // if destroy() is called concurrently. This is safe because the reference is only used
+         // on the capture thread.
++        recordStage("resolving requesting activity");
+         final var resolvedContextRef = new AtomicReference<Context>();
+         if (!ThreadUtils.runOnUiThreadBlocking(
+                 () -> {
+@@ -259,18 +330,13 @@
+         final var manager =
+                 (MediaProjectionManager)
+                         localContext.getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+-        if (manager == null) {
+-            cleanupJavaResources();
+-            return false;
+-        }
+-
++        if (manager == null) return false;
++
++        recordStage("creating MediaProjection");
+         mMediaProjection =
+                 manager.getMediaProjection(
+                         activityResult.getResultCode(), activityResult.getData());
+-        if (mMediaProjection == null) {
+-            cleanupJavaResources();
+-            return false;
+-        }
++        if (mMediaProjection == null) return false;
+ 
+         mMediaProjection.registerCallback(new MediaProjectionCallback(), mHandler);
+ 
+@@ -279,6 +345,7 @@
+         final var windowMetrics = windowManager.getMaximumWindowMetrics();
+         final Rect bounds = windowMetrics.getBounds();
+ 
++        recordStage("creating RGBA virtual display");
+         createListener(
+                 new CaptureState(
+                         bounds.width(),
+@@ -286,13 +353,14 @@
+                         localContext.getResources().getConfiguration().densityDpi,
+                         PixelFormat.RGBA_8888));
+ 
+-        // If capture already destroyed, then ensure we clean-up.
+-        if (mNativeDesktopCapturerAndroid == 0) {
+-            cleanupOSResources();
+-            cleanupJavaResources();
+-            return false;
+-        }
+-
++        if (mNativeDesktopCapturerAndroid == 0) return false;
++        registerLegacyDisplayListener(localContext);
++        recordStage("virtual display ready; waiting for first frame");
++        mHandler.postDelayed(
++                () -> {
++                    if (!mReceivedFrame) stopWithFailure("No RGBA frame within 15 seconds");
++                },
++                15_000);
+         return true;
+     }
+ 
+@@ -304,6 +372,11 @@
+     }
+ 
+     private void cleanupOSResources() {
++        if (mDisplayManager != null && mDisplayListener != null) {
++            mDisplayManager.unregisterDisplayListener(mDisplayListener);
++            mDisplayListener = null;
++            mDisplayManager = null;
++        }
+         if (mVirtualDisplay != null) {
+             mVirtualDisplay.release();
+             mVirtualDisplay = null;
+@@ -328,6 +401,7 @@
+         ThreadUtils.runOnUiThread(
+                 () -> {
+                     unregisterComponentCallbacks();
++                    if (mSession != null) mSession.release();
+                     mContext = null;
+                     mWebContents = null;
+                     if (mWebContentsObserver != null) {
+@@ -351,8 +425,12 @@
+ 
+     private void onConfigurationChanged(Configuration config) {
+         assert mHandler.getLooper().isCurrentThread();
+-        if (mNativeDesktopCapturerAndroid == 0) return;
++        if (mNativeDesktopCapturerAndroid == 0 || mStopping) return;
+         if (mImageHandlerQueue.isEmpty()) return;
++        if (mDisplayListener != null) {
++            resizeLegacyDisplay();
++            return;
++        }
+ 
+         final CaptureState captureState =
+                 mImageHandlerQueue.get(mImageHandlerQueue.size() - 1).getCaptureState();
+@@ -362,6 +440,58 @@
+                         captureState.height,
+                         config.densityDpi,
+                         captureState.format));
++    }
++
++    private void recordStage(String stage) {
++        mStage = stage;
++        if (mSession != null) mSession.record(stage);
++    }
++
++    private void reportFailure(String reason) {
++        if (mSession != null) mSession.fail(reason);
++    }
++
++    private void stopWithFailure(String reason) {
++        if (mNativeDesktopCapturerAndroid == 0 || mStopping) return;
++        mStopping = true;
++        reportFailure(reason);
++        ScreenCaptureJni.get().onStop(mNativeDesktopCapturerAndroid);
++    }
++
++    private void registerLegacyDisplayListener(Context context) {
++        if (mSession == null || Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return;
++        mDisplayManager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
++        if (mDisplayManager == null) return;
++        mDisplayListener =
++                new DisplayManager.DisplayListener() {
++                    @Override
++                    public void onDisplayAdded(int displayId) {}
++
++                    @Override
++                    public void onDisplayRemoved(int displayId) {}
++
++                    @Override
++                    public void onDisplayChanged(int displayId) {
++                        if (displayId == Display.DEFAULT_DISPLAY) resizeLegacyDisplay();
++                    }
++                };
++        mDisplayManager.registerDisplayListener(mDisplayListener, mHandler);
++        resizeLegacyDisplay();
++    }
++
++    @SuppressWarnings("deprecation")
++    private void resizeLegacyDisplay() {
++        if (mNativeDesktopCapturerAndroid == 0 || mStopping || mImageHandlerQueue.isEmpty()) return;
++        if (mDisplayManager == null) return;
++        Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
++        if (display == null) return;
++        DisplayMetrics metrics = new DisplayMetrics();
++        display.getRealMetrics(metrics);
++        if (metrics.widthPixels <= 0 || metrics.heightPixels <= 0) return;
++        recreateListener(
++                new CaptureState(
++                        metrics.widthPixels, metrics.heightPixels, metrics.densityDpi,
++                        PixelFormat.RGBA_8888));
+     }
+ 
+     private void registerComponentCallbacks() {
+@@ -392,8 +522,9 @@
+     private class MediaProjectionCallback extends MediaProjection.Callback {
+         @Override
+         public void onCapturedContentResize(int width, int height) {
+-            if (mNativeDesktopCapturerAndroid == 0) return;
+-            if (mContext == null) return;
++            if (mNativeDesktopCapturerAndroid == 0 || mStopping) return;
++            if (mContext == null || mImageHandlerQueue.isEmpty()) return;
++            if (width <= 0 || height <= 0) return;
+ 
+             final int format =
+                     mImageHandlerQueue.get(mImageHandlerQueue.size() - 1).getCaptureState().format;
+@@ -412,7 +543,8 @@
+ 
+         @Override
+         public void onStop() {
+-            if (mNativeDesktopCapturerAndroid == 0) return;
++            if (mNativeDesktopCapturerAndroid == 0 || mStopping) return;
++            mStopping = true;
+             mMediaProjection = null;
+             ScreenCaptureJni.get().onStop(mNativeDesktopCapturerAndroid);
+         }
+@@ -443,11 +575,15 @@
+             return;
+         }
+ 
+-        final var imageHandler = createImageHandler(captureState);
+-
+-        assert mVirtualDisplay != null;
+-        mVirtualDisplay.resize(captureState.width, captureState.height, captureState.dpi);
+-        mVirtualDisplay.setSurface(imageHandler.getSurface());
++        if (mNativeDesktopCapturerAndroid == 0 || mStopping) return;
++        try {
++            final var imageHandler = createImageHandler(captureState);
++            assert mVirtualDisplay != null;
++            mVirtualDisplay.resize(captureState.width, captureState.height, captureState.dpi);
++            mVirtualDisplay.setSurface(imageHandler.getSurface());
++        } catch (RuntimeException error) {
++            stopWithFailure("Display resize: " + error.getClass().getSimpleName());
++        }
+     }
+ 
+     private void createListener(CaptureState captureState) {
+@@ -465,6 +601,7 @@
+                         imageHandler.getSurface(),
+                         null,
+                         null);
++        if (mVirtualDisplay == null) throw new IllegalStateException("No virtual display");
+     }
+ 
+     // ImageHandler.Delegate
+@@ -475,12 +612,15 @@
+             long timestampNs,
+             Plane plane,
+             Rect cropRect) {
+-        // If the native side was destroyed, then exit without calling JNI methods.
+-        if (mNativeDesktopCapturerAndroid == 0) return;
+-
+-        // Don't close old `ImageHandler`s until we have a Image written to the new
+-        // Image handler. This is to make sure that if the OS is still trying to write
+-        // to an older Surface from `ImageReader` it can.
++        if (mNativeDesktopCapturerAndroid == 0 || mStopping) {
++            releaseCb.run();
++            return;
++        }
++        if (!mReceivedFrame) {
++            mReceivedFrame = true;
++            recordStage("first RGBA frame received");
++        }
++        // Keep upstream buffer ownership: close old readers only once the replacement produces.
+         closeImageHandlersBefore(imageHandler);
+ 
+         ScreenCaptureJni.get()
+@@ -504,32 +644,8 @@
+             long timestampNs,
+             Plane[] planes,
+             Rect cropRect) {
+-        // If the native side was destroyed, then exit without calling JNI methods.
+-        if (mNativeDesktopCapturerAndroid == 0) return;
+-
+-        // Don't close old `ImageHandler`s until we have a Image written to the new
+-        // Image handler. This is to make sure that if the OS is still trying to write
+-        // to an older Surface from `ImageReader` it can.
+-        closeImageHandlersBefore(imageHandler);
+-
+-        ScreenCaptureJni.get()
+-                .onI420FrameAvailable(
+-                        mNativeDesktopCapturerAndroid,
+-                        releaseCb,
+-                        timestampNs,
+-                        planes[0].getBuffer(),
+-                        planes[0].getPixelStride(),
+-                        planes[0].getRowStride(),
+-                        planes[1].getBuffer(),
+-                        planes[1].getPixelStride(),
+-                        planes[1].getRowStride(),
+-                        planes[2].getBuffer(),
+-                        planes[2].getPixelStride(),
+-                        planes[2].getRowStride(),
+-                        cropRect.left,
+-                        cropRect.top,
+-                        cropRect.right,
+-                        cropRect.bottom);
++        releaseCb.run();
++        stopWithFailure("Unsupported I420 capture format; native conversion is not implemented");
+     }
+ 
+     @Override
+@@ -540,9 +656,11 @@
+ 
+     @Override
+     public void recreateImageHandler(CaptureState captureState) {
+-        // If the native side was destroyed, then don't bother recreating the ImageHandler.
+-        if (mNativeDesktopCapturerAndroid == 0) return;
+-
++        if (mNativeDesktopCapturerAndroid == 0 || mStopping) return;
++        if (captureState.format != PixelFormat.RGBA_8888) {
++            stopWithFailure("Android could not provide RGBA capture frames");
++            return;
++        }
+         recreateListener(captureState);
+     }
+ 
+diff --git a/content/public/android/java/src/org/chromium/content_public/browser/media/capture/ScreenCaptureSession.java b/content/public/android/java/src/org/chromium/content_public/browser/media/capture/ScreenCaptureSession.java
+new file mode 100644
+--- /dev/null
++++ b/content/public/android/java/src/org/chromium/content_public/browser/media/capture/ScreenCaptureSession.java
+@@ -0,0 +1,72 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.content_public.browser.media.capture;
++
++import android.os.Build;
++import android.os.SystemClock;
++
++import org.chromium.base.Callback;
++import org.chromium.base.ThreadUtils;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++
++/** Owns one public full-display request and its local, account-free startup report. */
++@NullMarked
++public final class ScreenCaptureSession {
++    private static @Nullable ScreenCaptureSession sActive;
++
++    private final long mStartedAt = SystemClock.elapsedRealtime();
++    private final StringBuilder mReport =
++            new StringBuilder("Screen capture v1; Android API " + Build.VERSION.SDK_INT + "\n");
++    private @Nullable Callback<String> mOnFailure;
++    private int mStageCount;
++    private boolean mFailed;
++
++    private ScreenCaptureSession(Callback<String> onFailure) {
++        mOnFailure = onFailure;
++        record("request accepted");
++    }
++
++    /** Returns null while another request, system prompt or capture is still owned. */
++    public static synchronized @Nullable ScreenCaptureSession acquire(Callback<String> onFailure) {
++        if (sActive != null) return null;
++        sActive = new ScreenCaptureSession(onFailure);
++        return sActive;
++    }
++
++    public synchronized void record(String stage) {
++        if (mStageCount++ >= 24) return;
++        mReport.append(SystemClock.elapsedRealtime() - mStartedAt)
++                .append(" ms: ")
++                .append(stage)
++                .append('\n');
++    }
++
++    /** Reports only fixed stage names and exception classes, never URLs or exception messages. */
++    public void fail(String reason) {
++        final Callback<String> callback;
++        final String report;
++        synchronized (this) {
++            if (mFailed || mOnFailure == null) return;
++            mFailed = true;
++            callback = mOnFailure;
++            report = mReport + "Failure: " + reason;
++        }
++        ThreadUtils.runOnUiThread(() -> callback.onResult(report));
++    }
++
++    public void release() {
++        synchronized (ScreenCaptureSession.class) {
++            if (sActive == this) sActive = null;
++        }
++        synchronized (this) {
++            mOnFailure = null;
++        }
++    }
++
++    static synchronized void resetForTesting() {
++        if (sActive != null) sActive.release();
++    }
++}
+diff --git a/content/public/android/junit/src/org/chromium/content_public/browser/media/capture/ScreenCaptureTest.java b/content/public/android/junit/src/org/chromium/content_public/browser/media/capture/ScreenCaptureTest.java
+--- a/content/public/android/junit/src/org/chromium/content_public/browser/media/capture/ScreenCaptureTest.java
++++ b/content/public/android/junit/src/org/chromium/content_public/browser/media/capture/ScreenCaptureTest.java
+@@ -7,6 +7,7 @@
+ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertFalse;
+ import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertNull;
+ import static org.junit.Assert.assertThrows;
+ import static org.junit.Assert.assertTrue;
+ import static org.mockito.ArgumentMatchers.any;
+@@ -294,9 +295,9 @@
+     }
+ 
+     @Test
+-    public void testStartCaptureThrowsIfNoPickResult() {
+-        ScreenCapture.onForegroundServiceRunning(true);
+-        assertThrows(AssertionError.class, () -> mScreenCapture.startCapture());
++    public void testStartCaptureFailsIfNoPickResult() {
++        ScreenCapture.onForegroundServiceRunning(true);
++        assertFalse(mScreenCapture.startCapture());
+         verify(mMediaProjection, never())
+                 .createVirtualDisplay(
+                         any(), anyInt(), anyInt(), anyInt(), anyInt(), any(), any(), any());
+@@ -485,59 +486,30 @@
+     }
+ 
+     @Test
+-    public void testImageHandlerRecreatesOnFormatError() {
+-        final ActivityResult activityResult = new ActivityResult(Activity.RESULT_OK, new Intent());
+-        ScreenCapture.onPick(mWebContents, activityResult);
+-        ScreenCapture.onForegroundServiceRunning(true);
+-        assertTrue(mScreenCapture.startCapture());
+-
+-        assertEquals(1, mImageHandlerStates.size());
+-        final var state0 = mImageHandlerStates.get(0);
+-        assertEquals(PixelFormat.RGBA_8888, state0.imageHandler.getCaptureState().format);
+-
+-        // Simulate producer error causing UnsupportedOperationException on frame acquire.
+-        when(state0.imageReader.acquireLatestImage())
+-                .thenThrow(new UnsupportedOperationException());
+-        state0.imageHandler.onImageAvailable(state0.imageReader);
+-
+-        // ImageHandler should be recreated.
+-        assertEquals(2, mImageHandlerStates.size());
+-        final var state1 = mImageHandlerStates.get(1);
+-
+-        // Should be recreated in YUV.
+-        assertEquals(ImageFormat.YUV_420_888, state1.imageHandler.getCaptureState().format);
+-        final Surface surface1 = state1.imageHandler.getSurface();
+-        verify(mVirtualDisplay).setSurface(surface1);
+-    }
+-
+-    @Test
+-    public void testImageHandlerFormatFallbackPersistsAcrossResizes() {
+-        final ActivityResult activityResult = new ActivityResult(Activity.RESULT_OK, new Intent());
+-        ScreenCapture.onPick(mWebContents, activityResult);
++    public void testImageHandlerStopsOnUnsupportedFormat() {
++        ScreenCapture.onPick(mWebContents, new ActivityResult(Activity.RESULT_OK, new Intent()));
++        ScreenCapture.onForegroundServiceRunning(true);
++        assertTrue(mScreenCapture.startCapture());
++        final var state = mImageHandlerStates.get(0);
++        when(state.imageReader.acquireLatestImage()).thenThrow(new UnsupportedOperationException());
++        state.imageHandler.onImageAvailable(state.imageReader);
++        assertEquals(1, mImageHandlerStates.size());
++        verify(mNativeMock).onStop(NATIVE_POINTER);
++    }
++
++    @Test
++    public void testFormatFailureDoesNotResizeOrStopTwice() {
++        ScreenCapture.onPick(mWebContents, new ActivityResult(Activity.RESULT_OK, new Intent()));
+         ScreenCapture.onForegroundServiceRunning(true);
+         assertTrue(mScreenCapture.startCapture());
+         MediaProjection.Callback callback = getMediaProjectionCallback();
+-
+-        final ImageReader reader0 = mImageHandlerStates.get(0).imageReader;
+-        final ImageHandler handler0 = mImageHandlerStates.get(0).imageHandler;
+-        assertEquals(PixelFormat.RGBA_8888, handler0.getCaptureState().format);
+-
+-        // Trigger a fallback to YUV.
+-        when(reader0.acquireLatestImage()).thenThrow(new UnsupportedOperationException());
+-        handler0.onImageAvailable(reader0);
+-        assertEquals(2, mImageHandlerStates.size());
+-        assertEquals(
+-                ImageFormat.YUV_420_888,
+-                mImageHandlerStates.get(1).imageHandler.getCaptureState().format);
+-
+-        // Trigger a resize.
++        final var state = mImageHandlerStates.get(0);
++        when(state.imageReader.acquireLatestImage()).thenThrow(new UnsupportedOperationException());
++        state.imageHandler.onImageAvailable(state.imageReader);
+         callback.onCapturedContentResize(NEW_WIDTH_PX, NEW_HEIGHT_PX);
+-        assertEquals(3, mImageHandlerStates.size());
+-
+-        // Verify the third handler is still using YUV.
+-        assertEquals(
+-                ImageFormat.YUV_420_888,
+-                mImageHandlerStates.get(2).imageHandler.getCaptureState().format);
++        callback.onStop();
++        assertEquals(1, mImageHandlerStates.size());
++        verify(mNativeMock, times(1)).onStop(NATIVE_POINTER);
+     }
+ 
+     @Test
+@@ -875,118 +847,89 @@
+     }
+ 
+     @Test
+-    public void testOnI420FrameAvailable() {
+-        final ActivityResult activityResult = new ActivityResult(Activity.RESULT_OK, new Intent());
+-        ScreenCapture.onPick(mWebContents, activityResult);
+-        ScreenCapture.onForegroundServiceRunning(true);
+-
+-        assertTrue(mScreenCapture.startCapture());
+-        assertEquals(1, mImageHandlerStates.size());
+-
+-        // Fallback to YUV first.
+-        final ImageReader reader0 = mImageHandlerStates.get(0).imageReader;
+-        final ImageHandler handler0 = mImageHandlerStates.get(0).imageHandler;
+-        when(reader0.acquireLatestImage()).thenThrow(new UnsupportedOperationException());
+-        handler0.onImageAvailable(reader0);
+-
+-        // Verify fallback occurred and we have a YUV handler.
+-        assertEquals(2, mImageHandlerStates.size());
+-        final ImageHandler handler1 = mImageHandlerStates.get(1).imageHandler;
+-        final ImageReader reader1 = mImageHandlerStates.get(1).imageReader;
+-        assertEquals(ImageFormat.YUV_420_888, handler1.getCaptureState().format);
+-
+-        // Prepare a mock YUV image.
+-        final int rowStride = 128;
+-        final Rect cropRect = new Rect(10, 20, 50, 60);
+-        final long timestamp = 12345L;
+-        final Image image =
+-                createMockYuvImage(
+-                        timestamp,
+-                        cropRect,
+-                        /* yPixelStride= */ 1,
+-                        /* yRowStride= */ rowStride,
+-                        /* uPixelStride= */ 2,
+-                        /* uRowStride= */ rowStride,
+-                        /* vPixelStride= */ 2,
+-                        /* vRowStride= */ rowStride);
+-        final Plane[] planes = image.getPlanes();
+-
+-        when(reader1.acquireLatestImage()).thenReturn(image).thenReturn(null);
+-        handler1.onImageAvailable(reader1);
+-
+-        // Verify the native JNI call (onI420FrameAvailable) and its parameters.
+-        final ByteBuffer buffer0 = planes[0].getBuffer();
+-        final ByteBuffer buffer1 = planes[1].getBuffer();
+-        final ByteBuffer buffer2 = planes[2].getBuffer();
+-        verify(mNativeMock)
+-                .onI420FrameAvailable(
+-                        eq(NATIVE_POINTER),
+-                        any(Runnable.class),
+-                        eq(timestamp),
+-                        eq(buffer0),
+-                        eq(1),
+-                        eq(rowStride),
+-                        eq(buffer1),
+-                        eq(2),
+-                        eq(rowStride),
+-                        eq(buffer2),
+-                        eq(2),
+-                        eq(rowStride),
+-                        eq(cropRect.left),
+-                        eq(cropRect.top),
+-                        eq(cropRect.right),
+-                        eq(cropRect.bottom));
+-        verify(mNativeMock, never())
+-                .onRgbaFrameAvailable(
+-                        anyLong(), any(), anyLong(), any(), anyInt(), anyInt(), anyInt(), anyInt(),
+-                        anyInt(), anyInt());
++    public void testOnI420FrameAvailableReleasesImageAndStops() {
++        ScreenCapture.onPick(mWebContents, new ActivityResult(Activity.RESULT_OK, new Intent()));
++        ScreenCapture.onForegroundServiceRunning(true);
++        assertTrue(mScreenCapture.startCapture());
++        final var state = mImageHandlerStates.get(0);
++        final Image image = createMockYuvImage(12345L, new Rect(0, 0, 10, 10), 1, 16, 2, 16, 2, 16);
++        when(state.imageReader.acquireLatestImage()).thenReturn(image).thenReturn(null);
++        state.imageHandler.onImageAvailable(state.imageReader);
++        verify(image).close();
++        verify(mNativeMock).onStop(NATIVE_POINTER);
++        verify(mNativeMock, never()).onI420FrameAvailable(
++                anyLong(), any(), anyLong(), any(), anyInt(), anyInt(), any(), anyInt(),
++                anyInt(), any(), anyInt(), anyInt(), anyInt(), anyInt(), anyInt(), anyInt());
+     }
+ 
+     @Test
+     public void testOnI420FrameAvailableAfterDestroy() {
+-        final ActivityResult activityResult = new ActivityResult(Activity.RESULT_OK, new Intent());
+-        ScreenCapture.onPick(mWebContents, activityResult);
+-        ScreenCapture.onForegroundServiceRunning(true);
+-
+-        assertTrue(mScreenCapture.startCapture());
+-        assertEquals(1, mImageHandlerStates.size());
+-
+-        // Fallback to YUV first.
+-        final ImageReader reader0 = mImageHandlerStates.get(0).imageReader;
+-        final ImageHandler handler0 = mImageHandlerStates.get(0).imageHandler;
+-        when(reader0.acquireLatestImage()).thenThrow(new UnsupportedOperationException());
+-        handler0.onImageAvailable(reader0);
+-
+-        // Destroy ScreenCapture.
+-        final ImageHandler handler1 = mImageHandlerStates.get(1).imageHandler;
+-        final ImageReader reader1 = mImageHandlerStates.get(1).imageReader;
+         mScreenCapture.destroy();
+-
+-        // Prepare a mock YUV image.
+-        final int rowStride = 128;
+-        final Rect cropRect = new Rect(10, 20, 50, 60);
+-        final long timestamp = 12345L;
+-        final Image image =
+-                createMockYuvImage(
+-                        timestamp,
+-                        cropRect,
+-                        /* yPixelStride= */ 1,
+-                        /* yRowStride= */ rowStride,
+-                        /* uPixelStride= */ 2,
+-                        /* uRowStride= */ rowStride,
+-                        /* vPixelStride= */ 2,
+-                        /* vRowStride= */ rowStride);
+-
+-        // Simulate the frame arriving after destroy.
+-        when(reader1.acquireLatestImage()).thenReturn(image).thenReturn(null);
+-        handler1.onImageAvailable(reader1);
+-
+-        // Verify no call to the native side.
+-        verify(mNativeMock, never())
+-                .onI420FrameAvailable(
+-                        anyLong(), any(), anyLong(), any(), anyInt(), anyInt(), any(), anyInt(),
+-                        anyInt(), any(), anyInt(), anyInt(), anyInt(), anyInt(), anyInt(),
+-                        anyInt());
++        Runnable release = mock(Runnable.class);
++        mScreenCapture.onI420FrameAvailable(
++                mock(ImageHandler.class), release, 0L, new Plane[0], new Rect());
++        verify(release).run();
++        verifyNoMoreInteractions(mNativeMock);
++    }
++
++    @Test
++    public void testSessionOwnershipCannotBeReleasedByPreviousSession() {
++        ScreenCaptureSession first = ScreenCaptureSession.acquire(report -> {});
++        assertNotNull(first);
++        assertNull(ScreenCaptureSession.acquire(report -> {}));
++        first.release();
++        ScreenCaptureSession second = ScreenCaptureSession.acquire(report -> {});
++        assertNotNull(second);
++        first.release();
++        assertNull(ScreenCaptureSession.acquire(report -> {}));
++        second.release();
++    }
++
++    @Test
++    public void testUnconsumedHandoffTimesOutClosed() {
++        ArrayList<String> reports = new ArrayList<>();
++        ScreenCaptureSession session = ScreenCaptureSession.acquire(reports::add);
++        assertNotNull(session);
++        assertTrue(ScreenCapture.onFullDisplayPick(
++                mWebContents, new ActivityResult(Activity.RESULT_OK, new Intent()), session));
++        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(31));
++        assertEquals(1, reports.size());
++        assertTrue(reports.get(0).contains("Native handoff timed out"));
++        assertNull(ScreenCaptureSession.acquire(report -> {}));
++        ScreenCapture.onForegroundServiceRunning(true);
++        assertFalse(mScreenCapture.startCapture());
++        assertNull(ScreenCaptureSession.acquire(report -> {}));
++    }
++
++    @Test
++    public void testOwnedCaptureReleasesSessionOnDestroy() {
++        ScreenCaptureSession session = ScreenCaptureSession.acquire(report -> {});
++        assertNotNull(session);
++        assertTrue(ScreenCapture.onFullDisplayPick(
++                mWebContents, new ActivityResult(Activity.RESULT_OK, new Intent()), session));
++        ScreenCapture.onForegroundServiceRunning(true);
++        assertTrue(mScreenCapture.startCapture());
++        assertNull(ScreenCaptureSession.acquire(report -> {}));
++        mScreenCapture.destroy();
++        shadowOf(Looper.getMainLooper()).idle();
++        ScreenCaptureSession next = ScreenCaptureSession.acquire(report -> {});
++        assertNotNull(next);
++        next.release();
++    }
++
++    @Test
++    public void testSessionReportsFailureOnlyOnce() {
++        ArrayList<String> reports = new ArrayList<>();
++        ScreenCaptureSession session = ScreenCaptureSession.acquire(reports::add);
++        assertNotNull(session);
++        session.record("Android consent granted");
++        session.fail("first failure");
++        session.fail("second failure");
++        shadowOf(Looper.getMainLooper()).idle();
++        assertEquals(1, reports.size());
++        assertTrue(reports.get(0).contains("Android consent granted"));
++        assertTrue(reports.get(0).contains("first failure"));
++        session.release();
+     }
+ 
+     @Test
