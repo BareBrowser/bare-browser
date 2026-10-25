@@ -26,7 +26,7 @@ This is full-display **video**, not a tab picker or system-audio implementation.
 
 On 2026-10-25, Bare plus patch 0205 built successfully for ARM64 from commit `382c268b8356e5a9541670f7ece881e89ecad3fa`. The test APK, version `1.0.1-pr127.1`, changed only the package/version GN arguments for side-by-side installation; it contained no downstream profile source changes.
 
-The user installed this PR build on their Huawei tablet and confirmed screen sharing works. Automated unit tests were not run; the checklist below is available for further regression coverage.
+The user confirmed screen sharing works with this PR build on a Huawei tablet and multiple Xiaomi phones. Automated unit tests were not run; the checklist below is available for further regression coverage.
 
 ## Repeating the checks
 
