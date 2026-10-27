@@ -1,0 +1,903 @@
+From 519b6cb942f9b6e4583fb04ce931f4cea3c7d289 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 06:53:14 +0000
+Subject: [PATCH] Patch 0000186
+
+---
+ chrome/android/chrome_java_resources.gni      |   2 +
+ chrome/android/chrome_java_sources.gni        |   1 +
+ .../java/res/drawable/bare_menu_eye.xml       |  16 +
+ .../java/res/drawable/bare_menu_eye_off.xml   |  16 +
+ chrome/android/java/res/values/ids.xml        |   4 +
+ .../app/appmenu/BareAppMenuCustomization.java | 343 ++++++++++++++++++
+ .../TabbedAppMenuPropertiesDelegate.java      |  21 ++
+ chrome/android/junit/BUILD.gn                 |   1 +
+ .../BareAppMenuCustomizationUnitTest.java     | 204 +++++++++++
+ ...bbedAppMenuPropertiesDelegateUnitTest.java |   3 +
+ .../preferences/ChromePreferenceKeys.java     |  13 +
+ .../ui/appmenu/AppMenuHandlerImpl.java        |  23 ++
+ .../ui/appmenu/AppMenuItemViewBinder.java     |   1 +
+ .../ui/appmenu/AppMenuPropertiesDelegate.java |  16 +
+ .../strings/android_chrome_strings.grd        |  12 +
+ 15 files changed, 676 insertions(+)
+ create mode 100644 chrome/android/java/res/drawable/bare_menu_eye.xml
+ create mode 100644 chrome/android/java/res/drawable/bare_menu_eye_off.xml
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomizationUnitTest.java
+
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 8be2f4eec29..e9fc20c4f0e 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -691,6 +691,8 @@ chrome_java_resources = [
+   "java/res/xml/ad_services_config.xml",
+   "java/res/xml/appearance_preferences.xml",
+   "java/res/xml/bare_clear_on_exit_preferences.xml",
++  "java/res/drawable/bare_menu_eye.xml",
++  "java/res/drawable/bare_menu_eye_off.xml",
+   "java/res/xml/bare_extensions_preferences.xml",
+   "java/res/xml/bare_push_preferences.xml",
+   "java/res/xml/bare_translate_preferences.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 7c4900f716c..3f0a0dbd094 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -84,6 +84,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/app/MainLayoutSwitcher.java",
+   "java/src/org/chromium/chrome/browser/app/appmenu/AppMenuItemTheme.java",
+   "java/src/org/chromium/chrome/browser/app/appmenu/AppMenuItemUtils.java",
++  "java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java",
+   "java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java",
+   "java/src/org/chromium/chrome/browser/app/bluetooth/BluetoothNotificationServiceImpl.java",
+   "java/src/org/chromium/chrome/browser/app/bookmarks/BookmarkActivity.java",
+diff --git a/chrome/android/java/res/drawable/bare_menu_eye.xml b/chrome/android/java/res/drawable/bare_menu_eye.xml
+new file mode 100644
+index 00000000000..b132671d07e
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_menu_eye.xml
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24"
++    android:tint="?attr/colorControlNormal">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M12,4.5C7,4.5 2.73,7.61 1,12c1.73,4.39 6,7.5 11,7.5s9.27,-3.11 11,-7.5c-1.73,-4.39 -6,-7.5 -11,-7.5zM12,17c-2.76,0 -5,-2.24 -5,-5s2.24,-5 5,-5 5,2.24 5,5 -2.24,5 -5,5zM12,9c-1.66,0 -3,1.34 -3,3s1.34,3 3,3 3,-1.34 3,-3 -1.34,-3 -3,-3z" />
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_menu_eye_off.xml b/chrome/android/java/res/drawable/bare_menu_eye_off.xml
+new file mode 100644
+index 00000000000..bb3844f79ef
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_menu_eye_off.xml
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24"
++    android:tint="?attr/colorControlNormal">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M12,7c2.76,0 5,2.24 5,5 0,0.65 -0.13,1.26 -0.36,1.83l2.92,2.92c1.51,-1.26 2.7,-2.89 3.43,-4.75 -1.73,-4.39 -6,-7.5 -11,-7.5 -1.4,0 -2.74,0.25 -3.98,0.7l2.16,2.16C10.74,7.13 11.35,7 12,7zM2,4.27l2.28,2.28 0.46,0.46C3.08,8.3 1.78,10.02 1,12c1.73,4.39 6,7.5 11,7.5 1.55,0 3.03,-0.3 4.38,-0.84l0.42,0.42L19.73,22 21,20.73 3.27,3 2,4.27zM7.53,9.8l1.55,1.55c-0.05,0.21 -0.08,0.43 -0.08,0.65 0,1.66 1.34,3 3,3 0.22,0 0.44,-0.03 0.65,-0.08l1.55,1.55c-0.67,0.33 -1.41,0.53 -2.2,0.53 -2.76,0 -5,-2.24 -5,-5 0,-0.79 0.2,-1.53 0.53,-2.2zM11.84,9.02l3.15,3.15 0.02,-0.16c0,-1.66 -1.34,-3 -3,-3l-0.17,0.01z" />
++</vector>
+diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
+index 81f5d1e6c96..58e68f61ded 100644
+--- a/chrome/android/java/res/values/ids.xml
++++ b/chrome/android/java/res/values/ids.xml
+@@ -278,6 +278,10 @@ found in the LICENSE file.
+     <item type="id" name="recent_entry_window_tab_menu_item" />
+     <item type="id" name="recent_tabs_header_menu_id" />
+     <item type="id" name="recent_tabs_menu_id" />
++    <item type="id" name="bare_menu_tip_id" />
++    <item type="id" name="bare_menu_done_id" />
++    <item type="id" name="bare_menu_edit_help_id" />
++    <item type="id" name="bare_menu_hidden_header_id" />
+     <item type="id" name="reload_menu_id" />
+     <item type="id" name="request_desktop_site_check_id" />
+     <item type="id" name="request_desktop_site_id" />
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
+new file mode 100644
+index 00000000000..cb2d9f69598
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
+@@ -0,0 +1,343 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.app.appmenu;
++
++import android.content.Context;
++
++import androidx.appcompat.content.res.AppCompatResources;
++
++import org.chromium.base.ResettersForTesting;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler.AppMenuItemType;
++import org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties;
++import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
++import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
++import org.chromium.ui.modelutil.PropertyModel;
++
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
++
++/**
++ * Lets the user choose which items the three-dot menu shows.
++ *
++ * <p>Touching and holding an item switches the menu to edit mode, where each item that can be
++ * hidden carries an eye, tapping an item hides it or shows it again, and the items already hidden
++ * are listed together under their own heading. Touching and holding again, or Done, leaves edit
++ * mode. Outside edit mode the hidden items are simply left out. A short tip about this is shown on
++ * the first three times the menu opens.
++ *
++ * <p>Only the items on the list below can be hidden, and they are remembered by a name of their
++ * own rather than by their resource id, which is only stable within one build. Settings, Exit and
++ * the row of buttons at the top are never on it.
++ */
++@NullMarked
++public final class BareAppMenuCustomization {
++    private static final int TIP_LIMIT = 3;
++
++    /** The hideable items: a stable name, then the id the menu gives that item. */
++    private static final String[] KEYS = {
++        "new_tab",
++        "new_incognito_tab",
++        "new_window",
++        "new_incognito_window",
++        "move_to_other_window",
++        "manage_all_windows",
++        "history",
++        "quick_delete",
++        "page_info",
++        "homepage",
++        "downloads",
++        "recently_closed",
++        "extensions",
++        "zoom",
++        "share",
++        "download_page",
++        "print",
++        "find_in_page",
++        "translate",
++        "read_aloud",
++        "reader_mode",
++        "open_with",
++        "open_in_app",
++        "add_to_home_screen",
++        "request_desktop_site",
++        "dark_pages",
++        "developer_tools",
++        "help",
++        "lens",
++        "image_descriptions",
++        "listen_to_feed",
++    };
++
++    private static final int[] IDS = {
++        R.id.new_tab_menu_id,
++        R.id.new_incognito_tab_menu_id,
++        R.id.new_window_menu_id,
++        R.id.new_incognito_window_menu_id,
++        R.id.move_to_other_window_menu_id,
++        R.id.manage_all_windows_menu_id,
++        R.id.open_history_menu_id,
++        R.id.quick_delete_menu_id,
++        R.id.info_menu_id,
++        R.id.homepage_menu_id,
++        R.id.downloads_menu_id,
++        R.id.recent_tabs_menu_id,
++        R.id.extensions_menu_menu_id,
++        R.id.page_zoom_id,
++        R.id.share_menu_id,
++        R.id.offline_page_id,
++        R.id.print_id,
++        R.id.find_in_page_id,
++        R.id.translate_id,
++        R.id.readaloud_menu_id,
++        R.id.reader_mode_menu_id,
++        R.id.open_with_id,
++        R.id.open_in_app_menu_id,
++        R.id.universal_install,
++        R.id.request_desktop_site_id,
++        R.id.auto_dark_web_contents_id,
++        R.id.dev_tools,
++        R.id.help_id,
++        R.id.lens_overlay_menu_id,
++        R.id.get_image_descriptions_id,
++        R.id.listen_to_feed_id,
++    };
++
++    private static boolean sEditMode;
++    private static boolean sTipDisabledForTesting;
++
++    private BareAppMenuCustomization() {}
++
++    static @Nullable String keyFor(int id) {
++        for (int i = 0; i < IDS.length; i++) {
++            if (IDS[i] == id) return KEYS[i];
++        }
++        return null;
++    }
++
++    static boolean isHideable(int id) {
++        return keyFor(id) != null;
++    }
++
++    /** Whether a long press on this item should open edit mode (and not just show its name). */
++    static boolean opensEditMode(int id) {
++        return isHideable(id)
++                || id == R.id.preferences_id
++                || id == R.id.bare_exit_id
++                || id == R.id.bare_menu_tip_id
++                || id == R.id.bare_menu_done_id
++                || id == R.id.bare_menu_edit_help_id
++                || id == R.id.bare_menu_hidden_header_id;
++    }
++
++    /** Tests that count the menu's rows do not expect the tip. */
++    public static void setTipDisabledForTesting(boolean disabled) {
++        sTipDisabledForTesting = disabled;
++        ResettersForTesting.register(() -> sTipDisabledForTesting = false);
++    }
++
++    static boolean isEditMode() {
++        return sEditMode;
++    }
++
++    public static void setEditMode(boolean editMode) {
++        sEditMode = editMode;
++    }
++
++    static Set<String> getHidden() {
++        Set<String> stored =
++                ChromeSharedPreferences.getInstance()
++                        .readStringSet(ChromePreferenceKeys.BARE_APP_MENU_HIDDEN_ITEMS, null);
++        return stored == null ? new HashSet<>() : new HashSet<>(stored);
++    }
++
++    static void setHidden(Set<String> hidden) {
++        if (hidden.isEmpty()) {
++            ChromeSharedPreferences.getInstance()
++                    .removeKey(ChromePreferenceKeys.BARE_APP_MENU_HIDDEN_ITEMS);
++        } else {
++            ChromeSharedPreferences.getInstance()
++                    .writeStringSet(ChromePreferenceKeys.BARE_APP_MENU_HIDDEN_ITEMS, hidden);
++        }
++    }
++
++    /** Hides the item, or shows it again if it was hidden. */
++    static void toggle(int id) {
++        String key = keyFor(id);
++        if (key == null) return;
++        Set<String> hidden = getHidden();
++        if (!hidden.remove(key)) hidden.add(key);
++        setHidden(hidden);
++    }
++
++    public static boolean shouldShowTip() {
++        return !sEditMode
++                && !sTipDisabledForTesting
++                && ChromeSharedPreferences.getInstance()
++                                .readInt(ChromePreferenceKeys.BARE_APP_MENU_EDIT_TIP_COUNT, 0)
++                        < TIP_LIMIT;
++    }
++
++    public static void countTipShown() {
++        int shown =
++                ChromeSharedPreferences.getInstance()
++                        .readInt(ChromePreferenceKeys.BARE_APP_MENU_EDIT_TIP_COUNT, 0);
++        ChromeSharedPreferences.getInstance()
++                .writeInt(ChromePreferenceKeys.BARE_APP_MENU_EDIT_TIP_COUNT, shown + 1);
++    }
++
++    public static void dismissTip() {
++        ChromeSharedPreferences.getInstance()
++                .writeInt(ChromePreferenceKeys.BARE_APP_MENU_EDIT_TIP_COUNT, TIP_LIMIT);
++    }
++
++    /**
++     * Applies the user's choices to a freshly built menu, in place. Hidden items are removed
++     * (and, in edit mode, listed together at the end), dividers left stranded are dropped, and the
++     * tip or the edit-mode rows are added.
++     */
++    public static ModelList apply(
++            Context context, AppMenuItemTheme theme, boolean isIconAtStart, ModelList list) {
++        Set<String> hidden = getHidden();
++        List<ListItem> hiddenItems = new ArrayList<>();
++        for (int i = list.size() - 1; i >= 0; i--) {
++            ListItem item = list.get(i);
++            if (item.type != AppMenuItemType.STANDARD
++                    && item.type != AppMenuItemType.STANDARD_NO_ICON) {
++                continue;
++            }
++            String key = keyFor(item.model.get(AppMenuItemProperties.MENU_ITEM_ID));
++            if (key == null) continue;
++            boolean isHidden = hidden.contains(key);
++            if (sEditMode) {
++                item.model.set(
++                        AppMenuItemProperties.END_ICON,
++                        AppCompatResources.getDrawable(
++                                context,
++                                isHidden ? R.drawable.bare_menu_eye_off : R.drawable.bare_menu_eye));
++                if (isHidden) {
++                    list.removeAt(i);
++                    hiddenItems.add(0, item);
++                }
++            } else if (isHidden) {
++                list.removeAt(i);
++            }
++        }
++        removeStrandedDividers(list);
++
++        // Rows go after the button row at the top, if there is one.
++        int at = list.size() > 0 && list.get(0).type == AppMenuItemType.BUTTON_ROW ? 1 : 0;
++        if (sEditMode) {
++            list.add(
++                    at,
++                    textRow(
++                            context,
++                            theme,
++                            isIconAtStart,
++                            R.id.bare_menu_done_id,
++                            R.string.bare_menu_edit_done,
++                            true));
++            list.add(
++                    at + 1,
++                    textRow(
++                            context,
++                            theme,
++                            isIconAtStart,
++                            R.id.bare_menu_edit_help_id,
++                            R.string.bare_menu_edit_help,
++                            false));
++            if (!hiddenItems.isEmpty()) {
++                list.add(new ListItem(AppMenuItemType.DIVIDER, dividerModel()));
++                list.add(
++                        textRow(
++                                context,
++                                theme,
++                                isIconAtStart,
++                                R.id.bare_menu_hidden_header_id,
++                                R.string.bare_menu_hidden_heading,
++                                false));
++                for (ListItem item : hiddenItems) list.add(item);
++            }
++        } else if (shouldShowTip()) {
++            list.add(
++                    at,
++                    textRow(
++                            context,
++                            theme,
++                            isIconAtStart,
++                            R.id.bare_menu_tip_id,
++                            R.string.bare_menu_tip,
++                            true));
++        }
++        return list;
++    }
++
++    private static ListItem textRow(
++            Context context,
++            AppMenuItemTheme theme,
++            boolean isIconAtStart,
++            int id,
++            int titleRes,
++            boolean enabled) {
++        PropertyModel model =
++                AppMenuItemUtils.buildModelForStandardMenuItem(
++                        context, theme, id, titleRes, /* iconResId= */ 0, isIconAtStart);
++        model.set(AppMenuItemProperties.TITLE_MAX_LINES, 4);
++        model.set(AppMenuItemProperties.ENABLED, enabled);
++        return AppMenuItemUtils.createStandardListItem(model, /* showIcon= */ false);
++    }
++
++    private static PropertyModel dividerModel() {
++        return AppMenuItemUtils.buildModelForDivider(R.id.divider_line_id);
++    }
++
++    /** Drops dividers at the start or end of the list and any that follow another. */
++    private static void removeStrandedDividers(ModelList list) {
++        for (int i = list.size() - 1; i >= 0; i--) {
++            if (list.get(i).type != AppMenuItemType.DIVIDER) continue;
++            boolean first = i == 0;
++            boolean last = i == list.size() - 1;
++            boolean afterDivider = i > 0 && list.get(i - 1).type == AppMenuItemType.DIVIDER;
++            if (first || last || afterDivider) list.removeAt(i);
++        }
++    }
++
++    /** What the delegate does for a click while editing or on the tip. Returns whether handled. */
++    public static boolean onRowClicked(PropertyModel model) {
++        int id = model.get(AppMenuItemProperties.MENU_ITEM_ID);
++        if (sEditMode) {
++            if (id == R.id.bare_menu_done_id) {
++                sEditMode = false;
++            } else if (isHideable(id)) {
++                toggle(id);
++            }
++            return true;
++        }
++        if (id == R.id.bare_menu_tip_id) {
++            dismissTip();
++            return true;
++        }
++        return false;
++    }
++
++    /** What the delegate does for a long press. Returns whether the menu has to be rebuilt. */
++    public static boolean onRowLongPressed(PropertyModel model) {
++        int id = model.get(AppMenuItemProperties.MENU_ITEM_ID);
++        if (sEditMode) {
++            sEditMode = false;
++            return true;
++        }
++        if (!opensEditMode(id)) return false;
++        sEditMode = true;
++        dismissTip();
++        return true;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+index 026dbf3dfdd..dcb63c26e8a 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+@@ -34,6 +34,7 @@ import org.chromium.chrome.browser.ActivityTabProvider;
+ import org.chromium.chrome.browser.RecentlyClosedEntriesManager;
+ import org.chromium.chrome.browser.app.appmenu.AppMenuItemUtils;
+ import org.chromium.chrome.browser.app.appmenu.AppMenuPropertiesDelegateImpl;
++import org.chromium.chrome.browser.app.appmenu.BareAppMenuCustomization;
+ import org.chromium.chrome.browser.bookmarks.BookmarkImageFetcher;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+ import org.chromium.chrome.browser.device.DeviceConditions;
+@@ -298,9 +299,25 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+         } else if (menuGroup == MenuGroup.TABLET_EMPTY_MODE_MENU) {
+             populateTabletEmptyModeMenu(modelList);
+         }
++        if (menuGroup == MenuGroup.PAGE_MENU) {
++            // Bare: the items the user chose to hide, and the editing rows.
++            BareAppMenuCustomization.apply(
++                    mContext, getAppMenuItemTheme(), isMenuIconAtStart(), modelList);
++        }
+         return modelList;
+     }
+ 
++    @Override
++    public boolean onMenuRowClicked(PropertyModel model) {
++        return getMenuGroup() == MenuGroup.PAGE_MENU && BareAppMenuCustomization.onRowClicked(model);
++    }
++
++    @Override
++    public boolean onMenuRowLongPressed(PropertyModel model) {
++        return getMenuGroup() == MenuGroup.PAGE_MENU
++                && BareAppMenuCustomization.onRowLongPressed(model);
++    }
++
+     private void populatePageModeMenu(MVCListAdapter.ModelList modelList) {
+         Tab currentTab = mActivityTabProvider.get();
+ 
+@@ -1736,6 +1753,7 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+     @Override
+     public void onMenuDismissed() {
+         super.onMenuDismissed();
++        BareAppMenuCustomization.setEditMode(false);
+         RecentlyClosedEntriesManager manager = mRecentlyClosedEntriesManagerSupplier.get();
+         if (manager != null) {
+             manager.clearTabListCache();
+@@ -1753,6 +1771,9 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+     @Override
+     public void onMenuShown() {
+         super.onMenuShown();
++        if (getMenuGroup() == MenuGroup.PAGE_MENU && BareAppMenuCustomization.shouldShowTip()) {
++            BareAppMenuCustomization.countTipShown();
++        }
+ 
+         if (isSubmenusEnabled(mContext)) {
+             // TODO(crbug.com/521223427): Implement dynamic updates so that we don't
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index d10cf41139c..16baffd0af6 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -438,6 +438,7 @@ if (is_android) {
+       "src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcherUnitTest.java",
++      "src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomizationUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java",
+       "src/org/chromium/chrome/browser/services/gcm/BarePushDistributorUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareMediaProbeUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomizationUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomizationUnitTest.java
+new file mode 100644
+index 00000000000..b10fb7ac009
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomizationUnitTest.java
+@@ -0,0 +1,204 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.app.appmenu;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertTrue;
++
++import android.content.Context;
++
++import androidx.test.core.app.ApplicationProvider;
++
++import org.junit.After;
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler.AppMenuItemType;
++import org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties;
++import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
++import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
++import org.chromium.ui.modelutil.PropertyModel;
++
++/** Unit tests for {@link BareAppMenuCustomization}. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareAppMenuCustomizationUnitTest {
++    private Context mContext;
++
++    @Before
++    public void setUp() {
++        mContext = ApplicationProvider.getApplicationContext();
++        BareAppMenuCustomization.setEditMode(false);
++    }
++
++    @After
++    public void tearDown() {
++        BareAppMenuCustomization.setEditMode(false);
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.BARE_APP_MENU_HIDDEN_ITEMS);
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.BARE_APP_MENU_EDIT_TIP_COUNT);
++    }
++
++    private static ListItem item(int id) {
++        PropertyModel model =
++                new PropertyModel.Builder(AppMenuItemProperties.ALL_KEYS)
++                        .with(AppMenuItemProperties.MENU_ITEM_ID, id)
++                        .with(AppMenuItemProperties.ENABLED, true)
++                        .build();
++        return new ListItem(AppMenuItemType.STANDARD_NO_ICON, model);
++    }
++
++    private static ListItem divider() {
++        PropertyModel model =
++                new PropertyModel.Builder(AppMenuItemProperties.ALL_KEYS)
++                        .with(AppMenuItemProperties.MENU_ITEM_ID, R.id.divider_line_id)
++                        .build();
++        return new ListItem(AppMenuItemType.DIVIDER, model);
++    }
++
++    private ModelList menu() {
++        ModelList list = new ModelList();
++        list.add(item(R.id.new_tab_menu_id));
++        list.add(divider());
++        list.add(item(R.id.share_menu_id));
++        list.add(item(R.id.print_id));
++        list.add(divider());
++        list.add(item(R.id.preferences_id));
++        return list;
++    }
++
++    private int idAt(ModelList list, int index) {
++        return list.get(index).model.get(AppMenuItemProperties.MENU_ITEM_ID);
++    }
++
++    private ModelList apply(ModelList list) {
++        return BareAppMenuCustomization.apply(
++                mContext,
++                new AppMenuItemTheme(mContext, /* tabModelSelector= */ null),
++                /* isIconAtStart= */ false,
++                list);
++    }
++
++    @Test
++    public void testNamesAreStableAndSettingsCannotBeHidden() {
++        assertEquals("share", BareAppMenuCustomization.keyFor(R.id.share_menu_id));
++        assertNull(BareAppMenuCustomization.keyFor(R.id.preferences_id));
++        assertNull(BareAppMenuCustomization.keyFor(R.id.bare_exit_id));
++        assertNull(BareAppMenuCustomization.keyFor(R.id.icon_row_menu_id));
++    }
++
++    @Test
++    public void testNothingHiddenLeavesTheMenuAlone() {
++        BareAppMenuCustomization.dismissTip();
++        ModelList list = apply(menu());
++        assertEquals(6, list.size());
++    }
++
++    @Test
++    public void testHiddenItemsAreLeftOut() {
++        BareAppMenuCustomization.dismissTip();
++        BareAppMenuCustomization.toggle(R.id.share_menu_id);
++        ModelList list = apply(menu());
++        assertEquals(5, list.size());
++        for (int i = 0; i < list.size(); i++) {
++            assertFalse(idAt(list, i) == R.id.share_menu_id);
++        }
++    }
++
++    @Test
++    public void testHidingTheWholeGroupDropsItsDividerToo() {
++        BareAppMenuCustomization.dismissTip();
++        BareAppMenuCustomization.toggle(R.id.share_menu_id);
++        BareAppMenuCustomization.toggle(R.id.print_id);
++        ModelList list = apply(menu());
++        // new tab, divider, settings: the second divider would have sat next to the first.
++        assertEquals(3, list.size());
++        assertEquals(AppMenuItemType.DIVIDER, list.get(1).type);
++    }
++
++    @Test
++    public void testNoDividerIsLeftAtTheEnds() {
++        BareAppMenuCustomization.dismissTip();
++        BareAppMenuCustomization.toggle(R.id.new_tab_menu_id);
++        ModelList list = apply(menu());
++        assertFalse(list.get(0).type == AppMenuItemType.DIVIDER);
++        assertFalse(list.get(list.size() - 1).type == AppMenuItemType.DIVIDER);
++    }
++
++    @Test
++    public void testTogglingTwiceShowsItAgain() {
++        BareAppMenuCustomization.toggle(R.id.share_menu_id);
++        BareAppMenuCustomization.toggle(R.id.share_menu_id);
++        assertTrue(BareAppMenuCustomization.getHidden().isEmpty());
++    }
++
++    @Test
++    public void testTheTipIsShownThreeTimesThenNever() {
++        for (int i = 0; i < 3; i++) {
++            assertTrue(BareAppMenuCustomization.shouldShowTip());
++            ModelList list = apply(menu());
++            assertEquals(7, list.size());
++            BareAppMenuCustomization.countTipShown();
++        }
++        assertFalse(BareAppMenuCustomization.shouldShowTip());
++        assertEquals(6, apply(menu()).size());
++    }
++
++    @Test
++    public void testTappingTheTipDismissesIt() {
++        PropertyModel tip = item(R.id.bare_menu_tip_id).model;
++        assertTrue(BareAppMenuCustomization.onRowClicked(tip));
++        assertFalse(BareAppMenuCustomization.shouldShowTip());
++    }
++
++    @Test
++    public void testLongPressOpensEditModeAndAnotherClosesIt() {
++        PropertyModel share = item(R.id.share_menu_id).model;
++        assertTrue(BareAppMenuCustomization.onRowLongPressed(share));
++        assertTrue(BareAppMenuCustomization.isEditMode());
++        assertTrue(BareAppMenuCustomization.onRowLongPressed(share));
++        assertFalse(BareAppMenuCustomization.isEditMode());
++    }
++
++    @Test
++    public void testLongPressOnAnythingElseDoesNotEdit() {
++        PropertyModel back = item(R.id.back_menu_id).model;
++        assertFalse(BareAppMenuCustomization.onRowLongPressed(back));
++        assertFalse(BareAppMenuCustomization.isEditMode());
++    }
++
++    @Test
++    public void testEditModeListsHiddenItemsAtTheEndAndTapsToggle() {
++        BareAppMenuCustomization.toggle(R.id.share_menu_id);
++        BareAppMenuCustomization.setEditMode(true);
++        ModelList list = apply(menu());
++        // Done and the help line, the visible items, a divider, a heading and the hidden one.
++        assertEquals(AppMenuItemType.STANDARD_NO_ICON, list.get(0).type);
++        assertEquals(R.id.bare_menu_done_id, idAt(list, 0));
++        assertEquals(R.id.share_menu_id, idAt(list, list.size() - 1));
++        assertNotNull(list.get(list.size() - 1).model.get(AppMenuItemProperties.END_ICON));
++
++        PropertyModel share = list.get(list.size() - 1).model;
++        assertTrue(BareAppMenuCustomization.onRowClicked(share));
++        assertTrue(BareAppMenuCustomization.getHidden().isEmpty());
++        // A tap on Done leaves edit mode.
++        assertTrue(BareAppMenuCustomization.onRowClicked(list.get(0).model));
++        assertFalse(BareAppMenuCustomization.isEditMode());
++    }
++
++    @Test
++    public void testTheTipIsNotShownWhileEditing() {
++        BareAppMenuCustomization.setEditMode(true);
++        assertFalse(BareAppMenuCustomization.shouldShowTip());
++    }
++}
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegateUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegateUnitTest.java
+index 0e85cd62040..e954acc9984 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegateUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegateUnitTest.java
+@@ -68,6 +68,7 @@ import org.chromium.base.test.RobolectricUtil;
+ import org.chromium.base.test.util.Features.DisableFeatures;
+ import org.chromium.base.test.util.Features.EnableFeatures;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.app.appmenu.BareAppMenuCustomization;
+ import org.chromium.chrome.browser.ActivityTabProvider;
+ import org.chromium.chrome.browser.RecentlyClosedEntriesManager;
+ import org.chromium.chrome.browser.app.appmenu.AppMenuItemTheme;
+@@ -326,6 +327,8 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
+ 
+     @Before
+     public void setUp() {
++        // Bare's tip about editing the menu is an extra row that these counts do not expect.
++        BareAppMenuCustomization.setTipDisabledForTesting(true);
+         TrackerFactory.setTrackerForTests(mTracker);
+         Context context =
+                 new ContextThemeWrapper(
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 34328460151..fa28634ed71 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -456,6 +456,17 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_USER_AGENT_FIT_PHONE = "Bare.UserAgent.FitPhone";
+ 
++    /** Menu items the user has hidden from the three-dot menu, as stable names, not ids. */
++    public static final String BARE_APP_MENU_HIDDEN_ITEMS = "Bare.AppMenu.HiddenItems";
++
++
++
++
++
++
++    /** How many times the tip about editing the menu has been shown; 3 or more is finished. */
++    public static final String BARE_APP_MENU_EDIT_TIP_COUNT = "Bare.AppMenu.EditTipCount";
++
+     /**
+      * Whether fullscreen video follows the phone's orientation (the default) instead of the
+      * page's request to lock it. Read by content code under the same string, so keep them equal.
+@@ -1357,6 +1368,8 @@ public final class ChromePreferenceKeys {
+                 DOWNLOAD_EXTERNAL_SEND_SIGN_IN,
+                 BARE_USER_AGENT_CUSTOM,
+                 BARE_USER_AGENT_FIT_PHONE,
++                BARE_APP_MENU_HIDDEN_ITEMS,
++                BARE_APP_MENU_EDIT_TIP_COUNT,
+                 BARE_MEDIA_FULLSCREEN_FOLLOWS_PHONE,
+                 BARE_USER_AGENT_PRESET,
+                 BARE_ADDRESS_BAR_SWIPE_TABS,
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java
+index 9a1cbc7f512..6141ba43d24 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java
+@@ -512,6 +512,11 @@ class AppMenuHandlerImpl
+         if (mAppMenu == null) return;
+         if (!model.get(AppMenuItemProperties.ENABLED)) return;
+ 
++        if (mDelegate.onMenuRowClicked(model)) {
++            reloadMenuItems();
++            return;
++        }
++
+         int itemId = model.get(AppMenuItemProperties.MENU_ITEM_ID);
+ 
+         mAppMenu.setSelectedItemBeforeDismiss(true);
+@@ -529,6 +534,10 @@ class AppMenuHandlerImpl
+     @Override
+     public boolean onItemLongClick(PropertyModel model, View view) {
+         if (mAppMenu == null) return false;
++        if (mDelegate.onMenuRowLongPressed(model)) {
++            reloadMenuItems();
++            return true;
++        }
+         if (!model.get(AppMenuItemProperties.ENABLED)) return false;
+ 
+         mAppMenu.setSelectedItemBeforeDismiss(true);
+@@ -541,6 +550,20 @@ class AppMenuHandlerImpl
+         return showToastForItem(message, view);
+     }
+ 
++    /**
++     * Fills the menu again from the delegate, keeping the window open. Used when the items change
++     * under the user's finger, as in the editable menu.
++     */
++    private void reloadMenuItems() {
++        if (mModelList == null || mAppMenu == null) return;
++        ModelList fresh = mDelegate.getMenuItems();
++        List<ListItem> items = new ArrayList<>();
++        for (ListItem item : fresh) items.add(item);
++        updateModelForHighlightAndClick(
++                items, mHighlightMenuId, this, /* startIndex= */ 0, /* withAssertions= */ false);
++        mModelList.set(items);
++    }
++
+     private static boolean showToastForItem(CharSequence message, View view) {
+         Context context = view.getContext();
+         final @ColorInt int backgroundColor = ContextCompat.getColor(context, R.color.toast_color);
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuItemViewBinder.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuItemViewBinder.java
+index 10c31b6fbf1..124cfc9555c 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuItemViewBinder.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuItemViewBinder.java
+@@ -455,6 +455,7 @@ class AppMenuItemViewBinder {
+                         view,
+                         triggeringMotion -> clickHandler.onItemClick(model, triggeringMotion)));
+         view.setOnClickListener(v -> clickHandler.onItemClick(model));
++        view.setOnLongClickListener(v -> clickHandler.onItemLongClick(model, v));
+     }
+ 
+     private static void setupMenuButton(
+diff --git a/chrome/browser/ui/android/appmenu/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuPropertiesDelegate.java b/chrome/browser/ui/android/appmenu/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuPropertiesDelegate.java
+index b2c21be70ac..89bf72f4494 100644
+--- a/chrome/browser/ui/android/appmenu/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuPropertiesDelegate.java
++++ b/chrome/browser/ui/android/appmenu/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuPropertiesDelegate.java
+@@ -42,6 +42,22 @@ public interface AppMenuPropertiesDelegate {
+      */
+     ModelList getMenuItems();
+ 
++    /**
++     * Called for a click before it is acted on. Returns whether the delegate used it (the menu is
++     * then rebuilt rather than closed). Bare's editable menu uses this.
++     */
++    default boolean onMenuRowClicked(PropertyModel model) {
++        return false;
++    }
++
++    /**
++     * Called for a long press on a row. Returns whether the delegate used it, in which case the
++     * menu is rebuilt from {@link #getMenuItems()}.
++     */
++    default boolean onMenuRowLongPressed(PropertyModel model) {
++        return false;
++    }
++
+     /**
+      * Gets a bundle of (optional) extra data associated with the provided MenuItem.
+      *
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 65adf52090e..cd156cffd75 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4492,6 +4492,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_MINIMAL_LAYOUT_SUMMARY" desc="Summary of the setting that removes the bottom button bar. Applies after a restart.">
+         One row only: the address bar with New tab, Tabs and Menu. Applies after a restart.
+       </message>
++      <message name="IDS_BARE_MENU_TIP" desc="A tip at the top of the three-dot menu, shown the first few times. Tapping it dismisses it.">
++        Tip: touch and hold an item to choose which ones this menu shows. Tap here to dismiss.
++      </message>
++      <message name="IDS_BARE_MENU_EDIT_DONE" desc="Row at the top of the edit-mode menu that finishes editing. [CHAR_LIMIT=24]">
++        Done
++      </message>
++      <message name="IDS_BARE_MENU_EDIT_HELP" desc="Explains edit mode of the three-dot menu. Settings and Exit cannot be hidden.">
++        Tap an item to hide it or show it again. Settings and Exit always stay. Touch and hold to finish.
++      </message>
++      <message name="IDS_BARE_MENU_HIDDEN_HEADING" desc="Heading in edit mode above the menu items that are currently hidden. [CHAR_LIMIT=24]">
++        Hidden
++      </message>
+       <message name="IDS_BARE_CRX_OFFER_TITLE" desc="Title of the dialog offered when an extension file has finished downloading. [CHAR_LIMIT=40]">
+         Install this extension?
+       </message>
+-- 
+2.34.1
+

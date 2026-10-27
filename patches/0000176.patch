@@ -1,0 +1,1053 @@
+From 2ec63007c507ee6eb6ab2eb702fb9fea2420f0e3 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 01:42:25 +0000
+Subject: [PATCH] Patch 0000176
+
+---
+ chrome/android/chrome_java_resources.gni      |   1 +
+ chrome/android/chrome_java_sources.gni        |   4 +
+ chrome/android/java/AndroidManifest.xml       |  19 +
+ .../java/res/xml/bare_push_preferences.xml    |  20 ++
+ .../android/java/res/xml/main_preferences.xml |   5 +
+ .../settings/BarePushSettingsFragment.java    |  93 +++++
+ .../init/ProcessInitializationHandler.java    |   5 +
+ .../services/gcm/BarePushDistributor.java     | 336 ++++++++++++++++++
+ .../services/gcm/BarePushReceiver.java        |  54 +++
+ .../services/gcm/BarePushSubscriber.java      |  51 +++
+ chrome/android/junit/BUILD.gn                 |   1 +
+ .../gcm/BarePushDistributorUnitTest.java      | 178 ++++++++++
+ .../preferences/ChromePreferenceKeys.java     |   9 +
+ .../strings/android_chrome_strings.grd        |  12 +
+ .../instance_id/InstanceIDWithSubtype.java    |  28 ++
+ .../push_messaging/push_messaging_utils.cc    |  11 +
+ 16 files changed, 827 insertions(+)
+ create mode 100644 chrome/android/java/res/xml/bare_push_preferences.xml
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BarePushSettingsFragment.java
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/services/gcm/BarePushDistributor.java
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/services/gcm/BarePushReceiver.java
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/services/gcm/BarePushSubscriber.java
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/services/gcm/BarePushDistributorUnitTest.java
+
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 9ddb66cdb96..8be2f4eec29 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -692,6 +692,7 @@ chrome_java_resources = [
+   "java/res/xml/appearance_preferences.xml",
+   "java/res/xml/bare_clear_on_exit_preferences.xml",
+   "java/res/xml/bare_extensions_preferences.xml",
++  "java/res/xml/bare_push_preferences.xml",
+   "java/res/xml/bare_translate_preferences.xml",
+   "java/res/xml/bare_toolbar_preferences.xml",
+   "java/res/xml/bookmark_bar_preferences.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 7aad4967c9f..41cea0da4ef 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -246,6 +246,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareClearOnExitSettings.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java",
++  "java/src/org/chromium/chrome/browser/bare/settings/BarePushSettingsFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java",
+   "java/src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocol.java",
+   "java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettings.java",
+@@ -1103,6 +1104,9 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/selection/ChromeSelectionDropdownMenuDelegate.java",
+   "java/src/org/chromium/chrome/browser/selection/CompositeSelectionActionMenuDelegate.java",
+   "java/src/org/chromium/chrome/browser/selection/TextSelectionActionMenuDelegate.java",
++  "java/src/org/chromium/chrome/browser/services/gcm/BarePushDistributor.java",
++  "java/src/org/chromium/chrome/browser/services/gcm/BarePushReceiver.java",
++  "java/src/org/chromium/chrome/browser/services/gcm/BarePushSubscriber.java",
+   "java/src/org/chromium/chrome/browser/services/gcm/ChromeGcmListenerServiceImpl.java",
+   "java/src/org/chromium/chrome/browser/services/gcm/GCMBackgroundServiceImpl.java",
+   "java/src/org/chromium/chrome/browser/services/gcm/GCMNativeBackgroundTask.java",
+diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/AndroidManifest.xml
+index 677324d02b0..8804d1b9603 100644
+--- a/chrome/android/java/AndroidManifest.xml
++++ b/chrome/android/java/AndroidManifest.xml
+@@ -229,6 +229,13 @@ by a child template that "extends" this file.
+       </queries>
+     {% endif %}
+ 
++    <!-- Push distributor apps are found by the action they answer to. -->
++    <queries>
++        <intent>
++            <action android:name="org.barebrowser.push.REGISTER" />
++        </intent>
++    </queries>
++
+     <!-- Set android:largeHeap to "true" to allow more than the default
+          Java heap limit (32Mb on Nexus S, 48Mb on Xoom). -->
+       <application android:name="{% block application_name %}org.chromium.chrome.browser.base.SplitChromeApplication{% endblock %}"
+@@ -1125,6 +1132,18 @@ by a child template that "extends" this file.
+         <receiver android:name="com.google.firebase.iid.FirebaseInstanceIdReceiver"
+             tools:node="remove" />
+ 
++        <!-- Receives the answers and the messages of a push distributor app. Exported
++             because a distributor is another app. A message only means anything if it names a
++             token this browser made, and is only shown if it decrypts. -->
++        <receiver android:name="org.chromium.chrome.browser.services.gcm.BarePushReceiver"
++            android:exported="true">
++            <intent-filter>
++                <action android:name="org.barebrowser.push.NEW_ENDPOINT" />
++                <action android:name="org.barebrowser.push.MESSAGE" />
++                <action android:name="org.barebrowser.push.REGISTRATION_FAILED" />
++            </intent-filter>
++        </receiver>
++
+         <!-- Android Notification service listener -->
+         <service android:name="org.chromium.chrome.browser.notifications.NotificationService"
+             android:exported="false"/>
+diff --git a/chrome/android/java/res/xml/bare_push_preferences.xml b/chrome/android/java/res/xml/bare_push_preferences.xml
+new file mode 100644
+index 00000000000..e5ead1e6dc3
+--- /dev/null
++++ b/chrome/android/java/res/xml/bare_push_preferences.xml
+@@ -0,0 +1,20 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
++
++    <org.chromium.components.browser_ui.settings.TextMessagePreference
++        android:key="bare_push_about"
++        android:order="0"
++        android:summary="@string/bare_push_about" />
++
++    <ListPreference
++        android:key="bare_push_distributor"
++        android:order="1"
++        android:title="@string/bare_push_distributor_title" />
++
++</PreferenceScreen>
+diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/java/res/xml/main_preferences.xml
+index 66ee27559e2..9392906b3ea 100644
+--- a/chrome/android/java/res/xml/main_preferences.xml
++++ b/chrome/android/java/res/xml/main_preferences.xml
+@@ -96,6 +96,11 @@ found in the LICENSE file.
+         android:key="appearance"
+         android:order="23"
+         android:title="@string/appearance_settings" />
++    <Preference
++        android:fragment="org.chromium.chrome.browser.bare.settings.BarePushSettingsFragment"
++        android:key="bare_push"
++        android:order="24"
++        android:title="@string/bare_push_settings_title" />
+     <Preference
+         android:fragment="org.chromium.chrome.browser.bare.translate.BareTranslateSettingsFragment"
+         android:key="bare_translate"
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BarePushSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BarePushSettingsFragment.java
+new file mode 100644
+index 00000000000..a93822fd6b5
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BarePushSettingsFragment.java
+@@ -0,0 +1,93 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.settings;
++
++import android.content.Context;
++import android.content.pm.PackageManager;
++import android.content.pm.ResolveInfo;
++import android.os.Bundle;
++
++import androidx.preference.ListPreference;
++
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.services.gcm.BarePushDistributor;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.components.browser_ui.settings.SettingsUtils;
++
++import java.util.ArrayList;
++import java.util.List;
++
++/** Settings for where web push notifications come from. */
++@NullMarked
++public class BarePushSettingsFragment extends ChromeBaseSettingsFragment {
++    static final String PREF_DISTRIBUTOR = "bare_push_distributor";
++
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++            ObservableSuppliers.createMonotonic();
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        mPageTitle.set(getTitle(getContext()));
++        SettingsUtils.addPreferencesFromResource(this, R.xml.bare_push_preferences);
++
++        ListPreference distributor = findPreference(PREF_DISTRIBUTOR);
++        assert distributor != null;
++        distributor.setPersistent(false);
++
++        Context context = requireContext();
++        PackageManager pm = context.getPackageManager();
++        List<CharSequence> names = new ArrayList<>();
++        List<CharSequence> packages = new ArrayList<>();
++        names.add(getString(R.string.bare_push_distributor_none));
++        packages.add("");
++        for (ResolveInfo info : BarePushDistributor.findDistributors(context)) {
++            CharSequence label = info.loadLabel(pm);
++            names.add(label == null ? info.activityInfo.packageName : label);
++            packages.add(info.activityInfo.packageName);
++        }
++        distributor.setEntries(names.toArray(new CharSequence[0]));
++        distributor.setEntryValues(packages.toArray(new CharSequence[0]));
++
++        // An app that has since been removed must not stay chosen.
++        String chosen = BarePushDistributor.getDistributorPackage();
++        if (!packages.contains(chosen)) {
++            chosen = "";
++            BarePushDistributor.setDistributorPackage("");
++        }
++        distributor.setValue(chosen);
++        distributor.setSummary(distributor.getEntry());
++        distributor.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    BarePushDistributor.setDistributorPackage((String) newValue);
++                    int index = packages.indexOf(newValue);
++                    preference.setSummary(index < 0 ? names.get(0) : names.get(index));
++                    return true;
++                });
++    }
++
++    @Override
++    public MonotonicObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    public static String getTitle(Context context) {
++        return context.getString(R.string.bare_push_settings_title);
++    }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++
++    @Override
++    public @Nullable String getMainMenuKey() {
++        return "bare_push";
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
+index fab17b404fe..5041c69d5e2 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
+@@ -105,7 +105,9 @@ import org.chromium.chrome.browser.sync.SyncErrorNotifier;
+ import org.chromium.chrome.browser.tab.state.PersistedTabData;
+ import org.chromium.chrome.browser.tab.state.ShoppingPersistedTabData;
+ import org.chromium.chrome.browser.tabmodel.TabPersistentStoreImpl;
++import org.chromium.chrome.browser.services.gcm.BarePushSubscriber;
+ import org.chromium.chrome.browser.tracing.settings.UserAgentPresets;
++import org.chromium.components.gcm_driver.instance_id.InstanceIDWithSubtype;
+ import org.chromium.chrome.browser.ui.cars.DrivingRestrictionsManager;
+ import org.chromium.chrome.browser.ui.color.ColorProviderBridgeImpl;
+ import org.chromium.chrome.browser.ui.enterprise_signals_disclaimer.EnterpriseSignalsDisclaimerAckSyncer;
+@@ -280,6 +282,9 @@ public class ProcessInitializationHandler {
+ 
+         DeviceUtils.updateDeviceSpecificUserAgentSwitch(ContextUtils.getApplicationContext());
+         UserAgentPresets.appendSwitches();
++        // Web push subscriptions go through the distributor app the user chose, or through
++        // Google Play services if there is none.
++        InstanceIDWithSubtype.setTokenBroker(new BarePushSubscriber());
+         // ChromeLifetimeController is pure Java and safe to initialize pre-native. It is
+         // initialized early so that ApplicationLifetime.terminate() can restart the process
+         // if a locale change occurs before post-native initialization.
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/services/gcm/BarePushDistributor.java b/chrome/android/java/src/org/chromium/chrome/browser/services/gcm/BarePushDistributor.java
+new file mode 100644
+index 00000000000..687cefff95a
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/services/gcm/BarePushDistributor.java
+@@ -0,0 +1,336 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.services.gcm;
++
++import android.content.ComponentName;
++import android.content.Context;
++import android.content.Intent;
++import android.content.pm.PackageManager;
++import android.content.pm.ResolveInfo;
++import android.os.Bundle;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import org.chromium.base.ContextUtils;
++import org.chromium.base.Log;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.components.gcm_driver.GCMMessage;
++
++import java.io.IOException;
++import java.security.SecureRandom;
++import java.util.ArrayList;
++import java.util.HashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.TimeUnit;
++
++/**
++ * Delivers web push through an app on the phone that the user chose, instead of through Google.
++ *
++ * <p>A site that asks to send push notifications needs an address its server can post to, and a
++ * way for what is posted to reach the browser. Chromium gets both from Google's messaging service,
++ * which this build has no receiver for. A <em>distributor</em> is an app that supplies both
++ * another way: it hands out an address, receives what is posted to it, and passes it to Bare.
++ *
++ * <p>The messages between Bare and the distributor are broadcasts, each addressed to one package:
++ *
++ * <ul>
++ *   <li>Bare to the distributor, {@code org.barebrowser.push.REGISTER}: extras {@code token} (an
++ *       unguessable string naming this subscription), {@code application} (Bare's package) and
++ *       {@code vapid} (the site's application server key, if it gave one). The distributor
++ *       answers with NEW_ENDPOINT or REGISTRATION_FAILED.
++ *   <li>Distributor to Bare, {@code org.barebrowser.push.NEW_ENDPOINT}: {@code token} and {@code
++ *       endpoint}, the address the site's server posts to.
++ *   <li>Distributor to Bare, {@code org.barebrowser.push.MESSAGE}: {@code token} and {@code
++ *       message}, the bytes that were posted, unchanged. They are the encrypted web push body;
++ *       Bare decrypts them with the keys it made for this subscription.
++ *   <li>{@code REGISTRATION_FAILED} (with {@code token}), {@code UNREGISTER} and {@code
++ *       UNREGISTERED} (with {@code token}) are as their names say.
++ * </ul>
++ *
++ * <p>The token is the only thing that ties a message to a subscription, so it is 128 random bits
++ * and is only ever sent to the distributor the user chose. A message for a token Bare does not
++ * know is dropped. A message that is not validly encrypted for the subscription is dropped by the
++ * decryption, so a forged one cannot show a notification.
++ */
++@NullMarked
++public final class BarePushDistributor {
++    private static final String TAG = "BarePush";
++
++    public static final String ACTION_REGISTER = "org.barebrowser.push.REGISTER";
++    public static final String ACTION_UNREGISTER = "org.barebrowser.push.UNREGISTER";
++    public static final String ACTION_NEW_ENDPOINT = "org.barebrowser.push.NEW_ENDPOINT";
++    public static final String ACTION_MESSAGE = "org.barebrowser.push.MESSAGE";
++    public static final String ACTION_REGISTRATION_FAILED = "org.barebrowser.push.REGISTRATION_FAILED";
++    public static final String ACTION_UNREGISTERED = "org.barebrowser.push.UNREGISTERED";
++
++    public static final String EXTRA_TOKEN = "token";
++    public static final String EXTRA_APPLICATION = "application";
++    public static final String EXTRA_VAPID = "vapid";
++    public static final String EXTRA_ENDPOINT = "endpoint";
++    public static final String EXTRA_MESSAGE = "message";
++
++    /** How long a registration waits for the distributor to answer. */
++    static final long REGISTER_TIMEOUT_MS = 10000;
++
++    /** One subscription made through a distributor. */
++    public static final class Subscription {
++        public final String token;
++        public final String appId;
++        public final String senderId;
++
++        Subscription(String token, String appId, String senderId) {
++            this.token = token;
++            this.appId = appId;
++            this.senderId = senderId;
++        }
++    }
++
++    /** Sends one broadcast to the distributor. Replaced in tests. */
++    interface Sender {
++        void send(Intent intent);
++    }
++
++    /** A registration waiting for the distributor's answer. */
++    private static final class Pending {
++        final CountDownLatch latch = new CountDownLatch(1);
++        volatile @Nullable String endpoint;
++    }
++
++    private static final Map<String, Pending> sPending = new HashMap<>();
++    private static final SecureRandom sRandom = new SecureRandom();
++
++    private BarePushDistributor() {}
++
++    // The choice.
++
++    /** The package the user chose to deliver push through, or empty for none. */
++    public static String getDistributorPackage() {
++        return ChromeSharedPreferences.getInstance()
++                .readString(ChromePreferenceKeys.BARE_PUSH_DISTRIBUTOR, "");
++    }
++
++    public static void setDistributorPackage(String packageName) {
++        if (packageName.isEmpty()) {
++            ChromeSharedPreferences.getInstance()
++                    .removeKey(ChromePreferenceKeys.BARE_PUSH_DISTRIBUTOR);
++        } else {
++            ChromeSharedPreferences.getInstance()
++                    .writeString(ChromePreferenceKeys.BARE_PUSH_DISTRIBUTOR, packageName);
++        }
++    }
++
++    /** The installed apps that handle registration, other than this browser. */
++    public static List<ResolveInfo> findDistributors(Context context) {
++        PackageManager pm = context.getPackageManager();
++        List<ResolveInfo> found = new ArrayList<>();
++        for (ResolveInfo info : pm.queryBroadcastReceivers(new Intent(ACTION_REGISTER), 0)) {
++            if (info.activityInfo == null) continue;
++            if (context.getPackageName().equals(info.activityInfo.packageName)) continue;
++            found.add(info);
++        }
++        return found;
++    }
++
++    // The subscriptions.
++
++    private static List<Subscription> readAll() {
++        List<Subscription> all = new ArrayList<>();
++        String stored =
++                ChromeSharedPreferences.getInstance()
++                        .readString(ChromePreferenceKeys.BARE_PUSH_SUBSCRIPTIONS, "");
++        if (stored.isEmpty()) return all;
++        try {
++            JSONArray array = new JSONArray(stored);
++            for (int i = 0; i < array.length(); i++) {
++                JSONObject entry = array.getJSONObject(i);
++                all.add(
++                        new Subscription(
++                                entry.getString("token"),
++                                entry.getString("appId"),
++                                entry.getString("senderId")));
++            }
++        } catch (JSONException e) {
++            Log.w(TAG, "Stored push subscriptions could not be read");
++            all.clear();
++        }
++        return all;
++    }
++
++    private static void writeAll(List<Subscription> all) {
++        JSONArray array = new JSONArray();
++        try {
++            for (Subscription s : all) {
++                array.put(
++                        new JSONObject()
++                                .put("token", s.token)
++                                .put("appId", s.appId)
++                                .put("senderId", s.senderId));
++            }
++        } catch (JSONException e) {
++            throw new IllegalStateException(e);
++        }
++        if (all.isEmpty()) {
++            ChromeSharedPreferences.getInstance()
++                    .removeKey(ChromePreferenceKeys.BARE_PUSH_SUBSCRIPTIONS);
++        } else {
++            ChromeSharedPreferences.getInstance()
++                    .writeString(ChromePreferenceKeys.BARE_PUSH_SUBSCRIPTIONS, array.toString());
++        }
++    }
++
++    static synchronized @Nullable Subscription findByToken(String token) {
++        for (Subscription s : readAll()) {
++            if (s.token.equals(token)) return s;
++        }
++        return null;
++    }
++
++    static synchronized @Nullable Subscription findByApp(String appId, String senderId) {
++        for (Subscription s : readAll()) {
++            if (s.appId.equals(appId) && s.senderId.equals(senderId)) return s;
++        }
++        return null;
++    }
++
++    private static synchronized void put(Subscription subscription) {
++        List<Subscription> all = readAll();
++        all.removeIf(s -> s.appId.equals(subscription.appId) && s.senderId.equals(subscription.senderId));
++        all.add(subscription);
++        writeAll(all);
++    }
++
++    private static synchronized void remove(String token) {
++        List<Subscription> all = readAll();
++        if (all.removeIf(s -> s.token.equals(token))) writeAll(all);
++    }
++
++    /** 128 random bits as hex. */
++    static String newToken() {
++        byte[] bytes = new byte[16];
++        sRandom.nextBytes(bytes);
++        StringBuilder out = new StringBuilder();
++        for (byte b : bytes) out.append(String.format("%02x", b));
++        return out.toString();
++    }
++
++    // Registering.
++
++    /** Registers with the chosen distributor, on a background thread. Returns the endpoint. */
++    static String register(
++            Context context, String distributorPackage, String appId, String senderId)
++            throws IOException {
++        return register(
++                intent -> context.sendBroadcast(intent),
++                context.getPackageName(),
++                distributorPackage,
++                appId,
++                senderId,
++                REGISTER_TIMEOUT_MS);
++    }
++
++    static String register(
++            Sender sender,
++            String ownPackage,
++            String distributorPackage,
++            String appId,
++            String senderId,
++            long timeoutMs)
++            throws IOException {
++        // The distributor is addressed by package, and a distributor that has not been opened since
++        // it was installed or force stopped still has to hear this, hence the stopped-packages flag.
++        // A new registration for the same site replaces the old one, so that the old token stops
++        // being accepted.
++        @Nullable Subscription previous = findByApp(appId, senderId);
++        String token = newToken();
++        Pending pending = new Pending();
++        synchronized (sPending) {
++            sPending.put(token, pending);
++        }
++        put(new Subscription(token, appId, senderId));
++        try {
++            Intent intent = new Intent(ACTION_REGISTER).setPackage(distributorPackage)
++                        .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
++            intent.putExtra(EXTRA_TOKEN, token);
++            intent.putExtra(EXTRA_APPLICATION, ownPackage);
++            intent.putExtra(EXTRA_VAPID, senderId);
++            sender.send(intent);
++            boolean answered = pending.latch.await(timeoutMs, TimeUnit.MILLISECONDS);
++            String endpoint = pending.endpoint;
++            if (!answered || endpoint == null || endpoint.isEmpty()) {
++                remove(token);
++                throw new IOException(answered ? "REGISTRATION_FAILED" : "SERVICE_NOT_AVAILABLE");
++            }
++            if (previous != null) {
++                Intent drop = new Intent(ACTION_UNREGISTER).setPackage(distributorPackage)
++                        .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
++                drop.putExtra(EXTRA_TOKEN, previous.token);
++                sender.send(drop);
++            }
++            return endpoint;
++        } catch (InterruptedException e) {
++            remove(token);
++            Thread.currentThread().interrupt();
++            throw new IOException("INTERRUPTED");
++        } finally {
++            synchronized (sPending) {
++                sPending.remove(token);
++            }
++        }
++    }
++
++    /** Tells the distributor to stop, and forgets the subscription. */
++    static void unregister(
++            Sender sender, String distributorPackage, String appId, String senderId) {
++        @Nullable Subscription subscription = findByApp(appId, senderId);
++        if (subscription == null) return;
++        Intent intent = new Intent(ACTION_UNREGISTER).setPackage(distributorPackage)
++                        .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
++        intent.putExtra(EXTRA_TOKEN, subscription.token);
++        sender.send(intent);
++        remove(subscription.token);
++    }
++
++    // What the distributor says back.
++
++    static void onEndpoint(String token, @Nullable String endpoint) {
++        Pending pending;
++        synchronized (sPending) {
++            pending = sPending.get(token);
++        }
++        if (pending == null) return;
++        pending.endpoint = endpoint;
++        pending.latch.countDown();
++    }
++
++    static void onRegistrationFailed(String token) {
++        onEndpoint(token, null);
++    }
++
++    /**
++     * Builds the message the browser's push machinery expects from the bytes a distributor handed
++     * over. The content coding is the one web push uses, so the same decryption that handles a
++     * message from Google handles this one.
++     */
++    static GCMMessage buildMessage(Subscription subscription, byte[] body) {
++        Bundle extras = new Bundle();
++        extras.putString("subtype", subscription.appId);
++        extras.putByteArray("rawData", body);
++        extras.putString("content-encoding", "aes128gcm");
++        return new GCMMessage(subscription.senderId, extras);
++    }
++
++    /** The explicit address of this browser's receiver, for a distributor's replies. */
++    public static ComponentName receiverComponent() {
++        return new ComponentName(
++                ContextUtils.getApplicationContext(), BarePushReceiver.class);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/services/gcm/BarePushReceiver.java b/chrome/android/java/src/org/chromium/chrome/browser/services/gcm/BarePushReceiver.java
+new file mode 100644
+index 00000000000..038ed02c338
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/services/gcm/BarePushReceiver.java
+@@ -0,0 +1,54 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.services.gcm;
++
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++
++import org.chromium.base.Log;
++import org.chromium.base.ThreadUtils;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.components.gcm_driver.GCMMessage;
++
++/** Receives what a push distributor sends: its answers to a registration, and the messages. */
++@NullMarked
++public class BarePushReceiver extends BroadcastReceiver {
++    private static final String TAG = "BarePush";
++
++    @Override
++    public void onReceive(Context context, @Nullable Intent intent) {
++        if (intent == null) return;
++        String action = intent.getAction();
++        String token = intent.getStringExtra(BarePushDistributor.EXTRA_TOKEN);
++        if (action == null || token == null) return;
++
++        switch (action) {
++            case BarePushDistributor.ACTION_NEW_ENDPOINT:
++                BarePushDistributor.onEndpoint(
++                        token, intent.getStringExtra(BarePushDistributor.EXTRA_ENDPOINT));
++                break;
++            case BarePushDistributor.ACTION_REGISTRATION_FAILED:
++                BarePushDistributor.onRegistrationFailed(token);
++                break;
++            case BarePushDistributor.ACTION_MESSAGE:
++                byte[] body = intent.getByteArrayExtra(BarePushDistributor.EXTRA_MESSAGE);
++                if (body == null || body.length == 0) return;
++                BarePushDistributor.Subscription subscription =
++                        BarePushDistributor.findByToken(token);
++                if (subscription == null) {
++                    Log.w(TAG, "Dropped a message for a token this browser does not know");
++                    return;
++                }
++                GCMMessage message = BarePushDistributor.buildMessage(subscription, body);
++                ThreadUtils.postOnUiThread(
++                        () -> ChromeGcmListenerServiceImpl.scheduleOrDispatchMessageToDriver(message));
++                break;
++            default:
++                break;
++        }
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/services/gcm/BarePushSubscriber.java b/chrome/android/java/src/org/chromium/chrome/browser/services/gcm/BarePushSubscriber.java
+new file mode 100644
+index 00000000000..d44b98402c1
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/services/gcm/BarePushSubscriber.java
+@@ -0,0 +1,51 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.services.gcm;
++
++import android.content.Context;
++
++import org.chromium.base.ContextUtils;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.components.gcm_driver.instance_id.InstanceIDWithSubtype;
++
++import java.io.IOException;
++
++/**
++ * Makes web push subscriptions with the distributor the user picked. With none picked it leaves
++ * the call to Google Play services as before.
++ *
++ * <p>With a distributor the token Chromium keeps is the full address the site's server posts to,
++ * and Google is not asked for anything.
++ */
++@NullMarked
++public class BarePushSubscriber implements InstanceIDWithSubtype.TokenBroker {
++    /** Web push app ids start with this; other users of Instance ID are left alone. */
++    private static final String PUSH_APP_ID_PREFIX = "wp:";
++
++    @Override
++    public @Nullable String getToken(String subtype, String authorizedEntity, String scope)
++            throws IOException {
++        if (!subtype.startsWith(PUSH_APP_ID_PREFIX)) return null;
++        String distributor = BarePushDistributor.getDistributorPackage();
++        if (distributor.isEmpty()) return null;
++        Context context = ContextUtils.getApplicationContext();
++        return BarePushDistributor.register(context, distributor, subtype, authorizedEntity);
++    }
++
++    @Override
++    public boolean deleteToken(String subtype, String authorizedEntity, String scope)
++            throws IOException {
++        if (!subtype.startsWith(PUSH_APP_ID_PREFIX)) return false;
++        if (BarePushDistributor.findByApp(subtype, authorizedEntity) == null) return false;
++        // Whatever the distributor is now, this subscription was made through one.
++        String distributor = BarePushDistributor.getDistributorPackage();
++        Context context = ContextUtils.getApplicationContext();
++        if (!distributor.isEmpty()) {
++            BarePushDistributor.unregister(context::sendBroadcast, distributor, subtype, authorizedEntity);
++        }
++        return true;
++    }
++}
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index ecaeefb254f..fd5f07bd3ec 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -438,6 +438,7 @@ if (is_android) {
+       "src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java",
++      "src/org/chromium/chrome/browser/services/gcm/BarePushDistributorUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareMediaProbeUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocolUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/services/gcm/BarePushDistributorUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/services/gcm/BarePushDistributorUnitTest.java
+new file mode 100644
+index 00000000000..40e20e02ea5
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/services/gcm/BarePushDistributorUnitTest.java
+@@ -0,0 +1,178 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.services.gcm;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNotEquals;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertTrue;
++import static org.junit.Assert.fail;
++
++import android.content.Intent;
++
++import org.junit.After;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.components.gcm_driver.GCMMessage;
++
++import java.io.IOException;
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.List;
++
++/** Unit tests for {@link BarePushDistributor}. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BarePushDistributorUnitTest {
++    private static final String DIST = "dist.example";
++    private static final String OWN = "org.barebrowser";
++
++    @After
++    public void tearDown() {
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_PUSH_DISTRIBUTOR);
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.BARE_PUSH_SUBSCRIPTIONS);
++    }
++
++    /** A distributor that answers a registration with an address built from the token. */
++    private static BarePushDistributor.Sender answering(List<Intent> seen) {
++        return intent -> {
++            seen.add(intent);
++            if (BarePushDistributor.ACTION_REGISTER.equals(intent.getAction())) {
++                String token = intent.getStringExtra(BarePushDistributor.EXTRA_TOKEN);
++                new Thread(
++                                () ->
++                                        BarePushDistributor.onEndpoint(
++                                                token, "https://push.example/" + token))
++                        .start();
++            }
++        };
++    }
++
++    @Test
++    public void testNothingChosenIsNoDistributor() {
++        assertEquals("", BarePushDistributor.getDistributorPackage());
++        BarePushDistributor.setDistributorPackage(DIST);
++        assertEquals(DIST, BarePushDistributor.getDistributorPackage());
++        BarePushDistributor.setDistributorPackage("");
++        assertEquals("", BarePushDistributor.getDistributorPackage());
++    }
++
++    @Test
++    public void testTokensAreLongAndDifferent() {
++        String a = BarePushDistributor.newToken();
++        String b = BarePushDistributor.newToken();
++        assertEquals(32, a.length());
++        assertNotEquals(a, b);
++    }
++
++    @Test
++    public void testRegisteringGivesTheEndpointAndRemembersTheToken() throws Exception {
++        List<Intent> seen = new ArrayList<>();
++        String endpoint =
++                BarePushDistributor.register(answering(seen), OWN, DIST, "wp:app1", "SENDERKEY", 5000);
++
++        assertEquals(1, seen.size());
++        Intent sent = seen.get(0);
++        assertEquals(BarePushDistributor.ACTION_REGISTER, sent.getAction());
++        assertEquals(DIST, sent.getPackage());
++        assertEquals(OWN, sent.getStringExtra(BarePushDistributor.EXTRA_APPLICATION));
++        assertEquals("SENDERKEY", sent.getStringExtra(BarePushDistributor.EXTRA_VAPID));
++
++        String token = sent.getStringExtra(BarePushDistributor.EXTRA_TOKEN);
++        assertEquals("https://push.example/" + token, endpoint);
++        BarePushDistributor.Subscription stored = BarePushDistributor.findByToken(token);
++        assertNotNull(stored);
++        assertEquals("wp:app1", stored.appId);
++        assertEquals("SENDERKEY", stored.senderId);
++    }
++
++    @Test
++    public void testNoAnswerFailsAndForgetsTheToken() {
++        List<Intent> seen = new ArrayList<>();
++        try {
++            BarePushDistributor.register(seen::add, OWN, DIST, "wp:app1", "SENDERKEY", 100);
++            fail("expected a failure");
++        } catch (IOException expected) {
++            assertEquals("SERVICE_NOT_AVAILABLE", expected.getMessage());
++        }
++        assertNull(BarePushDistributor.findByApp("wp:app1", "SENDERKEY"));
++    }
++
++    @Test
++    public void testARefusalFails() {
++        BarePushDistributor.Sender refusing =
++                intent -> {
++                    String token = intent.getStringExtra(BarePushDistributor.EXTRA_TOKEN);
++                    new Thread(() -> BarePushDistributor.onRegistrationFailed(token)).start();
++                };
++        try {
++            BarePushDistributor.register(refusing, OWN, DIST, "wp:app1", "SENDERKEY", 5000);
++            fail("expected a failure");
++        } catch (IOException expected) {
++            assertEquals("REGISTRATION_FAILED", expected.getMessage());
++        }
++        assertNull(BarePushDistributor.findByApp("wp:app1", "SENDERKEY"));
++    }
++
++    @Test
++    public void testSubscribingAgainReplacesTheOldTokenAndTellsTheDistributor() throws Exception {
++        List<Intent> seen = new ArrayList<>();
++        BarePushDistributor.register(answering(seen), OWN, DIST, "wp:app1", "KEY", 5000);
++        String first = seen.get(0).getStringExtra(BarePushDistributor.EXTRA_TOKEN);
++
++        BarePushDistributor.register(answering(seen), OWN, DIST, "wp:app1", "KEY", 5000);
++        String second = seen.get(1).getStringExtra(BarePushDistributor.EXTRA_TOKEN);
++
++        assertNotEquals(first, second);
++        assertNull(BarePushDistributor.findByToken(first));
++        assertNotNull(BarePushDistributor.findByToken(second));
++        Intent drop = seen.get(2);
++        assertEquals(BarePushDistributor.ACTION_UNREGISTER, drop.getAction());
++        assertEquals(first, drop.getStringExtra(BarePushDistributor.EXTRA_TOKEN));
++    }
++
++    @Test
++    public void testUnregisteringForgetsTheSubscription() throws Exception {
++        List<Intent> seen = new ArrayList<>();
++        BarePushDistributor.register(answering(seen), OWN, DIST, "wp:app1", "KEY", 5000);
++        BarePushDistributor.unregister(seen::add, DIST, "wp:app1", "KEY");
++        assertNull(BarePushDistributor.findByApp("wp:app1", "KEY"));
++        assertEquals(BarePushDistributor.ACTION_UNREGISTER, seen.get(seen.size() - 1).getAction());
++    }
++
++    @Test
++    public void testAnUnknownTokenFindsNothing() {
++        assertNull(BarePushDistributor.findByToken("not-a-token"));
++    }
++
++    @Test
++    public void testAMessageIsBuiltTheWayWebPushDecryptionExpectsIt() throws Exception {
++        List<Intent> seen = new ArrayList<>();
++        BarePushDistributor.register(answering(seen), OWN, DIST, "wp:app1", "KEY", 5000);
++        String token = seen.get(0).getStringExtra(BarePushDistributor.EXTRA_TOKEN);
++        BarePushDistributor.Subscription subscription = BarePushDistributor.findByToken(token);
++        assertNotNull(subscription);
++
++        byte[] body = new byte[] {1, 2, 3, 4};
++        GCMMessage message = BarePushDistributor.buildMessage(subscription, body);
++        assertEquals("wp:app1", message.getAppId());
++        assertEquals("KEY", message.getSenderId());
++        assertTrue(Arrays.equals(body, message.getRawData()));
++        assertTrue(
++                Arrays.asList(message.getDataKeysAndValuesArray())
++                        .containsAll(Arrays.asList("content-encoding", "aes128gcm")));
++    }
++
++    @Test
++    public void testAMessageWithoutARegistrationIsNotAcceptedBecauseItsTokenIsUnknown() {
++        assertFalse(BarePushDistributor.findByToken("0123456789abcdef0123456789abcdef") != null);
++    }
++}
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 21ea1b53881..07fd64f53f9 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -423,6 +423,13 @@ public final class ChromePreferenceKeys {
+      * them has a default, and nothing is translated until the address is set.
+      */
+     public static final String BARE_TRANSLATE_ENDPOINT = "Bare.Translate.Endpoint";
++
++    /**
++     * De-Googled build: the package of the push distributor app the user chose, and the
++     * subscriptions made through it as a JSON list of token, app id and sender id.
++     */
++    public static final String BARE_PUSH_DISTRIBUTOR = "Bare.Push.Distributor";
++    public static final String BARE_PUSH_SUBSCRIPTIONS = "Bare.Push.Subscriptions";
+     public static final String BARE_TRANSLATE_API_KEY = "Bare.Translate.ApiKey";
+     public static final String BARE_TRANSLATE_TARGET = "Bare.Translate.Target";
+     public static final String BARE_TRANSLATE_CONSENT_HOST = "Bare.Translate.ConsentHost";
+@@ -1339,6 +1346,8 @@ public final class ChromePreferenceKeys {
+                 BARE_USER_AGENT_PRESET,
+                 BARE_ADDRESS_BAR_SWIPE_TABS,
+                 BARE_EXTENSION_PRESENTATION,
++                BARE_PUSH_DISTRIBUTOR,
++                BARE_PUSH_SUBSCRIPTIONS,
+                 BARE_TRANSLATE_API_KEY,
+                 BARE_TRANSLATE_CONSENT_HOST,
+                 BARE_TRANSLATE_ENDPOINT,
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 24f8a89381b..dac980e32d8 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4378,6 +4378,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_VIDEO_NOT_FOUND" desc="Toast shown when the video that was pressed has no file the browser can download.">
+         Could not find a file for this video
+       </message>
++      <message name="IDS_BARE_PUSH_SETTINGS_TITLE" desc="Title of the settings screen for where web push notifications come from. [CHAR_LIMIT=32]">
++        Push notifications
++      </message>
++      <message name="IDS_BARE_PUSH_ABOUT" desc="Explains how Bare delivers web push notifications and what choosing a distributor app changes.">
++        Sites you allow to send notifications need a way to reach this browser while it is closed. Bare has no Google messaging service, so with no choice here a site can subscribe but nothing it sends is delivered. A push distributor is an app that receives what a site sends and passes it to Bare. Choosing one makes new subscriptions go through it instead of through Google. Sites you already allowed need to subscribe again.
++      </message>
++      <message name="IDS_BARE_PUSH_DISTRIBUTOR_TITLE" desc="Setting for the push distributor app. [CHAR_LIMIT=32]">
++        Distributor app
++      </message>
++      <message name="IDS_BARE_PUSH_DISTRIBUTOR_NONE" desc="Option: no push distributor, so web push is not delivered. [CHAR_LIMIT=48]">
++        None (not delivered)
++      </message>
+       <message name="IDS_BARE_TRANSLATE_SETTINGS_TITLE" desc="Title of the settings screen for translating pages. [CHAR_LIMIT=32]">
+         Translate pages
+       </message>
+diff --git a/components/gcm_driver/instance_id/android/java/src/org/chromium/components/gcm_driver/instance_id/InstanceIDWithSubtype.java b/components/gcm_driver/instance_id/android/java/src/org/chromium/components/gcm_driver/instance_id/InstanceIDWithSubtype.java
+index ccbe7bb9eee..afdce111f60 100644
+--- a/components/gcm_driver/instance_id/android/java/src/org/chromium/components/gcm_driver/instance_id/InstanceIDWithSubtype.java
++++ b/components/gcm_driver/instance_id/android/java/src/org/chromium/components/gcm_driver/instance_id/InstanceIDWithSubtype.java
+@@ -37,6 +37,24 @@ public class InstanceIDWithSubtype {
+ 
+     protected static final Object sSubtypeInstancesLock = new Object();
+ 
++    /**
++     * Bare: lets the embedder make and delete tokens some other way than through Google Play
++     * services. Both methods return null or false to leave the call to Google as before.
++     */
++    public interface TokenBroker {
++        @Nullable String getToken(String subtype, String authorizedEntity, String scope)
++                throws IOException;
++
++        boolean deleteToken(String subtype, String authorizedEntity, String scope)
++                throws IOException;
++    }
++
++    private static volatile @Nullable TokenBroker sTokenBroker;
++
++    public static void setTokenBroker(@Nullable TokenBroker broker) {
++        sTokenBroker = broker;
++    }
++
+     /** Fake subclasses can set this so getInstance creates instances of them. */
+     @VisibleForTesting protected static @Nullable FakeFactory sFakeFactoryForTesting;
+ 
+@@ -91,10 +109,20 @@ public class InstanceIDWithSubtype {
+     }
+ 
+     public void deleteToken(String authorizedEntity, String scope) throws IOException {
++        TokenBroker broker = sTokenBroker;
++        if (broker != null
++                && broker.deleteToken(mInstanceID.getSubtype(), authorizedEntity, scope)) {
++            return;
++        }
+         mInstanceID.deleteToken(authorizedEntity, scope);
+     }
+ 
+     public String getToken(String authorizedEntity, String scope) throws IOException {
++        TokenBroker broker = sTokenBroker;
++        if (broker != null) {
++            String token = broker.getToken(mInstanceID.getSubtype(), authorizedEntity, scope);
++            if (token != null) return token;
++        }
+         return mInstanceID.getToken(authorizedEntity, scope);
+     }
+ 
+diff --git a/components/push_messaging/push_messaging_utils.cc b/components/push_messaging/push_messaging_utils.cc
+index 688417a4797..fc5bd822275 100644
+--- a/components/push_messaging/push_messaging_utils.cc
++++ b/components/push_messaging/push_messaging_utils.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "components/push_messaging/push_messaging_utils.h"
+ 
++#include "base/strings/string_util.h"
++
+ #include "base/base64url.h"
+ #include "base/version_info/channel.h"
+ #include "components/push_messaging/push_messaging_constants.h"
+@@ -30,6 +32,15 @@ std::string GetGcmEndpointForChannel(version_info::Channel channel) {
+ 
+ GURL CreateEndpoint(version_info::Channel channel,
+                     const std::string& subscription_id) {
++  // Bare: a subscription made through a push distributor app is the address the
++  // site posts to, not a token to put after Google's address.
++  if (base::StartsWith(subscription_id, "https://") ||
++      base::StartsWith(subscription_id, "http://")) {
++    const GURL direct(subscription_id);
++    if (direct.is_valid()) {
++      return direct;
++    }
++  }
+   const GURL endpoint(GetGcmEndpointForChannel(channel) + subscription_id);
+   DCHECK(endpoint.is_valid());
+   return endpoint;
+-- 
+2.34.1
+

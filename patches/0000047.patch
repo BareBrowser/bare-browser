@@ -1,0 +1,96 @@
+From b390bb3355647a31303b0a236673442f09f9cb2e Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 19 Aug 2026 07:19:51 +0000
+Subject: [PATCH] Patch 0000047
+
+---
+ .../blink/renderer/core/dom/document.cc       | 28 ++++++++++++++++---
+ .../blink/renderer/core/dom/document.h        |  3 +-
+ .../blink/renderer/core/dom/document.idl      |  4 +--
+ 3 files changed, 28 insertions(+), 7 deletions(-)
+
+diff --git a/third_party/blink/renderer/core/dom/document.cc b/third_party/blink/renderer/core/dom/document.cc
+index c5f4b9913cb..05dbb19f8f6 100644
+--- a/third_party/blink/renderer/core/dom/document.cc
++++ b/third_party/blink/renderer/core/dom/document.cc
+@@ -2362,12 +2362,32 @@ bool Document::IsPrefetchOnly() const {
+ // Deliberately scoped to what script can see. Document::hidden() is left
+ // alone, because Blink itself calls it for canvas font pruning, layout and
+ // view transitions, and those should keep treating the page as hidden.
+-bool Document::ReportsVisibleForBackgroundMedia() const {
+-  return GetSettings() && GetSettings()->GetBackgroundMediaPlaybackEnabled();
++namespace {
++
++bool ReportsVisibleForBackgroundMedia(const Document& document) {
++  const Settings* settings = document.GetSettings();
++  return settings && settings->GetBackgroundMediaPlaybackEnabled();
++}
++
++}  // namespace
++
++// What document.hidden reports to script, as opposed to whether the page is
++// really hidden.
++//
++// Bound from document.idl for both hidden and webkitHidden, so that the plain
++// Document::hidden() below keeps answering truthfully. Blink calls that one for
++// canvas font pruning, layout and view transitions, and all of those should go
++// on treating a hidden page as hidden.
++//
++// Reporting only visibilityState was not enough. A site that reads
++// document.hidden, and YouTube does, still saw the page go away and paused
++// itself a few seconds after the browser was backgrounded.
++bool Document::hiddenForBinding() const {
++  return hidden() && !ReportsVisibleForBackgroundMedia(*this);
+ }
+ 
+ V8VisibilityState Document::visibilityState() const {
+-  if (hidden() && !ReportsVisibleForBackgroundMedia()) {
++  if (hidden() && !ReportsVisibleForBackgroundMedia(*this)) {
+     return V8VisibilityState(V8VisibilityState::Enum::kHidden);
+   } else {
+     return V8VisibilityState(V8VisibilityState::Enum::kVisible);
+@@ -2405,7 +2425,7 @@ void Document::DidChangeVisibilityState() {
+   // Bare Browser: a document that keeps reporting itself visible must not
+   // announce a change that, as far as script is concerned, never happened.
+   // The housekeeping below still runs, since the page really is hidden.
+-  if (!ReportsVisibleForBackgroundMedia()) {
++  if (!ReportsVisibleForBackgroundMedia(*this)) {
+     DispatchEvent(*Event::CreateBubble(event_type_names::kVisibilitychange));
+     // Also send out the deprecated version until it can be removed.
+     DispatchEvent(
+diff --git a/third_party/blink/renderer/core/dom/document.h b/third_party/blink/renderer/core/dom/document.h
+index f4a92a6264b..57dfbfa6a22 100644
+--- a/third_party/blink/renderer/core/dom/document.h
++++ b/third_party/blink/renderer/core/dom/document.h
+@@ -601,7 +601,8 @@ class CORE_EXPORT Document : public ContainerNode,
+ 
+   V8VisibilityState visibilityState() const;
+   // Bare Browser: see the definition in document.cc.
+-  bool ReportsVisibleForBackgroundMedia() const;
++  // Bare Browser: what document.hidden reports to script. See document.cc.
++  bool hiddenForBinding() const;
+   String visibilityStateAsString() const;
+   bool IsPageVisible() const;
+   bool hidden() const;
+diff --git a/third_party/blink/renderer/core/dom/document.idl b/third_party/blink/renderer/core/dom/document.idl
+index 588b76b18c5..1a8826e801c 100644
+--- a/third_party/blink/renderer/core/dom/document.idl
++++ b/third_party/blink/renderer/core/dom/document.idl
+@@ -173,7 +173,7 @@ typedef (HTMLScriptElement or SVGScriptElement) HTMLOrSVGScriptElement;
+ 
+     // Page Visibility
+     // https://w3c.github.io/page-visibility/#extensions-to-the-document-interface
+-    readonly attribute boolean hidden;
++    [ImplementedAs=hiddenForBinding] readonly attribute boolean hidden;
+     readonly attribute VisibilityState visibilityState;
+     readonly attribute boolean wasDiscarded;
+ 
+@@ -198,7 +198,7 @@ typedef (HTMLScriptElement or SVGScriptElement) HTMLOrSVGScriptElement;
+     // TODO(davidben): This is a property so attaching a deprecation warning results in false positives when outputting
+     // document in the console. It's possible https://crbug.com/43394 will resolve this.
+     [MeasureAs=PrefixedPageVisibility, ImplementedAs=visibilityStateAsString] readonly attribute DOMString webkitVisibilityState;
+-    [MeasureAs=PrefixedPageVisibility, ImplementedAs=hidden] readonly attribute boolean webkitHidden;
++    [MeasureAs=PrefixedPageVisibility, ImplementedAs=hiddenForBinding] readonly attribute boolean webkitHidden;
+ 
+     // Private Token API (https://github.com/wicg/trust-token-api)
+     [CallWith=ScriptState, Measure, RaisesException, NewObject, SecureContext, RuntimeEnabled=PrivateStateTokens] Promise<boolean> hasPrivateToken(USVString issuer);

@@ -1,0 +1,90 @@
+From 7bc338d8bd9449af6557866c945e74902f1a4adb Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sat, 15 Aug 2026 04:06:56 +0000
+Subject: [PATCH] Patch 0000001
+
+---
+ components/signin/public/android/BUILD.gn     |  1 +
+ .../signin/NullAccountManagerDelegate.java    |  4 +-
+ .../NullAccountManagerDelegateTest.java       | 38 +++++++++++++++++++
+ 3 files changed, 41 insertions(+), 2 deletions(-)
+ create mode 100644 components/signin/public/android/junit/src/org/chromium/components/signin/NullAccountManagerDelegateTest.java
+
+diff --git a/components/signin/public/android/BUILD.gn b/components/signin/public/android/BUILD.gn
+index 8637afc1b69..9c0abcbb5e6 100644
+--- a/components/signin/public/android/BUILD.gn
++++ b/components/signin/public/android/BUILD.gn
+@@ -191,6 +191,7 @@ robolectric_library("junit") {
+     "junit/src/org/chromium/components/signin/AccountManagerFacadeImplTest.java",
+     "junit/src/org/chromium/components/signin/AccountReauthenticationUtilsTest.java",
+     "junit/src/org/chromium/components/signin/AccountUtilsTest.java",
++    "junit/src/org/chromium/components/signin/NullAccountManagerDelegateTest.java",
+     "junit/src/org/chromium/components/signin/PatternMatcherTest.java",
+     "junit/src/org/chromium/components/signin/base/AccountCapabilitiesTest.java",
+   ]
+diff --git a/components/signin/public/android/java/src/org/chromium/components/signin/NullAccountManagerDelegate.java b/components/signin/public/android/java/src/org/chromium/components/signin/NullAccountManagerDelegate.java
+index fcf64ef942d..d3db74ca84d 100644
+--- a/components/signin/public/android/java/src/org/chromium/components/signin/NullAccountManagerDelegate.java
++++ b/components/signin/public/android/java/src/org/chromium/components/signin/NullAccountManagerDelegate.java
+@@ -10,6 +10,7 @@ import android.content.Intent;
+ import android.os.Bundle;
+ 
+ import org.chromium.base.Callback;
++import org.chromium.base.ThreadUtils;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.NullUnmarked;
+ import org.chromium.build.annotations.Nullable;
+@@ -50,8 +51,7 @@ public class NullAccountManagerDelegate implements AccountManagerDelegate {
+     @Override
+     public void createAddAccountIntent(
+             @Nullable String prefilledEmail, Callback<@Nullable Intent> callback) {
+-        throw new UnsupportedOperationException(
+-                "NullAccountManagerDelegate does not implement createAddAccountIntent");
++        ThreadUtils.runOnUiThread(() -> callback.onResult(null));
+     }
+ 
+     @Override
+diff --git a/components/signin/public/android/junit/src/org/chromium/components/signin/NullAccountManagerDelegateTest.java b/components/signin/public/android/junit/src/org/chromium/components/signin/NullAccountManagerDelegateTest.java
+new file mode 100644
+index 00000000000..0aef6ed4224
+--- /dev/null
++++ b/components/signin/public/android/junit/src/org/chromium/components/signin/NullAccountManagerDelegateTest.java
+@@ -0,0 +1,38 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.components.signin;
++
++import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.ThreadUtils;
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.base.test.RobolectricUtil;
++
++import java.util.concurrent.atomic.AtomicBoolean;
++
++/** Tests for {@link NullAccountManagerDelegate}. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class NullAccountManagerDelegateTest {
++    @Test
++    public void createAddAccountIntentReturnsNullOnUiThread() {
++        AtomicBoolean callbackInvoked = new AtomicBoolean();
++
++        new NullAccountManagerDelegate()
++                .createAddAccountIntent(
++                        /* prefilledEmail= */ null,
++                        intent -> {
++                            assertTrue(ThreadUtils.runningOnUiThread());
++                            assertNull(intent);
++                            callbackInvoked.set(true);
++                        });
++        RobolectricUtil.runAllBackgroundAndUi();
++
++        assertTrue(callbackInvoked.get());
++    }
++}

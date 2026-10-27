@@ -1,0 +1,264 @@
+From 7b6f969601c80a5e52992cff98efe64c228b3e4f Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 05:04:36 +0000
+Subject: [PATCH] Patch 0000179
+
+---
+ ...ktop_site_web_contents_observer_android.cc | 227 +++++++++++++++++-
+ 1 file changed, 226 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc b/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
+index 363c177cc0e..faeab198d40 100644
+--- a/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
++++ b/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
+@@ -137,7 +137,226 @@ void RequestDesktopSiteWebContentsObserverAndroid::DidStartNavigation(
+ 
+ namespace {
+ 
+-// Lays the Chrome Web Store out for a phone.
++// Gives the Chrome Web Store a phone-first view.
++//
++// The store only serves the install button to a desktop user agent, and its
++// desktop pages are built for a window at least 1280 px wide, so the page
++// cannot simply be laid out narrower. Instead this runs in an isolated world and
++// replaces what the phone shows. Lists (the home page, categories, search) are
++// redrawn as a plain list of the extensions the page itself holds, under a bar
++// with a search box and the categories. Each row is an ordinary link to the
++// store's own listing, so nothing is hidden or rewritten about where an
++// extension comes from. A detail page is the store's own page, with the
++// install button kept as it is and pinned to the bottom, Google's prompt to
++// switch browsers removed, and the text made readable. The link at the foot
++// of a list shows the store's own page instead, laid out by kWebStoreFitScript.
++// It reads the shapes of the page (links to /detail/, headings, aria labels)
++// rather than the store's class names, which change with every deploy, and it
++// runs again when the page changes itself.
++const char kWebStoreViewScript[] = R"JS((function(){
++if (window.__bareStore) return 'already';
++window.__bareStore = 1;
++if (!(screen.width > 0) || screen.width > 700) return 'wide';
++var CLASSIC = false;
++try { CLASSIC = localStorage.getItem('bareStoreClassic') === '1'; } catch (e) {}
++
++var CATS = [
++ ['Productivity', [['Communication','productivity/communication'],['Developer tools','productivity/developer'],['Education','productivity/education'],['Tools','productivity/tools'],['Workflow & planning','productivity/workflow']]],
++ ['Lifestyle', [['Art & design','lifestyle/art'],['Entertainment','lifestyle/entertainment'],['Games','lifestyle/games'],['Household','lifestyle/household'],['Just for fun','lifestyle/fun'],['News & weather','lifestyle/news'],['Shopping','lifestyle/shopping'],['Social networking','lifestyle/social'],['Travel','lifestyle/travel'],['Well-being','lifestyle/well_being']]],
++ ['Make Chrome yours', [['Accessibility','make_chrome_yours/accessibility'],['Functionality & UI','make_chrome_yours/functionality'],['Privacy & security','make_chrome_yours/privacy']]]
++];
++
++var CSS = [
++ 'html.bs, html.bs body{min-width:0!important;background:var(--bs-bg)!important;color:var(--bs-fg)!important;overflow-x:hidden}',
++ ':root{--bs-bg:#fff;--bs-fg:#1b1c1f;--bs-dim:#5f6368;--bs-card:#f3f4f7;--bs-line:#e2e4e9;--bs-acc:#0b57d0;--bs-accfg:#fff}',
++ '@media (prefers-color-scheme:dark){:root{--bs-bg:#121316;--bs-fg:#e8eaed;--bs-dim:#9aa0a6;--bs-card:#1d1f24;--bs-line:#2c2f36;--bs-acc:#a8c7fa;--bs-accfg:#062e6f}}',
++ 'html.bs aside,html.bs [role=dialog]:not(#bs-sheet),html.bs .gb_Q{display:none!important}',
++ 'html.bs header:not(#bs-head){display:none!important}',
++ 'html.bs footer{display:none!important}',
++ 'html.bs-list body>*:not(#bs-root):not(#bs-head):not(script):not(style){display:none!important}',
++ '#bs-head{position:sticky;top:0;z-index:2147483000;background:var(--bs-bg);border-bottom:1px solid var(--bs-line);padding:10px 14px 8px;font:15px/1.35 system-ui,-apple-system,Roboto,sans-serif;color:var(--bs-fg)}',
++ '#bs-head .r1{display:flex;align-items:center;gap:8px}',
++ '#bs-head .t{font-weight:600;font-size:17px;flex:0 0 auto}',
++ '#bs-head form{flex:1;display:flex;position:relative}',
++ '#bs-head input{flex:1;min-width:0;height:42px;border-radius:21px;border:1px solid var(--bs-line);background:var(--bs-card);color:var(--bs-fg);padding:0 16px;font-size:16px;outline:none}',
++ '#bs-head input:focus{border-color:var(--bs-acc)}',
++ '#bs-chips{display:flex;gap:8px;overflow-x:auto;padding:10px 0 2px;scrollbar-width:none}',
++ '#bs-chips::-webkit-scrollbar{display:none}',
++ '#bs-chips a,#bs-chips button{flex:0 0 auto;border:1px solid var(--bs-line);background:var(--bs-bg);color:var(--bs-fg);border-radius:16px;padding:6px 14px;font:14px/1.2 system-ui,Roboto,sans-serif;text-decoration:none}',
++ '#bs-chips .on{background:var(--bs-acc);color:var(--bs-accfg);border-color:var(--bs-acc)}',
++ '#bs-root{font:15px/1.4 system-ui,-apple-system,Roboto,sans-serif;color:var(--bs-fg);padding:0 14px 40px}',
++ '#bs-root h2{font-size:19px;margin:24px 0 8px;font-weight:600}',
++ '#bs-root .row{display:flex;gap:14px;align-items:center;padding:10px 0;text-decoration:none;color:inherit;border-bottom:1px solid var(--bs-line)}',
++ '#bs-root .row img{width:56px;height:56px;border-radius:12px;flex:0 0 auto;background:var(--bs-card);object-fit:cover}',
++ '#bs-root .row img.wd{width:90px;height:57px;border-radius:10px}',
++ '#bs-root .tx{min-width:0;flex:1}',
++ '#bs-root .nm{font-weight:600;font-size:16px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}',
++ '#bs-root .sub{color:var(--bs-dim);font-size:13.5px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
++ '#bs-root .star{color:var(--bs-dim);font-size:13.5px;margin-top:2px}',
++ '#bs-root .more{display:block;width:100%;margin:18px 0;height:46px;border-radius:23px;border:1px solid var(--bs-line);background:var(--bs-card);color:var(--bs-fg);font-size:15px}',
++ '#bs-root .empty{color:var(--bs-dim);padding:30px 0;text-align:center}',
++ '#bs-root .foot{margin:26px 0 0;text-align:center;font-size:13px}',
++ '#bs-root .foot a,#bs-root .foot button{color:var(--bs-dim);background:none;border:0;text-decoration:underline;font-size:13px}',
++ // detail page
++ 'html.bs-detail main,html.bs-detail main *{min-width:0!important}',
++ 'html.bs-detail main{padding:8px 14px 96px!important;max-width:100vw!important;box-sizing:border-box}',
++ 'html.bs-detail main img{max-width:100%}',
++ 'html.bs-detail main h1{font-size:23px!important;line-height:1.25!important;overflow-wrap:anywhere;display:block!important;-webkit-line-clamp:unset!important;max-height:none!important;overflow:visible!important;text-overflow:clip!important;white-space:normal!important}',
++ 'html.bs-detail main{color:var(--bs-fg)!important}',
++ 'html.bs-detail main :not(button):not(button *):not(a):not(a *):not(svg):not(svg *){color:var(--bs-fg)!important;opacity:1!important}',
++ 'html.bs-detail main a{color:var(--bs-acc)!important}',
++ 'html.bs-detail main svg{fill:currentColor}',
++ 'html.bs-detail img.bs-icon{width:88px!important;height:88px!important;border-radius:20px}',
++ '.bs-install{position:fixed!important;left:14px!important;right:14px!important;bottom:14px!important;width:auto!important;height:50px!important;border-radius:25px!important;z-index:2147483001!important;font-size:16px!important;box-shadow:0 2px 10px rgba(0,0,0,.35)!important}'
++].join('\n');
++
++function el(tag, cls, text){ var e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e; }
++function qs(s){ var p=new URLSearchParams(location.search); return p.get(s); }
++function lang(){ var h=qs('hl'); return h ? '?hl='+encodeURIComponent(h) : ''; }
++function addCss(){ if(!document.getElementById('bs-style')){ var s=document.createElement('style'); s.id='bs-style'; s.textContent=CSS; (document.head||document.documentElement).appendChild(s);} }
++
++var path = location.pathname, isDetail = false, builtFor = '';
++
++function head(){
++  var old=document.getElementById('bs-head'); if(old) old.remove();
++  var h = el('header'); h.id='bs-head';
++  var r1 = el('div','r1');
++  var t = el('a','t','Extensions'); t.href='/'+lang(); t.style.cssText='text-decoration:none;color:inherit';
++  var f = el('form'); f.action='/search/'; f.addEventListener('submit', function(ev){ ev.preventDefault(); var q=inp.value.trim(); if(q) location.href='/search/'+encodeURIComponent(q)+'?itemTypes=EXTENSION'+(qs('hl')?'&hl='+encodeURIComponent(qs('hl')):''); });
++  var inp = el('input'); inp.type='search'; inp.placeholder='Search extensions'; inp.setAttribute('enterkeyhint','search'); inp.autocomplete='off';
++  var m = /^\/search\/([^\/]+)/.exec(path); if(m){ try{ inp.value=decodeURIComponent(m[1]); }catch(e){} }
++  f.appendChild(inp); r1.appendChild(t); r1.appendChild(f); h.appendChild(r1);
++  var chips = el('div'); chips.id='bs-chips';
++  function chip(label, href, on){ var a=el('a',on?'on':'',label); a.href=href; chips.appendChild(a); }
++  var cur = path.replace(/\/$/,'');
++  chip('Home','/'+lang(), cur===''||cur==='/');
++  chip('Themes','/category/themes'+lang(), /^\/category\/themes/.test(cur));
++  for (var g=0; g<CATS.length; g++) for (var c=0; c<CATS[g][1].length; c++){
++    var it=CATS[g][1][c]; var href='/category/extensions/'+it[1]; chip(it[0], href+lang(), cur===href);
++  }
++  h.appendChild(chips);
++  (document.body||document.documentElement).insertBefore(h, (document.body||document.documentElement).firstChild);
++}
++
++function cardData(a){
++  var title='';
++  var lb=a.getAttribute('aria-labelledby');
++  if(lb){ var n=document.getElementById(lb.split(' ')[0]); if(n) title=n.innerText.trim(); }
++  var box=a.parentElement, img=a.querySelector('img');
++  if(!img){
++    // the card's own image, from the nearest ancestor that holds this card and no other
++    for(var i=0;i<3&&box;i++){
++      if(box.querySelectorAll('a[href*="/detail/"]').length>1) { box=null; break; }
++      img=box.querySelector('img'); if(img) break; box=box.parentElement;
++    }
++  } else { box=a; }
++  if(!title){ var h=box&&box.querySelector('h2,h3'); if(h) title=h.innerText.trim(); }
++  if(!title&&img) title=(img.getAttribute('alt')||'').trim();
++  if(!title) return null;
++  var sub='', rate='';
++  var pub=box&&box.querySelector('.cJI8ee'); if(pub) sub=pub.innerText.trim();
++  var d=pub?null:a.getAttribute('aria-describedby');
++  if(d){ d.split(' ').forEach(function(id){ var n=document.getElementById(id); if(!n) return; var t=n.innerText.trim(); if(!t) return; if(n.querySelector('[aria-label^="Average rating"]')||/^\d(\.\d)?$/.test(t)) return; if(!sub) sub=t; }); }
++  var rt=box&&box.querySelector('[aria-label^="Average rating"]');
++  if(rt){ var mm=/rating ([\d.]+)/.exec(rt.getAttribute('aria-label')||''); if(mm) rate=mm[1]; }
++  if(!sub&&box){ var p=box.querySelector('.cJI8ee,p'); if(p) sub=p.innerText.trim(); }
++  var src=img?(img.currentSrc||img.src):'';
++  var wide=/-w\d+-h\d+$/.test(src);
++  if(src&&!wide) src=src.replace(/=s\d+$/,'=s112');
++  return {href:new URL(a.getAttribute('href'),location.href).href, title:title, sub:sub, rate:rate, img:src, wide:wide};
++}
++
++function collect(){
++  var sections=[], cur=null, seen={};
++  var els=document.querySelectorAll('main h1,main h2,main h3,main a[href*="/detail/"]');
++  if(!els.length) els=document.querySelectorAll('h1,h2,h3,a[href*="/detail/"]');
++  var titles={};
++  for(var j=0;j<els.length;j++){ if(!/^H/.test(els[j].tagName)&&!els[j].closest('#bs-root')){ var dd=cardData(els[j]); if(dd) titles[dd.title]=1; } }
++  for(var i=0;i<els.length;i++){
++    var e=els[i]; if(e.closest('#bs-root')||e.closest('#bs-head')||e.closest('aside')||e.closest('nav')||e.closest('header')) continue;
++    if(/^H/.test(e.tagName)){ var t=e.innerText.trim(); if(t&&!titles[t]){ cur={title:t,items:[]}; sections.push(cur);} continue; }
++    var d=cardData(e); if(!d) continue; var key=d.href.split('?')[0]; if(seen[key]) continue; seen[key]=1;
++    if(!cur){ cur={title:'',items:[]}; sections.push(cur); }
++    cur.items.push(d);
++  }
++  return sections.filter(function(s){return s.items.length;});
++}
++
++var root=null, sig='';
++function render(){
++  var secs=collect();
++  var s=JSON.stringify(secs.map(function(x){return [x.title,x.items.length];}));
++  var more=document.querySelector('main button')&&[].slice.call(document.querySelectorAll('button')).filter(function(b){return /^load more$/i.test(b.innerText.trim());})[0];
++  var full=s+(more?'m':'');
++  if(full===sig) return; sig=full;
++  root.textContent='';
++  if(!secs.length){ root.appendChild(el('div','empty','Loading…')); }
++  secs.forEach(function(sec){
++    if(sec.title) root.appendChild(el('h2','',sec.title));
++    sec.items.forEach(function(it){
++      var a=el('a','row'); a.href=it.href;
++      var im=el('img', it.wide?'wd':''); im.loading='lazy'; im.alt=''; if(it.img) im.src=it.img; a.appendChild(im);
++      var tx=el('div','tx'); tx.appendChild(el('div','nm',it.title)); if(it.sub) tx.appendChild(el('div','sub',it.sub)); if(it.rate) tx.appendChild(el('div','star','★ '+it.rate)); a.appendChild(tx);
++      root.appendChild(a);
++    });
++  });
++  if(more){ var b=el('button','more','Show more results'); b.onclick=function(){ more.click(); b.textContent='Loading…'; }; root.appendChild(b); }
++  var ft=el('div','foot'); var cl=el('button','','Show the store’s own page'); cl.onclick=function(){ try{localStorage.setItem('bareStoreClassic','1');}catch(e){} location.reload(); }; ft.appendChild(cl); root.appendChild(ft);
++}
++
++function detail(){
++  var btn=[].slice.call(document.querySelectorAll('button')).filter(function(b){ var t=b.innerText.trim(); return /^(add to chrome|remove from chrome|add to|remove)/i.test(t)&&b.getBoundingClientRect().width>0; })[0];
++  if(btn) btn.classList.add('bs-install');
++  // Google's own prompt to switch browsers, shown inline on the page
++  [].slice.call(document.querySelectorAll('button,a')).forEach(function(x){
++    if(!/^install chrome$/i.test(x.innerText.trim())) return;
++    var c=x; for(var i=0;i<5&&c.parentElement;i++){ c=c.parentElement; if(/^switch to chrome/i.test(c.innerText.trim())) { c.style.setProperty('display','none','important'); break; } }
++  });
++  if(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches){
++    var all=document.querySelectorAll('main *'), n=Math.min(all.length,1500);
++    for(var q=0;q<n;q++){ var x=all[q]; if(x.dataset.bsBg) continue; x.dataset.bsBg='1';
++      var m=/rgba?\((\d+), (\d+), (\d+)(?:, ([\d.]+))?\)/.exec(getComputedStyle(x).backgroundColor);
++      if(m&&(m[4]===undefined||parseFloat(m[4])>0.5)&&(+m[1]+ +m[2]+ +m[3])/3>200){ x.style.setProperty('background-color','var(--bs-card)','important'); } }
++  }
++  var h1=document.querySelector('main h1'), imgs=document.querySelectorAll('main img');
++  for(var j=0;j<imgs.length;j++){ var im=imgs[j]; if(h1&&(im.compareDocumentPosition(h1)&Node.DOCUMENT_POSITION_FOLLOWING)&&!im.closest('[role=tabpanel]')){ im.classList.add('bs-icon'); break; } }
++}
++
++function start(){
++  addCss();
++  var de=document.documentElement; de.classList.add('bs');
++  if(!document.body){ document.addEventListener('DOMContentLoaded', start); return; }
++  var here=location.pathname+location.search;
++  if(here!==builtFor){
++    // first run, or the store changed page without loading a new one
++    builtFor=here; path=location.pathname; isDetail=/^\/detail\//.test(path); sig='';
++    head();
++    var oldRoot=document.getElementById('bs-root'); if(oldRoot) oldRoot.remove(); root=null;
++    var bi=document.querySelectorAll('.bs-install,.bs-icon'); for(var k=0;k<bi.length;k++){ bi[k].classList.remove('bs-install'); bi[k].classList.remove('bs-icon'); }
++  }
++  de.classList.toggle('bs-detail', isDetail); de.classList.toggle('bs-list', !isDetail);
++  if(isDetail){ detail(); }
++  else {
++    if(!root){ root=el('div'); root.id='bs-root'; document.body.appendChild(root); }
++    render();
++  }
++}
++if (CLASSIC){
++  window.__bareClassicMode = true;
++  // back to the store's own page with a way to return
++  var b=el('button','',''); b.textContent='Bare view'; b.style.cssText='position:fixed;left:12px;bottom:12px;z-index:2147483647;border:0;border-radius:18px;padding:9px 16px;background:#0b57d0;color:#fff;font:14px system-ui';
++  b.onclick=function(){ try{localStorage.removeItem('bareStoreClassic');}catch(e){} location.reload(); };
++  document.addEventListener('DOMContentLoaded', function(){ document.body.appendChild(b); });
++  return 'classic';
++}
++start();
++var t=0; function later(){ clearTimeout(t); t=setTimeout(function(){ start(); },200); }
++new MutationObserver(later).observe(document.documentElement,{childList:true,subtree:true});
++return 'installed';
++})())JS";
++
++// The store's own page, reflowed for a phone: what the footer link of the
++// phone view switches to.
+ //
+ // The store gives the install button only to a desktop user agent, and its
+ // desktop pages are built for a window at least 1280 px wide: the body and the
+@@ -149,6 +368,7 @@ namespace {
+ // runs again when the page changes itself, as the store does without
+ // navigating.
+ const char kWebStoreFitScript[] = R"JS((function(){
++ if (!window.__bareClassicMode) return 'skipped';
+  if (window.__bareStoreFit) return 'already'; window.__bareStoreFit=true;
+  var STYLE='bare-store-fit';
+  var css='html,body,header,header *{min-width:0!important}';
+@@ -189,6 +409,11 @@ void RequestDesktopSiteWebContentsObserverAndroid::DOMContentLoaded(
+       !ShouldKeepWebStoreViewport(web_contents())) {
+     return;
+   }
++  // The phone view first; it records in the world when the user has asked for
++  // the store's own page, which the second script then reflows.
++  render_frame_host->ExecuteJavaScriptInIsolatedWorld(
++      base::UTF8ToUTF16(std::string_view(kWebStoreViewScript)), base::NullCallback(),
++      content::ISOLATED_WORLD_ID_CONTENT_END);
+   render_frame_host->ExecuteJavaScriptInIsolatedWorld(
+       base::UTF8ToUTF16(std::string_view(kWebStoreFitScript)), base::NullCallback(),
+       content::ISOLATED_WORLD_ID_CONTENT_END);
+-- 
+2.34.1
+

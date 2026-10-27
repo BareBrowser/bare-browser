@@ -1,0 +1,79 @@
+From 48161626e7f1656be3f032ee24b523ae026670c5 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Fri, 23 Oct 2026 01:40:56 +0000
+Subject: [PATCH] Patch 0000193
+
+---
+ .../IncognitoTabSwitcherPaneUnitTest.java        |  2 ++
+ .../ui/bottombar/BareToolbarLayoutUnitTest.java  |  5 ++++-
+ .../bottombar/BottomBarConfigUtilsUnitTest.java  | 16 ++++++++++++++++
+ 3 files changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/IncognitoTabSwitcherPaneUnitTest.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/IncognitoTabSwitcherPaneUnitTest.java
+index 27c0c0e7744..b7d92d1eef6 100644
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/IncognitoTabSwitcherPaneUnitTest.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/IncognitoTabSwitcherPaneUnitTest.java
+@@ -208,6 +208,7 @@ public class IncognitoTabSwitcherPaneUnitTest {
+     }
+ 
+     @Test
++    @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
+     public void testNewTabButtonData() {
+         checkNewTabButton(/* enabled= */ false);
+ 
+@@ -229,6 +230,7 @@ public class IncognitoTabSwitcherPaneUnitTest {
+     }
+ 
+     @Test
++    @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
+     public void testIncognitoReauthCallback() {
+         assertTrue(mIncognitoTabSwitcherPane.getHubSearchEnabledStateSupplier().get());
+         checkNewTabButton(/* enabled= */ false);
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java
+index 499552d6a73..d5c36206470 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java
+@@ -305,9 +305,12 @@ public class BareToolbarLayoutUnitTest {
+             99,
+             UNSET,
+         };
++        // The last position only matters for arrangements an older build left behind, and what
++        // matters about it is whether it is unset, an ordinary button, the app menu, or junk.
++        @ActionId int[] legacyLast = {UNSET, ActionId.HOME_BUTTON, ActionId.APP_MENU, 99};
+         for (int home : anything) {
+             for (int extra : anything) {
+-                for (int last : anything) {
++                for (int last : legacyLast) {
+                     clearStored();
+                     store(home, extra);
+                     if (last != UNSET) storeLegacyLastPosition(last);
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtilsUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtilsUnitTest.java
+index e9939d905b7..0e2b39d8945 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtilsUnitTest.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtilsUnitTest.java
+@@ -295,6 +295,22 @@ public class BottomBarConfigUtilsUnitTest {
+     @Test
+     @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
+     public void testShouldForceBothConstraints_BottomBarDisabled() {
++        // Bare does not turn the new tab page off for the bottom bar (disable_on_ntp is false by
++        // default), so a native page keeps its constraints whether or not the bar is on.
++        when(mTab.isIncognito()).thenReturn(false);
++        when(mTab.getNativePage()).thenReturn(mNativePage);
++        when(mNativePage.getHost()).thenReturn("newtab");
++        when(mTab.isNativePage()).thenReturn(true);
++
++        assertTrue(
++                BottomBarConfigUtils.shouldForceBothConstraintsForBottomControls(mTab, mContext));
++    }
++
++    @Test
++    @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
++    @EnableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR + ":disable_on_ntp/true")
++    public void testShouldForceBothConstraints_NtpTurnedOffByParam() {
++        // The stock setting is still honoured when it is asked for.
+         when(mTab.isIncognito()).thenReturn(false);
+         when(mTab.getNativePage()).thenReturn(mNativePage);
+         when(mNativePage.getHost()).thenReturn("newtab");
+-- 
+2.34.1
+

@@ -1,0 +1,51 @@
+From eb62d0be6c884eb9323d67f30d9206a5dcdc5cc1 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 05:47:50 +0000
+Subject: [PATCH] Patch 0000185
+
+---
+ .../settings/search/SettingsSearchCoordinator.java | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SettingsSearchCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SettingsSearchCoordinator.java
+index 37e1d073556..6fcd894df85 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SettingsSearchCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SettingsSearchCoordinator.java
+@@ -624,6 +624,17 @@ public class SettingsSearchCoordinator
+         // Controls search UI visibility in single-column mode.
+         slidingPaneLayout.addPanelSlideListener(
+                 new SlidingPaneLayout.SimplePanelSlideListener() {
++                    @Override
++                    public void onPanelSlide(View panel, float slideOffset) {
++                        // Bare: the box used to be shown again as the pane started to slide in
++                        // and only faded out once it had arrived, which read as a flash at the
++                        // top of every sub-screen. Hide it as soon as the slide starts.
++                        if (mUseMultiColumn) return;
++                        if (slideOffset > 0f && searchBox.getAlpha() != 0f) {
++                            searchBox.setAlpha(0f);
++                        }
++                    }
++
+                     @Override
+                     public void onPanelOpened(View panel) {
+                         if (mUseMultiColumn) return;
+@@ -768,6 +779,7 @@ public class SettingsSearchCoordinator
+             mHandler.post(() -> showUiInSingleColumn(searchBox, show));
+             return;
+         }
++        if (show) searchBox.setAlpha(1f);
+         searchBox.setOnClickListener(
+                 ViewUtils.emptyClickListener()); // Temporary disables search during the animation
+         Transition transition =
+@@ -780,6 +792,8 @@ public class SettingsSearchCoordinator
+                                     @Override
+                                     public void onTransitionEnd(Transition transition) {
+                                         searchBox.setOnClickListener(v -> onClickSearchBox(v));
++                                        // Back to opaque once hidden, ready to be shown again.
++                                        if (!show) searchBox.setAlpha(1f);
+                                         updateSearchUiWidth();
+                                     }
+                                 });
+-- 
+2.34.1
+

@@ -1,0 +1,182 @@
+From 378b875fab6f1646b6d4fe98a3ff2e80769d524a Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 05:47:46 +0000
+Subject: [PATCH] Patch 0000182
+
+---
+ .../java/res/xml/media_preferences.xml        |  6 +++
+ .../media/settings/MediaSettingsFragment.java | 18 ++++++++
+ .../preferences/ChromePreferenceKeys.java     |  9 ++++
+ .../strings/android_chrome_strings.grd        |  6 +++
+ .../ScreenOrientationProviderImpl.java        | 44 +++++++++++++++----
+ 5 files changed, 74 insertions(+), 9 deletions(-)
+
+diff --git a/chrome/android/java/res/xml/media_preferences.xml b/chrome/android/java/res/xml/media_preferences.xml
+index cf6b2026a7e..3894c8e5a0e 100644
+--- a/chrome/android/java/res/xml/media_preferences.xml
++++ b/chrome/android/java/res/xml/media_preferences.xml
+@@ -13,4 +13,10 @@ found in the LICENSE file.
+         android:summary="@string/background_media_playback_summary"
+         android:defaultValue="false" />
+ 
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="fullscreen_follows_orientation"
++        android:persistent="false"
++        android:title="@string/bare_media_fullscreen_orientation_title"
++        android:summary="@string/bare_media_fullscreen_orientation_summary" />
++
+ </PreferenceScreen>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/media/settings/MediaSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/media/settings/MediaSettingsFragment.java
+index a099607fa50..12e7134c238 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/media/settings/MediaSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/media/settings/MediaSettingsFragment.java
+@@ -13,6 +13,8 @@ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.preferences.Pref;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
+ import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+@@ -25,6 +27,7 @@ import org.chromium.components.user_prefs.UserPrefs;
+ public class MediaSettingsFragment extends ChromeBaseSettingsFragment {
+ 
+     public static final String PREF_BACKGROUND_MEDIA_PLAYBACK = "background_media_playback";
++    static final String PREF_FULLSCREEN_FOLLOWS_ORIENTATION = "fullscreen_follows_orientation";
+ 
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+             ObservableSuppliers.createMonotonic();
+@@ -46,6 +49,21 @@ public class MediaSettingsFragment extends ChromeBaseSettingsFragment {
+                             .setBoolean(Pref.BACKGROUND_MEDIA_PLAYBACK, (boolean) newValue);
+                     return true;
+                 });
++
++        ChromeSwitchPreference followsPhone =
++                (ChromeSwitchPreference) findPreference(PREF_FULLSCREEN_FOLLOWS_ORIENTATION);
++        assert followsPhone != null;
++        followsPhone.setChecked(
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_MEDIA_FULLSCREEN_FOLLOWS_PHONE, true));
++        followsPhone.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    ChromeSharedPreferences.getInstance()
++                            .writeBoolean(
++                                    ChromePreferenceKeys.BARE_MEDIA_FULLSCREEN_FOLLOWS_PHONE,
++                                    (boolean) newValue);
++                    return true;
++                });
+     }
+ 
+     @Override
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 07fd64f53f9..3e1e6d9bdc5 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -450,6 +450,14 @@ public final class ChromePreferenceKeys {
+     /** De-Googled build: the user agent string typed under Other in Developer options. */
+     public static final String BARE_USER_AGENT_CUSTOM = "Bare.UserAgent.Custom";
+ 
++
++    /**
++     * Whether fullscreen video follows the phone's orientation (the default) instead of the
++     * page's request to lock it. Read by content code under the same string, so keep them equal.
++     */
++    public static final String BARE_MEDIA_FULLSCREEN_FOLLOWS_PHONE =
++            "Bare.Media.FullscreenFollowsPhone";
++
+     /**
+      * De-Googled build: package name of the chosen external download manager, or empty to ask
+      * every time. A package that is no longer installed falls back to asking.
+@@ -1343,6 +1351,7 @@ public final class ChromePreferenceKeys {
+                 DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,
+                 DOWNLOAD_EXTERNAL_SEND_SIGN_IN,
+                 BARE_USER_AGENT_CUSTOM,
++                BARE_MEDIA_FULLSCREEN_FOLLOWS_PHONE,
+                 BARE_USER_AGENT_PRESET,
+                 BARE_ADDRESS_BAR_SWIPE_TABS,
+                 BARE_EXTENSION_PRESENTATION,
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 798d88527c6..1947a7f31a2 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4504,6 +4504,12 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_CRX_OFFER_NOT_NOW" desc="Button that leaves a downloaded extension file uninstalled. [CHAR_LIMIT=20]">
+         Not now
+       </message>
++      <message name="IDS_BARE_MEDIA_FULLSCREEN_ORIENTATION_TITLE" desc="Setting: fullscreen video follows the phone's orientation. [CHAR_LIMIT=48]">
++        Follow the phone’s orientation
++      </message>
++      <message name="IDS_BARE_MEDIA_FULLSCREEN_ORIENTATION_SUMMARY" desc="Summary of the setting that stops pages from forcing landscape in fullscreen video.">
++        Fullscreen video turns only when the phone does, and respects your rotation lock. Turn this off to let a page switch to landscape itself.
++      </message>
+       <message name="IDS_BARE_MINIMAL_LAYOUT_USE_MINIMAL" desc="Address bar long press menu item that switches to the minimal toolbar. [CHAR_LIMIT=40]">
+         Use minimal toolbar
+       </message>
+diff --git a/content/public/android/java/src/org/chromium/content/browser/ScreenOrientationProviderImpl.java b/content/public/android/java/src/org/chromium/content/browser/ScreenOrientationProviderImpl.java
+index 77ca4976194..8d61bb5713c 100644
+--- a/content/public/android/java/src/org/chromium/content/browser/ScreenOrientationProviderImpl.java
++++ b/content/public/android/java/src/org/chromium/content/browser/ScreenOrientationProviderImpl.java
+@@ -20,6 +20,7 @@ import org.jni_zero.JNINamespace;
+ import org.chromium.base.ActivityState;
+ import org.chromium.base.ApplicationStatus;
+ import org.chromium.base.ApplicationStatus.ActivityStateListener;
++import org.chromium.base.ContextUtils;
+ import org.chromium.base.Log;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+@@ -244,17 +245,42 @@ public class ScreenOrientationProviderImpl
+ 
+     @Override
+     public void lockOrientation(@Nullable WindowAndroid window, byte webScreenOrientation) {
+-        // De-Googled build: pages are not allowed to dictate screen orientation.
++        // De-Googled build: by default pages are not allowed to dictate screen orientation.
+         //
+-        // Sites commonly call screen.orientation.lock("landscape") when entering
+-        // fullscreen video. Honouring that calls Activity.setRequestedOrientation(),
+-        // which overrides the user's system rotation lock outright - the device
+-        // rotates even when the user has explicitly locked rotation. Ignoring the
+-        // request leaves fullscreen video following the phone, as every other app
+-        // does.
++        // Sites commonly call screen.orientation.lock("landscape") when entering fullscreen
++        // video. Honouring that calls Activity.setRequestedOrientation(), which overrides the
++        // user's system rotation lock outright - the device rotates even when the user has
++        // explicitly locked rotation. Ignoring the request leaves fullscreen video following
++        // the phone, as every other app does.
+         //
+-        // unlockOrientation() is deliberately left working, so any orientation
+-        // state set before this build can still be cleared.
++        // Settings, Media can turn this off, which brings back the browser's own behaviour of
++        // honouring the lock. The key is the same string as
++        // ChromePreferenceKeys.BARE_MEDIA_FULLSCREEN_FOLLOWS_PHONE; it is read on every call so a
++        // change applies without a restart.
++        //
++        // unlockOrientation() is deliberately left working, so any orientation state set before
++        // this build can still be cleared.
++        if (ContextUtils.getAppSharedPreferences()
++                .getBoolean("Bare.Media.FullscreenFollowsPhone", true)) {
++            return;
++        }
++
++        // WindowAndroid may be null if the tab is being reparented.
++        if (window == null) return;
++        Activity activity = window.getActivity().get();
++
++        // Locking orientation is only supported for web contents that have an associated
++        // activity. Note that we can't just use the focused activity, as that would lead to bugs
++        // where unlockOrientation unlocks a different activity to the one that was locked.
++        if (activity == null) return;
++
++        int orientation =
++                getOrientationFromWebScreenOrientations(webScreenOrientation, window, activity);
++        if (orientation == ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
++            return;
++        }
++
++        setMaybeDelayedRequestedOrientation(activity, /* lock= */ true, orientation);
+     }
+ 
+     private void requestOrientationForWebContents(
+-- 
+2.34.1
+

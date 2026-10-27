@@ -1,0 +1,574 @@
+From 651b73e6ab594e851c2354b7ae6292b273cdb8e5 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 20 Aug 2026 10:41:06 +0000
+Subject: [PATCH] Patch 0000063
+
+---
+ chrome/android/java/res/values/ids.xml        |   1 +
+ .../browser/bare/BareMediaRegistryBridge.java |  64 +++---
+ .../contextmenu/ChromeContextMenuItem.java    |   8 +-
+ .../ChromeContextMenuPopulator.java           |  72 ++++---
+ .../browser/ui/android/bare_media_registry.cc | 194 ++++++++++++++----
+ .../browser/ui/android/bare_media_registry.h  |  14 +-
+ 6 files changed, 250 insertions(+), 103 deletions(-)
+
+diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
+index 21d823ab713..2859bbf4364 100644
+--- a/chrome/android/java/res/values/ids.xml
++++ b/chrome/android/java/res/values/ids.xml
+@@ -143,6 +143,7 @@ found in the LICENSE file.
+     <item type="id" name="contextmenu_download_video_frame" />
+     <item type="id" name="contextmenu_picture_in_picture" />
+     <item type="id" name="contextmenu_save_audio" />
++    <item type="id" name="contextmenu_save_detected_audio" />
+     <item type="id" name="contextmenu_save_detected_video" />
+     <item type="id" name="contextmenu_save_video" />
+     <!-- go/keep-sorted end -->
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java
+index b20692d9531..df36b07240b 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java
+@@ -19,54 +19,50 @@ import java.util.List;
+ /**
+  * Reads back the media a tab has fetched, as recorded by BareMediaRegistry on the native side.
+  *
+- * <p>Nothing here starts a download or touches the network. It answers one question, what media
+- * has this tab loaded, and leaves acting on the answer to the context menu.
++ * <p>Nothing here starts a download or touches the network. It answers one question, what has this
++ * tab loaded that is worth keeping, and leaves acting on the answer to the context menu.
+  */
+ @NullMarked
+ public class BareMediaRegistryBridge {
+-    /** One piece of media the tab fetched. */
++    /** One file the tab fetched. */
+     public static class Candidate {
+         public final GURL url;
+         public final String mimeType;
+-        public final long sizeBytes;
+ 
+-        Candidate(GURL url, String mimeType, long sizeBytes) {
++        /** How much of this file the page pulled, summed over range requests. */
++        public final long transferredBytes;
++
++        Candidate(GURL url, String mimeType, long transferredBytes) {
+             this.url = url;
+             this.mimeType = mimeType;
+-            this.sizeBytes = sizeBytes;
++            this.transferredBytes = transferredBytes;
+         }
++    }
+ 
+-        public boolean isVideo() {
+-            return mimeType.startsWith("video/");
+-        }
++    /**
++     * What a tab has to offer: the video it fetched, and the audio track that goes with it when
++     * the page streamed the two separately. Adaptive streaming usually does, in which case the
++     * video file on its own is silent and the audio is a second download.
++     */
++    public static class DownloadSet {
++        public final Candidate video;
++        public final @Nullable Candidate audio;
+ 
+-        public boolean isAudio() {
+-            return mimeType.startsWith("audio/");
++        DownloadSet(Candidate video, @Nullable Candidate audio) {
++            this.video = video;
++            this.audio = audio;
+         }
+     }
+ 
+     private BareMediaRegistryBridge() {}
+ 
+-    /** Returns what the tab has fetched, oldest first. Empty if it has fetched nothing. */
+-    public static List<Candidate> getCandidates(@Nullable WebContents webContents) {
+-        List<Candidate> candidates = new ArrayList<>();
+-        if (webContents == null || webContents.isDestroyed()) return candidates;
+-        BareMediaRegistryBridgeJni.get().getCandidates(webContents, candidates);
+-        return candidates;
+-    }
+-
+-    /**
+-     * Returns the largest video the tab has fetched, or null if it has fetched none. Largest is
+-     * the right pick: adaptive streaming fetches several renditions of the same content, and the
+-     * biggest of them is the best quality one.
+-     */
+-    public static @Nullable Candidate getLargestVideo(@Nullable WebContents webContents) {
+-        Candidate best = null;
+-        for (Candidate candidate : getCandidates(webContents)) {
+-            if (!candidate.isVideo()) continue;
+-            if (best == null || candidate.sizeBytes > best.sizeBytes) best = candidate;
+-        }
+-        return best;
++    /** Returns what this tab has to offer, or null if it has fetched no video. */
++    public static @Nullable DownloadSet getDownloadSet(@Nullable WebContents webContents) {
++        if (webContents == null || webContents.isDestroyed()) return null;
++        List<Candidate> found = new ArrayList<>();
++        BareMediaRegistryBridgeJni.get().getDownloadSet(webContents, found);
++        if (found.isEmpty()) return null;
++        return new DownloadSet(found.get(0), found.size() > 1 ? found.get(1) : null);
+     }
+ 
+     @SuppressWarnings("unchecked")
+@@ -75,12 +71,12 @@ public class BareMediaRegistryBridge {
+             Object out,
+             @JniType("std::string") String url,
+             @JniType("std::string") String mimeType,
+-            long sizeBytes) {
+-        ((List<Candidate>) out).add(new Candidate(new GURL(url), mimeType, sizeBytes));
++            long transferredBytes) {
++        ((List<Candidate>) out).add(new Candidate(new GURL(url), mimeType, transferredBytes));
+     }
+ 
+     @NativeMethods
+     interface Natives {
+-        void getCandidates(WebContents webContents, Object out);
++        void getDownloadSet(WebContents webContents, Object out);
+     }
+ }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
+index 40184c49097..e77f18737cd 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
+@@ -90,7 +90,8 @@ class ChromeContextMenuItem {
+         Item.ASK_GEMINI,
+         Item.ASK_GEMINI_IMAGE,
+         Item.SAVE_AUDIO,
+-        Item.SAVE_DETECTED_VIDEO
++        Item.SAVE_DETECTED_VIDEO,
++        Item.SAVE_DETECTED_AUDIO
+     })
+     @Retention(RetentionPolicy.SOURCE)
+     public @interface Item {
+@@ -164,8 +165,9 @@ class ChromeContextMenuItem {
+         // indexed by these values, so inserting in the middle renumbers the rest.
+         int SAVE_AUDIO = 55;
+         int SAVE_DETECTED_VIDEO = 56;
++        int SAVE_DETECTED_AUDIO = 57;
+         // ALWAYS UPDATE!
+-        int NUM_ENTRIES = 57;
++        int NUM_ENTRIES = 58;
+     }
+ 
+     /** Mapping from {@link Item} to the ID found in the ids.xml. */
+@@ -227,6 +229,7 @@ class ChromeContextMenuItem {
+         R.id.contextmenu_ask_gemini_image, // Item.ASK_GEMINI_IMAGE
+         R.id.contextmenu_save_audio, // Item.SAVE_AUDIO
+         R.id.contextmenu_save_detected_video, // Item.SAVE_DETECTED_VIDEO
++        R.id.contextmenu_save_detected_audio, // Item.SAVE_DETECTED_AUDIO
+     };
+ 
+     /** Mapping from {@link Item} to the ID of the string that describes the action of the item. */
+@@ -288,6 +291,7 @@ class ChromeContextMenuItem {
+         R.string.glic_button_entrypoint_ask_gemini_label, // Item.ASK_GEMINI_IMAGE
+         R.string.contextmenu_save_audio, // Item.SAVE_AUDIO
+         R.string.contextmenu_save_video, // Item.SAVE_DETECTED_VIDEO
++        R.string.contextmenu_save_audio, // Item.SAVE_DETECTED_AUDIO
+     };
+ 
+     /**
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
+index d883c9f1591..7db359a7629 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
+@@ -933,8 +933,8 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+         // the element points at a blob with no file behind it, and the real files were fetched
+         // separately and never appear as anyone's src. Blink knows this and clears the save
+         // flag, so upstream offers nothing at all here. BareMediaRegistry has been watching
+-        // those fetches, so when the ordinary item cannot be offered, offer the largest video
+-        // the tab actually loaded instead.
++        // those fetches, so when the ordinary item cannot be offered, offer what the tab
++        // actually loaded instead.
+         //
+         // The test is the ordinary item's own condition, negated, rather than a guess about
+         // schemes: blob counts as downloadable, so checking the scheme would have matched
+@@ -944,15 +944,27 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+         if (mParams.isVideo()
+                 && !upstreamOffersVideoDownload
+                 && mMode != ContextMenuMode.THIN_WEB_VIEW
+-                && areMandatoryFlowsCompleted(getProfile())
+-                && getLargestDetectedVideo() != null) {
+-            ModelList detectedVideoGroup = new ModelList();
+-            detectedVideoGroup.add(
+-                    createListItem(
+-                            Item.SAVE_DETECTED_VIDEO,
+-                            /* showInProductHelp= */ false,
+-                            !mIsDownloadRestrictedByPolicy));
+-            groupedItems.add(detectedVideoGroup);
++                && areMandatoryFlowsCompleted(getProfile())) {
++            BareMediaRegistryBridge.DownloadSet detected = getDetectedMedia();
++            if (detected != null) {
++                ModelList detectedGroup = new ModelList();
++                detectedGroup.add(
++                        createListItem(
++                                Item.SAVE_DETECTED_VIDEO,
++                                /* showInProductHelp= */ false,
++                                !mIsDownloadRestrictedByPolicy));
++                // Adaptive streaming splits sound off into its own file, so the video on its
++                // own is silent. Offer the audio as well rather than quietly handing over half
++                // of what was playing.
++                if (detected.audio != null) {
++                    detectedGroup.add(
++                            createListItem(
++                                    Item.SAVE_DETECTED_AUDIO,
++                                    /* showInProductHelp= */ false,
++                                    !mIsDownloadRestrictedByPolicy));
++                }
++                groupedItems.add(detectedGroup);
++            }
+         }
+ 
+         if (mParams.getOpenedFromHighlight()) {
+@@ -1208,16 +1220,11 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+                 mNativeDelegate.startDownload(mParams.getSrcUrl(), /* isMedia= */ true);
+             }
+         } else if (itemId == R.id.contextmenu_save_detected_video) {
+-            // Re-read rather than remembering what the menu was built from, so this cannot act
+-            // on a URL the tab has since replaced. Same download path as every other item, so
+-            // the same policy check and the same external download manager handoff apply.
+-            BareMediaRegistryBridge.Candidate detected = getLargestDetectedVideo();
+-            if (mIsDownloadRestrictedByPolicy) {
+-                showDownloadRestrictedToast();
+-            } else if (detected != null
+-                    && mItemDelegate.startDownload(detected.url, /* isLink= */ false)) {
+-                mNativeDelegate.startDownload(detected.url, /* isMedia= */ true);
+-            }
++            BareMediaRegistryBridge.DownloadSet detected = getDetectedMedia();
++            startDetectedDownload(detected == null ? null : detected.video);
++        } else if (itemId == R.id.contextmenu_save_detected_audio) {
++            BareMediaRegistryBridge.DownloadSet detected = getDetectedMedia();
++            startDetectedDownload(detected == null ? null : detected.audio);
+         } else if (itemId == R.id.contextmenu_save_video) {
+             recordContextMenuSelection(ContextMenuUma.Action.SAVE_VIDEO);
+             if (mIsDownloadRestrictedByPolicy) {
+@@ -1919,9 +1926,26 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+                 && !LocaleManager.getInstance().needToCheckForSearchEnginePromo();
+     }
+ 
+-    /** The biggest video this tab has fetched, or null if it has fetched none. */
+-    private BareMediaRegistryBridge.@Nullable Candidate getLargestDetectedVideo() {
+-        return BareMediaRegistryBridge.getLargestVideo(mItemDelegate.getWebContents());
++    /** What this tab has fetched that is worth offering, or null if there is nothing. */
++    private BareMediaRegistryBridge.@Nullable DownloadSet getDetectedMedia() {
++        return BareMediaRegistryBridge.getDownloadSet(mItemDelegate.getWebContents());
++    }
++
++    /**
++     * Downloads one detected file. Re-read at the moment of the tap rather than remembered from
++     * when the menu was built, so this cannot act on a URL the tab has since replaced. It goes
++     * through the same two calls as every other download item, so the same policy check and the
++     * same external download manager handoff apply.
++     */
++    private void startDetectedDownload(BareMediaRegistryBridge.@Nullable Candidate candidate) {
++        if (mIsDownloadRestrictedByPolicy) {
++            showDownloadRestrictedToast();
++            return;
++        }
++        if (candidate == null) return;
++        if (mItemDelegate.startDownload(candidate.url, /* isLink= */ false)) {
++            mNativeDelegate.startDownload(candidate.url, /* isMedia= */ true);
++        }
+     }
+ 
+     /** Returns the profile of the current tab via the item delegate. */
+diff --git a/chrome/browser/ui/android/bare_media_registry.cc b/chrome/browser/ui/android/bare_media_registry.cc
+index 93b22d8be34..0479a60a989 100644
+--- a/chrome/browser/ui/android/bare_media_registry.cc
++++ b/chrome/browser/ui/android/bare_media_registry.cc
+@@ -5,6 +5,8 @@
+ #include "chrome/browser/ui/android/bare_media_registry.h"
+ 
+ #include <algorithm>
++#include <array>
++#include <string_view>
+ 
+ #include "base/android/jni_android.h"
+ #include "base/android/jni_string.h"
+@@ -14,6 +16,7 @@
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/web_contents.h"
+ #include "net/base/net_errors.h"
++#include "net/base/url_util.h"
+ #include "services/network/public/mojom/fetch_api.mojom-shared.h"
+ #include "third_party/blink/public/mojom/loader/resource_load_info.mojom.h"
+ 
+@@ -28,11 +31,8 @@ namespace {
+ // Oldest entries are dropped once this many are held.
+ constexpr size_t kMaxCandidates = 64;
+ 
+-// Floors that keep ordinary page furniture out of the list. Sprites, icons,
+-// tracking pixels and interface sounds all sit comfortably below these;
+-// anything a person would actually mean to keep sits comfortably above.
+-constexpr base::ByteSize kMinImageSize = base::KiB(40);
+-constexpr base::ByteSize kMinAudioVideoSize = base::KiB(96);
++// The smallest a resource has to be before it earns an entry of its own.
++constexpr base::ByteSize kMinSize = base::KiB(96);
+ 
+ bool IsMediaMimeType(std::string_view mime) {
+   return base::StartsWith(mime, "video/",
+@@ -41,12 +41,40 @@ bool IsMediaMimeType(std::string_view mime) {
+                           base::CompareCase::INSENSITIVE_ASCII);
+ }
+ 
+-bool IsImageMimeType(std::string_view mime) {
+-  // SVG is left out on purpose: it is almost always page furniture rather than
+-  // something anyone means to save.
+-  return base::StartsWith(mime, "image/",
+-                          base::CompareCase::INSENSITIVE_ASCII) &&
+-         !base::EqualsCaseInsensitiveASCII(mime, "image/svg+xml");
++// A playlist or manifest is a text file listing where the pieces are; saving it
++// saves nothing anyone can play. A lone segment is no better. Both are refused
++// rather than offered as a download that would disappoint.
++//
++// Assembling a segmented stream into one file is a separate job that this class
++// does not do, and media behind DRM is out of scope entirely: nothing here
++// decrypts, and nothing here goes looking for a way around an access control.
++bool IsManifestOrSegment(std::string_view mime, const GURL& url) {
++  static constexpr auto kManifestTypes = std::to_array<std::string_view>({
++      "application/vnd.apple.mpegurl",
++      "application/x-mpegurl",
++      "audio/mpegurl",
++      "audio/x-mpegurl",
++      "application/dash+xml",
++      "video/vnd.mpeg.dash.mpd",
++  });
++  for (std::string_view type : kManifestTypes) {
++    if (base::EqualsCaseInsensitiveASCII(mime, type)) {
++      return true;
++    }
++  }
++  static constexpr auto kSuffixes = std::to_array<std::string_view>({
++      ".m3u8",
++      ".mpd",
++      ".m4s",
++      ".ts",
++  });
++  const std::string_view path = url.path();
++  for (std::string_view suffix : kSuffixes) {
++    if (base::EndsWith(path, suffix, base::CompareCase::INSENSITIVE_ASCII)) {
++      return true;
++    }
++  }
++  return false;
+ }
+ 
+ }  // namespace
+@@ -61,7 +89,79 @@ BareMediaRegistry::~BareMediaRegistry() = default;
+ GURL BareMediaRegistry::NormalizeForDownload(const GURL& url) {
+   GURL::Replacements strip_ref;
+   strip_ref.ClearRef();
+-  return url.ReplaceComponents(strip_ref);
++  GURL normalized = url.ReplaceComponents(strip_ref);
++
++  if (!normalized.has_query()) {
++    return normalized;
++  }
++
++  // Adaptive players usually ask for ranges with the Range header, in which
++  // case the URL already names the whole file and there is nothing to do. Some
++  // sites put the range in the query instead, and there the URL names a slice.
++  // Only one such convention is handled, the bytestart/byteend pair, because it
++  // is the only one that has been checked end to end: with those two removed
++  // the same URL returns 200 and the full Content-Length, so what comes back is
++  // the complete file rather than the piece the player wanted. Every other
++  // parameter is left exactly as it was.
++  bool found_range = false;
++  std::string rebuilt;
++  for (net::QueryIterator it(normalized); !it.IsAtEnd(); it.Advance()) {
++    const std::string_view key = it.GetKey();
++    if (key == "bytestart" || key == "byteend") {
++      found_range = true;
++      continue;
++    }
++    if (!rebuilt.empty()) {
++      rebuilt += "&";
++    }
++    rebuilt += std::string(it.GetKey()) + "=" + std::string(it.GetValue());
++  }
++  if (!found_range) {
++    return normalized;
++  }
++
++  GURL::Replacements set_query;
++  if (rebuilt.empty()) {
++    set_query.ClearQuery();
++  } else {
++    set_query.SetQueryStr(rebuilt);
++  }
++  return normalized.ReplaceComponents(set_query);
++}
++
++const BareMediaRegistry::Candidate* BareMediaRegistry::BestVideo() const {
++  const Candidate* best = nullptr;
++  for (const Candidate& candidate : candidates_) {
++    if (!base::StartsWith(candidate.mime_type, "video/",
++                          base::CompareCase::INSENSITIVE_ASCII)) {
++      continue;
++    }
++    if (!best || candidate.size > best->size) {
++      best = &candidate;
++    }
++  }
++  return best;
++}
++
++const BareMediaRegistry::Candidate* BareMediaRegistry::BestAudioFor(
++    const Candidate& video) const {
++  // Adaptive streaming splits a video into a silent video file and a separate
++  // audio file, served from the same host. When that is what happened, the
++  // video on its own is silent, and the audio track is worth offering too.
++  const Candidate* best = nullptr;
++  for (const Candidate& candidate : candidates_) {
++    if (!base::StartsWith(candidate.mime_type, "audio/",
++                          base::CompareCase::INSENSITIVE_ASCII)) {
++      continue;
++    }
++    if (candidate.url.host() != video.url.host()) {
++      continue;
++    }
++    if (!best || candidate.size > best->size) {
++      best = &candidate;
++    }
++  }
++  return best;
+ }
+ 
+ void BareMediaRegistry::ResourceLoadComplete(
+@@ -112,34 +212,27 @@ void BareMediaRegistry::ResourceLoadComplete(
+       break;
+   }
+ 
+-  // Two ways in. The destination is the reliable signal for a <video>, <audio>
+-  // or <img> element. Media assembled by script through Media Source arrives
++  const std::string& mime = resource_load_info.mime_type;
++  if (IsManifestOrSegment(mime, url)) {
++    return;
++  }
++
++  // Two ways in. The destination is the reliable signal for a <video> or
++  // <audio> element. Media assembled by script through Media Source arrives
+   // with an empty destination, because to the loader it is an ordinary fetch,
+   // so there the content type is the only thing that identifies it. That
+   // second case is the one this class exists for.
+-  const std::string& mime = resource_load_info.mime_type;
+-  const bool looks_like_media =
+-      destination == network::mojom::RequestDestination::kVideo ||
+-      destination == network::mojom::RequestDestination::kAudio ||
+-      IsMediaMimeType(mime);
+-  const bool looks_like_image =
+-      destination == network::mojom::RequestDestination::kImage ||
+-      IsImageMimeType(mime);
+-
+-  const base::ByteSize size = resource_load_info.total_received_bytes;
+-  if (looks_like_media) {
+-    if (size < kMinAudioVideoSize) {
+-      return;
+-    }
+-  } else if (looks_like_image) {
+-    if (size < kMinImageSize) {
+-      return;
+-    }
+-  } else {
++  //
++  // Images are deliberately left out. Upstream already offers a download for an
++  // image the person is pointing at, so there is nothing to add, and a feed full
++  // of them would push the video out of a list this size.
++  if (destination != network::mojom::RequestDestination::kVideo &&
++      destination != network::mojom::RequestDestination::kAudio &&
++      !IsMediaMimeType(mime)) {
+     return;
+   }
+ 
+-  Remember(url, mime, size);
++  Remember(url, mime, resource_load_info.total_received_bytes);
+ }
+ 
+ void BareMediaRegistry::Remember(const GURL& url,
+@@ -147,14 +240,23 @@ void BareMediaRegistry::Remember(const GURL& url,
+                                  base::ByteSize size) {
+   const GURL normalized = NormalizeForDownload(url);
+ 
+-  // A file delivered in range requests completes once per range, so the same
+-  // resource turns up again and again. Keep the largest sighting, which is the
+-  // closest thing available to the real size.
++  // A file delivered in ranges completes once per range, so the same resource
++  // turns up again and again. Add the ranges up: what is wanted is not the size
++  // of any one response but how much of this resource the page pulled, which is
++  // what says which of several renditions is the one being watched.
+   auto existing = std::ranges::find_if(
+       candidates_,
+       [&normalized](const Candidate& c) { return c.url == normalized; });
+   if (existing != candidates_.end()) {
+-    existing->size = std::max(existing->size, size);
++    existing->size += size;
++    return;
++  }
++
++  // The floor only decides whether a resource is worth starting an entry for.
++  // Once there is one, every later range counts, however small. Interface
++  // sounds and thumbnail clips sit below it; anything a person would mean to
++  // keep sits above.
++  if (size < kMinSize) {
+     return;
+   }
+ 
+@@ -173,7 +275,7 @@ WEB_CONTENTS_USER_DATA_KEY_IMPL(BareMediaRegistry);
+ 
+ }  // namespace bare
+ 
+-static void JNI_BareMediaRegistryBridge_GetCandidates(
++static void JNI_BareMediaRegistryBridge_GetDownloadSet(
+     JNIEnv* env,
+     const base::android::JavaRef<jobject>& jweb_contents,
+     const base::android::JavaRef<jobject>& jout) {
+@@ -186,10 +288,22 @@ static void JNI_BareMediaRegistryBridge_GetCandidates(
+   if (!registry) {
+     return;
+   }
+-  for (const auto& candidate : registry->candidates()) {
++  const bare::BareMediaRegistry::Candidate* video = registry->BestVideo();
++  if (!video) {
++    return;
++  }
++
++  auto add = [&](const bare::BareMediaRegistry::Candidate& candidate) {
+     Java_BareMediaRegistryBridge_addCandidate(
+         env, jout, candidate.url.spec(), candidate.mime_type,
+         static_cast<int64_t>(candidate.size.InBytes()));
++  };
++
++  // Video first, then its audio track if the page fetched one separately. The
++  // order is the contract: Java reads position 0 as the video.
++  add(*video);
++  if (const auto* audio = registry->BestAudioFor(*video)) {
++    add(*audio);
+   }
+ }
+ 
+diff --git a/chrome/browser/ui/android/bare_media_registry.h b/chrome/browser/ui/android/bare_media_registry.h
+index e13e52f943c..586e159117a 100644
+--- a/chrome/browser/ui/android/bare_media_registry.h
++++ b/chrome/browser/ui/android/bare_media_registry.h
+@@ -47,11 +47,19 @@ class BareMediaRegistry
+     return candidates_;
+   }
+ 
+-  // Drops the fragment and nothing else. Query parameters are kept, because on
+-  // most sites they carry the signature or expiry the CDN requires and removing
+-  // them turns a working URL into a 403.
++  // Turns the URL of one fetch into the URL of the whole file.
++  //
++  // Drops the fragment, and drops the byte range parameters of the one range
++  // convention that has been measured to work this way. Everything else in the
++  // query is kept, because on most sites it carries the signature or expiry the
++  // CDN requires and removing it turns a working URL into a 403.
+   static GURL NormalizeForDownload(const GURL& url);
+ 
++  // The largest video, and an audio track to go with it if the page fetched
++  // audio separately. Either may be null.
++  const Candidate* BestVideo() const;
++  const Candidate* BestAudioFor(const Candidate& video) const;
++
+   // content::WebContentsObserver:
+   void ResourceLoadComplete(
+       content::RenderFrameHost* render_frame_host,

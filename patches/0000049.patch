@@ -1,0 +1,130 @@
+From 1cbfb8b0ca64283c8b2d0a61d061a1b8a2617cd6 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 19 Aug 2026 07:19:55 +0000
+Subject: [PATCH] Patch 0000049
+
+---
+ .../regional_capabilities_utils.cc            | 70 ++++++++++++++++++-
+ .../template_url_prepopulate_data.cc          |  7 +-
+ 2 files changed, 75 insertions(+), 2 deletions(-)
+
+diff --git a/components/regional_capabilities/regional_capabilities_utils.cc b/components/regional_capabilities/regional_capabilities_utils.cc
+index 7d42a128258..0b300664c99 100644
+--- a/components/regional_capabilities/regional_capabilities_utils.cc
++++ b/components/regional_capabilities/regional_capabilities_utils.cc
+@@ -16,6 +16,7 @@
+ #include "base/command_line.h"
+ #include "base/containers/span.h"
+ #include "base/containers/to_vector.h"
++#include "base/no_destructor.h"
+ #include "components/country_codes/country_codes.h"
+ #include "components/regional_capabilities/eea_countries_ids.h"
+ #include "components/regional_capabilities/program_settings.h"
+@@ -162,6 +163,57 @@ bool HasSearchEngineCountryListOverride() {
+       country_override.value());
+ }
+ 
++// Bare: DuckDuckGo with the AI answers left out, offered alongside the engines that ship
++// upstream.
++//
++// The engine definitions normally live in third_party/search_engines_data, which is a separate
++// DEPS checkout rather than part of this repository, so a patch series here cannot add an entry
++// to that data. Declaring the engine in code instead keeps it inside the series and leaves the
++// checkout untouched.
++//
++// The id sits above 1000 deliberately. That range is reserved for distribution custom engines,
++// and search_engine_choice_service skips the choice screen for one, which is the behaviour we
++// want here.
++//
++// logo_url stays null on purpose. It is what LogoServiceImpl fetches over the network to draw
++// the centre logo on the new tab page. The NOAI wordmark ships in the APK instead and is served
++// from LogoMediator, so the new tab page never reaches out for a picture.
++//
++// base_builtin_resource_id is set for completeness but does nothing in this build: the bundled
++// search provider assets sit behind enable_builtin_search_provider_assets, which follows
++// is_internal_chrome_branded and is therefore off here. The small icon in the search box comes
++// from the favicon.
++const TemplateURLPrepopulateData::PrepopulatedEngine kBareNoAiDuckDuckGo = {
++    u"DuckDuckGo (No AI)",
++    u"noai.duckduckgo.com",
++    "https://noai.duckduckgo.com/favicon.ico",
++    "SEARCH_ENGINE_DUCKDUCKGO",
++    "https://noai.duckduckgo.com/?q={searchTerms}",
++    "UTF-8",
++    "https://duckduckgo.com/ac/?q={searchTerms}&type=list",
++    nullptr,  // image_url
++    nullptr,  // image_translate_url
++    nullptr,  // new_tab_url
++    nullptr,  // contextual_search_url
++    nullptr,  // logo_url
++    nullptr,  // doodle_url
++    nullptr,  // search_url_post_params
++    nullptr,  // suggest_url_post_params
++    nullptr,  // image_url_post_params
++    nullptr,  // image_translate_source_language_param_key
++    nullptr,  // image_translate_target_language_param_key
++    nullptr,  // image_search_branding_label
++    {},       // search_intent_params
++    {},       // alternate_urls
++    SEARCH_ENGINE_DUCKDUCKGO,
++    nullptr,  // preconnect_to_search_url
++    nullptr,  // prefetch_likely_navigations
++    1001,     // id
++    0,        // migrate_to_id
++    false,    // send_x_geo_header
++    {},       // regulatory_extensions
++};
++
+ std::vector<raw_ptr<const PrepopulatedEngine>> GetPrepopulatedEngines(
+     CountryId country_id,
+     PrefService& prefs,
+@@ -191,6 +243,10 @@ std::vector<raw_ptr<const PrepopulatedEngine>> GetPrepopulatedEngines(
+                              "SearchEngineListType might be invalid: "
+                           << static_cast<int>(search_engine_list_type);
+ 
++  // Bare: offer the no-AI engine in every region, appended so it never displaces an entry a
++  // region expects to see at the top.
++  engines.push_back(&kBareNoAiDuckDuckGo);
++
+   return engines;
+ }
+ 
+@@ -232,7 +288,19 @@ GetAllPrepopulatedEngines() {
+     return base::span(overrides->all_engines);
+   }
+ 
+-  return base::span(TemplateURLPrepopulateData::kAllEngines);
++  // Bare: kAllEngines is the separate list an id or a URL gets resolved against, so the engine
++  // has to be here too. Without it a profile that has it set as the default cannot map that back
++  // to a known engine.
++  static const base::NoDestructor<
++      std::vector<raw_ptr<const TemplateURLPrepopulateData::PrepopulatedEngine>>>
++      kAllEnginesWithNoAi([] {
++        std::vector<raw_ptr<const TemplateURLPrepopulateData::PrepopulatedEngine>> all(
++            TemplateURLPrepopulateData::kAllEngines.begin(),
++            TemplateURLPrepopulateData::kAllEngines.end());
++        all.push_back(&kBareNoAiDuckDuckGo);
++        return all;
++      }());
++  return base::span(*kAllEnginesWithNoAi);
+ }
+ 
+ // -- Test-only utils ---------------------------------------------------------
+diff --git a/components/search_engines/template_url_prepopulate_data.cc b/components/search_engines/template_url_prepopulate_data.cc
+index 8a6cae697e0..bcfb76d3fce 100644
+--- a/components/search_engines/template_url_prepopulate_data.cc
++++ b/components/search_engines/template_url_prepopulate_data.cc
+@@ -177,7 +177,12 @@ int GetDataVersion(PrefService* prefs) {
+     return prefs->GetInteger(prefs::kSearchProviderOverridesVersion);
+   }
+ 
+-  return kCurrentDataVersion;
++  // Bare: the engine list gets an entry added in regional_capabilities_utils.cc, but a profile
++  // only re-reads that list when this version is higher than the one its keyword database was
++  // last built from. kCurrentDataVersion comes from the third_party/search_engines_data checkout
++  // and cannot be changed from this repository, so offset it here instead. A fixed offset means
++  // exactly one refresh on upgrade, and upstream bumps still come through normally afterwards.
++  return kCurrentDataVersion + 1;
+ }
+ 
+ std::vector<std::unique_ptr<TemplateURLData>> GetPrepopulatedEngines(

@@ -1,0 +1,98 @@
+From 607e53ed5a798037d8a165e8ff0f012700f37836 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 23 Aug 2026 17:17:01 +0000
+Subject: [PATCH] Patch 0000080
+
+---
+ .../chrome/browser/ChromeTabbedActivity.java       |  9 ---------
+ .../tabbed_mode/SaveAndShareItemBuilder.java       | 14 --------------
+ .../TabbedAppMenuPropertiesDelegate.java           |  6 +++---
+ .../send_tab_to_self/entry_point_display_reason.cc | 13 +++++++------
+ 4 files changed, 10 insertions(+), 32 deletions(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index 58ba0d92acf..6441eb5362a 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -4464,15 +4464,6 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                             /* notifyOnSuccess= */ true);
+             RecordUserAction.record("MobileMenuCopyLink");
+             return true;
+-        } else if (id == R.id.send_to_devices_menu_id) {
+-            assert currentTab != null;
+-            ShareDelegate shareDelegate = getShareDelegateSupplier().get();
+-            if (shareDelegate != null) {
+-                shareDelegate.sendTabToSelf(currentTab);
+-                RecordUserAction.record("MobileMenuSendToDevices");
+-                return true;
+-            }
+-            return false;
+         } else if (id == R.id.qr_code_menu_id) {
+             assert currentTab != null;
+             QrCodeCoordinator qrCodeCoordinator =
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/SaveAndShareItemBuilder.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/SaveAndShareItemBuilder.java
+index acf85997a74..6eaf3e4a28c 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/SaveAndShareItemBuilder.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/SaveAndShareItemBuilder.java
+@@ -63,20 +63,6 @@ public class SaveAndShareItemBuilder {
+                 /* showIcon= */ false);
+     }
+ 
+-    /** Builds the "Send to devices" menu item. */
+-    public ListItem buildSendToDevicesItem() {
+-        assert !isIncognitoShowing();
+-        return AppMenuItemUtils.createStandardListItem(
+-                AppMenuItemUtils.buildModelForStandardMenuItem(
+-                        mContext,
+-                        mAppMenuItemTheme,
+-                        R.id.send_to_devices_menu_id,
+-                        R.string.send_tab_to_self,
+-                        Resources.ID_NULL,
+-                        mIsMenuIconAtStart),
+-                /* showIcon= */ false);
+-    }
+-
+     /** Builds the "QR Code" menu item. */
+     public ListItem buildShareQrCodeItem() {
+         return AppMenuItemUtils.createStandardListItem(
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+index 8a98f10eef9..3279d2c58a2 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+@@ -1099,9 +1099,9 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+         if (ShareUtils.shouldEnableShare(currentTab)) {
+             submenuItems.add(buildShareListItem(/* showIcon= */ false));
+             submenuItems.add(mSaveAndShareItemBuilder.buildCopyLinkItem());
+-            if (currentTab != null && !currentTab.isIncognito()) {
+-                submenuItems.add(mSaveAndShareItemBuilder.buildSendToDevicesItem());
+-            }
++            // De-Googled build: no "Send to your devices". Unlike the tab context
++            // menus, this row never consulted GetEntryPointDisplayReason, so it
++            // showed for everyone and led to a Google sign-in page.
+             submenuItems.add(mSaveAndShareItemBuilder.buildShareQrCodeItem());
+         }
+ 
+diff --git a/components/send_tab_to_self/entry_point_display_reason.cc b/components/send_tab_to_self/entry_point_display_reason.cc
+index 876a016264c..9961be3736b 100644
+--- a/components/send_tab_to_self/entry_point_display_reason.cc
++++ b/components/send_tab_to_self/entry_point_display_reason.cc
+@@ -107,12 +107,13 @@ std::optional<EntryPointDisplayReason> GetEntryPointDisplayReason(
+     return std::nullopt;
+   }
+ 
+-  if (ShouldOfferSignin(sync_service, pref_service)) {
+-    return EntryPointDisplayReason::kOfferSignIn;
+-  }
+-
+-  if (ShouldOfferReauth(sync_service, pref_service)) {
+-    return EntryPointDisplayReason::kOfferReauth;
++  // De-Googled build: never show the entry point in order to ask for a Google
++  // account. Upstream offers send-tab-to-self to signed-out users precisely to
++  // recruit a sign-in, which in this build lands on a page that cannot complete.
++  // Returning nullopt removes the entry point from every surface that asks here.
++  if (ShouldOfferSignin(sync_service, pref_service) ||
++      ShouldOfferReauth(sync_service, pref_service)) {
++    return std::nullopt;
+   }
+ 
+   if (HasUserActionableErrorBlockingSendTabToSelf(*sync_service)) {

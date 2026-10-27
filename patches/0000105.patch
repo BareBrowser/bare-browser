@@ -1,0 +1,130 @@
+From f7bcd1ced97e63bddec60015857cd38c481ebb1d Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 6 Sep 2026 05:54:09 +0000
+Subject: [PATCH] Patch 0000105
+
+---
+ .../ExternalNavigationHandler.java            |  9 +++
+ .../ExternalNavigationHandlerTest.java        | 75 +++++++++++++++++++
+ 2 files changed, 84 insertions(+)
+
+diff --git a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
+index f747106bf30..144f71973d0 100644
+--- a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
++++ b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
+@@ -2224,6 +2224,15 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+         // Staying in the browser, or the launch failed. Either way the page the user was going to
+         // is the right thing to show, so the interrupted navigation is resumed rather than
+         // dropped.
++        //
++        // The resumed load is a fresh navigation on the same chain, so without a marker it would
++        // arrive back here and ask the same question again, for as long as the chain lasts. The
++        // intent chooser marks the chain the same way when the user picks the browser from it:
++        // the rest of this chain stays in the browser, and the next navigation the user starts is
++        // a new chain and is asked about afresh.
++        if (params.getRedirectHandler().isOnNavigation()) {
++            params.getRedirectHandler().setShouldNotOverrideUrlLoadingOnCurrentRedirectChain();
++        }
+         callback.onResult(AsyncActionTakenParams.forNavigate(params.getUrl(), params));
+     }
+ 
+diff --git a/components/external_intents/android/javatests/src/org/chromium/components/external_intents/ExternalNavigationHandlerTest.java b/components/external_intents/android/javatests/src/org/chromium/components/external_intents/ExternalNavigationHandlerTest.java
+index 7b785e68ad8..1acaffee660 100644
+--- a/components/external_intents/android/javatests/src/org/chromium/components/external_intents/ExternalNavigationHandlerTest.java
++++ b/components/external_intents/android/javatests/src/org/chromium/components/external_intents/ExternalNavigationHandlerTest.java
+@@ -1548,6 +1548,71 @@ public class ExternalNavigationHandlerTest {
+         }
+     }
+ 
++    @Test
++    @SmallTest
++    public void testAskBeforeLeavingForApp_StayHereKeepsTheChainInTheBrowser() {
++        // Declining the Open in app prompt resumes the interrupted load on the same chain. That
++        // load must not bring the prompt back, while a later link the user taps starts a new
++        // chain and is asked about again.
++        Intent testIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
++        testIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++        Activity activity =
++                InstrumentationRegistry.getInstrumentation().startActivitySync(testIntent);
++        mDelegate.setContext(activity);
++        mDelegate.setCanLoadUrlInTab(true);
++        mDelegate.setShouldAskBeforeLeavingForApp(true);
++        mDelegate.add(new IntentActivity(YOUTUBE_URL, YOUTUBE_PACKAGE_NAME));
++        try {
++            RedirectHandler handler = redirectHandlerForLinkClick();
++            ThreadUtils.runOnUiThreadBlocking(
++                    () -> {
++                        checkUrl(YOUTUBE_URL, handler)
++                                .withHasUserGesture(true)
++                                .expecting(
++                                        OverrideUrlLoadingResultType.OVERRIDE_WITH_ASYNC_ACTION,
++                                        IGNORE);
++                        Assert.assertNotNull(
++                                "the prompt should be showing", mUrlHandler.mOpenInAppDialogDelegate);
++                        Assert.assertNull(mUrlHandler.mStartActivityIntent);
++                        Assert.assertFalse(handler.shouldNotOverrideUrlLoading());
++
++                        mUrlHandler.mOpenInAppDialogDelegate.performClick(
++                                ModalDialogProperties.ButtonType.NEGATIVE);
++                    });
++            // The decision callback is posted, so continue after it has run.
++            ThreadUtils.runOnUiThreadBlocking(
++                    () -> {
++                        Assert.assertEquals(YOUTUBE_URL, mUrlHandler.mNewUrlAfterClobbering);
++                        Assert.assertNull(mUrlHandler.mOpenInAppDialogDelegate);
++                        Assert.assertTrue(
++                                "the chain should now stay in the browser",
++                                handler.shouldNotOverrideUrlLoading());
++                        mUrlHandler.mNewUrlAfterClobbering = null;
++
++                        // The resumed load: same chain, renderer initiated, no fresh gesture.
++                        handler.updateNewUrlLoading(PageTransition.LINK, false, false, 0, false, true);
++                        checkUrl(YOUTUBE_URL, handler)
++                                .withHasUserGesture(false)
++                                .expecting(OverrideUrlLoadingResultType.NO_OVERRIDE, IGNORE);
++                        Assert.assertNull(
++                                "no second prompt for the same navigation",
++                                mUrlHandler.mOpenInAppDialogDelegate);
++                        Assert.assertNull(mUrlHandler.mStartActivityIntent);
++
++                        // A later link the user taps is a new chain and is asked about again.
++                        checkUrl(YOUTUBE_URL, redirectHandlerForLinkClick())
++                                .withHasUserGesture(true)
++                                .expecting(
++                                        OverrideUrlLoadingResultType.OVERRIDE_WITH_ASYNC_ACTION,
++                                        IGNORE);
++                        Assert.assertNotNull(mUrlHandler.mOpenInAppDialogDelegate);
++                        mUrlHandler.mOpenInAppDialogDelegate.cancelDialog();
++                    });
++        } finally {
++            activity.finish();
++        }
++    }
++
+     @Test
+     @MediumTest
+     public void testIncognitoAlertDialogDismissedOnNavigation() {
+@@ -3702,6 +3767,7 @@ public class ExternalNavigationHandlerTest {
+     private static class TestExternalNavigationDelegate implements ExternalNavigationDelegate {
+         private WindowAndroid mWindowAndroid;
+         private boolean mAllowExternalNavigationForHttpProtocols = true;
++        private boolean mShouldAskBeforeLeavingForApp;
+ 
+         public List<ResolveInfo> queryIntentActivities(Intent intent) {
+             List<ResolveInfo> list = new ArrayList<>();
+@@ -3936,6 +4002,15 @@ public class ExternalNavigationHandlerTest {
+             return mAllowExternalNavigationForHttpProtocols;
+         }
+ 
++        public void setShouldAskBeforeLeavingForApp(boolean value) {
++            mShouldAskBeforeLeavingForApp = value;
++        }
++
++        @Override
++        public boolean shouldAskBeforeLeavingForApp(GURL url) {
++            return mShouldAskBeforeLeavingForApp;
++        }
++
+         public void reset() {
+             startIncognitoIntentCalled = false;
+             mIsUrlInPwaScope = false;

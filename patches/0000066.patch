@@ -1,0 +1,420 @@
+From 9aa5ca6d206de7adf3f27ca2b4b86f35437d9718 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Fri, 21 Aug 2026 07:53:03 +0000
+Subject: [PATCH] Patch 0000066
+
+---
+ .../browser/ChromeBaseAppCompatActivity.java  |  8 ++++++
+ .../browser/ntp/IncognitoNewTabPageView.java  |  8 +++++-
+ .../radio_button_group_theme_preference.xml   |  8 ++++++
+ .../GlobalNightModeStateController.java       | 24 ++++++++++++++---
+ .../browser/night_mode/NightModeUtils.java    |  7 +++++
+ .../chrome/browser/night_mode/ThemeType.java  |  5 ++--
+ .../RadioButtonGroupThemePreference.java      |  9 +++++--
+ .../settings/ThemeSettingsFragment.java       | 11 ++++++++
+ .../strings/android_chrome_strings.grd        |  3 +++
+ .../chrome/browser/theme/ThemeUtils.java      |  7 ++++-
+ .../styles/android/java/res/values/attrs.xml  |  5 ++++
+ .../styles/android/java/res/values/styles.xml | 25 +++++++++++++++++
+ .../browser_ui/styles/ChromeColors.java       |  5 +++-
+ .../browser_ui/styles/IncognitoColors.java    | 27 +++++++++++++++----
+ 14 files changed, 136 insertions(+), 16 deletions(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java
+index d4913144d4f..f9c33399f4f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java
+@@ -58,6 +58,7 @@ import org.chromium.chrome.browser.language.GlobalAppLocaleController;
+ import org.chromium.chrome.browser.night_mode.GlobalNightModeStateProviderHolder;
+ import org.chromium.chrome.browser.night_mode.NightModeStateProvider;
+ import org.chromium.chrome.browser.night_mode.NightModeUtils;
++import org.chromium.chrome.browser.night_mode.ThemeType;
+ import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
+ import org.chromium.chrome.browser.ntp_customization.theme.NtpThemeStateProvider;
+ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
+@@ -607,6 +608,13 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
+             }
+         }
+ 
++        // Bare: "Dark AMOLED" is the dark theme with its flat surfaces taken to
++        // true black. Night mode is already on for this setting (see
++        // GlobalNightModeStateController), so this only restates the colours.
++        if (NightModeUtils.getThemeSetting() == ThemeType.DARK_AMOLED) {
++            applySingleThemeOverlay(R.style.ThemeOverlay_BrowserUI_Amoled);
++        }
++
+         // TODO(https://crbug.com/392634251): Explore setting elegantTextHeight to 'true' on older
+         // OS versions.
+         if (ChromeFeatureList.sAndroidElegantTextHeight.isEnabled()
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/IncognitoNewTabPageView.java b/chrome/android/java/src/org/chromium/chrome/browser/ntp/IncognitoNewTabPageView.java
+index 0f80756dced..819dbd064dc 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ntp/IncognitoNewTabPageView.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ntp/IncognitoNewTabPageView.java
+@@ -14,6 +14,8 @@ import android.widget.ScrollView;
+ 
+ import androidx.annotation.ColorInt;
+ 
++import com.google.android.material.color.MaterialColors;
++
+ import org.chromium.build.annotations.Initializer;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.chrome.R;
+@@ -56,7 +58,11 @@ public class IncognitoNewTabPageView extends FrameLayout {
+     protected void onFinishInflate() {
+         super.onFinishInflate();
+ 
+-        @ColorInt int bgColor = getContext().getColor(R.color.ntp_bg_incognito);
++        @ColorInt int bgColor =
++                MaterialColors.getColor(
++                        getContext(),
++                        R.attr.colorIncognitoSurface,
++                        getContext().getColor(R.color.ntp_bg_incognito));
+         mScrollView = findViewById(R.id.ntp_scrollview);
+         mScrollView.setBackgroundColor(bgColor);
+         setContentDescription(
+diff --git a/chrome/browser/ui/android/night_mode/java/res/layout/radio_button_group_theme_preference.xml b/chrome/browser/ui/android/night_mode/java/res/layout/radio_button_group_theme_preference.xml
+index e603b9c8b66..fdfc7f9afe9 100644
+--- a/chrome/browser/ui/android/night_mode/java/res/layout/radio_button_group_theme_preference.xml
++++ b/chrome/browser/ui/android/night_mode/java/res/layout/radio_button_group_theme_preference.xml
+@@ -42,6 +42,14 @@ found in the LICENSE file.
+           android:paddingTop="@dimen/settings_item_default_padding"
+           android:paddingBottom="@dimen/settings_item_default_padding" />
+ 
++      <org.chromium.components.browser_ui.widget.RadioButtonWithDescription
++          android:id="@+id/dark_amoled"
++          android:layout_width="match_parent"
++          android:layout_height="wrap_content"
++          android:minHeight="@dimen/min_touch_target_size"
++          android:paddingTop="@dimen/settings_item_default_padding"
++          android:paddingBottom="@dimen/settings_item_default_padding" />
++
+     </org.chromium.components.browser_ui.widget.RadioButtonWithDescriptionLayout>
+ 
+     <!-- Make the row clickable -->
+diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateController.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateController.java
+index 618b6e951c1..e617cc7e966 100644
+--- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateController.java
++++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateController.java
+@@ -30,6 +30,9 @@ class GlobalNightModeStateController
+      * initialized yet.
+      */
+     private Boolean mNightModeOn;
++    // Dark and Dark AMOLED are both night mode, so the flag above does not change between them.
++    // Tracked separately so observers still get told to re-theme when the user switches.
++    private Boolean mAmoledOn;
+ 
+     private final SharedPreferences.OnSharedPreferenceChangeListener mPreferenceListener;
+ 
+@@ -122,12 +125,25 @@ class GlobalNightModeStateController
+         final boolean newNightModeOn =
+                 (theme == ThemeType.SYSTEM_DEFAULT
+                                 && SystemNightModeMonitor.getInstance().isSystemNightModeOn())
+-                        || theme == ThemeType.DARK;
+-        if (mNightModeOn != null && newNightModeOn == mNightModeOn) return;
++                        || theme == ThemeType.DARK
++                        || theme == ThemeType.DARK_AMOLED;
++        final boolean newAmoledOn = theme == ThemeType.DARK_AMOLED;
++        if (mNightModeOn != null
++                && newNightModeOn == mNightModeOn
++                && mAmoledOn != null
++                && newAmoledOn == mAmoledOn) {
++            return;
++        }
+ 
++        final boolean nightModeChanged = mNightModeOn == null || newNightModeOn != mNightModeOn;
+         mNightModeOn = newNightModeOn;
+-        AppCompatDelegate.setDefaultNightMode(
+-                mNightModeOn ? AppCompatDelegate.MODE_NIGHT_YES : AppCompatDelegate.MODE_NIGHT_NO);
++        mAmoledOn = newAmoledOn;
++        if (nightModeChanged) {
++            AppCompatDelegate.setDefaultNightMode(
++                    mNightModeOn
++                            ? AppCompatDelegate.MODE_NIGHT_YES
++                            : AppCompatDelegate.MODE_NIGHT_NO);
++        }
+         for (Observer observer : mObservers) observer.onNightModeStateChanged();
+ 
+         NightModeMetrics.recordNightModeState(mNightModeOn);
+diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/NightModeUtils.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/NightModeUtils.java
+index 2b741c2fb07..b9d43447f4b 100644
+--- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/NightModeUtils.java
++++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/NightModeUtils.java
+@@ -96,6 +96,11 @@ public class NightModeUtils {
+                 nightMode ? Configuration.UI_MODE_NIGHT_YES : Configuration.UI_MODE_NIGHT_NO;
+         config.uiMode = nightModeFlag | (config.uiMode & ~Configuration.UI_MODE_NIGHT_MASK);
+         wrapper.applyOverrideConfiguration(config);
++        // After applyOverrideConfiguration: touching getTheme() earlier creates the
++        // resources, and applyOverrideConfiguration throws once they exist.
++        if (getThemeSetting() == ThemeType.DARK_AMOLED) {
++            wrapper.getTheme().applyStyle(R.style.ThemeOverlay_BrowserUI_Amoled, true);
++        }
+         return wrapper;
+     }
+ 
+@@ -124,6 +129,8 @@ public class NightModeUtils {
+         switch (theme) {
+             case ThemeType.DARK:
+                 return context.getString(R.string.dark_mode);
++            case ThemeType.DARK_AMOLED:
++                return context.getString(R.string.bare_dark_amoled_mode);
+             case ThemeType.LIGHT:
+                 return context.getString(R.string.light_mode);
+             case ThemeType.SYSTEM_DEFAULT:
+diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/ThemeType.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/ThemeType.java
+index 8859d747a85..e5ceb14fb4a 100644
+--- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/ThemeType.java
++++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/ThemeType.java
+@@ -15,7 +15,7 @@ import java.lang.annotation.RetentionPolicy;
+  * Theme setting variations. This is also used for histograms and should therefore be treated
+  * as append-only. See DarkThemePreferences in tools/metrics/histograms/enums.xml.
+  */
+-@IntDef({ThemeType.SYSTEM_DEFAULT, ThemeType.LIGHT, ThemeType.DARK})
++@IntDef({ThemeType.SYSTEM_DEFAULT, ThemeType.LIGHT, ThemeType.DARK, ThemeType.DARK_AMOLED})
+ @Retention(RetentionPolicy.SOURCE)
+ @NullMarked
+ public @interface ThemeType {
+@@ -23,6 +23,7 @@ public @interface ThemeType {
+     int SYSTEM_DEFAULT = 0;
+     int LIGHT = 1;
+     int DARK = 2;
++    int DARK_AMOLED = 3;
+ 
+-    int NUM_ENTRIES = 3;
++    int NUM_ENTRIES = 4;
+ }
+diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/RadioButtonGroupThemePreference.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/RadioButtonGroupThemePreference.java
+index 0d942fff35d..4179debfbf1 100644
+--- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/RadioButtonGroupThemePreference.java
++++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/RadioButtonGroupThemePreference.java
+@@ -91,12 +91,15 @@ public class RadioButtonGroupThemePreference extends ContainedRadioButtonGroupPr
+ 
+         mCheckBox.setChecked(mDarkenWebsitesEnabled);
+ 
+-        assert ThemeType.NUM_ENTRIES == 3;
++        assert ThemeType.NUM_ENTRIES == 4;
+         mButtons.set(
+                 ThemeType.SYSTEM_DEFAULT,
+                 (RadioButtonWithDescription) holder.findViewById(R.id.system_default));
+         mButtons.set(ThemeType.LIGHT, (RadioButtonWithDescription) holder.findViewById(R.id.light));
+         mButtons.set(ThemeType.DARK, (RadioButtonWithDescription) holder.findViewById(R.id.dark));
++        mButtons.set(
++                ThemeType.DARK_AMOLED,
++                (RadioButtonWithDescription) holder.findViewById(R.id.dark_amoled));
+ 
+         final Context context = getContext();
+         for (int theme = 0; theme < mButtons.size(); theme++) {
+@@ -113,7 +116,9 @@ public class RadioButtonGroupThemePreference extends ContainedRadioButtonGroupPr
+         assertBound();
+         if (ChromeFeatureList.isEnabled(
+                 ChromeFeatureList.DARKEN_WEBSITES_CHECKBOX_IN_THEMES_SETTING)) {
+-            if (mSetting == ThemeType.SYSTEM_DEFAULT || mSetting == ThemeType.DARK) {
++            if (mSetting == ThemeType.SYSTEM_DEFAULT
++                    || mSetting == ThemeType.DARK
++                    || mSetting == ThemeType.DARK_AMOLED) {
+                 mGroup.attachAccessoryView(mCheckboxContainer, mSettingRadioButton);
+                 mCheckboxContainer.setVisibility(View.VISIBLE);
+             } else {
+diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
+index ab08ce4bad1..58ac1dac3f0 100644
+--- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
++++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
+@@ -35,6 +35,7 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
+     static final String PREF_UI_THEME_PREF = "ui_theme_pref";
+     private static final String PREF_UI_THEME_PREF_LIGHT = "ui_theme_pref_light";
+     private static final String PREF_UI_THEME_PREF_DARK = "ui_theme_pref_dark";
++    private static final String PREF_UI_THEME_PREF_DARK_AMOLED = "ui_theme_pref_dark_amoled";
+ 
+     private boolean mWebContentsDarkModeEnabled;
+ 
+@@ -134,6 +135,16 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
+                             2,
+                             darkTitle,
+                             null);
++                    String darkAmoledTitle =
++                            NightModeUtils.getThemeSettingTitle(context, ThemeType.DARK_AMOLED);
++                    addEntryForKey(
++                            indexData,
++                            prefFragment,
++                            PREF_UI_THEME_PREF_DARK_AMOLED,
++                            PREF_UI_THEME_PREF,
++                            3,
++                            darkAmoledTitle,
++                            null);
+                 }
+ 
+                 private void addEntryForKey(
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index a4a331ac10c..91b42e87ea1 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -3069,6 +3069,9 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_LIGHT_MODE" desc="Title of button that will change theme of distilled pages to light mode.">
+         Light
+       </message>
++      <message name="IDS_BARE_DARK_AMOLED_MODE" desc="Title of the theme option that uses true black backgrounds so AMOLED screens can switch those pixels off.">
++        Dark AMOLED
++      </message>
+       <message name="IDS_SEPIA_MODE" desc="Title of button that will change theme of distilled pages to sepia mode.">
+         Sepia
+       </message>
+diff --git a/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/theme/ThemeUtils.java b/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/theme/ThemeUtils.java
+index a4f9b14b88b..b13c4b38f92 100644
+--- a/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/theme/ThemeUtils.java
++++ b/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/theme/ThemeUtils.java
+@@ -13,6 +13,8 @@ import androidx.annotation.ColorRes;
+ import androidx.annotation.VisibleForTesting;
+ import androidx.core.content.ContextCompat;
+ 
++import com.google.android.material.color.MaterialColors;
++
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.tab.Tab;
+@@ -88,7 +90,10 @@ public class ThemeUtils {
+             Context context, @ColorInt int color, boolean isIncognito, boolean isCustomTab) {
+         // Text box color on default toolbar background in incognito mode is a pre-defined color.
+         if (isIncognito) {
+-            return context.getColor(R.color.toolbar_text_box_background_incognito);
++            return MaterialColors.getColor(
++                    context,
++                    R.attr.colorIncognitoSurfaceRaised,
++                    context.getColor(R.color.toolbar_text_box_background_incognito));
+         }
+ 
+         // Text box color on default toolbar background in standard mode is a pre-defined
+diff --git a/components/browser_ui/styles/android/java/res/values/attrs.xml b/components/browser_ui/styles/android/java/res/values/attrs.xml
+index 61ce66c84d9..7c9c3deb775 100644
+--- a/components/browser_ui/styles/android/java/res/values/attrs.xml
++++ b/components/browser_ui/styles/android/java/res/values/attrs.xml
+@@ -10,6 +10,11 @@ found in the LICENSE file.
+         <attr name="isDialogFullscreen" format="boolean" />
+     </declare-styleable>
+ 
++    <!-- Incognito chrome surfaces. Unset in every theme except the AMOLED
++         overlay; callers fall back to the non-adaptive incognito colours. -->
++    <attr name="colorIncognitoSurface" format="color" />
++    <attr name="colorIncognitoSurfaceRaised" format="color" />
++
+     <attr name="iconRowButtonSizeOverlay" format="reference" />
+     <attr name="colorButtonSizeOverlay" format="reference" />
+ </resources>
+diff --git a/components/browser_ui/styles/android/java/res/values/styles.xml b/components/browser_ui/styles/android/java/res/values/styles.xml
+index 9473be261f3..71637302a1d 100644
+--- a/components/browser_ui/styles/android/java/res/values/styles.xml
++++ b/components/browser_ui/styles/android/java/res/values/styles.xml
+@@ -375,4 +375,29 @@ found in the LICENSE file.
+     <style name="TextAppearance.TextAccentMediumThick.ColorOnPrimaryContainer">
+         <item name="android:textColor">?attr/colorOnPrimaryContainer</item>
+     </style>
++    <!-- Bare: true-black surfaces for AMOLED panels, layered on top of the dark
++         theme when the user picks "Dark AMOLED". Only the flat, full-bleed
++         surfaces go to #000 so those pixels switch off entirely; the container
++         ramp keeps a small lift so menus, dialogs and sheets remain separable
++         from the content behind them. Foreground and accent colours are left to
++         the dark theme so contrast is unchanged. -->
++    <style name="ThemeOverlay.BrowserUI.Amoled" parent="">
++        <!-- Flat, full-bleed surfaces go fully black so the pixels switch off.
++             colorSurfaceContainerHigh is included because Chromium settings use
++             it for the page background, not for a raised surface. -->
++        <item name="android:colorBackground">#FF000000</item>
++        <item name="colorSurface">#FF000000</item>
++        <item name="colorSurfaceDim">#FF000000</item>
++        <item name="colorSurfaceContainerLow">#FF000000</item>
++        <item name="colorSurfaceContainer">#FF000000</item>
++        <item name="colorSurfaceContainerHigh">#FF000000</item>
++        <!-- Genuinely raised surfaces (cards, menus, sheets) keep a small lift so
++             they stay separable from the black behind them. -->
++        <item name="colorSurfaceContainerHighest">#FF141414</item>
++        <item name="colorSurfaceBright">#FF141414</item>
++        <!-- Incognito reaches these through attrs rather than the theme's own
++             surface tokens, so it needs its own pair. -->
++        <item name="colorIncognitoSurface">#FF000000</item>
++        <item name="colorIncognitoSurfaceRaised">#FF141414</item>
++    </style>
+ </resources>
+diff --git a/components/browser_ui/styles/android/java/src/org/chromium/components/browser_ui/styles/ChromeColors.java b/components/browser_ui/styles/android/java/src/org/chromium/components/browser_ui/styles/ChromeColors.java
+index ff1da80ecbf..38a325800ef 100644
+--- a/components/browser_ui/styles/android/java/src/org/chromium/components/browser_ui/styles/ChromeColors.java
++++ b/components/browser_ui/styles/android/java/src/org/chromium/components/browser_ui/styles/ChromeColors.java
+@@ -29,7 +29,10 @@ public class ChromeColors {
+      */
+     public static @ColorInt int getDefaultThemeColor(Context context, boolean isIncognito) {
+         return isIncognito
+-                ? context.getColor(R.color.toolbar_background_incognito)
++                ? MaterialColors.getColor(
++                        context,
++                        R.attr.colorIncognitoSurface,
++                        context.getColor(R.color.toolbar_background_incognito))
+                 : MaterialColors.getColor(context, R.attr.colorSurface, TAG);
+     }
+ 
+diff --git a/components/browser_ui/styles/android/java/src/org/chromium/components/browser_ui/styles/IncognitoColors.java b/components/browser_ui/styles/android/java/src/org/chromium/components/browser_ui/styles/IncognitoColors.java
+index 4c7c6db7248..5b959b49b0c 100644
+--- a/components/browser_ui/styles/android/java/src/org/chromium/components/browser_ui/styles/IncognitoColors.java
++++ b/components/browser_ui/styles/android/java/src/org/chromium/components/browser_ui/styles/IncognitoColors.java
+@@ -10,6 +10,8 @@ import android.content.res.ColorStateList;
+ import androidx.annotation.ColorInt;
+ import androidx.annotation.StyleRes;
+ 
++import com.google.android.material.color.MaterialColors;
++
+ import org.chromium.build.annotations.NullMarked;
+ 
+ /**
+@@ -23,21 +25,30 @@ public class IncognitoColors {
+     /** {@link SemanticColorUtils#getColorSurface} */
+     public static @ColorInt int getColorSurface(Context context, boolean isIncognito) {
+         return isIncognito
+-                ? context.getColor(R.color.gm3_baseline_surface_dark)
++                ? MaterialColors.getColor(
++                        context,
++                        R.attr.colorIncognitoSurface,
++                        context.getColor(R.color.gm3_baseline_surface_dark))
+                 : SemanticColorUtils.getColorSurface(context);
+     }
+ 
+     /** {@link SemanticColorUtils#getColorSurfaceBright} */
+     public static @ColorInt int getColorSurfaceBright(Context context, boolean isIncognito) {
+         return isIncognito
+-                ? context.getColor(R.color.gm3_baseline_surface_bright_dark)
++                ? MaterialColors.getColor(
++                        context,
++                        R.attr.colorIncognitoSurfaceRaised,
++                        context.getColor(R.color.gm3_baseline_surface_bright_dark))
+                 : SemanticColorUtils.getColorSurfaceBright(context);
+     }
+ 
+     /** {@link SemanticColorUtils#getColorSurfaceContainerHigh} */
+     public static @ColorInt int getColorSurfaceContainerHigh(Context context, boolean isIncognito) {
+         return isIncognito
+-                ? context.getColor(R.color.gm3_baseline_surface_container_high_dark)
++                ? MaterialColors.getColor(
++                        context,
++                        R.attr.colorIncognitoSurface,
++                        context.getColor(R.color.gm3_baseline_surface_container_high_dark))
+                 : SemanticColorUtils.getColorSurfaceContainerHigh(context);
+     }
+ 
+@@ -45,14 +56,20 @@ public class IncognitoColors {
+     public static @ColorInt int getColorSurfaceContainerHighest(
+             Context context, boolean isIncognito) {
+         return isIncognito
+-                ? context.getColor(R.color.gm3_baseline_surface_container_highest_dark)
++                ? MaterialColors.getColor(
++                        context,
++                        R.attr.colorIncognitoSurfaceRaised,
++                        context.getColor(R.color.gm3_baseline_surface_container_highest_dark))
+                 : SemanticColorUtils.getColorSurfaceContainerHighest(context);
+     }
+ 
+     /** {@link SemanticColorUtils#getColorSurfaceContainerLow} */
+     public static @ColorInt int getColorSurfaceContainerLow(Context context, boolean isIncognito) {
+         return isIncognito
+-                ? context.getColor(R.color.gm3_baseline_surface_container_low_dark)
++                ? MaterialColors.getColor(
++                        context,
++                        R.attr.colorIncognitoSurface,
++                        context.getColor(R.color.gm3_baseline_surface_container_low_dark))
+                 : SemanticColorUtils.getColorSurfaceContainerLow(context);
+     }
+ 

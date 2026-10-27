@@ -1,0 +1,1235 @@
+From c6c26732acae32e9ef9a4187277294842fb5a26e Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 6 Sep 2026 21:25:11 +0000
+Subject: [PATCH] Patch 0000108
+
+---
+ chrome/android/features/tab_ui/BUILD.gn       |   1 +
+ .../java/res/layout/bare_tab_row_item.xml     |  92 +++++++++
+ .../tab_ui/java/res/values/dimens.xml         |   2 +
+ .../tab_ui/java/res/xml/tabs_settings.xml     |   3 +
+ .../tab_management/BareTabRowViewBinder.java  |  94 +++++++++
+ .../tasks/tab_management/BareTabViewMode.java |  71 +++++++
+ .../TabListContainerViewBinder.java           |   6 +-
+ .../tab_management/TabListCoordinator.java    |  78 +++++++-
+ .../tab_management/TabListLayoutDelegate.java |   4 +-
+ .../tasks/tab_management/TabListMediator.java |  39 ++++
+ .../tasks/tab_management/TabProperties.java   |   6 +
+ .../tab_management/TabSwitcherPaneBase.java   |  14 +-
+ .../TabSwitcherPaneCoordinator.java           |  50 +++--
+ .../TabSwitcherPaneCoordinatorFactory.java    |   8 +-
+ .../tasks/tab_management/TabsSettings.java    |  45 +++++
+ .../BareTabRowViewBinderUnitTest.java         | 187 ++++++++++++++++++
+ .../BareTabViewModeUnitTest.java              |  99 ++++++++++
+ .../tab_ui/tab_management_java_sources.gni    |   2 +
+ chrome/android/junit/BUILD.gn                 |   2 +
+ .../preferences/ChromePreferenceKeys.java     |   7 +
+ .../chrome/browser/tab_ui/TabListMode.java    |  13 +-
+ .../strings/android_chrome_strings.grd        |   9 +
+ 22 files changed, 803 insertions(+), 29 deletions(-)
+ create mode 100644 chrome/android/features/tab_ui/java/res/layout/bare_tab_row_item.xml
+ create mode 100644 chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/BareTabRowViewBinder.java
+ create mode 100644 chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/BareTabViewMode.java
+ create mode 100644 chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/BareTabRowViewBinderUnitTest.java
+ create mode 100644 chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/BareTabViewModeUnitTest.java
+
+diff --git a/chrome/android/features/tab_ui/BUILD.gn b/chrome/android/features/tab_ui/BUILD.gn
+index 22eb49872cc..23719c1150d 100644
+--- a/chrome/android/features/tab_ui/BUILD.gn
++++ b/chrome/android/features/tab_ui/BUILD.gn
+@@ -97,6 +97,7 @@ android_resources("java_resources") {
+     "java/res/layout/archived_tabs_auto_delete_promo.xml",
+     "java/res/layout/archived_tabs_dialog.xml",
+     "java/res/layout/archived_tabs_message_card_view.xml",
++    "java/res/layout/bare_tab_row_item.xml",
+     "java/res/layout/bottom_tab_strip_toolbar.xml",
+     "java/res/layout/color_picker_item.xml",
+     "java/res/layout/dynamic_bottom_tab_strip_toolbar.xml",
+diff --git a/chrome/android/features/tab_ui/java/res/layout/bare_tab_row_item.xml b/chrome/android/features/tab_ui/java/res/layout/bare_tab_row_item.xml
+new file mode 100644
+index 00000000000..0c0e0c0c063
+--- /dev/null
++++ b/chrome/android/features/tab_ui/java/res/layout/bare_tab_row_item.xml
+@@ -0,0 +1,92 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<!-- Bare: one row of the list tab switcher. A tab is a favicon, its title and the
++     domain it came from; a tab group is the same row with the group's colour shown
++     in front of the title. Constraints are start/end anchored so the row mirrors in
++     RTL without a second layout. -->
++<androidx.constraintlayout.widget.ConstraintLayout
++    xmlns:android="http://schemas.android.com/apk/res/android"
++    xmlns:app="http://schemas.android.com/apk/res-auto"
++    android:id="@+id/bare_tab_row"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content"
++    android:minHeight="@dimen/bare_tab_row_min_height"
++    android:paddingTop="8dp"
++    android:paddingBottom="8dp"
++    android:paddingStart="16dp"
++    android:paddingEnd="4dp"
++    android:background="?attr/selectableItemBackground"
++    android:clickable="true"
++    android:focusable="true">
++
++    <!-- Group colour. Gone for an ordinary tab; the shared colour widget is attached
++         here for a group, which is the same view the grid card uses. -->
++    <FrameLayout
++        android:id="@+id/bare_tab_row_group_color"
++        android:layout_width="wrap_content"
++        android:layout_height="wrap_content"
++        app:layout_constraintStart_toStartOf="parent"
++        app:layout_constraintTop_toTopOf="parent"
++        app:layout_constraintBottom_toBottomOf="parent"
++        android:layout_marginEnd="12dp"
++        android:visibility="gone" />
++
++    <ImageView
++        android:id="@+id/bare_tab_row_favicon"
++        android:layout_width="24dp"
++        android:layout_height="24dp"
++        android:scaleType="fitCenter"
++        app:layout_constraintStart_toEndOf="@id/bare_tab_row_group_color"
++        app:layout_constraintTop_toTopOf="parent"
++        app:layout_constraintBottom_toBottomOf="parent"
++        android:importantForAccessibility="no" />
++
++    <TextView
++        android:id="@+id/bare_tab_row_title"
++        android:layout_width="0dp"
++        android:layout_height="wrap_content"
++        app:layout_constraintStart_toEndOf="@id/bare_tab_row_favicon"
++        app:layout_constraintEnd_toStartOf="@id/action_button"
++        app:layout_constraintTop_toTopOf="parent"
++        app:layout_constraintBottom_toTopOf="@id/bare_tab_row_url"
++        app:layout_constraintVertical_chainStyle="packed"
++        android:layout_marginStart="16dp"
++        android:layout_marginEnd="8dp"
++        android:singleLine="true"
++        android:ellipsize="end"
++        android:textAlignment="viewStart"
++        android:textAppearance="@style/TextAppearance.TextMedium.Primary" />
++
++    <TextView
++        android:id="@+id/bare_tab_row_url"
++        android:layout_width="0dp"
++        android:layout_height="wrap_content"
++        app:layout_constraintStart_toStartOf="@id/bare_tab_row_title"
++        app:layout_constraintEnd_toEndOf="@id/bare_tab_row_title"
++        app:layout_constraintTop_toBottomOf="@id/bare_tab_row_title"
++        app:layout_constraintBottom_toBottomOf="parent"
++        android:singleLine="true"
++        android:ellipsize="end"
++        android:textAlignment="viewStart"
++        android:textAppearance="@style/TextAppearance.TextSmall.Secondary" />
++
++    <ImageView
++        android:id="@+id/action_button"
++        android:layout_width="48dp"
++        android:layout_height="48dp"
++        android:padding="12dp"
++        android:scaleType="fitCenter"
++        app:layout_constraintEnd_toEndOf="parent"
++        app:layout_constraintTop_toTopOf="parent"
++        app:layout_constraintBottom_toBottomOf="parent"
++        android:src="@drawable/material_ic_close_24dp"
++        android:tint="@macro/default_icon_color"
++        android:background="?attr/selectableItemBackgroundBorderless"
++        android:contentDescription="@string/close_tab" />
++
++</androidx.constraintlayout.widget.ConstraintLayout>
+diff --git a/chrome/android/features/tab_ui/java/res/values/dimens.xml b/chrome/android/features/tab_ui/java/res/values/dimens.xml
+index 761aaa27799..6e5e12ebdf7 100644
+--- a/chrome/android/features/tab_ui/java/res/values/dimens.xml
++++ b/chrome/android/features/tab_ui/java/res/values/dimens.xml
+@@ -267,4 +267,6 @@ found in the LICENSE file.
+     <dimen name="tab_search_close_button_size">24dp</dimen>
+     <dimen name="tab_search_close_button_size_desktop">20dp</dimen>
+     <dimen name="tab_search_close_button_margin_end">8dp</dimen>
++    <!-- Bare: height of one row in the list tab switcher. -->
++    <dimen name="bare_tab_row_min_height">64dp</dimen>
+ </resources>
+diff --git a/chrome/android/features/tab_ui/java/res/xml/tabs_settings.xml b/chrome/android/features/tab_ui/java/res/xml/tabs_settings.xml
+index 3e61d3657d9..c818bccb30e 100644
+--- a/chrome/android/features/tab_ui/java/res/xml/tabs_settings.xml
++++ b/chrome/android/features/tab_ui/java/res/xml/tabs_settings.xml
+@@ -9,6 +9,9 @@ found in the LICENSE file.
+     xmlns:android="http://schemas.android.com/apk/res/android"
+     xmlns:app="http://schemas.android.com/apk/res-auto">
+ 
++    <ListPreference
++        android:key="bare_tab_view"
++        android:title="@string/bare_tab_view_title" />
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
+         android:key="archive_settings_entrypoint"
+         android:title="@string/archive_settings_section_title"
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/BareTabRowViewBinder.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/BareTabRowViewBinder.java
+new file mode 100644
+index 00000000000..4f89121c800
+--- /dev/null
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/BareTabRowViewBinder.java
+@@ -0,0 +1,94 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.tasks.tab_management;
++
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.FrameLayout;
++import android.widget.ImageView;
++import android.widget.TextView;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.tab_ui.R;
++import org.chromium.ui.modelutil.PropertyKey;
++import org.chromium.ui.modelutil.PropertyModel;
++
++/**
++ * Binds a tab or a tab group to one row of the list tab switcher.
++ *
++ * <p>A row is the favicon, the title and the domain, so nothing here reads {@link
++ * TabProperties#THUMBNAIL_FETCHER}. The list is built with no thumbnail provider at all, so no
++ * fetcher is ever created for these models and there is nothing to read.
++ *
++ * <p>Everything the row shows comes from the same properties the grid card uses, through the same
++ * shared helpers, so a row and a card describe a tab the same way and the accessibility text is the
++ * one the switcher already produced.
++ */
++@NullMarked
++public class BareTabRowViewBinder {
++    /** Binds one property. Called per key, and once per key when a row is first shown. */
++    public static void bind(
++            PropertyModel model, ViewGroup view, @Nullable PropertyKey propertyKey) {
++        if (propertyKey == null) return;
++
++        TextView title = view.findViewById(R.id.bare_tab_row_title);
++        TextView url = view.findViewById(R.id.bare_tab_row_url);
++        ImageView favicon = view.findViewById(R.id.bare_tab_row_favicon);
++        View actionButton = view.findViewById(R.id.action_button);
++        FrameLayout groupColor = view.findViewById(R.id.bare_tab_row_group_color);
++
++        if (TabProperties.TITLE == propertyKey) {
++            title.setText(model.get(TabProperties.TITLE));
++        } else if (TabProperties.URL_DOMAIN == propertyKey) {
++            // A group header and an internal page have no domain to show. The row keeps its
++            // height either way, so a missing domain reads as a one-line row rather than a gap.
++            @Nullable String domain = model.get(TabProperties.URL_DOMAIN);
++            boolean hasDomain = domain != null && !domain.isEmpty();
++            url.setText(hasDomain ? domain : "");
++            url.setVisibility(hasDomain ? View.VISIBLE : View.GONE);
++        } else if (TabProperties.FAVICON_FETCHER == propertyKey) {
++            TabListViewBinderUtils.updateFaviconAndVisibility(model, favicon);
++        } else if (TabProperties.IS_SELECTED == propertyKey) {
++            // The favicon has a selected form, and the row records the state so a theme can show
++            // the current tab without this binder deciding what that should look like.
++            view.setActivated(model.get(TabProperties.IS_SELECTED));
++            TabListViewBinderUtils.updateFaviconImage(model, favicon);
++        } else if (TabProperties.TAB_CLICK_LISTENER == propertyKey) {
++            TabListViewBinderUtils.setNullableClickListener(
++                    model.get(TabProperties.TAB_CLICK_LISTENER), view, model);
++        } else if (TabProperties.TAB_ACTION_BUTTON_DATA == propertyKey) {
++            @Nullable TabActionButtonData data = model.get(TabProperties.TAB_ACTION_BUTTON_DATA);
++            TabListViewBinderUtils.bindActionButton(model, actionButton, data);
++            actionButton.setVisibility(data == null ? View.GONE : View.VISIBLE);
++        } else if (TabProperties.CONTENT_DESCRIPTION_TEXT_RESOLVER == propertyKey) {
++            TabListViewBinderUtils.updateContentDescription(model, view);
++        } else if (TabProperties.ACTION_BUTTON_DESCRIPTION_TEXT_RESOLVER == propertyKey) {
++            TabListViewBinderUtils.updateActionButtonContentDescription(model, actionButton);
++        } else if (TabProperties.TAB_GROUP_COLOR_VIEW_PROVIDER == propertyKey) {
++            // The same colour widget the grid card attaches, so a group is coloured here the way
++            // it is coloured everywhere else.
++            @Nullable TabGroupColorViewProvider provider =
++                    model.get(TabProperties.TAB_GROUP_COLOR_VIEW_PROVIDER);
++            TabCardViewBinderUtils.updateTabGroupColorView(groupColor, provider);
++        }
++    }
++
++    /** Releases what the row holds so a recycled view starts from nothing. */
++    public static void onViewRecycled(PropertyModel model, View view) {
++        ImageView favicon = view.findViewById(R.id.bare_tab_row_favicon);
++        if (favicon != null) favicon.setImageDrawable(null);
++
++        FrameLayout groupColor = view.findViewById(R.id.bare_tab_row_group_color);
++        if (groupColor != null) {
++            // The colour view is shared and has one parent at a time, so it has to come off this
++            // row before the row can be handed to another item.
++            TabCardViewBinderUtils.detachTabGroupColorView(groupColor);
++            groupColor.setVisibility(View.GONE);
++        }
++    }
++
++    private BareTabRowViewBinder() {}
++}
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/BareTabViewMode.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/BareTabViewMode.java
+new file mode 100644
+index 00000000000..30b2042023f
+--- /dev/null
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/BareTabViewMode.java
+@@ -0,0 +1,71 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.tasks.tab_management;
++
++import androidx.annotation.IntDef;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.tab_ui.TabListMode;
++
++import java.lang.annotation.Retention;
++import java.lang.annotation.RetentionPolicy;
++
++/**
++ * How the tab switcher lays its tabs out.
++ *
++ * <p>The values are written into a preference and so have to stay stable. They are stored as
++ * strings because the setting is a list preference, which writes the value it was given.
++ */
++@NullMarked
++public final class BareTabViewMode {
++    @IntDef({Mode.GRID, Mode.LIST})
++    @Retention(RetentionPolicy.SOURCE)
++    public @interface Mode {
++        int GRID = 0;
++        int LIST = 1;
++    }
++
++    public static final String VALUE_GRID = "grid";
++    public static final String VALUE_LIST = "list";
++
++    /**
++     * The layout the user has chosen.
++     *
++     * <p>Grid is the answer for a preference that was never written, so an install that predates
++     * the setting keeps the switcher it already had. It is also the answer for a value this build
++     * does not recognise, which covers a preference written by a later build and read back by this
++     * one.
++     */
++    public static @Mode int get() {
++        String value =
++                ChromeSharedPreferences.getInstance()
++                        .readString(ChromePreferenceKeys.BARE_TAB_VIEW, VALUE_GRID);
++        return fromValue(value);
++    }
++
++    /** The mode a stored preference string names, or Grid if it names nothing this build knows. */
++    public static @Mode int fromValue(String value) {
++        return VALUE_LIST.equals(value) ? Mode.LIST : Mode.GRID;
++    }
++
++    /** The preference string for a mode. */
++    public static String toValue(@Mode int mode) {
++        return mode == Mode.LIST ? VALUE_LIST : VALUE_GRID;
++    }
++
++    /**
++     * The {@link TabListMode} a mode asks the tab switcher for.
++     *
++     * <p>Grid resolves to the mode the switcher has always used, so choosing it leaves every
++     * upstream path exactly as it was.
++     */
++    public static @TabListMode int toTabListMode(@Mode int mode) {
++        return mode == Mode.LIST ? TabListMode.BARE_LIST : TabListMode.GRID;
++    }
++
++    private BareTabViewMode() {}
++}
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListContainerViewBinder.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListContainerViewBinder.java
+index 53be1f0845a..3e4cc9b7bf1 100644
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListContainerViewBinder.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListContainerViewBinder.java
+@@ -320,8 +320,12 @@ class TabListContainerViewBinder {
+         }
+         if (width <= 0 || height <= 0) return 0;
+ 
++        // Bare: this centres a grid card in the viewport. A list has no card to centre, so the
++        // row is left at the top of the list instead of being offset by half of something that
++        // does not exist.
++        if (model.get(MODE) != TabListMode.GRID) return 0;
++
+         LinearLayoutManager layoutManager = (LinearLayoutManager) view.getLayoutManager();
+-        assert model.get(MODE) == TabListMode.GRID;
+         GridLayoutManager gridLayoutManager = (GridLayoutManager) layoutManager;
+         assumeNonNull(gridLayoutManager);
+         int cardWidth = width / gridLayoutManager.getSpanCount();
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListCoordinator.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListCoordinator.java
+index f5fc5b00b20..8fb9bb74314 100644
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListCoordinator.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListCoordinator.java
+@@ -233,6 +233,8 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
+                             TabGridViewBinder.onViewRecycled(model, viewHolder.itemView);
+                         } else if (mMode == TabListMode.BOTTOM_STRIP) {
+                             TabStripViewBinder.onViewRecycled(model, viewHolder.itemView);
++                        } else if (mMode == TabListMode.BARE_LIST) {
++                            BareTabRowViewBinder.onViewRecycled(model, viewHolder.itemView);
+                         }
+                         super.onViewRecycled(viewHolder);
+                     }
+@@ -302,6 +304,24 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
+                                     LayoutInflater.from(activity)
+                                             .inflate(R.layout.tab_strip_item, parentView, false),
+                     TabStripViewBinder::bind);
++        } else if (mMode == TabListMode.BARE_LIST) {
++            // Bare: a tab and a tab group are the same row. The group carries its colour and the
++            // title the model already resolved for it, which is what the grid card shows too, so
++            // one binder covers both without a second model.
++            for (@UiType int uiType : new int[] {UiType.TAB, UiType.TAB_GROUP}) {
++                mAdapter.registerType(
++                        uiType,
++                        _ ->
++                                (ViewGroup)
++                                        LayoutInflater.from(activity)
++                                                .inflate(
++                                                        R.layout.bare_tab_row_item,
++                                                        parentView,
++                                                        false),
++                        BareTabRowViewBinder::bind);
++            }
++            // Message cards register themselves through registerItemType, so nothing else has to
++            // be declared here for them to keep working.
+         } else {
+             throw new IllegalArgumentException(
+                     "Attempting to create a tab list UI with invalid mode");
+@@ -335,13 +355,20 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
+                         .setTabClosingSource(TabClosingSource.UNKNOWN)
+                         .build();
+ 
++        // Bare: a row has no thumbnail, so the list is built with no provider at all. The
++        // mediator already treats a null provider as "do not fetch", so no fetcher is created,
++        // nothing is decoded and no bitmap is held for a row.
++        @Nullable
++        ThumbnailProvider effectiveThumbnailProvider =
++                mMode == TabListMode.BARE_LIST ? null : thumbnailProvider;
++
+         mMediator =
+                 new TabListMediator(
+                         activity,
+                         mModelList,
+                         modalDialogManager,
+                         tabModelSupplier,
+-                        thumbnailProvider,
++                        effectiveThumbnailProvider,
+                         mTabListFaviconProvider,
+                         selectionDelegateProvider,
+                         tabListItemOnClickListenerProvider,
+@@ -411,6 +438,26 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
+                             }
+                         };
+                 mRecyclerView.setLayoutManager(layoutManager);
++            } else if (mMode == TabListMode.BARE_LIST) {
++                // A grid one column wide, not a LinearLayoutManager. It lays rows out the same
++                // way, and it is what the rest of the switcher expects to find: the pinned tab
++                // strip reads the tab list's layout manager back as a GridLayoutManager, and so
++                // does the scroll position code. Handing them a LinearLayoutManager crashes the
++                // switcher the moment it opens. The span stays at one, so no card sizing or
++                // orientation span work is needed or done.
++                GridLayoutManager layoutManager =
++                        new GridLayoutManager(activity, /* spanCount= */ 1) {
++                            @Override
++                            public void onLayoutCompleted(RecyclerView.State state) {
++                                super.onLayoutCompleted(state);
++                                checkAwaitingLayout();
++                            }
++                        };
++                mRecyclerView.setLayoutManager(layoutManager);
++                mMediator.setupAccessibilityDelegate(mRecyclerView);
++                Rect listFrame = new Rect();
++                mActivity.getWindow().getDecorView().getWindowVisibleDisplayFrame(listFrame);
++                updateListRowSize(listFrame.width());
+             }
+             mMediator.setRecyclerViewItemAnimationToggle(mRecyclerView::setDisableItemAnimations);
+         }
+@@ -418,6 +465,9 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
+         if (mMode == TabListMode.GRID) {
+             mListLayoutListener =
+                     (_, left, _, right, _, _, _, _, _) -> updateGridCardLayout(right - left);
++        } else if (mMode == TabListMode.BARE_LIST) {
++            mListLayoutListener =
++                    (_, left, _, right, _, _, _, _, _) -> updateListRowSize(right - left);
+         } else if (mMode == TabListMode.BOTTOM_STRIP) {
+             assert onModelTokenChange != null;
+             mTabStripSnapshotter =
+@@ -656,6 +706,32 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
+         }
+     }
+ 
++    /**
++     * Records how large one row is, the way the grid records how large a card is.
++     *
++     * <p>Several parts of the switcher ask the tab list for its item size and assume there is one:
++     * the archived tabs message and anything else observing the size both do. A list never runs the
++     * grid's card measurement, so without this they would be asking about a size that was never
++     * set. A row is as wide as the list and as tall as one row.
++     */
++    private void updateListRowSize(int viewWidth) {
++        final int rowWidthPx =
++                Math.max(
++                        1,
++                        viewWidth
++                                - mRecyclerView.getPaddingStart()
++                                - mRecyclerView.getPaddingEnd());
++        final int rowHeightPx =
++                mActivity.getResources().getDimensionPixelSize(R.dimen.bare_tab_row_min_height);
++        final Size newSize = new Size(rowWidthPx, rowHeightPx);
++        if (newSize.equals(mMediator.getDefaultGridCardSize())) return;
++
++        mMediator.setDefaultGridCardSize(newSize);
++        for (TabListItemSizeChangedObserver observer : mTabListItemSizeChangedObserverList) {
++            observer.onSizeChanged(mMediator.getCurrentSpanCount(), newSize);
++        }
++    }
++
+     private void updateGridCardLayout(int viewWidth) {
+         // Determine and set span count
+         final GridLayoutManager layoutManager =
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListLayoutDelegate.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListLayoutDelegate.java
+index e7c449711ed..8a352d88435 100644
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListLayoutDelegate.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListLayoutDelegate.java
+@@ -370,7 +370,8 @@ abstract class TabListLayoutDelegate implements TabGroupObserver, TabObserver {
+     }
+ 
+     /**
+-     * Updates the thumbnail and favicon for a tab or its representing card when its URL changes.
++     * Updates the URL domain, thumbnail, and favicon for a tab or its representing card when its
++     * URL changes.
+      *
+      * @param updatedTab The {@link Tab} whose URL changed.
+      */
+@@ -385,6 +386,7 @@ abstract class TabListLayoutDelegate implements TabGroupObserver, TabObserver {
+         PropertyModel model = getModelFromTabId(updatedTab.getId());
+         if (model == null) return;
+ 
++        model.set(TabProperties.URL_DOMAIN, mMediator.getDomainForTab(updatedTab, model));
+         mMediator.updateThumbnailFetcher(model, updatedTab.getId());
+         mMediator.updateFaviconForTab(model, updatedTab, null, null);
+     }
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListMediator.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListMediator.java
+index ee588331562..34203ed8456 100644
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListMediator.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListMediator.java
+@@ -123,6 +123,7 @@ import org.chromium.components.collaboration.CollaborationService;
+ import org.chromium.components.collaboration.CollaborationServiceLeaveOrDeleteEntryPoint;
+ import org.chromium.components.collaboration.CollaborationServiceShareOrManageEntryPoint;
+ import org.chromium.components.data_sharing.DataSharingService;
++import org.chromium.components.embedder_support.util.UrlUtilities;
+ import org.chromium.components.tab_group_sync.EitherId.EitherGroupId;
+ import org.chromium.components.tab_group_sync.LocalTabGroupId;
+ import org.chromium.components.tab_group_sync.SavedTabGroup;
+@@ -1281,6 +1282,8 @@ public class TabListMediator implements TabListNotificationHandler {
+ 
+         bindTabActionStateProperties(model.get(TabProperties.TAB_ACTION_STATE), tab, model);
+ 
++        model.set(TabProperties.URL_DOMAIN, getDomainForTab(tab, model));
++
+         setupPersistedTabDataFetcherForTab(tab, model);
+ 
+         updateFaviconForTab(model, tab, null, null);
+@@ -1826,6 +1829,7 @@ public class TabListMediator implements TabListNotificationHandler {
+         tabInfo.set(
+                 TabProperties.TITLE,
+                 getLatestTitleForTabOrGroup(tab, tabInfo, /* useDefault= */ false));
++        tabInfo.set(TabProperties.URL_DOMAIN, getDomainForTab(tab, tabInfo));
+         @TabAlert int alertState = mTabListLayoutDelegate.getAlertStateForTab(tab);
+         tabInfo.set(TabProperties.ALERT_STATE, alertState);
+         tabInfo.set(TabProperties.SHOULD_SHOW_PRICE_DROP_TOOLTIP, false);
+@@ -1956,6 +1960,22 @@ public class TabListMediator implements TabListNotificationHandler {
+         return children.size();
+     }
+ 
++    String getDomainForTab(Tab tab, PropertyModel model) {
++        if (!TabProperties.isTabGroupHeader(model)) return getDomain(tab);
++        Token tabGroupId = tab.getTabGroupId();
++        if (tabGroupId == null) return getDomain(tab);
++        List<Tab> relatedTabs = getCurrentTabModelChecked().getTabsInGroup(tabGroupId);
++
++        List<String> domainNames = new ArrayList<>();
++
++        for (int i = 0; i < relatedTabs.size(); i++) {
++            String domain = getDomain(relatedTabs.get(i));
++            domainNames.add(domain);
++        }
++        // TODO(crbug.com/40107640): Address i18n issue for the list delimiter.
++        return TextUtils.join(", ", domainNames);
++    }
++
+     /**
+      * Updates the accessibility content description string resolver for the given tab or group
+      * card.
+@@ -2157,6 +2177,25 @@ public class TabListMediator implements TabListNotificationHandler {
+         model.set(TabProperties.ACTION_BUTTON_DESCRIPTION_TEXT_RESOLVER, descriptionTextResolver);
+     }
+ 
++    @VisibleForTesting
++    protected static String getDomain(Tab tab) {
++        // TODO(crbug.com/40144810) Investigate how uninitialized Tabs are appearing
++        // here.
++        assert tab.isInitialized();
++        if (!tab.isInitialized()) {
++            return "";
++        }
++
++        String spec = tab.getUrl().getSpec();
++        if (spec == null) return "";
++
++        // TODO(crbug.com/40549331): convert UrlUtilities to GURL
++        String domain = UrlUtilities.getDomainAndRegistry(spec, false);
++
++        if (domain == null || domain.isEmpty()) return spec;
++        return domain;
++    }
++
+     @Nullable
+     private SelectionDelegate<TabListEditorItemSelectionId> getTabSelectionDelegate() {
+         return mSelectionDelegateProvider == null
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabProperties.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabProperties.java
+index 98578dbe115..5edb58a9f4f 100644
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabProperties.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabProperties.java
+@@ -187,6 +187,11 @@ public class TabProperties {
+     public static final WritableObjectPropertyKey<SelectionDelegate<TabListEditorItemSelectionId>>
+             TAB_SELECTION_DELEGATE = new WritableObjectPropertyKey<>();
+ 
++    // Bare: read by BareTabRowViewBinder, the list layout of the tab switcher. Upstream removed
++    // it once its own list view had gone.
++    public static final WritableObjectPropertyKey<String> URL_DOMAIN =
++            new WritableObjectPropertyKey<>();
++
+     public static final WritableObjectPropertyKey<AccessibilityDelegate> ACCESSIBILITY_DELEGATE =
+             new WritableObjectPropertyKey<>();
+ 
+@@ -274,6 +279,7 @@ public class TabProperties {
+                 CARD_ALPHA,
+                 CARD_ANIMATION_STATUS,
+                 TAB_SELECTION_DELEGATE,
++                URL_DOMAIN,
+                 ACCESSIBILITY_DELEGATE,
+                 CARD_TYPE,
+                 CONTENT_DESCRIPTION_TEXT_RESOLVER,
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java
+index 21b8404320d..af30a3c4930 100644
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java
+@@ -317,7 +317,12 @@ public abstract class TabSwitcherPaneBase extends PaneBase
+                 || isFullSpaceModeOnAndroidXr;
+ 
+         @Nullable Tab tab = getCurrentTab();
+-        if (tab == null || SysUtils.isLowEndDevice()) {
++        // Bare: the shrink and expand animation grows a tab out of its grid card's
++        // thumbnail. A list has no thumbnail to grow out of, and asking for one reads the
++        // row back as a grid card, so a list fades the same way a low-end device does.
++        if (tab == null
++                || SysUtils.isLowEndDevice()
++                || getTabListMode() != TabListMode.GRID) {
+             return FadeHubLayoutAnimationFactory.createFadeInAnimatorProvider(
+                     hubContainerView, HUB_LAYOUT_FADE_DURATION_MS, mOnToolbarAlphaChange);
+         } else if (isFullSpaceModeOnAndroidXr && getTabListMode() == TabListMode.GRID) {
+@@ -347,7 +352,12 @@ public abstract class TabSwitcherPaneBase extends PaneBase
+             HubContainerView hubContainerView) {
+         assert !DeviceFormFactor.isNonMultiDisplayContextOnTablet(hubContainerView.getContext());
+         Tab tab = getCurrentTab();
+-        if (tab == null || SysUtils.isLowEndDevice()) {
++        // Bare: the shrink and expand animation grows a tab out of its grid card's
++        // thumbnail. A list has no thumbnail to grow out of, and asking for one reads the
++        // row back as a grid card, so a list fades the same way a low-end device does.
++        if (tab == null
++                || SysUtils.isLowEndDevice()
++                || getTabListMode() != TabListMode.GRID) {
+             return FadeHubLayoutAnimationFactory.createFadeOutAnimatorProvider(
+                     hubContainerView, HUB_LAYOUT_FADE_DURATION_MS, mOnToolbarAlphaChange);
+         }
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinator.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinator.java
+index a06bf1af0eb..66504cbafb7 100644
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinator.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinator.java
+@@ -488,26 +488,35 @@ public class TabSwitcherPaneCoordinator implements BackPressHandler {
+             // TODO(crbug.com/436614730): Inline the view construction once feature is launched.
+             // Create and set up the pinned tab strip, and add it as a sibling of the regular tab
+             // list. The pinned tab strip will be positioned above the regular tab list.
++            // Bare: the pinned tab strip is a grid feature. It reads the tab list's layout
++            // manager back as a GridLayoutManager and sizes itself from the grid card size, which
++            // a list never computes, so it is not built for a list. Pinned tabs are still in the
++            // list itself, as ordinary rows, rather than in a strip above it.
+             mPinnedTabsCoordinator =
+-                    new PinnedTabStripCoordinator(
+-                            mActivity,
+-                            parentView,
+-                            tabListCoordinator,
+-                            mTabModelSupplier,
+-                            tabBookmarkerSupplier,
+-                            bottomSheetController,
+-                            modalDialogManager,
+-                            onTabGroupCreation);
+-
+-            mContainerViewModel.set(
+-                    TabListContainerProperties.IS_PINNED_TAB_STRIP_ANIMATING_SUPPLIER,
+-                    mPinnedTabsCoordinator.getIsVisibilityAnimationRunningSupplier());
+-
+-            TabListRecyclerView pinnedTabStripRecyclerView =
+-                    mPinnedTabsCoordinator.getPinnedTabsRecyclerView();
+-
+-            FrameLayout pinnedTabsContainer = layout.findViewById(R.id.pinned_tabs_container);
+-            pinnedTabsContainer.addView(pinnedTabStripRecyclerView);
++                    mode == TabListMode.GRID
++                            ? new PinnedTabStripCoordinator(
++                                    mActivity,
++                                    parentView,
++                                    tabListCoordinator,
++                                    mTabModelSupplier,
++                                    tabBookmarkerSupplier,
++                                    bottomSheetController,
++                                    modalDialogManager,
++                                    onTabGroupCreation)
++                            : null;
++
++            if (mPinnedTabsCoordinator != null) {
++                mContainerViewModel.set(
++                        TabListContainerProperties.IS_PINNED_TAB_STRIP_ANIMATING_SUPPLIER,
++                        mPinnedTabsCoordinator.getIsVisibilityAnimationRunningSupplier());
++
++                TabListRecyclerView pinnedTabStripRecyclerView =
++                        mPinnedTabsCoordinator.getPinnedTabsRecyclerView();
++
++                FrameLayout pinnedTabsContainer =
++                        layout.findViewById(R.id.pinned_tabs_container);
++                pinnedTabsContainer.addView(pinnedTabStripRecyclerView);
++            }
+ 
+             maybeMakeSpaceForSearchBar();
+             mActivity.registerComponentCallbacks(mComponentsCallbacks);
+@@ -547,7 +556,7 @@ public class TabSwitcherPaneCoordinator implements BackPressHandler {
+                             super.onScrollStateChanged(recyclerView, newState);
+ 
+                             if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+-                                if (isAnyTabPinned()) {
++                                if (mPinnedTabsCoordinator != null && isAnyTabPinned()) {
+                                     mPinnedTabsCoordinator.onScrolled();
+                                 }
+                             }
+@@ -1226,6 +1235,7 @@ public class TabSwitcherPaneCoordinator implements BackPressHandler {
+     }
+ 
+     private void updatePinnedTabsStripOnScroll(boolean shouldShowSearchBox, boolean forced) {
++        if (mPinnedTabsCoordinator == null) return;
+         mPinnedTabsCoordinator.onScrolled();
+         if (shouldShowSearchBox || mPinnedTabsCoordinator.isPinnedTabsBarVisible()) {
+             mMediator.maybeTranslatePinnedStrip(shouldShowSearchBox, forced);
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinatorFactory.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinatorFactory.java
+index 22306c2cf3d..66fe96b9512 100644
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinatorFactory.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinatorFactory.java
+@@ -68,7 +68,7 @@ public class TabSwitcherPaneCoordinatorFactory {
+     private final ScrimManager mScrimManager;
+     private final SnackbarManager mSnackbarManager;
+     private final ModalDialogManager mModalDialogManager;
+-    private final @TabListMode int mMode;
++    private @TabListMode int mMode;
+     private final BottomSheetController mBottomSheetController;
+     private final DataSharingTabManager mDataSharingTabManager;
+     private final BackPressManager mBackPressManager;
+@@ -148,7 +148,7 @@ public class TabSwitcherPaneCoordinatorFactory {
+         mModalDialogManager = modalDialogManager;
+         mBottomSheetController = bottomSheetController;
+         mDataSharingTabManager = dataSharingTabManager;
+-        mMode = TabListMode.GRID;
++        mMode = BareTabViewMode.toTabListMode(BareTabViewMode.get());
+         mBackPressManager = backPressManager;
+         mDesktopWindowStateManager = desktopWindowStateManager;
+         mEdgeToEdgeSupplier = edgeToEdgeSupplier;
+@@ -192,6 +192,10 @@ public class TabSwitcherPaneCoordinatorFactory {
+         int token = mMessageManagerTokenHolder.acquireToken();
+         assert mMessageManager != null;
+ 
++        // Bare: read the layout preference again here so a coordinator built after the user
++        // changed it comes up in the mode they chose. Everything that asks the factory for the
++        // mode reads this same field, so a coordinator and its surroundings never disagree.
++        mMode = BareTabViewMode.toTabListMode(BareTabViewMode.get());
+         return new TabSwitcherPaneCoordinator(
+                 mActivity,
+                 assertNonNull(mProfileProviderSupplier.get()),
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabsSettings.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabsSettings.java
+index 689bd447910..053ea149937 100644
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabsSettings.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabsSettings.java
+@@ -11,6 +11,7 @@ import android.os.Bundle;
+ import android.view.View;
+ 
+ import androidx.annotation.VisibleForTesting;
++import androidx.preference.ListPreference;
+ import androidx.preference.Preference;
+ 
+ import org.chromium.base.metrics.RecordHistogram;
+@@ -56,6 +57,9 @@ public class TabsSettings extends ChromeBaseSettingsFragment {
+     @VisibleForTesting
+     static final String PREF_TAB_ARCHIVE_SETTINGS = "archive_settings_entrypoint";
+ 
++    // Must match key in tabs_settings.xml
++    @VisibleForTesting static final String PREF_BARE_TAB_VIEW = "bare_tab_view";
++
+     @VisibleForTesting
+     static final String PREF_SHARE_TITLES_AND_URLS_WITH_OS_SWITCH =
+             "share_titles_and_urls_with_os_switch";
+@@ -82,6 +86,7 @@ public class TabsSettings extends ChromeBaseSettingsFragment {
+         SettingsUtils.addPreferencesFromResource(this, R.xml.tabs_settings);
+         mPageTitle.set(getString(R.string.tabs_settings_title));
+ 
++        configureTabViewRow();
+         configureAutoOpenSyncedTabGroupsSwitch();
+         configureShareTitlesAndUrlsWithOsSwitch();
+         configureChromeSuggestionsInOtherAppsSwitch();
+@@ -99,6 +104,46 @@ public class TabsSettings extends ChromeBaseSettingsFragment {
+         configureTabArchiveSettings();
+     }
+ 
++    /**
++     * The row for whether the tab switcher shows tabs as a grid of cards or as a list of rows.
++     * Grid is the default, so a switcher that has always been a grid stays one until the user says
++     * otherwise.
++     */
++    private void configureTabViewRow() {
++        ListPreference row = (ListPreference) findPreference(PREF_BARE_TAB_VIEW);
++        if (row == null) return;
++
++        String[] values = {BareTabViewMode.VALUE_GRID, BareTabViewMode.VALUE_LIST};
++        CharSequence[] labels = new CharSequence[values.length];
++        for (int i = 0; i < values.length; i++) {
++            labels[i] = getString(tabViewLabel(values[i]));
++        }
++
++        row.setPersistent(false);
++        row.setEntries(labels);
++        row.setEntryValues(values);
++
++        String current = BareTabViewMode.toValue(BareTabViewMode.get());
++        row.setValue(current);
++        row.setSummary(getString(tabViewLabel(current)));
++
++        row.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    String chosen =
++                            BareTabViewMode.toValue(BareTabViewMode.fromValue((String) newValue));
++                    ChromeSharedPreferences.getInstance()
++                            .writeString(ChromePreferenceKeys.BARE_TAB_VIEW, chosen);
++                    preference.setSummary(getString(tabViewLabel(chosen)));
++                    return true;
++                });
++    }
++
++    private static int tabViewLabel(String value) {
++        return BareTabViewMode.fromValue(value) == BareTabViewMode.Mode.LIST
++                ? R.string.bare_tab_view_list
++                : R.string.bare_tab_view_grid;
++    }
++
+     private void configureAutoOpenSyncedTabGroupsSwitch() {
+         ChromeSwitchPreference autoOpenSyncedTabGroupsSwitch =
+                 assertNonNull(findPreference(PREF_AUTO_OPEN_SYNCED_TAB_GROUPS_SWITCH));
+diff --git a/chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/BareTabRowViewBinderUnitTest.java b/chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/BareTabRowViewBinderUnitTest.java
+new file mode 100644
+index 00000000000..de869bc7601
+--- /dev/null
++++ b/chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/BareTabRowViewBinderUnitTest.java
+@@ -0,0 +1,187 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.tasks.tab_management;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertTrue;
++
++import android.content.Context;
++import android.view.ContextThemeWrapper;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.ImageView;
++import android.widget.TextView;
++
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.robolectric.RuntimeEnvironment;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.tasks.tab_management.TabProperties.TabActionState;
++import org.chromium.chrome.tab_ui.R;
++import org.chromium.ui.modelutil.PropertyKey;
++import org.chromium.ui.modelutil.PropertyModel;
++
++/** Unit tests for the row the list tab switcher shows for a tab or a tab group. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareTabRowViewBinderUnitTest {
++    private static final String LONG_TITLE =
++            "A page title long enough that it cannot possibly fit on one line of a phone screen"
++                    + " and therefore has to be ellipsized rather than wrapped";
++
++    private Context mContext;
++    private ViewGroup mRow;
++    private PropertyModel mModel;
++
++    @Before
++    public void setUp() {
++        mContext =
++                new ContextThemeWrapper(
++                        RuntimeEnvironment.application, R.style.Theme_BrowserUI_DayNight);
++        mRow =
++                (ViewGroup)
++                        LayoutInflater.from(mContext)
++                                .inflate(R.layout.bare_tab_row_item, null, false);
++        mModel = buildModel(/* incognito= */ false);
++    }
++
++    private static PropertyModel buildModel(boolean incognito) {
++        // IS_INCOGNITO is readable-only, so it is fixed when the model is built, the same way the
++        // switcher builds one model per tab.
++        return new PropertyModel.Builder(TabProperties.ALL_KEYS_TAB_GRID)
++                .with(TabProperties.TAB_ACTION_STATE, TabActionState.CLOSABLE)
++                .with(TabProperties.IS_INCOGNITO, incognito)
++                .with(TabProperties.IS_SELECTED, false)
++                .build();
++    }
++
++    private void bind(PropertyKey key) {
++        BareTabRowViewBinder.bind(mModel, mRow, key);
++    }
++
++    private TextView title() {
++        return mRow.findViewById(R.id.bare_tab_row_title);
++    }
++
++    private TextView url() {
++        return mRow.findViewById(R.id.bare_tab_row_url);
++    }
++
++    private ImageView favicon() {
++        return mRow.findViewById(R.id.bare_tab_row_favicon);
++    }
++
++    private View actionButton() {
++        return mRow.findViewById(R.id.action_button);
++    }
++
++    @Test
++    public void testRowHasEveryPartTheDesignCallsFor() {
++        assertNotNull(title());
++        assertNotNull(url());
++        assertNotNull(favicon());
++        assertNotNull(actionButton());
++        assertNull("a row must not carry a thumbnail", mRow.findViewById(R.id.tab_thumbnail));
++    }
++
++    @Test
++    public void testTitleIsShown() {
++        mModel.set(TabProperties.TITLE, "Example page");
++        bind(TabProperties.TITLE);
++        assertEquals("Example page", title().getText().toString());
++    }
++
++    @Test
++    public void testLongTitleStaysOnOneLine() {
++        mModel.set(TabProperties.TITLE, LONG_TITLE);
++        bind(TabProperties.TITLE);
++        assertEquals(LONG_TITLE, title().getText().toString());
++        assertEquals(1, title().getMaxLines());
++        assertNotNull("a long title has to be ellipsized", title().getEllipsize());
++    }
++
++    @Test
++    public void testDomainIsShownWhenThereIsOne() {
++        mModel.set(TabProperties.URL_DOMAIN, "example.com");
++        bind(TabProperties.URL_DOMAIN);
++        assertEquals("example.com", url().getText().toString());
++        assertEquals(View.VISIBLE, url().getVisibility());
++    }
++
++    @Test
++    public void testDomainIsHiddenWhenThereIsNone() {
++        // An internal page and a tab group header both arrive without a domain.
++        mModel.set(TabProperties.URL_DOMAIN, null);
++        bind(TabProperties.URL_DOMAIN);
++        assertEquals(View.GONE, url().getVisibility());
++
++        mModel.set(TabProperties.URL_DOMAIN, "");
++        bind(TabProperties.URL_DOMAIN);
++        assertEquals(View.GONE, url().getVisibility());
++    }
++
++    @Test
++    public void testMissingFaviconLeavesNoImageBehind() {
++        mModel.set(TabProperties.FAVICON_FETCHER, null);
++        bind(TabProperties.FAVICON_FETCHER);
++        assertEquals(View.GONE, favicon().getVisibility());
++        assertNull(favicon().getDrawable());
++    }
++
++    @Test
++    public void testCloseButtonIsHiddenWithoutAnAction() {
++        mModel.set(TabProperties.TAB_ACTION_BUTTON_DATA, null);
++        bind(TabProperties.TAB_ACTION_BUTTON_DATA);
++        assertEquals(View.GONE, actionButton().getVisibility());
++    }
++
++    @Test
++    public void testSelectedTabIsRecordedOnTheRow() {
++        mModel.set(TabProperties.IS_SELECTED, true);
++        bind(TabProperties.IS_SELECTED);
++        assertTrue(mRow.isActivated());
++    }
++
++    @Test
++    public void testIncognitoRowBindsTheSameWay() {
++        mModel = buildModel(/* incognito= */ true);
++        mModel.set(TabProperties.TITLE, "Private page");
++        mModel.set(TabProperties.URL_DOMAIN, "example.com");
++        bind(TabProperties.TITLE);
++        bind(TabProperties.URL_DOMAIN);
++        assertEquals("Private page", title().getText().toString());
++        assertEquals("example.com", url().getText().toString());
++    }
++
++    @Test
++    public void testGroupRowWithoutAColourDoesNotCrash() {
++        // A group header arrives with no colour provider until one is resolved.
++        mModel.set(TabProperties.TAB_GROUP_COLOR_VIEW_PROVIDER, null);
++        bind(TabProperties.TAB_GROUP_COLOR_VIEW_PROVIDER);
++        assertEquals(View.GONE, mRow.findViewById(R.id.bare_tab_row_group_color).getVisibility());
++    }
++
++    @Test
++    public void testRecyclingReleasesWhatTheRowHeld() {
++        mModel.set(TabProperties.FAVICON_FETCHER, null);
++        bind(TabProperties.FAVICON_FETCHER);
++        BareTabRowViewBinder.onViewRecycled(mModel, mRow);
++        assertNull(favicon().getDrawable());
++        assertEquals(View.GONE, mRow.findViewById(R.id.bare_tab_row_group_color).getVisibility());
++    }
++
++    @Test
++    public void testUnknownKeyIsIgnored() {
++        // The binder is called for every key the model carries, including ones a row does not
++        // show, and must simply do nothing for them.
++        mModel.set(TabProperties.THUMBNAIL_FETCHER, null);
++        bind(TabProperties.THUMBNAIL_FETCHER);
++        bind(null);
++    }
++}
+diff --git a/chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/BareTabViewModeUnitTest.java b/chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/BareTabViewModeUnitTest.java
+new file mode 100644
+index 00000000000..360a2a3ddd2
+--- /dev/null
++++ b/chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/BareTabViewModeUnitTest.java
+@@ -0,0 +1,99 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.tasks.tab_management;
++
++import static org.junit.Assert.assertEquals;
++
++import org.junit.After;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.tab_ui.TabListMode;
++
++/** Unit tests for how the Tab view setting is stored, read back and turned into a list mode. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareTabViewModeUnitTest {
++
++    @After
++    public void tearDown() {
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_TAB_VIEW);
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_OPEN_LINKS_IN_APPS);
++    }
++
++    private static void store(String value) {
++        ChromeSharedPreferences.getInstance()
++                .writeString(ChromePreferenceKeys.BARE_TAB_VIEW, value);
++    }
++
++    @Test
++    public void testDefaultIsGrid() {
++        assertEquals(BareTabViewMode.Mode.GRID, BareTabViewMode.get());
++    }
++
++    @Test
++    public void testEachModePersists() {
++        store(BareTabViewMode.VALUE_LIST);
++        assertEquals(BareTabViewMode.Mode.LIST, BareTabViewMode.get());
++
++        store(BareTabViewMode.VALUE_GRID);
++        assertEquals(BareTabViewMode.Mode.GRID, BareTabViewMode.get());
++    }
++
++    @Test
++    public void testUnrecognisedValueFallsBackToGrid() {
++        // A preference written by a later build, or corrupted, must leave the switcher as it was.
++        store("mosaic");
++        assertEquals(BareTabViewMode.Mode.GRID, BareTabViewMode.get());
++
++        store("");
++        assertEquals(BareTabViewMode.Mode.GRID, BareTabViewMode.get());
++    }
++
++    @Test
++    public void testRoundTrip() {
++        assertEquals(
++                BareTabViewMode.Mode.LIST,
++                BareTabViewMode.fromValue(BareTabViewMode.toValue(BareTabViewMode.Mode.LIST)));
++        assertEquals(
++                BareTabViewMode.Mode.GRID,
++                BareTabViewMode.fromValue(BareTabViewMode.toValue(BareTabViewMode.Mode.GRID)));
++    }
++
++    @Test
++    public void testGridKeepsTheExistingSwitcherMode() {
++        // Grid has to resolve to the mode the switcher already used, or choosing it would be a
++        // different switcher rather than the one every install has.
++        assertEquals(
++                TabListMode.GRID, BareTabViewMode.toTabListMode(BareTabViewMode.Mode.GRID));
++    }
++
++    @Test
++    public void testListSelectsTheListMode() {
++        assertEquals(
++                TabListMode.BARE_LIST, BareTabViewMode.toTabListMode(BareTabViewMode.Mode.LIST));
++    }
++
++    @Test
++    public void testAbsentPreferenceSelectsGridMode() {
++        assertEquals(
++                TabListMode.GRID, BareTabViewMode.toTabListMode(BareTabViewMode.get()));
++    }
++
++    @Test
++    public void testDoesNotDisturbAnotherBarePreference() {
++        ChromeSharedPreferences.getInstance()
++                .writeString(ChromePreferenceKeys.BARE_OPEN_LINKS_IN_APPS, "ask");
++        store(BareTabViewMode.VALUE_LIST);
++
++        assertEquals(BareTabViewMode.Mode.LIST, BareTabViewMode.get());
++        assertEquals(
++                "ask",
++                ChromeSharedPreferences.getInstance()
++                        .readString(ChromePreferenceKeys.BARE_OPEN_LINKS_IN_APPS, ""));
++    }
++}
+diff --git a/chrome/android/features/tab_ui/tab_management_java_sources.gni b/chrome/android/features/tab_ui/tab_management_java_sources.gni
+index eec90568f0f..8d24b0e114c 100644
+--- a/chrome/android/features/tab_ui/tab_management_java_sources.gni
++++ b/chrome/android/features/tab_ui/tab_management_java_sources.gni
+@@ -245,6 +245,8 @@ internal_tab_management_java_sources = [
+   "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/tab_group_share_notice/TabGroupShareNoticeBottomSheetView.java",
+   "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/tab_group_share_notice/TabGroupShareNoticeBottomSheetViewBinder.java",
+   "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/vertical_tabs/BaseVerticalTabDropIndicatorDecoration.java",
++  "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/BareTabRowViewBinder.java",
++  "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/BareTabViewMode.java",
+   "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/vertical_tabs/TabVerticalViewBinder.java",
+   "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/vertical_tabs/VerticalExternalViewDragDropReorderStrategy.java",
+   "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/vertical_tabs/VerticalTabDropIndicatorDecoration.java",
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index 495ab7b48c7..60ad296ddc1 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -1523,6 +1523,8 @@ if (is_android) {
+       "//chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/TabGridDialogMediatorUnitTest.java",
+       "//chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/TabGridDialogViewBinderUnitTest.java",
+       "//chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/TabGridItemTouchHelperCallbackUnitTest.java",
++      "//chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/BareTabRowViewBinderUnitTest.java",
++      "//chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/BareTabViewModeUnitTest.java",
+       "//chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/TabGridViewBinderUnitTest.java",
+       "//chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupCreationDialogManagerUnitTest.java",
+       "//chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupUiMediatorUnitTest.java",
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 20f76c629ab..8f28450c0ac 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -448,6 +448,12 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_OPEN_LINKS_IN_APPS = "Chrome.Bare.OpenLinksInApps";
+ 
++    /**
++     * Whether the tab switcher lays its tabs out as a grid or as a list. Holds one of the values in
++     * BareTabViewMode. Absent means Grid, which is the switcher every install already had.
++     */
++    public static final String BARE_TAB_VIEW = "Chrome.Bare.TabView";
++
+     public static final String DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER =
+             "Chrome.Download.UseExternalDownloadManager";
+ 
+@@ -1261,6 +1267,7 @@ public final class ChromePreferenceKeys {
+                 BARE_BUNDLED_AD_BLOCKER_ENABLED,
+                 BARE_UPDATE_BADGE,
+                 BARE_OPEN_LINKS_IN_APPS,
++                BARE_TAB_VIEW,
+                 BARE_UPDATE_LAST_CHECK_MS,
+                 BARE_UPDATE_LATEST_TAG,
+                 BARE_UPDATE_ACKED_TAG,
+diff --git a/chrome/browser/tab_ui/android/java/src/org/chromium/chrome/browser/tab_ui/TabListMode.java b/chrome/browser/tab_ui/android/java/src/org/chromium/chrome/browser/tab_ui/TabListMode.java
+index bfded7e189f..35fbbe31682 100644
+--- a/chrome/browser/tab_ui/android/java/src/org/chromium/chrome/browser/tab_ui/TabListMode.java
++++ b/chrome/browser/tab_ui/android/java/src/org/chromium/chrome/browser/tab_ui/TabListMode.java
+@@ -12,7 +12,13 @@ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+ 
+ /** Modes of showing the list of tabs. */
+-@IntDef({TabListMode.GRID, TabListMode.BOTTOM_STRIP, TabListMode.VERTICAL, TabListMode.NUM_ENTRIES})
++@IntDef({
++    TabListMode.GRID,
++    TabListMode.BOTTOM_STRIP,
++    TabListMode.VERTICAL,
++    TabListMode.BARE_LIST,
++    TabListMode.NUM_ENTRIES
++})
+ @Retention(RetentionPolicy.SOURCE)
+ @NullMarked
+ public @interface TabListMode {
+@@ -21,5 +27,8 @@ public @interface TabListMode {
+     // int CAROUSEL_DEPRECATED = 2;
+     // int LIST_DEPRECATED = 3;
+     int VERTICAL = 4;
+-    int NUM_ENTRIES = 5;
++    // Bare: tabs as full-width rows in the tab switcher, chosen in settings. Deliberately not
++    // the removed LIST above, which was a different implementation with different callers.
++    int BARE_LIST = 5;
++    int NUM_ENTRIES = 6;
+ }
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 65b513c7df4..59fda4a1885 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4237,6 +4237,15 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_OPEN_LINKS_IN_APPS_NEVER" desc="Setting value: links stay in the browser.">
+         Never
+       </message>
++      <message name="IDS_BARE_TAB_VIEW_TITLE" desc="Title of the setting for whether the tab switcher shows tabs as a grid of cards or as a list of rows.">
++        Tab view
++      </message>
++      <message name="IDS_BARE_TAB_VIEW_GRID" desc="Setting value: the tab switcher shows tabs as a grid of cards.">
++        Grid
++      </message>
++      <message name="IDS_BARE_TAB_VIEW_LIST" desc="Setting value: the tab switcher shows tabs as a list of rows.">
++        List
++      </message>
+       <message name="IDS_BARE_TOOLBAR_SETTINGS_TITLE" desc="Title of the settings screen for choosing which buttons appear on the browser toolbar.">
+         Toolbar
+       </message>

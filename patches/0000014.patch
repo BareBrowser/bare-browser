@@ -1,0 +1,50 @@
+From 14423ca4f86cdb2284a33dd849eaded05de09113 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 16 Aug 2026 05:31:52 +0000
+Subject: [PATCH] Patch 0000014
+
+---
+ .../template_url_prepopulate_data.cc          | 30 +++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/components/search_engines/template_url_prepopulate_data.cc b/components/search_engines/template_url_prepopulate_data.cc
+index 85b0c960533..8a6cae697e0 100644
+--- a/components/search_engines/template_url_prepopulate_data.cc
++++ b/components/search_engines/template_url_prepopulate_data.cc
+@@ -317,6 +317,36 @@ std::unique_ptr<TemplateURLData> GetPrepopulatedFallbackSearch(
+     PrefService& prefs,
+     const std::vector<raw_ptr<const PrepopulatedEngine>>&
+         regional_prepopulated_engines) {
++  // De-Googled build: ship DuckDuckGo as the default search provider.
++  //
++  // Upstream passes google.id here. The lookup matches on prepopulate id, not
++  // on position, so reordering the regional engine list has no effect on the
++  // default - the id match wins wherever Google sits in the list.
++  //
++  // Prefer the regional entry so a country-specific DuckDuckGo variant is used
++  // where one exists, and fall back to the built-in definition for regions
++  // whose list does not carry DuckDuckGo at all. That second step matters:
++  // asking FindPrepopulatedEngineInternal for a missing id with
++  // use_first_as_fallback would hand back the region's first entry, which is
++  // usually Google, and the default would silently be Google again.
++  if (std::unique_ptr<TemplateURLData> regional_duckduckgo =
++          FindPrepopulatedEngineInternal(prefs, regional_prepopulated_engines,
++                                         duckduckgo.id,
++                                         /*use_first_as_fallback=*/false)) {
++    return regional_duckduckgo;
++  }
++
++  if (const PrepopulatedEngine* engine =
++          GetPrepopulatedEngineFromBuiltInDataImpl(
++              [](const PrepopulatedEngine* candidate) {
++                return candidate->id == duckduckgo.id;
++              },
++              regional_prepopulated_engines, /*regional_variants=*/{})) {
++    return PrepopulatedEngineToTemplateURLData(engine);
++  }
++
++  // DuckDuckGo is built in, so the lookups above are expected to succeed. Keep
++  // upstream behaviour rather than returning nothing if that ever changes.
+   return FindPrepopulatedEngineInternal(prefs, regional_prepopulated_engines,
+                                         google.id,
+                                         /*use_first_as_fallback=*/true);

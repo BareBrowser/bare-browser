@@ -1,0 +1,307 @@
+From f2a19f59df3a3d8bbe1b03a7d8765e6bddbd361b Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Tue, 20 Oct 2026 23:14:01 +0000
+Subject: [PATCH] Patch 0000163
+
+---
+ .../chrome/browser/ChromeTabbedActivity.java  | 30 ++++++++---------
+ .../browser/chrome_content_browser_client.cc  | 27 ++++++++++++++++
+ ...ktop_site_web_contents_observer_android.cc | 32 +++++++++++++++++++
+ ...sktop_site_web_contents_observer_android.h | 12 +++++++
+ .../preferences/ChromePreferenceKeys.java     | 10 +++++-
+ .../desktop_site/DesktopSiteUtils.java        | 32 +++++++++++++++++++
+ 6 files changed, 125 insertions(+), 18 deletions(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index 9c81bd8e00a..2ce3ace87b3 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -1697,29 +1697,25 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+     }
+ 
+     /**
+-     * De-Googled build: browse the Chrome Web Store as a desktop site.
++     * De-Googled build: remove the desktop-site exception that earlier versions stored for the Chrome
++     * Web Store.
+      *
+-     * <p>The store's mobile site does not offer an install button, so "Discover more extensions"
+-     * leads to a page that cannot install anything unless the user knows to switch to desktop mode
+-     * by hand. This build ships extensions as a headline feature, so that dead end is worth
+-     * removing.
+-     *
+-     * <p>Applied once and recorded in shared preferences. Anyone who later turns desktop mode off
+-     * for the store keeps that choice rather than having it reapplied on the next launch.
++     * <p>It was written for the store's registrable domain, so it put every google.com site in
++     * desktop mode, not only the store. The store now gets the desktop user agent from {@link
++     * DesktopSiteUtils} without a stored exception, and keeps a phone-width layout.
+      */
+-    private void maybeSeedWebstoreDesktopSiteException(Profile profile) {
++    private void maybeClearWebstoreDesktopSiteException(Profile profile) {
+         if (profile == null || profile.isOffTheRecord()) return;
+ 
+         SharedPreferencesManager prefs = ChromeSharedPreferences.getInstance();
+-        if (prefs.readBoolean(ChromePreferenceKeys.WEBSTORE_DESKTOP_SITE_SEEDED, false)) {
++        if (prefs.readBoolean(ChromePreferenceKeys.WEBSTORE_DESKTOP_SITE_CLEARED, false)) {
+             return;
+         }
+-
+-        DesktopSiteUtils.setRequestDesktopSiteContentSettingsForUrl(
+-                profile,
+-                new GURL(UrlConstants.CHROME_WEBSTORE_URL),
+-                /* useDesktopUserAgent= */ true);
+-        prefs.writeBoolean(ChromePreferenceKeys.WEBSTORE_DESKTOP_SITE_SEEDED, true);
++        if (prefs.readBoolean(ChromePreferenceKeys.WEBSTORE_DESKTOP_SITE_SEEDED, false)) {
++            DesktopSiteUtils.removeRequestDesktopSiteDomainException(
++                    profile, new GURL(UrlConstants.CHROME_WEBSTORE_URL));
++        }
++        prefs.writeBoolean(ChromePreferenceKeys.WEBSTORE_DESKTOP_SITE_CLEARED, true);
+     }
+ 
+     @Override
+@@ -1727,7 +1723,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+         try (TraceEvent te = TraceEvent.scoped("ChromeTabbedActivity.finishNativeInitialization")) {
+             var profileProvider = assertNonNull(getProfileProviderSupplier().get());
+             var originalProfile = profileProvider.getOriginalProfile();
+-            maybeSeedWebstoreDesktopSiteException(originalProfile);
++            maybeClearWebstoreDesktopSiteException(originalProfile);
+             new NavigationPredictorBridge(
+                     originalProfile, getLifecycleDispatcher(), this::isWarmOnResume);
+ 
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 9a48a6c35f9..acb8b32fa89 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -364,6 +364,8 @@
+ #include "content/public/browser/internal_webui_config.h"
+ #include "content/public/browser/isolated_web_apps_policy.h"
+ #include "content/public/browser/legacy_tech_cookie_issue_details.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/navigation_handle.h"
+ #include "content/public/browser/network_service_instance.h"
+ #include "content/public/browser/permission_controller.h"
+@@ -440,6 +442,7 @@
+ #include "third_party/blink/public/common/navigation/navigation_policy.h"
+ #include "third_party/blink/public/common/permissions/permission_utils.h"
+ #include "third_party/blink/public/common/switches.h"
++#include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+ #include "third_party/blink/public/mojom/navigation/navigation_params.mojom-forward.h"
+ #include "third_party/blink/public/mojom/navigation/navigation_params.mojom.h"
+ #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
+@@ -648,6 +651,7 @@
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ #include "base/android/device_info.h"
++#include "chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h"
+ #include "components/crash/content/browser/crash_handler_host_linux.h"
+ #include "components/permissions/android/android_permission_util.h"
+ #include "components/permissions/android/permissions_reprompt_controller_android.h"
+@@ -4749,6 +4753,10 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
+   if (IsDevToolsFrontend(web_contents)) {
+     web_prefs->viewport_style = blink::mojom::ViewportStyle::kDefault;
+   }
++  if (RequestDesktopSiteWebContentsObserverAndroid::ShouldKeepWebStoreViewport(
++          web_contents)) {
++    web_prefs->viewport_meta_enabled = true;
++  }
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+ // Fill font preferences. These are not registered on Android unless we're built
+@@ -5141,6 +5149,25 @@ bool ChromeContentBrowserClient::OverrideWebPreferencesAfterNavigation(
+     web_prefs->viewport_style = blink::mojom::ViewportStyle::kDefault;
+     prefs_changed = true;
+   }
++
++  // Web preferences are only recomputed when a navigation turns the desktop
++  // user agent on or off, so moving between the Chrome Web Store and another
++  // desktop site leaves the store's viewport rule in place, or misses it.
++  // Settle it here from the committed entry.
++  if (content::NavigationEntry* entry =
++          web_contents->GetController().GetVisibleEntry();
++      entry && entry->GetIsOverridingUserAgent()) {
++    const blink::UserAgentOverride& ua_override =
++        web_contents->GetUserAgentOverride();
++    const bool desktop_ua = ua_override.ua_metadata_override &&
++                            !ua_override.ua_metadata_override->mobile;
++    const bool viewport_meta_enabled =
++        !desktop_ua ||
++        RequestDesktopSiteWebContentsObserverAndroid::ShouldKeepWebStoreViewport(
++            web_contents);
++    prefs_changed |= web_prefs->viewport_meta_enabled != viewport_meta_enabled;
++    web_prefs->viewport_meta_enabled = viewport_meta_enabled;
++  }
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+ #if !BUILDFLAG(IS_ANDROID)
+diff --git a/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc b/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
+index 44347aed1cb..300d2e5d201 100644
+--- a/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
++++ b/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
+@@ -22,6 +22,8 @@
+ #include "components/content_settings/core/common/content_settings_utils.h"
+ #include "components/content_settings/core/common/pref_names.h"
+ #include "components/prefs/pref_service.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/navigation_handle.h"
+ #include "content/public/common/content_features.h"
+ #include "services/metrics/public/cpp/ukm_builders.h"
+@@ -95,6 +97,8 @@ void RequestDesktopSiteWebContentsObserverAndroid::DidStartNavigation(
+       ShouldAllowOnExternalDisplay(is_global_setting);
+   desktop_mode |= should_allow_on_external_display;
+ 
++  desktop_mode |= ShouldRequestDesktopWebStore(host_content_settings_map_, url);
++
+   // Override UA for renderer initiated navigation only. UA override for browser
+   // initiated navigation is handled on Java side. This is to workaround known
+   // issues crbug.com/40801643 and crbug.com/40799177.
+@@ -123,6 +127,34 @@ void RequestDesktopSiteWebContentsObserverAndroid::DidStartNavigation(
+ 
+ WEB_CONTENTS_USER_DATA_KEY_IMPL(RequestDesktopSiteWebContentsObserverAndroid);
+ 
++// static
++bool RequestDesktopSiteWebContentsObserverAndroid::ShouldRequestDesktopWebStore(
++    HostContentSettingsMap* map,
++    const GURL& url) {
++  if (!url.SchemeIs(url::kHttpsScheme) ||
++      url.host() != "chromewebstore.google.com") {
++    return false;
++  }
++  content_settings::SettingInfo setting_info;
++  map->GetContentSetting(url, url, ContentSettingsType::REQUEST_DESKTOP_SITE,
++                         &setting_info);
++  return setting_info.primary_pattern.MatchesAllHosts();
++}
++
++// static
++bool RequestDesktopSiteWebContentsObserverAndroid::ShouldKeepWebStoreViewport(
++    content::WebContents* web_contents) {
++  content::NavigationEntry* entry =
++      web_contents->GetController().GetVisibleEntry();
++  if (!entry || !entry->GetIsOverridingUserAgent()) {
++    return false;
++  }
++  Profile* profile =
++      Profile::FromBrowserContext(web_contents->GetBrowserContext());
++  return ShouldRequestDesktopWebStore(
++      HostContentSettingsMapFactory::GetForProfile(profile), entry->GetURL());
++}
++
+ bool RequestDesktopSiteWebContentsObserverAndroid::ShouldAllowOnExternalDisplay(
+     bool is_global_setting) {
+   // Disallow if feature is disabled.
+diff --git a/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h b/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h
+index 8d879692750..faede21f3af 100644
+--- a/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h
++++ b/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h
+@@ -29,6 +29,18 @@ class RequestDesktopSiteWebContentsObserverAndroid
+   void DidStartNavigation(
+       content::NavigationHandle* navigation_handle) override;
+ 
++  // The Chrome Web Store shows its install button only to a desktop user
++  // agent, so `url` on the store gets one unless the user has set desktop mode
++  // for it either way. DesktopSiteUtils.java makes the same call for
++  // navigations started from the browser.
++  static bool ShouldRequestDesktopWebStore(HostContentSettingsMap* map,
++                                           const GURL& url);
++
++  // Whether the page in `web_contents` is the store loaded under that rule.
++  // Such a page keeps its viewport tag, which a desktop user agent otherwise
++  // turns off, so it still lays out at phone width.
++  static bool ShouldKeepWebStoreViewport(content::WebContents* web_contents);
++
+  private:
+   explicit RequestDesktopSiteWebContentsObserverAndroid(
+       content::WebContents* web_contents);
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 8f28450c0ac..f7e57cc1f0b 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -387,11 +387,18 @@ public final class ChromePreferenceKeys {
+     /**
+      * De-Googled build: whether the one-time desktop-site exception for the Chrome Web Store has
+      * been applied. Seeded once so that a user who later turns it off is not overridden on the
+-     * next launch.
++     * next launch. No longer written; read once to decide whether that exception needs removing.
+      */
+     public static final String WEBSTORE_DESKTOP_SITE_SEEDED =
+             "Chrome.Extensions.WebstoreDesktopSiteSeeded";
+ 
++    /**
++     * De-Googled build: whether the Chrome Web Store desktop-site exception from earlier versions
++     * has been removed, so the check runs once.
++     */
++    public static final String WEBSTORE_DESKTOP_SITE_CLEARED =
++            "Chrome.Extensions.WebstoreDesktopSiteCleared";
++
+     /**
+      * De-Googled build: package name of the chosen external download manager, or empty to ask
+      * every time. A package that is no longer installed falls back to asking.
+@@ -1276,6 +1283,7 @@ public final class ChromePreferenceKeys {
+                 BARE_UPDATE_REMINDER,
+                 DOWNLOAD_EXTERNAL_MANAGER_PACKAGE,
+                 DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,
++                WEBSTORE_DESKTOP_SITE_CLEARED,
+                 WEBSTORE_DESKTOP_SITE_SEEDED,
+                 AUTOFILL_ASSISTANT_PROACTIVE_HELP_ENABLED,
+                 AUTOFILL_THIRD_PARTY_MODE_STATE,
+diff --git a/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtils.java b/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtils.java
+index 028311d52e1..9af8936fd4e 100644
+--- a/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtils.java
++++ b/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtils.java
+@@ -50,6 +50,13 @@ import java.util.Set;
+ @NullMarked
+ public class DesktopSiteUtils {
+     private static final String SITE_WILDCARD = "*";
++
++    /**
++     * The Chrome Web Store offers its install button only to a desktop user agent, but its pages
++     * are laid out for any width. Native code keeps the page's viewport tag on the store, so the
++     * desktop request still fits the phone.
++     */
++    private static final String CHROME_WEB_STORE_HOST = "chromewebstore.google.com";
+     // Global defaults experiment constants.
+     private static @Nullable DisplayMetrics sDisplayMetrics;
+     @VisibleForTesting static @TriState int sDesktopUAAllowedOnExternalDisplayForOem;
+@@ -221,6 +228,12 @@ public class DesktopSiteUtils {
+             return true;
+         }
+ 
++        // The Chrome Web Store gets the desktop user agent unless the user has set desktop mode
++        // for it either way.
++        if (isChromeWebStore(url) && isRequestDesktopSiteContentSettingsGlobal(profile, url)) {
++            return true;
++        }
++
+         // If domain/global setting is enabled and window setting should not
+         // apply, override the user agent.
+         if (readRequestDesktopSiteContentSettings(profile, url)
+@@ -356,6 +369,25 @@ public class DesktopSiteUtils {
+         return sDesktopUAAllowedOnExternalDisplayForOem == TriState.TRUE;
+     }
+ 
++    private static boolean isChromeWebStore(@Nullable GURL url) {
++        return url != null
++                && "https".equals(url.getScheme())
++                && CHROME_WEB_STORE_HOST.equals(url.getHost());
++    }
++
++    /**
++     * Removes the domain level exception for {@link ContentSettingsType.REQUEST_DESKTOP_SITE} that
++     * covers |url|, whatever its value.
++     */
++    public static void removeRequestDesktopSiteDomainException(Profile profile, GURL url) {
++        WebsitePreferenceBridge.setContentSettingCustomScope(
++                profile,
++                ContentSettingsType.REQUEST_DESKTOP_SITE,
++                WebsitePreferenceBridge.toDomainWildcardPattern(url.getSpec()),
++                /* secondaryPattern= */ SITE_WILDCARD,
++                ContentSetting.DEFAULT);
++    }
++
+     /** Check if Request Desktop Site ContentSettings is global setting. */
+     private static boolean isRequestDesktopSiteContentSettingsGlobal(
+             Profile profile, @Nullable GURL url) {
+-- 
+2.34.1
+

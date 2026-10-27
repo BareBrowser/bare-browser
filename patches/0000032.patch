@@ -1,0 +1,108 @@
+From b8d49823b75d38549d91cf9886817d99f5a7fa39 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Tue, 18 Aug 2026 16:20:53 +0000
+Subject: [PATCH] Patch 0000032
+
+---
+ .../browser/compositor/CompositorViewHolder.java  | 11 ++++++++---
+ chrome/browser/android/tab_android.cc             | 15 +++++++++++++++
+ .../content_settings/core/common/features.cc      | 15 +++++++++++++--
+ 3 files changed, 36 insertions(+), 5 deletions(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
+index ae37843b68e..1fe7ebd9acf 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
+@@ -18,7 +18,6 @@ import static java.util.Collections.emptySet;
+ 
+ import android.app.Activity;
+ import android.content.Context;
+-import android.graphics.Color;
+ import android.graphics.Point;
+ import android.graphics.Rect;
+ import android.graphics.RectF;
+@@ -97,6 +96,7 @@ import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.UiUpdateRequest.
+ import org.chromium.chrome.browser.ui.side_ui.SideUiObserver;
+ import org.chromium.chrome.browser.ui.side_ui.SideUiStateProvider;
+ import org.chromium.chrome.browser.ui.vertical_tabs.VerticalTabUtils;
++import org.chromium.components.browser_ui.styles.ChromeColors;
+ import org.chromium.components.browser_ui.widget.TouchEventObserver;
+ import org.chromium.components.browser_ui.widget.TouchEventProvider;
+ import org.chromium.components.content_capture.OnscreenContentProvider;
+@@ -874,8 +874,13 @@ public class CompositorViewHolder extends FrameLayout
+     public void prepareForTabReparenting() {
+         if (mHasDrawnOnce) return;
+ 
+-        // Set the background to white while we wait for the first swap of buffers.
+-        mCompositorView.setBackgroundColor(Color.WHITE);
++        // Set a placeholder background while we wait for the first swap of buffers. This gets
++        // corrected inside the view.
++        //
++        // De-Googled build: follow the theme rather than always using white, which flashed on a
++        // dark theme.
++        mCompositorView.setBackgroundColor(
++                ChromeColors.getPrimaryBackgroundColor(getContext(), false));
+         // The removal scheduled by setControlContainer() may have already timed out if the
+         // activity was stopped before its first draw, so make sure one is pending.
+         scheduleTempBackgroundRemoval();
+diff --git a/chrome/browser/android/tab_android.cc b/chrome/browser/android/tab_android.cc
+index dc12c8e4e23..3eaeba43d02 100644
+--- a/chrome/browser/android/tab_android.cc
++++ b/chrome/browser/android/tab_android.cc
+@@ -85,6 +85,7 @@
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents_observer.h"
+ #include "content/public/browser/web_contents_user_data.h"
++#include "third_party/skia/include/core/SkColor.h"
+ #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+ #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
+ #include "ui/android/view_android.h"
+@@ -398,6 +399,20 @@ void TabAndroid::InitWebContents(
+ 
+   night_mode::WebContentsThemeClient::CreateForWebContents(web_contents_.get());
+ 
++  // De-Googled build: paint the pre-paint background black in night mode.
++  //
++  // Before a page paints its own background the renderer fills with its base colour, which
++  // defaults to white. On a dark theme that produces a white flash on every navigation, which
++  // is glaring on an OLED screen at night.
++  //
++  // The theme client created just above already answers whether night mode is on, so the colour
++  // follows the user theme rather than being forced. In light mode nothing is set and the
++  // default white is kept.
++  if (night_mode::WebContentsThemeClient::FromWebContents(web_contents_.get())
++          ->IsNightModeEnabled()) {
++    web_contents_->SetPageBaseBackgroundColor(SK_ColorBLACK);
++  }
++
+   renderer_preferences_util::UpdateFromSystemSettings(
+       web_contents_->GetMutableRendererPrefs(),
+       Profile::FromBrowserContext(web_contents_->GetBrowserContext()));
+diff --git a/components/content_settings/core/common/features.cc b/components/content_settings/core/common/features.cc
+index 088951616f5..0bb3a171a42 100644
+--- a/components/content_settings/core/common/features.cc
++++ b/components/content_settings/core/common/features.cc
+@@ -11,10 +11,21 @@ namespace content_settings {
+ 
+ // Enables auto dark feature in theme settings.
+ #if BUILDFLAG(IS_ANDROID)
++// De-Googled build: enabled so that Settings > Theme offers the "Apply dark
++// theme to sites" checkbox. Upstream disables this, which hides the setting
++// entirely and leaves Blink's force-dark unreachable from the UI.
++//
++// This is the switch for Bare's auto-dark option and nothing more. It does not
++// close the white flash seen on navigation: that happens before the page
++// paints, and force-dark only changes how the page paints once it does.
++//
++// "opt_out" is false so the content setting still defaults to BLOCK: the
++// feature only makes the checkbox reachable, and darkening stays off until the
++// user ticks it. Upstream's true would have turned auto-dark on for everyone.
+ BASE_FEATURE(kDarkenWebsitesCheckboxInThemesSetting,
+-             base::FEATURE_DISABLED_BY_DEFAULT);
++             base::FEATURE_ENABLED_BY_DEFAULT);
+ constexpr base::FeatureParam<bool> kDarkenWebsitesCheckboxOptOut{
+-    &kDarkenWebsitesCheckboxInThemesSetting, "opt_out", true};
++    &kDarkenWebsitesCheckboxInThemesSetting, "opt_out", false};
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+ namespace features {

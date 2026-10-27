@@ -1,0 +1,1388 @@
+From 30cb409089919e6d7f8c1c828c7dce34ec6d1b6a Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Fri, 28 Aug 2026 21:47:10 +0000
+Subject: [PATCH] Patch 0000099
+
+---
+ chrome/android/chrome_java_resources.gni      |   2 +
+ chrome/android/chrome_java_sources.gni        |   3 +
+ .../java/res/layout/bare_toolbar_preview.xml  |  76 ++++++++
+ .../java/res/xml/appearance_preferences.xml   |  12 +-
+ .../java/res/xml/bare_toolbar_preferences.xml |  20 +++
+ .../bare/settings/BareToolbarActionUi.java    |  94 ++++++++++
+ .../BareToolbarPreviewPreference.java         | 130 ++++++++++++++
+ .../settings/BareToolbarSettingsFragment.java | 113 ++++++++++++
+ chrome/android/junit/BUILD.gn                 |   1 +
+ .../settings/BareToolbarSettingsUnitTest.java | 160 +++++++++++++++++
+ chrome/browser/ui/android/bottombar/BUILD.gn  |   1 +
+ .../ui/bottombar/BareToolbarPrefs.java        |  45 ++++-
+ .../bottombar/BareToolbarPrefsUnitTest.java   | 165 ++++++++++++++++++
+ .../bottombar/BottomBarButtonContainer.java   |  36 ++++
+ .../ui/bottombar/BottomBarButtonManager.java  |  40 ++++-
+ .../ui/bottombar/BottomBarCoordinator.java    |  57 +++++-
+ .../ui/bottombar/BottomBarMediator.java       |  23 +++
+ .../bottombar/BottomBarMediatorUnitTest.java  |   4 +
+ .../strings/android_chrome_strings.grd        |  39 +++++
+ 19 files changed, 1005 insertions(+), 16 deletions(-)
+ create mode 100644 chrome/android/java/res/layout/bare_toolbar_preview.xml
+ create mode 100644 chrome/android/java/res/xml/bare_toolbar_preferences.xml
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java
+ create mode 100644 chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java
+
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 1130c2bcb1b..383e7febb03 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -428,6 +428,7 @@ chrome_java_resources = [
+   "java/res/drawable/xr_toolbar_rounded_rect.xml",
+   "java/res/font/reader_mode_lexend.xml",
+   "java/res/layout-sw600dp/find_toolbar.xml",
++  "java/res/layout/bare_toolbar_preview.xml",
+   "java/res/layout/account_chooser_dialog_item.xml",
+   "java/res/layout/account_chooser_dialog_title.xml",
+   "java/res/layout/account_management_account_row.xml",
+@@ -670,6 +671,7 @@ chrome_java_resources = [
+   "java/res/xml/account_management_preferences.xml",
+   "java/res/xml/ad_services_config.xml",
+   "java/res/xml/appearance_preferences.xml",
++  "java/res/xml/bare_toolbar_preferences.xml",
+   "java/res/xml/bookmark_bar_preferences.xml",
+   "java/res/xml/bookmark_widget_info.xml",
+   "java/res/xml/clear_browsing_data_preferences.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 4ee55c8a68d..d4d396d322f 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -240,6 +240,9 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetViewBinder.java",
+   "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
+   "java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java",
++  "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java",
++  "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java",
++  "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java",
+   "java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java",
+   "java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java",
+diff --git a/chrome/android/java/res/layout/bare_toolbar_preview.xml b/chrome/android/java/res/layout/bare_toolbar_preview.xml
+new file mode 100644
+index 00000000000..c3208c12328
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_toolbar_preview.xml
+@@ -0,0 +1,76 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++
++A picture of the bottom bar, laid out the way the real one is: five equal
++positions with the new tab button in the middle. The three the user can change
++are focusable and respond to a press; the other two are shown so the row reads
++as the toolbar rather than as a list of three buttons.
++-->
++<LinearLayout
++    xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content"
++    android:orientation="vertical"
++    android:paddingTop="8dp"
++    android:paddingBottom="8dp">
++
++    <LinearLayout
++        android:id="@+id/bare_toolbar_preview_row"
++        android:layout_width="match_parent"
++        android:layout_height="@dimen/bottom_bar_height"
++        android:orientation="horizontal"
++        android:gravity="center"
++        android:baselineAligned="false">
++
++        <ImageView
++            android:id="@+id/bare_preview_slot_home"
++            android:layout_width="0dp"
++            android:layout_height="match_parent"
++            android:layout_weight="1"
++            android:scaleType="center"
++            android:focusable="true"
++            android:clickable="true"
++            android:background="?attr/selectableItemBackgroundBorderless" />
++
++        <ImageView
++            android:id="@+id/bare_preview_slot_extra"
++            android:layout_width="0dp"
++            android:layout_height="match_parent"
++            android:layout_weight="1"
++            android:scaleType="center"
++            android:focusable="true"
++            android:clickable="true"
++            android:background="?attr/selectableItemBackgroundBorderless" />
++
++        <ImageView
++            android:id="@+id/bare_preview_new_tab"
++            android:layout_width="0dp"
++            android:layout_height="match_parent"
++            android:layout_weight="1"
++            android:scaleType="center"
++            android:importantForAccessibility="yes" />
++
++        <ImageView
++            android:id="@+id/bare_preview_tab_switcher"
++            android:layout_width="0dp"
++            android:layout_height="match_parent"
++            android:layout_weight="1"
++            android:scaleType="center"
++            android:importantForAccessibility="yes" />
++
++        <ImageView
++            android:id="@+id/bare_preview_slot_app_menu"
++            android:layout_width="0dp"
++            android:layout_height="match_parent"
++            android:layout_weight="1"
++            android:scaleType="center"
++            android:focusable="true"
++            android:clickable="true"
++            android:background="?attr/selectableItemBackgroundBorderless" />
++
++    </LinearLayout>
++
++</LinearLayout>
+diff --git a/chrome/android/java/res/xml/appearance_preferences.xml b/chrome/android/java/res/xml/appearance_preferences.xml
+index d89b76290c5..df2c0d940a8 100644
+--- a/chrome/android/java/res/xml/appearance_preferences.xml
++++ b/chrome/android/java/res/xml/appearance_preferences.xml
+@@ -19,25 +19,31 @@ found in the LICENSE file.
+         android:order="1"
+         android:title="@string/toolbar_shortcut" />
+ 
++    <Preference
++        android:fragment="org.chromium.chrome.browser.bare.settings.BareToolbarSettingsFragment"
++        android:key="bare_toolbar"
++        android:order="2"
++        android:title="@string/bare_toolbar_settings_title" />
++
+ <!--The following bookmarks bar settings preferences repeat
+ the same order, title and summary because they are mutually
+ exclusive options. -->
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
+         android:fragment="org.chromium.chrome.browser.appearance.settings.BookmarkBarSettingsFragment"
+         android:key="bookmark_bar"
+-        android:order="2"
++        android:order="3"
+         android:title="@string/bookmark_bar_setting" />
+ 
+     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+         android:key="bookmark_bar_switch"
+-        android:order="2"
++        android:order="3"
+         android:title="@string/bookmark_bar_setting"
+         android:summary="@string/bookmark_bar_setting_subtitle" />
+ 
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
+         android:fragment="org.chromium.chrome.browser.appearance.settings.TabPositionSettingsFragment"
+         android:key="tab_position"
+-        android:order="3"
++        android:order="4"
+         android:title="@string/tab_position_settings_title" />
+ 
+ </PreferenceScreen>
+diff --git a/chrome/android/java/res/xml/bare_toolbar_preferences.xml b/chrome/android/java/res/xml/bare_toolbar_preferences.xml
+new file mode 100644
+index 00000000000..abef8fe592d
+--- /dev/null
++++ b/chrome/android/java/res/xml/bare_toolbar_preferences.xml
+@@ -0,0 +1,20 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<PreferenceScreen
++    xmlns:android="http://schemas.android.com/apk/res/android">
++
++    <org.chromium.chrome.browser.bare.settings.BareToolbarPreviewPreference
++        android:key="bare_toolbar_preview"
++        android:order="0"
++        android:selectable="false" />
++
++    <Preference
++        android:key="bare_toolbar_reset"
++        android:order="1"
++        android:title="@string/bare_toolbar_settings_reset" />
++
++</PreferenceScreen>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java
+new file mode 100644
+index 00000000000..3de2cad8289
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java
+@@ -0,0 +1,94 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.settings;
++
++import androidx.annotation.DrawableRes;
++import androidx.annotation.StringRes;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.ui.actions.ActionId;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
++
++/**
++ * What each toolbar button is called and what it looks like, for the screen that arranges them.
++ *
++ * <p>The icons are the ones the real bar uses, so the picture in settings is the toolbar rather
++ * than an illustration of it. They are named here rather than read from the bar because the bar
++ * gets them from the running browser: the providers behind Share, Translate and Bookmark exist
++ * only where there is a tab to act on, and settings has none.
++ *
++ * <p>The names are the buttons' names, not descriptions of what pressing them does. Someone
++ * arranging a toolbar is choosing between things to put in a row, and "Share this page" reads as
++ * an instruction rather than as the label of the thing being moved.
++ */
++@NullMarked
++public final class BareToolbarActionUi {
++    private BareToolbarActionUi() {}
++
++    /** The name shown for an action. */
++    public static @StringRes int labelFor(@ActionId int actionId) {
++        switch (actionId) {
++            case ActionId.HOME_BUTTON:
++                return R.string.bare_toolbar_action_home;
++            case ActionId.INCOGNITO:
++                return R.string.bare_toolbar_action_incognito;
++            case ActionId.APP_MENU:
++                return R.string.bare_toolbar_action_app_menu;
++            case ActionId.SHARE:
++                return R.string.bare_toolbar_action_share;
++            case ActionId.TRANSLATE:
++                // Already exactly this word in the adaptive toolbar's own chooser.
++                return R.string.adaptive_toolbar_button_preference_translate;
++            case ActionId.BOOKMARK:
++                return R.string.bare_toolbar_action_bookmark;
++            case ActionId.NEW_TAB:
++                return R.string.button_new_tab;
++            default:
++                return R.string.tab_switcher_button_label;
++        }
++    }
++
++    /** The icon shown for an action, the same drawable the toolbar itself uses. */
++    public static @DrawableRes int iconFor(@ActionId int actionId) {
++        switch (actionId) {
++            case ActionId.HOME_BUTTON:
++                return R.drawable.ic_home_24dp;
++            case ActionId.INCOGNITO:
++                return R.drawable.ic_incognito_24dp;
++            case ActionId.APP_MENU:
++                return R.drawable.ic_more_vert_24dp;
++            case ActionId.SHARE:
++                return R.drawable.ic_toolbar_share_offset_24dp;
++            case ActionId.TRANSLATE:
++                return R.drawable.ic_translate;
++            case ActionId.BOOKMARK:
++                // The empty star. Whether a page is bookmarked is a fact about a page, and this
++                // picture is not of any page.
++                return R.drawable.ic_star_24dp;
++            case ActionId.NEW_TAB:
++                return R.drawable.new_tab_icon;
++            default:
++                return R.drawable.btn_tabswitcher_modern;
++        }
++    }
++
++    /**
++     * What to call a position out loud.
++     *
++     * <p>Positions are described by where they are, because that is all they are to the person
++     * using them. The names the code uses for them say what they used to hold.
++     */
++    public static @StringRes int positionNameFor(@BareToolbarSlot int slot) {
++        switch (slot) {
++            case BareToolbarSlot.HOME:
++                return R.string.bare_toolbar_position_first;
++            case BareToolbarSlot.EXTRA:
++                return R.string.bare_toolbar_position_second;
++            default:
++                return R.string.bare_toolbar_position_last;
++        }
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java
+new file mode 100644
+index 00000000000..a5c18ed4ec9
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java
+@@ -0,0 +1,130 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.settings;
++
++import android.content.Context;
++import android.content.res.ColorStateList;
++import android.util.AttributeSet;
++import android.view.View;
++import android.widget.ImageView;
++
++import androidx.core.widget.ImageViewCompat;
++import androidx.preference.Preference;
++import androidx.preference.PreferenceViewHolder;
++
++import org.chromium.base.Callback;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.ui.actions.ActionId;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarLayout;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++
++/**
++ * A picture of the bottom bar, with the three positions the user can change made pressable.
++ *
++ * <p>Shown instead of three rows naming three positions, because the thing being arranged is a row
++ * of buttons and a list is a poor drawing of one. Pressing a button in the picture is the same
++ * gesture as pressing it on the toolbar, which is where the user has seen it.
++ *
++ * <p>It is a picture and not the toolbar. The real buttons know whether the page is bookmarked and
++ * whether it can be translated; those answers belong to a tab, and there is no tab here. What it
++ * shows is which button is where.
++ */
++@NullMarked
++public class BareToolbarPreviewPreference extends Preference {
++
++    private static final @BareToolbarSlot int[] CONFIGURABLE_SLOTS = {
++        BareToolbarSlot.HOME, BareToolbarSlot.EXTRA, BareToolbarSlot.APP_MENU
++    };
++
++    private @Nullable Callback<Integer> mOnSlotClicked;
++    private @Nullable View mRoot;
++
++    public BareToolbarPreviewPreference(Context context, @Nullable AttributeSet attrs) {
++        super(context, attrs);
++        setLayoutResource(R.layout.bare_toolbar_preview);
++        setSelectable(false);
++    }
++
++    /** Called with the slot the user pressed. */
++    public void setOnSlotClicked(Callback<Integer> callback) {
++        mOnSlotClicked = callback;
++    }
++
++    /** Redraws from the current arrangement. */
++    public void refresh() {
++        if (mRoot != null) bind(mRoot);
++    }
++
++    @Override
++    public void onBindViewHolder(PreferenceViewHolder holder) {
++        super.onBindViewHolder(holder);
++        mRoot = holder.itemView;
++        bind(holder.itemView);
++    }
++
++    private void bind(View root) {
++        for (@BareToolbarSlot int slot : CONFIGURABLE_SLOTS) {
++            ImageView view = root.findViewById(viewIdForSlot(slot));
++            @ActionId int actionId = BareToolbarLayout.actionForSlot(slot);
++
++            setIcon(view, actionId);
++            view.setContentDescription(
++                    getContext()
++                            .getString(
++                                    R.string.bare_toolbar_position_description,
++                                    getContext()
++                                            .getString(
++                                                    BareToolbarActionUi.positionNameFor(slot)),
++                                    getContext()
++                                            .getString(
++                                                    BareToolbarActionUi.labelFor(actionId))));
++            view.setOnClickListener(
++                    v -> {
++                        if (mOnSlotClicked != null) mOnSlotClicked.onResult(slot);
++                    });
++        }
++
++        bindFixed(root, R.id.bare_preview_new_tab, ActionId.NEW_TAB);
++        bindFixed(root, R.id.bare_preview_tab_switcher, ActionId.TAB_SWITCHER);
++    }
++
++    /** The two positions the user cannot change are drawn, and say so if asked. */
++    private void bindFixed(View root, int viewId, @ActionId int actionId) {
++        ImageView view = root.findViewById(viewId);
++        setIcon(view, actionId);
++        view.setContentDescription(
++                getContext()
++                        .getString(
++                                R.string.bare_toolbar_position_fixed_description,
++                                getContext().getString(BareToolbarActionUi.labelFor(actionId))));
++    }
++
++    /**
++     * Draws one icon in the colour the toolbar's icons are drawn in.
++     *
++     * <p>Tinted rather than taken as-is because several of these are black assets that the real
++     * bar tints as it draws them; shown untinted they would be the only dark things on the page.
++     */
++    private void setIcon(ImageView view, @ActionId int actionId) {
++        view.setImageResource(BareToolbarActionUi.iconFor(actionId));
++        ImageViewCompat.setImageTintList(
++                view,
++                ColorStateList.valueOf(SemanticColorUtils.getDefaultIconColor(getContext())));
++    }
++
++    private static int viewIdForSlot(@BareToolbarSlot int slot) {
++        switch (slot) {
++            case BareToolbarSlot.HOME:
++                return R.id.bare_preview_slot_home;
++            case BareToolbarSlot.EXTRA:
++                return R.id.bare_preview_slot_extra;
++            default:
++                return R.id.bare_preview_slot_app_menu;
++        }
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+new file mode 100644
+index 00000000000..3b4ef3689c9
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+@@ -0,0 +1,113 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.settings;
++
++import android.content.Context;
++import android.os.Bundle;
++
++import androidx.appcompat.app.AlertDialog;
++import androidx.preference.Preference;
++
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.chrome.browser.ui.actions.ActionId;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarDefaults;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarLayout;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarPrefs;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
++import org.chromium.components.browser_ui.settings.SettingsUtils;
++
++/**
++ * Lets the user choose which button sits in each of the three positions the bottom bar leaves open.
++ *
++ * <p>The screen writes preferences and nothing else. The bar is listening for them and rebuilds
++ * itself, so there is no path from here into the browser and nothing to keep in step: what the
++ * user sees when they go back is the same arrangement read the same way.
++ *
++ * <p>Opening the screen writes nothing. An arrangement nobody has changed is the absence of any
++ * preference, and recording today's defaults would turn a build's opinion into the user's.
++ */
++@NullMarked
++public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
++
++    static final String PREF_PREVIEW = "bare_toolbar_preview";
++    static final String PREF_RESET = "bare_toolbar_reset";
++
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++            ObservableSuppliers.createMonotonic();
++
++    private @Nullable BareToolbarPreviewPreference mPreview;
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        mPageTitle.set(getTitle(getContext()));
++        SettingsUtils.addPreferencesFromResource(this, R.xml.bare_toolbar_preferences);
++
++        mPreview = (BareToolbarPreviewPreference) findPreference(PREF_PREVIEW);
++        assert mPreview != null;
++        mPreview.setOnSlotClicked(this::showActionChooser);
++
++        Preference reset = findPreference(PREF_RESET);
++        assert reset != null;
++        reset.setOnPreferenceClickListener(
++                pref -> {
++                    BareToolbarPrefs.resetAll();
++                    assert mPreview != null;
++                    mPreview.refresh();
++                    return true;
++                });
++    }
++
++    /**
++     * Offers the buttons that can go in a position, with the one already there marked.
++     *
++     * <p>A radio list rather than anything cleverer: there are six of them, exactly one can be
++     * chosen, and this is the shape settings uses everywhere else for that.
++     */
++    private void showActionChooser(@BareToolbarSlot int slot) {
++        @ActionId int[] catalogue = BareToolbarDefaults.CATALOGUE;
++        CharSequence[] labels = new CharSequence[catalogue.length];
++        int checked = -1;
++        @ActionId int current = BareToolbarLayout.actionForSlot(slot);
++        for (int i = 0; i < catalogue.length; i++) {
++            labels[i] = getString(BareToolbarActionUi.labelFor(catalogue[i]));
++            if (catalogue[i] == current) checked = i;
++        }
++
++        new AlertDialog.Builder(getContext(), R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                .setTitle(R.string.bare_toolbar_settings_choose_action)
++                .setSingleChoiceItems(
++                        labels,
++                        checked,
++                        (dialog, which) -> {
++                            // Swaps when the chosen button is already somewhere else, so the bar
++                            // keeps the same buttons and only their order changes.
++                            BareToolbarPrefs.assignPrimaryAction(slot, catalogue[which]);
++                            if (mPreview != null) mPreview.refresh();
++                            dialog.dismiss();
++                        })
++                .setNegativeButton(R.string.cancel, null)
++                .show();
++    }
++
++    @Override
++    public MonotonicObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    public static String getTitle(Context context) {
++        return context.getString(R.string.bare_toolbar_settings_title);
++    }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++}
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index 2649cde3c26..066f2bbcdde 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -433,6 +433,7 @@ if (is_android) {
+       "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarAppMenuUpdateBadgeControllerUnitTest.java",
+       "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinatorUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapterUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java",
+       "src/org/chromium/chrome/browser/BrowserExitReasonTrackerUnitTest.java",
+       "src/org/chromium/chrome/browser/ChromeActionModeHandlerUnitTest.java",
+       "src/org/chromium/chrome/browser/ChromeActivityUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java
+new file mode 100644
+index 00000000000..5776e0202b2
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java
+@@ -0,0 +1,160 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.settings;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertNotEquals;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertTrue;
++
++import android.content.Context;
++import android.content.res.XmlResourceParser;
++import android.view.ContextThemeWrapper;
++import android.view.View;
++
++import androidx.test.core.app.ApplicationProvider;
++
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.xmlpull.v1.XmlPullParser;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.ui.actions.ActionId;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarDefaults;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
++
++/** Unit tests for the toolbar settings screen's names, icons and entry point. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareToolbarSettingsUnitTest {
++
++    private final Context mContext = ApplicationProvider.getApplicationContext();
++
++    @Test
++    public void testAppearanceOffersTheToolbarScreen() {
++        assertTrue(
++                "Appearance should have a Toolbar entry pointing at the toolbar screen",
++                appearanceXmlContains(
++                        "bare_toolbar", BareToolbarSettingsFragment.class.getName()));
++    }
++
++    /** Walks the Appearance screen's XML looking for a preference with the given key and fragment. */
++    private boolean appearanceXmlContains(String key, String fragment) {
++        try (XmlResourceParser parser =
++                mContext.getResources().getXml(R.xml.appearance_preferences)) {
++            int event = parser.getEventType();
++            while (event != XmlPullParser.END_DOCUMENT) {
++                if (event == XmlPullParser.START_TAG) {
++                    String foundKey = null;
++                    String foundFragment = null;
++                    for (int i = 0; i < parser.getAttributeCount(); i++) {
++                        String name = parser.getAttributeName(i);
++                        if ("key".equals(name)) foundKey = parser.getAttributeValue(i);
++                        if ("fragment".equals(name)) foundFragment = parser.getAttributeValue(i);
++                    }
++                    if (key.equals(foundKey) && fragment.equals(foundFragment)) return true;
++                }
++                event = parser.next();
++            }
++        } catch (Exception e) {
++            throw new AssertionError("could not read the Appearance screen", e);
++        }
++        return false;
++    }
++
++    @Test
++    public void testEveryActionTheUserCanChooseHasANameAndAnIcon() {
++        for (@ActionId int action : BareToolbarDefaults.CATALOGUE) {
++            String label = mContext.getString(BareToolbarActionUi.labelFor(action));
++            assertNotNull(label);
++            assertNotEquals("action " + action + " has no name", "", label.trim());
++            assertNotEquals(
++                    "action " + action + " has no icon",
++                    0,
++                    BareToolbarActionUi.iconFor(action));
++            assertNotNull(
++                    "action " + action + " icon does not resolve",
++                    mContext.getDrawable(BareToolbarActionUi.iconFor(action)));
++        }
++    }
++
++    @Test
++    public void testTheTwoFixedButtonsAreDrawnToo() {
++        for (@ActionId int action : new int[] {ActionId.NEW_TAB, ActionId.TAB_SWITCHER}) {
++            assertNotNull(mContext.getDrawable(BareToolbarActionUi.iconFor(action)));
++            assertNotEquals("", mContext.getString(BareToolbarActionUi.labelFor(action)).trim());
++        }
++    }
++
++    @Test
++    public void testNamesAreTheButtonsNamesRatherThanInternalOnes() {
++        assertEquals("Home", mContext.getString(BareToolbarActionUi.labelFor(ActionId.HOME_BUTTON)));
++        assertEquals(
++                "Incognito", mContext.getString(BareToolbarActionUi.labelFor(ActionId.INCOGNITO)));
++        assertEquals(
++                "App menu", mContext.getString(BareToolbarActionUi.labelFor(ActionId.APP_MENU)));
++        assertEquals("Share", mContext.getString(BareToolbarActionUi.labelFor(ActionId.SHARE)));
++        assertEquals(
++                "Translate", mContext.getString(BareToolbarActionUi.labelFor(ActionId.TRANSLATE)));
++        assertEquals(
++                "Bookmark", mContext.getString(BareToolbarActionUi.labelFor(ActionId.BOOKMARK)));
++    }
++
++    @Test
++    public void testPositionsAreDescribedByWhereTheyAreNotByWhatTheyUsedToHold() {
++        String first = mContext.getString(
++                BareToolbarActionUi.positionNameFor(BareToolbarSlot.HOME));
++        String second = mContext.getString(
++                BareToolbarActionUi.positionNameFor(BareToolbarSlot.EXTRA));
++        String last = mContext.getString(
++                BareToolbarActionUi.positionNameFor(BareToolbarSlot.APP_MENU));
++
++        assertNotEquals(first, second);
++        assertNotEquals(second, last);
++        for (String name : new String[] {first, second, last}) {
++            String lower = name.toLowerCase(java.util.Locale.US);
++            assertTrue("a position should be named by where it is: " + name,
++                    lower.contains("toolbar button"));
++            assertNotEquals("a position should not be named after an action", "extra", lower);
++        }
++
++        // The accessibility text a position ends up with reads as a place and a button.
++        String described =
++                mContext.getString(
++                        R.string.bare_toolbar_position_description,
++                        first,
++                        mContext.getString(BareToolbarActionUi.labelFor(ActionId.BOOKMARK)));
++        assertEquals("First toolbar button: Bookmark", described);
++    }
++
++    @Test
++    public void testTheFixedPositionsSayTheyCannotBeChanged() {
++        String described =
++                mContext.getString(
++                        R.string.bare_toolbar_position_fixed_description,
++                        mContext.getString(BareToolbarActionUi.labelFor(ActionId.NEW_TAB)));
++        assertTrue(described, described.contains("cannot be changed"));
++    }
++
++    @Test
++    public void testThePreviewLayoutHasAViewForEveryPosition() {
++        // A themed context, because the pressable positions take their ripple from the theme.
++        Context themed =
++                new ContextThemeWrapper(mContext, R.style.Theme_BrowserUI_DayNight);
++        View preview =
++                android.view.LayoutInflater.from(themed)
++                        .inflate(R.layout.bare_toolbar_preview, null, false);
++        assertNotNull(preview.findViewById(R.id.bare_preview_slot_home));
++        assertNotNull(preview.findViewById(R.id.bare_preview_slot_extra));
++        assertNotNull(preview.findViewById(R.id.bare_preview_slot_app_menu));
++        assertNotNull(preview.findViewById(R.id.bare_preview_new_tab));
++        assertNotNull(preview.findViewById(R.id.bare_preview_tab_switcher));
++
++        // The two the user cannot change do not respond to a press.
++        assertTrue(preview.findViewById(R.id.bare_preview_slot_home).isClickable());
++        assertTrue(!preview.findViewById(R.id.bare_preview_new_tab).isClickable());
++        assertTrue(!preview.findViewById(R.id.bare_preview_tab_switcher).isClickable());
++    }
++}
+diff --git a/chrome/browser/ui/android/bottombar/BUILD.gn b/chrome/browser/ui/android/bottombar/BUILD.gn
+index 5b3f6e3dca9..b335ba1e2e5 100644
+--- a/chrome/browser/ui/android/bottombar/BUILD.gn
++++ b/chrome/browser/ui/android/bottombar/BUILD.gn
+@@ -129,6 +129,7 @@ robolectric_library("junit") {
+     "java/src/org/chromium/chrome/browser/ui/bottombar/AppMenuActionButtonBinderUnitTest.java",
+     "java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarActionRenderingUnitTest.java",
+     "java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java",
++    "java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java",
+     "java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarActionEligibilityUnitTest.java",
+     "java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonContainerUnitTest.java",
+     "java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonManagerUnitTest.java",
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefs.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefs.java
+index c5a1233689e..1e73ce85b47 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefs.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefs.java
+@@ -53,20 +53,57 @@ public final class BareToolbarPrefs {
+         return ChromeSharedPreferences.getInstance().readInt(primaryKey(slot), UNSET) != UNSET;
+     }
+ 
++    /**
++     * Puts an action in a slot, and moves whatever was there into the slot the action came from.
++     *
++     * <p>A swap rather than an overwrite, because the alternative is worse in both directions: the
++     * bar cannot show the same action twice, so overwriting would have to drop one of them, and
++     * dropping the one the user did not just touch is the surprising half of the choice. Swapping
++     * keeps the set of actions on the bar the same and only changes where they are, which is what
++     * dragging one onto another would do.
++     *
++     * <p>An action that is not currently on the bar simply takes the slot, and whatever was there
++     * leaves. Nothing is displaced because nothing has to be.
++     *
++     * <p>Both slots are written before anything is told to look again, so nobody sees the moment
++     * in between where the same action is in two places.
++     */
++    public static void assignPrimaryAction(@BareToolbarSlot int slot, @ActionId int actionId) {
++        if (!BareToolbarDefaults.isConfigurable(slot)) return;
++        if (!BareToolbarDefaults.isConfigurableAction(actionId)) return;
++
++        @ActionId int displaced = BareToolbarLayout.actionForSlot(slot);
++        if (displaced == actionId) return;
++
++        @BareToolbarSlot int cameFrom = BareToolbarLayout.slotForAction(actionId);
++
++        write(slot, actionId);
++        if (cameFrom != BareToolbarSlot.NONE
++                && cameFrom != slot
++                && BareToolbarDefaults.isConfigurable(cameFrom)) {
++            write(cameFrom, displaced);
++        }
++        BareToolbarLayout.invalidate();
++    }
++
+     /**
+      * Records the action for a slot, and forgets the arrangement resolved from the old one.
+      *
+-     * <p>Nothing calls this yet; the settings screen that will is a later patch. It invalidates
+-     * because a write that left the resolved bar in place would be a write nobody could see, and
+-     * the next thing to ask about a slot would get the previous answer.
++     * <p>Writes one slot and nothing else, so it can leave the bar holding the same action twice.
++     * {@link #assignPrimaryAction} is what the settings screen uses; this is for a caller that has
++     * already worked out the whole arrangement itself.
+      */
+     public static void setPrimaryAction(@BareToolbarSlot int slot, @ActionId int actionId) {
+         if (!BareToolbarDefaults.isConfigurable(slot)) return;
+         if (!BareToolbarDefaults.isConfigurableAction(actionId)) return;
+-        ChromeSharedPreferences.getInstance().writeInt(primaryKey(slot), actionId);
++        write(slot, actionId);
+         BareToolbarLayout.invalidate();
+     }
+ 
++    private static void write(@BareToolbarSlot int slot, @ActionId int actionId) {
++        ChromeSharedPreferences.getInstance().writeInt(primaryKey(slot), actionId);
++    }
++
+     /**
+      * Forgets every choice, which returns the bar to Bare's defaults.
+      *
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java
+new file mode 100644
+index 00000000000..42539be9123
+--- /dev/null
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java
+@@ -0,0 +1,165 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.ui.bottombar;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNotEquals;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.After;
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.shared_preferences.SharedPreferencesManager;
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.ui.actions.ActionId;
++
++/**
++ * Unit tests for {@link BareToolbarPrefs}, and in particular for what happens when the user picks
++ * a button that is already somewhere else.
++ */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareToolbarPrefsUnitTest {
++
++    private SharedPreferencesManager mPrefs;
++
++    @Before
++    public void setUp() {
++        mPrefs = ChromeSharedPreferences.getInstance();
++        clear();
++    }
++
++    @After
++    public void tearDown() {
++        clear();
++    }
++
++    private void clear() {
++        for (int slot = 0; slot < BareToolbarSlot.COUNT; slot++) {
++            mPrefs.removeKey(ChromePreferenceKeys.BOTTOM_BAR_SLOT_PRIMARY_ACTION.createKey(slot));
++        }
++        BareToolbarLayout.invalidate();
++    }
++
++    private void assertBar(int home, int extra, int appMenu) {
++        assertEquals(home, BareToolbarLayout.actionForSlot(BareToolbarSlot.HOME));
++        assertEquals(extra, BareToolbarLayout.actionForSlot(BareToolbarSlot.EXTRA));
++        assertEquals(appMenu, BareToolbarLayout.actionForSlot(BareToolbarSlot.APP_MENU));
++        assertNotEquals(home, extra);
++        assertNotEquals(home, appMenu);
++        assertNotEquals(extra, appMenu);
++    }
++
++    @Test
++    public void testChoosingAnUnusedActionJustTakesTheSlot() {
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.HOME, ActionId.BOOKMARK);
++        assertBar(ActionId.BOOKMARK, ActionId.INCOGNITO, ActionId.APP_MENU);
++    }
++
++    @Test
++    public void testChoosingAnActionFromAnotherSlotSwapsThem() {
++        // Home | Incognito | App menu, then Share is put in the last slot and Home in the first is
++        // asked for Share: the two trade places rather than one of them disappearing.
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.APP_MENU, ActionId.SHARE);
++        assertBar(ActionId.HOME_BUTTON, ActionId.INCOGNITO, ActionId.SHARE);
++
++        // Home and Share trade places: Share takes the first slot and Home goes to the one
++        // Share came from. The app menu is not involved; it left the bar when Share took its slot.
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.HOME, ActionId.SHARE);
++        assertBar(ActionId.SHARE, ActionId.INCOGNITO, ActionId.HOME_BUTTON);
++    }
++
++    @Test
++    public void testSwappingWithADefaultThatWasNeverWritten() {
++        // Nothing is stored for the spare slot, so what it holds is only the default. Choosing
++        // that action elsewhere still has to move it, or the bar would show it twice.
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.HOME, ActionId.INCOGNITO);
++        assertBar(ActionId.INCOGNITO, ActionId.HOME_BUTTON, ActionId.APP_MENU);
++    }
++
++    @Test
++    public void testNoSequenceOfChoicesCanProduceADuplicate() {
++        @ActionId int[] catalogue = BareToolbarDefaults.CATALOGUE;
++        @BareToolbarSlot int[] slots = {
++            BareToolbarSlot.HOME, BareToolbarSlot.EXTRA, BareToolbarSlot.APP_MENU
++        };
++        // Every action into every slot, in every order the loops produce.
++        for (int round = 0; round < 3; round++) {
++            for (@BareToolbarSlot int slot : slots) {
++                for (@ActionId int action : catalogue) {
++                    BareToolbarPrefs.assignPrimaryAction(slot, action);
++                    assertEquals(
++                            "the chosen action should be in the slot it was chosen for",
++                            action,
++                            BareToolbarLayout.actionForSlot(slot));
++                    assertBar(
++                            BareToolbarLayout.actionForSlot(BareToolbarSlot.HOME),
++                            BareToolbarLayout.actionForSlot(BareToolbarSlot.EXTRA),
++                            BareToolbarLayout.actionForSlot(BareToolbarSlot.APP_MENU));
++                }
++            }
++        }
++    }
++
++    @Test
++    public void testChoosingWhatIsAlreadyThereChangesNothing() {
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.HOME, ActionId.HOME_BUTTON);
++        assertBar(ActionId.HOME_BUTTON, ActionId.INCOGNITO, ActionId.APP_MENU);
++        assertFalse(
++                "choosing the button already there should not record anything",
++                BareToolbarPrefs.hasPrimaryAction(BareToolbarSlot.HOME));
++    }
++
++    @Test
++    public void testAnActionBareDoesNotOfferIsRefused() {
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.HOME, ActionId.GLIC);
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.HOME, 99);
++        assertBar(ActionId.HOME_BUTTON, ActionId.INCOGNITO, ActionId.APP_MENU);
++        assertFalse(BareToolbarPrefs.hasPrimaryAction(BareToolbarSlot.HOME));
++    }
++
++    @Test
++    public void testAFixedSlotCannotBeAssigned() {
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.NEW_TAB, ActionId.SHARE);
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.TAB_SWITCHER, ActionId.SHARE);
++        assertEquals(ActionId.NEW_TAB, BareToolbarLayout.actionForSlot(BareToolbarSlot.NEW_TAB));
++        assertEquals(
++                ActionId.TAB_SWITCHER,
++                BareToolbarLayout.actionForSlot(BareToolbarSlot.TAB_SWITCHER));
++        assertFalse(BareToolbarPrefs.hasPrimaryAction(BareToolbarSlot.NEW_TAB));
++    }
++
++    @Test
++    public void testResetForgetsEveryChoice() {
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.HOME, ActionId.BOOKMARK);
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.EXTRA, ActionId.TRANSLATE);
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.APP_MENU, ActionId.SHARE);
++        assertBar(ActionId.BOOKMARK, ActionId.TRANSLATE, ActionId.SHARE);
++
++        BareToolbarPrefs.resetAll();
++
++        for (int slot = 0; slot < BareToolbarSlot.COUNT; slot++) {
++            assertFalse(
++                    "reset should remove the key rather than record a default",
++                    mPrefs.contains(
++                            ChromePreferenceKeys.BOTTOM_BAR_SLOT_PRIMARY_ACTION.createKey(slot)));
++        }
++        assertBar(ActionId.HOME_BUTTON, ActionId.INCOGNITO, ActionId.APP_MENU);
++    }
++
++    @Test
++    public void testAWriteIsVisibleImmediately() {
++        // The resolved arrangement is held on to, so a write that did not clear it would not be
++        // seen until the next launch.
++        assertEquals(ActionId.HOME_BUTTON, BareToolbarLayout.actionForSlot(BareToolbarSlot.HOME));
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.HOME, ActionId.SHARE);
++        assertEquals(ActionId.SHARE, BareToolbarLayout.actionForSlot(BareToolbarSlot.HOME));
++        assertTrue(BareToolbarPrefs.hasPrimaryAction(BareToolbarSlot.HOME));
++    }
++}
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonContainer.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonContainer.java
+index 42270f1e742..85692a848f3 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonContainer.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonContainer.java
+@@ -8,6 +8,7 @@ import android.content.Context;
+ import android.content.res.ColorStateList;
+ import android.graphics.drawable.Drawable;
+ import android.util.AttributeSet;
++import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewStub;
+ import android.widget.FrameLayout;
+@@ -34,6 +35,7 @@ public class BottomBarButtonContainer extends FrameLayout
+ 
+     private @Nullable ColorStateList mIconTint;
+     private @Nullable View mTargetView;
++    private int mTemplateResource;
+     private @Nullable Drawable mTargetBackground;
+     private @Nullable @BrandedColorScheme Integer mColorScheme;
+     private @Px int mTargetPaddingHorizontal = -1;
+@@ -69,12 +71,18 @@ public class BottomBarButtonContainer extends FrameLayout
+      */
+     /*package*/ void setStubLayoutResource(int layoutResource) {
+         assert mTargetView == null : "Stub already inflated.";
++        mTemplateResource = layoutResource;
+         View child = getChildAt(0);
+         if (child instanceof ViewStub stub) {
+             stub.setLayoutResource(layoutResource);
+         }
+     }
+ 
++    /** The layout the held view was inflated from, or zero if it was not inflated from one. */
++    /*package*/ int getTemplateResource() {
++        return mTemplateResource;
++    }
++
+     /** Inflates the child ViewStub. */
+     /*package*/ void inflateStub() {
+         View child = getChildAt(0);
+@@ -91,6 +99,34 @@ public class BottomBarButtonContainer extends FrameLayout
+         assert mTargetView != null : "Stub inflation failed.";
+     }
+ 
++    /**
++     * Replaces the view this position holds with one inflated from a different layout.
++     *
++     * <p>Needed because the view an action needs is a fact about the action: moving the home
++     * button somewhere else means that position now needs a view that can show a menu, and the
++     * position it left needs an ordinary image again. A ViewStub answers once, so the swap is done
++     * by hand.
++     *
++     * <p>The outgoing view's layout parameters are carried over rather than read from the new
++     * layout. The size and gravity of a button belong to the position, and they were written on
++     * the stub in the bar's own layout; a template inflated on its own does not carry them.
++     */
++    /*package*/ void replaceTargetView(int layoutResource) {
++        mTemplateResource = layoutResource;
++        @Nullable View old = mTargetView;
++        @Nullable LayoutParams params = old == null ? null : (LayoutParams) old.getLayoutParams();
++
++        removeAllViews();
++        View replacement =
++                LayoutInflater.from(getContext()).inflate(layoutResource, this, /* root= */ false);
++        if (params != null) replacement.setLayoutParams(params);
++        addView(replacement);
++        mTargetView = replacement;
++
++        applyColorScheme(mIconTint, null);
++        applyTargetBackground();
++    }
++
+     /**
+      * Sets the color scheme and tint for the target view.
+      *
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonManager.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonManager.java
+index b01ec9ff96b..d71f810b3b0 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonManager.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonManager.java
+@@ -146,6 +146,7 @@ public class BottomBarButtonManager implements Destroyable {
+             this::onModelPropertyChanged;
+     private final SparseArray<ButtonBinding> mButtons = new SparseArray<>();
+     private final PropertyModel mBottomBarModel;
++    private final ActionRegistry mActionRegistry;
+ 
+     private @Nullable Listener mListener;
+     private boolean mHasCenteredButton;
+@@ -164,8 +165,18 @@ public class BottomBarButtonManager implements Destroyable {
+             ActionRegistry actionRegistry,
+             PropertyModel bottomBarModel,
+             int centerActionId) {
++        mActionRegistry = actionRegistry;
+         mBottomBarModel = bottomBarModel;
++        registerAll(configs, centerActionId);
++    }
+ 
++    /**
++     * Registers every configured action, working out which side of the centre each one sits on.
++     *
++     * @param configs Ordered left to right as they appear on the bar.
++     * @param centerActionId The action that acts as the centre button.
++     */
++    private void registerAll(List<ActionConfig> configs, @ActionId int centerActionId) {
+         boolean foundCenter = false;
+         for (int i = 0; i < configs.size(); i++) {
+             ActionConfig config = configs.get(i);
+@@ -181,7 +192,7 @@ public class BottomBarButtonManager implements Destroyable {
+ 
+             registerAction(
+                     config.actionId,
+-                    actionRegistry.get(config.actionId),
++                    mActionRegistry.get(config.actionId),
+                     config.container,
+                     config.binder,
+                     position,
+@@ -191,6 +202,33 @@ public class BottomBarButtonManager implements Destroyable {
+         assert foundCenter : "Center action not found in configs";
+     }
+ 
++    /** Whether the given action currently has a button on the bar. */
++    public boolean isRegistered(@ActionId int actionId) {
++        return mButtons.indexOfKey(actionId) >= 0;
++    }
++
++    /**
++     * Throws away every button and builds the given set instead.
++     *
++     * <p>Used when the arrangement changes underneath a bar that is already on screen. The
++     * alternative was to rebuild the bar itself, which would mean detaching and reattaching a view
++     * the browser is holding on to; this keeps the same bar and changes what is in it.
++     *
++     * <p>The listener is deliberately kept. It belongs to whoever built the manager and has not
++     * gone anywhere, and dropping it would silently stop the bar reporting its own state.
++     */
++    public void rebuild(List<ActionConfig> configs, @ActionId int centerActionId) {
++        for (int i = 0; i < mButtons.size(); i++) {
++            ButtonBinding state = mButtons.valueAt(i);
++            state.mSupplier.removeObserver(state.mObserver);
++            cleanupActionObservation(state);
++        }
++        mButtons.clear();
++
++        registerAll(configs, centerActionId);
++        recomputeState();
++    }
++
+     /**
+      * Sets the listener for button property changes.
+      *
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
+index cd8eb11fb04..cd139025279 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
+@@ -5,18 +5,23 @@
+ package org.chromium.chrome.browser.ui.bottombar;
+ 
+ import android.content.Context;
++import android.content.SharedPreferences;
++import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewGroup;
+ 
+ import androidx.annotation.ColorInt;
+ 
++import org.chromium.base.ContextUtils;
+ import org.chromium.base.lifetime.Destroyable;
+ import org.chromium.base.supplier.NonNullObservableSupplier;
+ import org.chromium.base.supplier.NullableObservableSupplier;
+ import org.chromium.base.supplier.OneshotSupplier;
+ import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.layouts.LayoutStateProvider;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.theme.ThemeColorProvider;
+@@ -35,7 +40,8 @@ import java.util.List;
+ 
+ /** Coordinator for the bottom bar. */
+ @NullMarked
+-public class BottomBarCoordinator implements BottomBar, Destroyable {
++public class BottomBarCoordinator
++        implements BottomBar, Destroyable, OnSharedPreferenceChangeListener {
+     private final PropertyModel mModel;
+     private final BottomBarMediator mMediator;
+     private final BottomBarView mView;
+@@ -43,6 +49,7 @@ public class BottomBarCoordinator implements BottomBar, Destroyable {
+     private final BottomBarButtonManager mButtonManager;
+     private final BottomBarPromoDialogCoordinator mPromoDialogCoordinator;
+     private final NullableObservableSupplier<Tab> mTabSupplier;
++    private final boolean mShouldIncludeHomeButton;
+ 
+     /**
+      * @param parent The parent view to inflate the bottom bar into.
+@@ -87,8 +94,7 @@ public class BottomBarCoordinator implements BottomBar, Destroyable {
+         // of the position, the answer was wrong in both directions once the button could move:
+         // nothing would hide it where it had gone, and whatever took its place would be hidden
+         // instead.
+-        boolean homeButtonPlaced =
+-                shouldIncludeHomeButton && BareToolbarLayout.isPlaced(ActionId.HOME_BUTTON);
++        mShouldIncludeHomeButton = shouldIncludeHomeButton;
+ 
+         mModel = new PropertyModel.Builder(BottomBarProperties.ALL_KEYS).build();
+ 
+@@ -108,7 +114,7 @@ public class BottomBarCoordinator implements BottomBar, Destroyable {
+                         tabSupplier,
+                         homepageEnabledSupplier,
+                         visibilityDelegate,
+-                        homeButtonPlaced,
++                        shouldIncludeHomeButton,
+                         profileSupplier,
+                         countrySupplier,
+                         omniboxFocusStateSupplier,
+@@ -119,6 +125,12 @@ public class BottomBarCoordinator implements BottomBar, Destroyable {
+ 
+         mTabSupplier = tabSupplier;
+         mMcp = PropertyModelChangeProcessor.create(mModel, mView, BottomBarViewBinder::bind);
++
++        // The arrangement can change while the bar is on screen, because settings writes the
++        // preference and goes away. This is the same route the bar already uses to hear about its
++        // other setting, and the same one the address bar uses to move itself between top and
++        // bottom, so the bar finds out the way everything else in the browser does.
++        ContextUtils.getAppSharedPreferences().registerOnSharedPreferenceChangeListener(this);
+     }
+ 
+     /**
+@@ -152,13 +164,17 @@ public class BottomBarCoordinator implements BottomBar, Destroyable {
+                 // Inflated here rather than on first use, because the view an action needs depends
+                 // on the action and the container would otherwise inflate the layout the position
+                 // was written with.
++                int template = BareToolbarActionRendering.templateForAction(actionId);
+                 if (!container.hasTargetView()) {
+-                    container.setStubLayoutResource(
+-                            BareToolbarActionRendering.templateForAction(actionId));
++                    container.setStubLayoutResource(template);
+                     container.inflateStub();
+-                    int viewId = BareToolbarActionRendering.viewIdForAction(actionId);
+-                    container.getTargetView().setId(viewId);
++                } else if (container.getTemplateResource() != template) {
++                    // Only when the new action needs a different kind of view. Share replacing
++                    // Bookmark is a rebind; either replacing Home is a new view.
++                    container.replaceTargetView(template);
+                 }
++                container.getTargetView().setId(
++                        BareToolbarActionRendering.viewIdForAction(actionId));
+                 if (!managed) container.setVisibility(View.VISIBLE);
+             }
+ 
+@@ -215,7 +231,32 @@ public class BottomBarCoordinator implements BottomBar, Destroyable {
+     }
+ 
+     @Override
++    @SuppressWarnings("UseSharedPreferencesManagerFromChromeCheck")
++    public void onSharedPreferenceChanged(SharedPreferences preferences, @Nullable String key) {
++        if (key == null || !ChromePreferenceKeys.BOTTOM_BAR_SLOT_PRIMARY_ACTION.hasGenerated(key)) {
++            return;
++        }
++        rebuildArrangement();
++    }
++
++    /**
++     * Rebuilds the bar's buttons for a changed arrangement.
++     *
++     * <p>The bar itself, its position in the browser and everything holding a reference to it stay
++     * as they are. What changes is which action each position is bound to, and the view it is
++     * drawn into when the new action needs a different one.
++     */
++    private void rebuildArrangement() {
++        BareToolbarLayout.invalidate();
++        mButtonManager.rebuild(
++                createActionConfigs(mView, mShouldIncludeHomeButton), ActionId.NEW_TAB);
++        mMediator.onArrangementChanged();
++    }
++
++    @Override
++    @SuppressWarnings("UseSharedPreferencesManagerFromChromeCheck")
+     public void destroy() {
++        ContextUtils.getAppSharedPreferences().unregisterOnSharedPreferenceChangeListener(this);
+         mMediator.destroy();
+         mMcp.destroy();
+         mButtonManager.destroy();
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
+index 4230205c7a0..6d8f3f98f4e 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
+@@ -479,10 +479,33 @@ public class BottomBarMediator
+         setButtonVisibility(ActionId.HOME_BUTTON, isEnabled);
+     }
+ 
++    /**
++     * Asks for a button to be shown or hidden, if the bar has one.
++     *
++     * <p>An action that decides its own visibility can be moved off the bar, and the answer to
++     * whether it should be showing arrives from elsewhere and does not know that. Asking the bar
++     * about a button it does not have is a mistake worth catching, so the question is only put
++     * when there is one.
++     */
+     private void setButtonVisibility(int actionId, boolean visible) {
++        if (!mButtonManager.isRegistered(actionId)) return;
+         mButtonManager.setButtonVisibility(actionId, visible);
+     }
+ 
++    /**
++     * Re-applies the visibility of the actions that decide it for themselves.
++     *
++     * <p>Called after the bar has been rebuilt for a new arrangement. Everything else is shown
++     * because the user placed it, which the rebuild has already done; these two were told to be
++     * hidden by something that happened before the rebuild and have to be told again.
++     */
++    /*package*/ void onArrangementChanged() {
++        if (mShouldIncludeHomeButton) {
++            onHomepageEnabledChanged(Boolean.TRUE.equals(mHomepageEnabledSupplier.get()));
++        }
++        updateExtraActionVisibility();
++    }
++
+     @Override
+     public void onButtonVisibilityChanged(int actionId, boolean visible) {
+         if (actionId == ActionId.GLIC && visible) {
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediatorUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediatorUnitTest.java
+index 4093379b0c3..5db222db78b 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediatorUnitTest.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediatorUnitTest.java
+@@ -10,6 +10,7 @@ import static org.junit.Assert.assertNotNull;
+ import static org.junit.Assert.assertNull;
+ import static org.junit.Assert.assertTrue;
+ import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.anyInt;
+ import static org.mockito.Mockito.never;
+ import static org.mockito.Mockito.times;
+ import static org.mockito.Mockito.verify;
+@@ -117,6 +118,9 @@ public class BottomBarMediatorUnitTest {
+ 
+     @Before
+     public void setUp() {
++        // The mediator only asks the bar to show or hide a button the bar actually has, so a
++        // stand-in bar has to claim it has them.
++        when(mButtonManager.isRegistered(anyInt())).thenReturn(true);
+         mTabSupplier = ObservableSuppliers.createNullable();
+         mHomepageEnabledSupplier = ObservableSuppliers.createNonNull(false);
+         mOmniboxFocusStateSupplier = ObservableSuppliers.createNonNull(false);
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index ea6d8bb2065..5236c8b6fb5 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4225,6 +4225,45 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_TOOLBAR_SHORTCUT" desc="Title for toolbar shortcut toggle button in adaptive toolbar button preference page.">
+         Toolbar shortcut
+       </message>
++      <message name="IDS_BARE_TOOLBAR_SETTINGS_TITLE" desc="Title of the settings screen for choosing which buttons appear on the browser toolbar.">
++        Toolbar
++      </message>
++      <message name="IDS_BARE_TOOLBAR_SETTINGS_CHOOSE_ACTION" desc="Title of the dialog for choosing which button goes in one toolbar position.">
++        Choose a button
++      </message>
++      <message name="IDS_BARE_TOOLBAR_SETTINGS_RESET" desc="Button that puts the toolbar back to its original arrangement.">
++        Reset toolbar
++      </message>
++      <message name="IDS_BARE_TOOLBAR_ACTION_HOME" desc="Name of the toolbar button that opens the home page.">
++        Home
++      </message>
++      <message name="IDS_BARE_TOOLBAR_ACTION_INCOGNITO" desc="Name of the toolbar button that opens a new Incognito tab.">
++        Incognito
++      </message>
++      <message name="IDS_BARE_TOOLBAR_ACTION_APP_MENU" desc="Name of the toolbar button that opens the browser menu.">
++        App menu
++      </message>
++      <message name="IDS_BARE_TOOLBAR_ACTION_SHARE" desc="Name of the toolbar button that shares the current page.">
++        Share
++      </message>
++      <message name="IDS_BARE_TOOLBAR_ACTION_BOOKMARK" desc="Name of the toolbar button that bookmarks the current page.">
++        Bookmark
++      </message>
++      <message name="IDS_BARE_TOOLBAR_POSITION_FIRST" desc="Accessibility name for the first configurable button on the toolbar.">
++        First toolbar button
++      </message>
++      <message name="IDS_BARE_TOOLBAR_POSITION_SECOND" desc="Accessibility name for the second configurable button on the toolbar.">
++        Second toolbar button
++      </message>
++      <message name="IDS_BARE_TOOLBAR_POSITION_LAST" desc="Accessibility name for the last configurable button on the toolbar.">
++        Last toolbar button
++      </message>
++      <message name="IDS_BARE_TOOLBAR_POSITION_DESCRIPTION" desc="Accessibility description of one configurable toolbar position and the button currently in it.">
++        <ph name="POSITION">%1$s<ex>First toolbar button</ex></ph>: <ph name="ACTION">%2$s<ex>Home</ex></ph>
++      </message>
++      <message name="IDS_BARE_TOOLBAR_POSITION_FIXED_DESCRIPTION" desc="Accessibility description of a toolbar position that cannot be changed.">
++        <ph name="ACTION">%1$s<ex>New tab</ex></ph>, cannot be changed
++      </message>
+       <message name="IDS_TOOLBAR_LONG_PRESS_OPTIONS_IPH" desc="The in-product-help message shown to inform the user they can change placement of the address bar from a long-press menu.">
+         You can touch and hold to move the address bar to the bottom
+       </message>

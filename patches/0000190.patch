@@ -1,0 +1,1904 @@
+From d2c407b54f34a4a06e516d155f8bb1181e44aded Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 16:29:27 +0000
+Subject: [PATCH] Patch 0000190
+
+---
+ chrome/android/chrome_java_resources.gni      |   4 +
+ chrome/android/chrome_java_sources.gni        |   1 +
+ .../java/res/drawable/bare_menu_close.xml     |  16 ++
+ .../java/res/drawable/bare_menu_tap.xml       |  18 ++
+ .../drawable/bare_toolbar_preview_card.xml    |  13 ++
+ .../drawable/bare_toolbar_preview_pill.xml    |  12 ++
+ .../java/res/layout/bare_toolbar_preview.xml  | 171 +++++++++++-----
+ .../res/layout/bare_welcome_page_browsing.xml |   7 +
+ .../res/layout/bare_welcome_page_toolbar.xml  |   4 +
+ chrome/android/java/res/values/ids.xml        |   1 +
+ .../values/channel_constants.xml              |  16 +-
+ .../chrome/browser/app/ChromeActivity.java    |   2 +-
+ .../app/appmenu/BareAppMenuCustomization.java | 163 +++++++++++++--
+ .../browser/bare/BareWelcomeOverlay.java      |  70 ++++++-
+ .../settings/BareToolbarPreviewBinder.java    | 113 +++++++++++
+ .../BareToolbarPreviewPreference.java         |  77 ++-----
+ .../browser/download/DownloadController.java  |   3 +-
+ .../feedback/HelpAndFeedbackLauncherImpl.java |  64 +-----
+ .../IncognitoMenuItemViewBinder.java          |  13 +-
+ chrome/android/junit/BUILD.gn                 |   2 +
+ .../BareAppMenuCustomizationUnitTest.java     | 191 +++++++++++++++++-
+ .../BareWelcomeDownloadChoicesUnitTest.java   |  75 +++++++
+ .../BareToolbarPreviewBinderUnitTest.java     | 124 ++++++++++++
+ .../DownloadControllerHandoffUnitTest.java    |  26 +++
+ .../feedback/HelpAndFeedbackLauncherTest.java |  42 ++++
+ .../download/settings/DownloadSettings.java   |   9 +
+ .../strings/android_chrome_strings.grd        |  15 +-
+ 27 files changed, 1047 insertions(+), 205 deletions(-)
+ create mode 100644 chrome/android/java/res/drawable/bare_menu_close.xml
+ create mode 100644 chrome/android/java/res/drawable/bare_menu_tap.xml
+ create mode 100644 chrome/android/java/res/drawable/bare_toolbar_preview_card.xml
+ create mode 100644 chrome/android/java/res/drawable/bare_toolbar_preview_pill.xml
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/BareWelcomeDownloadChoicesUnitTest.java
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinderUnitTest.java
+
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 3dae327fad1..cf93ef9689b 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -469,6 +469,8 @@ chrome_java_resources = [
+   "java/res/drawable/bare_welcome_button_soft.xml",
+   "java/res/drawable/bare_welcome_dot.xml",
+   "java/res/drawable/bare_welcome_dot_active.xml",
++  "java/res/drawable/bare_toolbar_preview_card.xml",
++  "java/res/drawable/bare_toolbar_preview_pill.xml",
+   "java/res/drawable/bare_welcome_group_bg.xml",
+   "java/res/drawable/bare_welcome_seg_thumb.xml",
+   "java/res/drawable/bare_welcome_seg_track.xml",
+@@ -692,8 +694,10 @@ chrome_java_resources = [
+   "java/res/xml/ad_services_config.xml",
+   "java/res/xml/appearance_preferences.xml",
+   "java/res/xml/bare_clear_on_exit_preferences.xml",
++  "java/res/drawable/bare_menu_close.xml",
+   "java/res/drawable/bare_menu_eye.xml",
+   "java/res/drawable/bare_menu_eye_off.xml",
++  "java/res/drawable/bare_menu_tap.xml",
+   "java/res/values/bare_incognito_arrays.xml",
+   "java/res/xml/bare_extensions_preferences.xml",
+   "java/res/xml/bare_push_preferences.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 8a6d2537889..06db7ca4c7a 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -246,6 +246,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
+   "java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java",
++  "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareClearOnExitSettings.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java",
+diff --git a/chrome/android/java/res/drawable/bare_menu_close.xml b/chrome/android/java/res/drawable/bare_menu_close.xml
+new file mode 100644
+index 00000000000..e04c04ef72f
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_menu_close.xml
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24"
++    android:tint="?attr/colorControlNormal">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M19,6.41L17.59,5 12,10.59 6.41,5 5,6.41 10.59,12 5,17.59 6.41,19 12,13.41 17.59,19 19,17.59 13.41,12z" />
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_menu_tap.xml b/chrome/android/java/res/drawable/bare_menu_tap.xml
+new file mode 100644
+index 00000000000..67f5b58ad76
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_menu_tap.xml
+@@ -0,0 +1,18 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++
++A finger pressing, with a ring around the touch point. Shown in the tip at the top of the menu.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24"
++    android:tint="?attr/colorControlNormal">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M9,11.24V7.5C9,6.12 10.12,5 11.5,5S14,6.12 14,7.5v3.74c1.21,-0.81 2,-2.18 2,-3.74C16,5.01 13.99,3 11.5,3S7,5.01 7,7.5c0,1.56 0.79,2.93 2,3.74zM18.84,15.87l-4.54,-2.26c-0.17,-0.07 -0.35,-0.11 -0.54,-0.11H13v-6c0,-0.83 -0.67,-1.5 -1.5,-1.5S10,6.67 10,7.5v10.74l-3.43,-0.72c-0.08,-0.01 -0.15,-0.03 -0.24,-0.03 -0.31,0 -0.59,0.13 -0.79,0.33l-0.79,0.8 4.94,4.94c0.27,0.27 0.65,0.44 1.06,0.44h6.79c0.75,0 1.33,-0.55 1.44,-1.28l0.75,-5.27c0.01,-0.07 0.02,-0.14 0.02,-0.2 0,-0.62 -0.38,-1.16 -0.91,-1.38z" />
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_toolbar_preview_card.xml b/chrome/android/java/res/drawable/bare_toolbar_preview_card.xml
+new file mode 100644
+index 00000000000..45e8d624d17
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_toolbar_preview_card.xml
+@@ -0,0 +1,13 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<shape xmlns:android="http://schemas.android.com/apk/res/android"
++    android:shape="rectangle">
++    <solid android:color="?attr/colorSurfaceContainer" />
++    <stroke android:width="1dp" android:color="?attr/colorOutlineVariant" />
++    <corners android:radius="20dp" />
++</shape>
+diff --git a/chrome/android/java/res/drawable/bare_toolbar_preview_pill.xml b/chrome/android/java/res/drawable/bare_toolbar_preview_pill.xml
+new file mode 100644
+index 00000000000..18787ff0b03
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_toolbar_preview_pill.xml
+@@ -0,0 +1,12 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<shape xmlns:android="http://schemas.android.com/apk/res/android"
++    android:shape="rectangle">
++    <solid android:color="?attr/colorSurfaceContainerHighest" />
++    <corners android:radius="22dp" />
++</shape>
+diff --git a/chrome/android/java/res/layout/bare_toolbar_preview.xml b/chrome/android/java/res/layout/bare_toolbar_preview.xml
+index 64c4aac254d..5f299228aaf 100644
+--- a/chrome/android/java/res/layout/bare_toolbar_preview.xml
++++ b/chrome/android/java/res/layout/bare_toolbar_preview.xml
+@@ -4,11 +4,12 @@ Copyright 2026 The Chromium Authors
+ Use of this source code is governed by a BSD-style license that can be
+ found in the LICENSE file.
+ 
+-A picture of the bottom bar, laid out the way the real one is: five equal
+-positions with the new tab button in the middle. The two the user can change
+-are focusable and respond to a press; the other three are shown so the row
+-reads as the toolbar, and so that not lighting up under a finger is what says
+-they are fixed.
++A picture of the toolbar, used by Settings and by the welcome so that both show the same thing.
++Full layout: the address bar with the bottom bar's five equal positions under it, the new tab
++button in the middle. Minimal layout: one row, the address bar with New tab, Tabs and Menu.
++The two positions the user can change are focusable and respond to a press; the others are shown
++so the picture reads as the toolbar, and not lighting up under a finger is what says they are
++fixed.
+ -->
+ <LinearLayout
+     xmlns:android="http://schemas.android.com/apk/res/android"
+@@ -19,57 +20,127 @@ they are fixed.
+     android:paddingBottom="8dp">
+ 
+     <LinearLayout
+-        android:id="@+id/bare_toolbar_preview_row"
++        android:id="@+id/bare_toolbar_preview_card"
+         android:layout_width="match_parent"
+-        android:layout_height="@dimen/bottom_bar_height"
+-        android:orientation="horizontal"
+-        android:gravity="center"
+-        android:baselineAligned="false">
++        android:layout_height="wrap_content"
++        android:orientation="vertical"
++        android:background="@drawable/bare_toolbar_preview_card"
++        android:paddingStart="8dp"
++        android:paddingEnd="8dp"
++        android:paddingTop="10dp"
++        android:paddingBottom="6dp">
+ 
+-        <ImageView
+-            android:id="@+id/bare_preview_slot_home"
+-            android:layout_width="0dp"
+-            android:layout_height="match_parent"
+-            android:layout_weight="1"
+-            android:scaleType="center"
+-            android:focusable="true"
+-            android:clickable="true"
+-            android:background="?attr/selectableItemBackgroundBorderless" />
++        <LinearLayout
++            android:id="@+id/bare_preview_minimal"
++            android:layout_width="match_parent"
++            android:layout_height="52dp"
++            android:orientation="horizontal"
++            android:gravity="center_vertical"
++            android:baselineAligned="false"
++            android:visibility="gone">
+ 
+-        <ImageView
+-            android:id="@+id/bare_preview_slot_extra"
+-            android:layout_width="0dp"
+-            android:layout_height="match_parent"
+-            android:layout_weight="1"
+-            android:scaleType="center"
+-            android:focusable="true"
+-            android:clickable="true"
+-            android:background="?attr/selectableItemBackgroundBorderless" />
++            <View
++                android:id="@+id/bare_preview_minimal_pill"
++                android:layout_width="0dp"
++                android:layout_height="40dp"
++                android:layout_weight="3"
++                android:layout_marginStart="4dp"
++                android:layout_marginEnd="4dp"
++                android:background="@drawable/bare_toolbar_preview_pill"
++                android:importantForAccessibility="no" />
+ 
+-        <ImageView
+-            android:id="@+id/bare_preview_new_tab"
+-            android:layout_width="0dp"
+-            android:layout_height="match_parent"
+-            android:layout_weight="1"
+-            android:scaleType="center"
+-            android:importantForAccessibility="yes" />
++            <ImageView
++                android:id="@+id/bare_preview_minimal_new_tab"
++                android:layout_width="0dp"
++                android:layout_height="match_parent"
++                android:layout_weight="1"
++                android:scaleType="center"
++                android:importantForAccessibility="yes" />
+ 
+-        <ImageView
+-            android:id="@+id/bare_preview_tab_switcher"
+-            android:layout_width="0dp"
+-            android:layout_height="match_parent"
+-            android:layout_weight="1"
+-            android:scaleType="center"
+-            android:importantForAccessibility="yes" />
++            <ImageView
++                android:id="@+id/bare_preview_minimal_tab_switcher"
++                android:layout_width="0dp"
++                android:layout_height="match_parent"
++                android:layout_weight="1"
++                android:scaleType="center"
++                android:importantForAccessibility="yes" />
+ 
+-        <ImageView
+-            android:id="@+id/bare_preview_slot_app_menu"
+-            android:layout_width="0dp"
+-            android:layout_height="match_parent"
+-            android:layout_weight="1"
+-            android:scaleType="center"
+-            android:importantForAccessibility="yes" />
++            <ImageView
++                android:id="@+id/bare_preview_minimal_app_menu"
++                android:layout_width="0dp"
++                android:layout_height="match_parent"
++                android:layout_weight="1"
++                android:scaleType="center"
++                android:importantForAccessibility="yes" />
++        </LinearLayout>
+ 
+-    </LinearLayout>
++        <LinearLayout
++            android:id="@+id/bare_preview_full"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:orientation="vertical">
++
++            <View
++                android:id="@+id/bare_preview_pill"
++                android:layout_width="match_parent"
++                android:layout_height="40dp"
++                android:layout_marginStart="4dp"
++                android:layout_marginEnd="4dp"
++                android:background="@drawable/bare_toolbar_preview_pill"
++                android:importantForAccessibility="no" />
++
++            <LinearLayout
++                android:id="@+id/bare_toolbar_preview_row"
++                android:layout_width="match_parent"
++                android:layout_height="@dimen/bottom_bar_height"
++                android:orientation="horizontal"
++                android:gravity="center"
++                android:baselineAligned="false">
++
++                <ImageView
++                    android:id="@+id/bare_preview_slot_home"
++                    android:layout_width="0dp"
++                    android:layout_height="match_parent"
++                    android:layout_weight="1"
++                    android:scaleType="center"
++                    android:focusable="true"
++                    android:clickable="true"
++                    android:background="?attr/selectableItemBackgroundBorderless" />
+ 
++                <ImageView
++                    android:id="@+id/bare_preview_slot_extra"
++                    android:layout_width="0dp"
++                    android:layout_height="match_parent"
++                    android:layout_weight="1"
++                    android:scaleType="center"
++                    android:focusable="true"
++                    android:clickable="true"
++                    android:background="?attr/selectableItemBackgroundBorderless" />
++
++                <ImageView
++                    android:id="@+id/bare_preview_new_tab"
++                    android:layout_width="0dp"
++                    android:layout_height="match_parent"
++                    android:layout_weight="1"
++                    android:scaleType="center"
++                    android:importantForAccessibility="yes" />
++
++                <ImageView
++                    android:id="@+id/bare_preview_tab_switcher"
++                    android:layout_width="0dp"
++                    android:layout_height="match_parent"
++                    android:layout_weight="1"
++                    android:scaleType="center"
++                    android:importantForAccessibility="yes" />
++
++                <ImageView
++                    android:id="@+id/bare_preview_slot_app_menu"
++                    android:layout_width="0dp"
++                    android:layout_height="match_parent"
++                    android:layout_weight="1"
++                    android:scaleType="center"
++                    android:importantForAccessibility="yes" />
++            </LinearLayout>
++        </LinearLayout>
++    </LinearLayout>
+ </LinearLayout>
+diff --git a/chrome/android/java/res/layout/bare_welcome_page_browsing.xml b/chrome/android/java/res/layout/bare_welcome_page_browsing.xml
+index 7270d885fa5..377243c6c8a 100644
+--- a/chrome/android/java/res/layout/bare_welcome_page_browsing.xml
++++ b/chrome/android/java/res/layout/bare_welcome_page_browsing.xml
+@@ -51,6 +51,13 @@ found in the LICENSE file.
+             android:background="@drawable/bare_welcome_group_bg">
+ 
+             <include android:id="@+id/bare_row_downloads" layout="@layout/bare_welcome_option_row" />
++            <View
++                android:id="@+id/bare_divider_download_sign_in"
++                android:layout_width="match_parent"
++                android:layout_height="1dp"
++                android:layout_marginStart="56dp"
++                android:background="@color/bare_welcome_divider" />
++            <include android:id="@+id/bare_row_download_sign_in" layout="@layout/bare_welcome_option_row" />
+             <View
+                 android:layout_width="match_parent"
+                 android:layout_height="1dp"
+diff --git a/chrome/android/java/res/layout/bare_welcome_page_toolbar.xml b/chrome/android/java/res/layout/bare_welcome_page_toolbar.xml
+index 0d6a081b8bf..04888323c65 100644
+--- a/chrome/android/java/res/layout/bare_welcome_page_toolbar.xml
++++ b/chrome/android/java/res/layout/bare_welcome_page_toolbar.xml
+@@ -44,6 +44,10 @@ found in the LICENSE file.
+             android:textSize="14sp"
+             android:lineSpacingMultiplier="1.2" />
+ 
++        <include
++            android:id="@+id/bare_toolbar_illustration"
++            layout="@layout/bare_toolbar_preview" />
++
+         <LinearLayout
+             android:layout_width="match_parent"
+             android:layout_height="wrap_content"
+diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
+index 58e68f61ded..9e74756480c 100644
+--- a/chrome/android/java/res/values/ids.xml
++++ b/chrome/android/java/res/values/ids.xml
+@@ -279,6 +279,7 @@ found in the LICENSE file.
+     <item type="id" name="recent_tabs_header_menu_id" />
+     <item type="id" name="recent_tabs_menu_id" />
+     <item type="id" name="bare_menu_tip_id" />
++    <item type="id" name="bare_menu_tip_never_id" />
+     <item type="id" name="bare_menu_done_id" />
+     <item type="id" name="bare_menu_edit_help_id" />
+     <item type="id" name="bare_menu_hidden_header_id" />
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 96dc3f97854..3ddf71710d2 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -34,8 +34,8 @@ found in the LICENSE file.
+     <string name="bare_welcome_hint_address_swipe" translatable="false">Slide it left or right to switch tabs</string>
+     <string name="bare_welcome_opt_bar_swipe" translatable="false">Swipe the bottom bar</string>
+     <string name="bare_welcome_hint_bar_swipe" translatable="false">What a sideways drag along the bar does</string>
+-    <string name="bare_welcome_security_title">Keep it safer</string>
+-    <string name="bare_welcome_security_intro">Four choices that make the browser harder to attack or follow you. Each can be changed later in Settings, Security options.</string>
++    <string name="bare_welcome_security_title">Security</string>
++    <string name="bare_welcome_security_intro">Settings that limit what pages can reach or learn about your connection. You can change them later in Settings, Security options.</string>
+     <string name="bare_welcome_opt_https">Secure connections</string>
+     <string name="bare_welcome_hint_https">Open pages over https and warn before a plain http page</string>
+     <string name="bare_welcome_opt_cookies">Block third-party cookies</string>
+@@ -44,11 +44,11 @@ found in the LICENSE file.
+     <string name="bare_welcome_hint_webrtc">Sites cannot learn your phone’s address on your network</string>
+     <string name="bare_welcome_opt_hardened">Hardened JavaScript</string>
+     <string name="bare_welcome_hint_hardened">Safer against browser exploits, slower on heavy sites</string>
+-    <string name="bare_welcome_security_note">None of these is a promise that sites cannot track you. Incognito can also lock its tabs behind your screen lock, in Settings, Privacy and security.</string>
+-    <string name="bare_welcome_browsing_title" translatable="false">Your browsing, your way</string>
++    <string name="bare_welcome_security_note">Websites can still use the information they receive, and characteristics of your browser, to recognize or track a visitor.</string>
++    <string name="bare_welcome_browsing_title" translatable="false">Downloads, media and notifications</string>
+     <string name="bare_welcome_browsing_intro" translatable="false">Choose how downloads, audio and notifications behave.</string>
+-    <string name="bare_welcome_ready_title" translatable="false">Ready for everyday browsing</string>
+-    <string name="bare_welcome_ready_intro" translatable="false">Two last choices. Neither is needed to start.</string>
++    <string name="bare_welcome_ready_title" translatable="false">Defaults and updates</string>
++    <string name="bare_welcome_ready_intro" translatable="false">Choose whether links from other apps open in Bare, and how it looks for new versions.</string>
+     <string name="bare_welcome_opt_search" translatable="false">Default search engine</string>
+     <string name="bare_welcome_hint_search" translatable="false">Used when you search from the address bar</string>
+     <string name="bare_welcome_opt_ad_blocker" translatable="false">Ad blocker</string>
+@@ -57,7 +57,9 @@ found in the LICENSE file.
+     <string name="bare_welcome_hint_address_bar" translatable="false">At the top, or at the bottom within reach of your thumb</string>
+     <string name="bare_welcome_opt_downloads" translatable="false">External download manager</string>
+     <string name="bare_welcome_hint_downloads" translatable="false">Hand downloads to another app instead of saving them in Bare</string>
+-    <string name="bare_welcome_downloads_note" translatable="false">The app gets the page address and the browser name. Your sign-in cookies are only sent if you allow it in Settings, Downloads, so a file that needs you to be signed in may fail until then.</string>
++    <string name="bare_welcome_downloads_note" translatable="false">The app is given the file\'s address, the page it came from and the browser\'s name. Your cookies are only sent when Share sign-in is on, so a file that needs you signed in may not download without it. Cookies are never sent from Incognito.</string>
++    <string name="bare_welcome_opt_download_sign_in" translatable="false">Share sign-in with the app</string>
++    <string name="bare_welcome_hint_download_sign_in" translatable="false">Also sends your cookies for the file\'s site. Off by default</string>
+     <string name="bare_welcome_opt_background_media" translatable="false">Background media playback</string>
+     <string name="bare_welcome_hint_background_media" translatable="false">Keep audio playing when you switch apps or lock the screen</string>
+     <string name="bare_welcome_opt_notifications" translatable="false">Allow notifications</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index f0c977a49bc..90401e128aa 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -3110,7 +3110,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+             } else {
+                 getTabCreator(getTabModelSelector().isIncognitoSelected())
+                         .launchUrl(
+-                                "https://support.google.com/chrome?p=help&ctx=keyboard",
++                                HelpAndFeedbackLauncherImpl.FALLBACK_SUPPORT_URL,
+                                 TabLaunchType.FROM_CHROME_UI);
+             }
+             return true;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
+index cb2d9f69598..eedf891f3af 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
+@@ -4,8 +4,12 @@
+ 
+ package org.chromium.chrome.browser.app.appmenu;
+ 
++import static org.chromium.build.NullUtil.assumeNonNull;
++
+ import android.content.Context;
++import android.graphics.drawable.Drawable;
+ 
++import androidx.annotation.VisibleForTesting;
+ import androidx.appcompat.content.res.AppCompatResources;
+ 
+ import org.chromium.base.ResettersForTesting;
+@@ -34,13 +38,19 @@ import java.util.Set;
+  * mode. Outside edit mode the hidden items are simply left out. A short tip about this is shown on
+  * the first three times the menu opens.
+  *
+- * <p>Only the items on the list below can be hidden, and they are remembered by a name of their
+- * own rather than by their resource id, which is only stable within one build. Settings, Exit and
+- * the row of buttons at the top are never on it.
++ * <p>Every item can be hidden except Settings, and they are remembered by a name of their own
++ * rather than by their resource id, which is only stable within one build. The buttons in the row
++ * at the top (back, forward, bookmark, download, reload) are hidden one by one.
++ *
++ * <p>In edit mode every item is made tappable, including those the menu greys out for the page
++ * being viewed. The menu does not deliver a tap on a greyed item at all, so without this the items
++ * that happened not to apply to the current page could not be chosen. Leaving edit mode builds the
++ * menu again, which brings back the real state of each item.
+  */
+ @NullMarked
+ public final class BareAppMenuCustomization {
+     private static final int TIP_LIMIT = 3;
++    private static final int FADED_ALPHA = 90;
+ 
+     /** The hideable items: a stable name, then the id the menu gives that item. */
+     private static final String[] KEYS = {
+@@ -75,6 +85,33 @@ public final class BareAppMenuCustomization {
+         "lens",
+         "image_descriptions",
+         "listen_to_feed",
++        "add_tab_to_new_group",
++        "add_to_group",
++        "add_tab_to_group",
++        "bookmarks",
++        "bookmarks_menu",
++        "reading_list",
++        "customize_new_tab_page",
++        "exit",
++        "close_all_tabs",
++        "close_all_incognito_tabs",
++        "select_tabs",
++        "update",
++        "back",
++        "forward",
++        "bookmark_this_page",
++        "reload",
++        "about",
++        "ai_mode",
++        "passwords_and_autofill",
++        "payment_methods",
++        "addresses",
++        "password_manager",
++        "save_and_share",
++        "more_tools",
++        "help_menu",
++        "default_browser",
++        "managed_by",
+     };
+ 
+     private static final int[] IDS = {
+@@ -109,6 +146,33 @@ public final class BareAppMenuCustomization {
+         R.id.lens_overlay_menu_id,
+         R.id.get_image_descriptions_id,
+         R.id.listen_to_feed_id,
++        R.id.add_tab_to_new_group_menu_id,
++        R.id.add_to_group_menu_id,
++        R.id.add_tab_to_group_menu_id,
++        R.id.all_bookmarks_menu_id,
++        R.id.bookmarks_parent_menu_id,
++        R.id.reading_list_parent_menu_id,
++        R.id.ntp_customization_id,
++        R.id.bare_exit_id,
++        R.id.close_all_tabs_menu_id,
++        R.id.close_all_incognito_tabs_menu_id,
++        R.id.menu_select_tabs,
++        R.id.update_menu_id,
++        R.id.back_menu_id,
++        R.id.forward_menu_id,
++        R.id.bookmark_this_page_id,
++        R.id.reload_menu_id,
++        R.id.about_chrome_menu_id,
++        R.id.glic_menu_id,
++        R.id.passwords_and_autofill_parent_menu_id,
++        R.id.payment_methods_menu_id,
++        R.id.addresses_and_more_menu_id,
++        R.id.google_password_manager_menu_id,
++        R.id.save_and_share_parent_menu_id,
++        R.id.more_tools_menu_id,
++        R.id.help_parent_menu_id,
++        R.id.default_browser_promo_menu_id,
++        R.id.managed_by_menu_id,
+     };
+ 
+     private static boolean sEditMode;
+@@ -133,6 +197,7 @@ public final class BareAppMenuCustomization {
+                 || id == R.id.preferences_id
+                 || id == R.id.bare_exit_id
+                 || id == R.id.bare_menu_tip_id
++                || id == R.id.bare_menu_tip_never_id
+                 || id == R.id.bare_menu_done_id
+                 || id == R.id.bare_menu_edit_help_id
+                 || id == R.id.bare_menu_hidden_header_id;
+@@ -210,14 +275,16 @@ public final class BareAppMenuCustomization {
+         List<ListItem> hiddenItems = new ArrayList<>();
+         for (int i = list.size() - 1; i >= 0; i--) {
+             ListItem item = list.get(i);
+-            if (item.type != AppMenuItemType.STANDARD
+-                    && item.type != AppMenuItemType.STANDARD_NO_ICON) {
++            if (item.type == AppMenuItemType.BUTTON_ROW) {
++                if (applyToButtonRow(context, item, hidden)) list.removeAt(i);
+                 continue;
+             }
++            if (!isRowType(item.type)) continue;
+             String key = keyFor(item.model.get(AppMenuItemProperties.MENU_ITEM_ID));
+             if (key == null) continue;
+             boolean isHidden = hidden.contains(key);
+             if (sEditMode) {
++                item.model.set(AppMenuItemProperties.ENABLED, true);
+                 item.model.set(
+                         AppMenuItemProperties.END_ICON,
+                         AppCompatResources.getDrawable(
+@@ -267,19 +334,81 @@ public final class BareAppMenuCustomization {
+                 for (ListItem item : hiddenItems) list.add(item);
+             }
+         } else if (shouldShowTip()) {
+-            list.add(
+-                    at,
+-                    textRow(
+-                            context,
+-                            theme,
+-                            isIconAtStart,
+-                            R.id.bare_menu_tip_id,
+-                            R.string.bare_menu_tip,
+-                            true));
++            list.add(at, tipRow(context, theme, isIconAtStart));
+         }
+         return list;
+     }
+ 
++    /**
++     * Whether an item of this type is a choice the user can hide. It is everything except the
++     * pieces that only lay the menu out. The menu has types of its own beyond the standard ones
++     * (the Incognito row, the update row), and those are choices too.
++     */
++    private static boolean isRowType(int type) {
++        return type != AppMenuItemType.DIVIDER
++                && type != AppMenuItemType.BUTTON_ROW
++                && type != AppMenuItemType.EMPTY
++                && type != AppMenuItemType.HEADER
++                && type != AppMenuItemType.SUBMENU_HEADER;
++    }
++
++    @VisibleForTesting
++    static int[] idsForTesting() {
++        return IDS.clone();
++    }
++
++    /**
++     * Edit mode and hiding for the row of buttons at the top. Returns whether the whole row is now
++     * empty and has to go.
++     */
++    private static boolean applyToButtonRow(Context context, ListItem row, Set<String> hidden) {
++        ModelList buttons = row.model.get(AppMenuItemProperties.ADDITIONAL_ICONS);
++        if (buttons == null) return false;
++        for (int i = buttons.size() - 1; i >= 0; i--) {
++            PropertyModel button = buttons.get(i).model;
++            String key = keyFor(button.get(AppMenuItemProperties.MENU_ITEM_ID));
++            if (key == null) continue;
++            boolean isHidden = hidden.contains(key);
++            if (sEditMode) {
++                button.set(AppMenuItemProperties.ENABLED, true);
++                if (isHidden) {
++                    // The eye does not fit on a button, so a hidden one is drawn faded instead.
++                    Drawable icon = button.get(AppMenuItemProperties.ICON);
++                    if (icon != null && icon.getConstantState() != null) {
++                        Drawable faded = icon.getConstantState().newDrawable().mutate();
++                        faded.setAlpha(FADED_ALPHA);
++                        button.set(AppMenuItemProperties.ICON, faded);
++                    }
++                }
++            } else if (isHidden) {
++                buttons.removeAt(i);
++            }
++        }
++        return !sEditMode && buttons.size() == 0;
++    }
++
++    /**
++     * The tip: a finger pressing, a few words, and a small cross that stops it being shown again.
++     * One row, the height of any other, so the menu does not change size.
++     */
++    private static ListItem tipRow(Context context, AppMenuItemTheme theme, boolean isIconAtStart) {
++        PropertyModel model =
++                AppMenuItemUtils.buildModelForMenuItemWithSecondaryButton(
++                        context,
++                        theme,
++                        R.id.bare_menu_tip_id,
++                        R.string.bare_menu_tip,
++                        R.drawable.bare_menu_tap,
++                        R.id.bare_menu_tip_never_id,
++                        context.getString(R.string.bare_menu_tip_never),
++                        assumeNonNull(
++                                AppCompatResources.getDrawable(context, R.drawable.bare_menu_close)),
++                        isIconAtStart);
++        model.set(AppMenuItemProperties.TITLE_CONDENSED, context.getString(R.string.bare_menu_tip));
++        model.set(AppMenuItemProperties.ENABLED, true);
++        return new ListItem(AppMenuItemType.TITLE_BUTTON, model);
++    }
++
+     private static ListItem textRow(
+             Context context,
+             AppMenuItemTheme theme,
+@@ -321,7 +450,13 @@ public final class BareAppMenuCustomization {
+             }
+             return true;
+         }
++        if (id == R.id.bare_menu_tip_never_id) {
++            dismissTip();
++            return true;
++        }
+         if (id == R.id.bare_menu_tip_id) {
++            // Tapping the tip itself is the first step of what it describes.
++            sEditMode = true;
+             dismissTip();
+             return true;
+         }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+index f1e16b44b89..2a87277bf57 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+@@ -70,6 +70,7 @@ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.app.ChromeActivity;
+ import org.chromium.chrome.browser.bare.settings.BareToolbarActionUi;
++import org.chromium.chrome.browser.bare.settings.BareToolbarPreviewBinder;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.preferences.Pref;
+@@ -130,6 +131,7 @@ public class BareWelcomeOverlay {
+     private static final String KEY_DRAFT_ADDRESS_BAR_TOP = "draft_address_bar_top";
+     private static final String KEY_DRAFT_EXTERNAL_DOWNLOADS = "draft_external_downloads";
+     private static final String KEY_DRAFT_DOWNLOAD_COMPONENT = "draft_download_component";
++    private static final String KEY_DRAFT_DOWNLOAD_SIGN_IN = "draft_download_sign_in";
+     private static final String KEY_DRAFT_BACKGROUND_MEDIA = "draft_background_media";
+     private static final String KEY_DRAFT_BACKGROUND_MEDIA_KNOWN = "draft_background_media_known";
+     private static final String KEY_DRAFT_UPDATES = "draft_updates";
+@@ -210,6 +212,7 @@ public class BareWelcomeOverlay {
+         boolean externalDownloadManager;
+         // Flattened ComponentName of the chosen download app, empty to ask each time.
+         String downloadManagerComponent = "";
++        boolean downloadSignIn;
+         boolean backgroundMedia;
+         // 0 automatic, 1 manual, 2 manual with a weekly local reminder. The reminder is a timer,
+         // not a request, so it belongs with the mode rather than being a separate network choice.
+@@ -735,7 +738,10 @@ public class BareWelcomeOverlay {
+         private @Nullable TextView mFirstButtonValue;
+         private @Nullable TextView mSecondButtonValue;
+ 
++        private @Nullable View mToolbarIllustration;
++
+         private void buildToolbarPage(View page) {
++            mToolbarIllustration = page.findViewById(R.id.bare_toolbar_illustration);
+             View minimal = page.findViewById(R.id.bare_row_minimal);
+             setUpRow(
+                     minimal,
+@@ -802,8 +808,20 @@ public class BareWelcomeOverlay {
+             updateToolbarRows();
+         }
+ 
++        /** Redraws the toolbar picture from what has been picked so far. */
++        private void updateToolbarIllustration() {
++            if (mToolbarIllustration == null) return;
++            BareToolbarPreviewBinder.bind(
++                    mToolbarIllustration,
++                    mChoices.firstButton,
++                    mChoices.secondButton,
++                    mChoices.minimalLayout,
++                    slot -> chooseButton(slot));
++        }
++
+         /** The bottom bar's own choices mean nothing in the layout that has no bottom bar. */
+         private void updateToolbarRows() {
++            updateToolbarIllustration();
+             int visibility = mChoices.minimalLayout ? View.GONE : View.VISIBLE;
+             for (@Nullable View row : new View[] {mFirstButtonRow, mSecondButtonRow, mBarSwipeRow}) {
+                 if (row != null) row.setVisibility(visibility);
+@@ -862,6 +880,7 @@ public class BareWelcomeOverlay {
+                             mChoices.secondButton = chosen;
+                         }
+                         mChoices.buttonsTouched = true;
++                        updateToolbarIllustration();
+                         if (mFirstButtonValue != null) {
+                             mFirstButtonValue.setText(buttonLabel(mChoices.firstButton));
+                         }
+@@ -985,6 +1004,18 @@ public class BareWelcomeOverlay {
+                             });
+         }
+ 
++        private @Nullable TextView mDownloadValue;
++        private @Nullable View mDownloadSignInRow;
++        private @Nullable View mDownloadSignInDivider;
++        private @Nullable MaterialSwitch mDownloadSignInSwitch;
++
++        /** Sharing sign-in is about the app a download is handed to, so it needs one. */
++        private void updateDownloadSignInRow() {
++            int visibility = mChoices.externalDownloadManager ? View.VISIBLE : View.GONE;
++            if (mDownloadSignInRow != null) mDownloadSignInRow.setVisibility(visibility);
++            if (mDownloadSignInDivider != null) mDownloadSignInDivider.setVisibility(visibility);
++        }
++
+         private void buildBrowsingPage(View page) {
+             View downloads = page.findViewById(R.id.bare_row_downloads);
+             setUpRow(
+@@ -992,7 +1023,24 @@ public class BareWelcomeOverlay {
+                     R.drawable.ic_file_download_24dp,
+                     R.string.bare_welcome_opt_downloads,
+                     R.string.bare_welcome_hint_downloads);
+-            valueRow(downloads, downloadLabel(), this::chooseDownloadManager);
++            mDownloadValue = valueRow(downloads, downloadLabel(), this::chooseDownloadManager);
++
++            mDownloadSignInRow = page.findViewById(R.id.bare_row_download_sign_in);
++            mDownloadSignInDivider = page.findViewById(R.id.bare_divider_download_sign_in);
++            setUpRow(
++                    mDownloadSignInRow,
++                    R.drawable.ic_file_download_24dp,
++                    R.string.bare_welcome_opt_download_sign_in,
++                    R.string.bare_welcome_hint_download_sign_in);
++            mDownloadSignInSwitch =
++                    switchRow(
++                            mDownloadSignInRow,
++                            mChoices.downloadSignIn,
++                            on -> {
++                                mChoices.downloadSignIn = on;
++                                saveDraft();
++                            });
++            updateDownloadSignInRow();
+ 
+             View media = page.findViewById(R.id.bare_row_background_media);
+             setUpRow(
+@@ -1567,6 +1615,13 @@ public class BareWelcomeOverlay {
+                             mChoices.externalDownloadManager = true;
+                             mChoices.downloadManagerComponent = component;
+                         }
++                        if (!mChoices.externalDownloadManager) {
++                            mChoices.downloadSignIn = false;
++                            if (mDownloadSignInSwitch != null) {
++                                mDownloadSignInSwitch.setChecked(false);
++                            }
++                        }
++                        updateDownloadSignInRow();
+                         value.setText(downloadLabel());
+                         saveDraft();
+                     });
+@@ -1743,6 +1798,7 @@ public class BareWelcomeOverlay {
+                     .putBoolean(KEY_DRAFT_ADDRESS_BAR_TOP, mChoices.addressBarOnTop)
+                     .putBoolean(KEY_DRAFT_EXTERNAL_DOWNLOADS, mChoices.externalDownloadManager)
+                     .putString(KEY_DRAFT_DOWNLOAD_COMPONENT, mChoices.downloadManagerComponent)
++                    .putBoolean(KEY_DRAFT_DOWNLOAD_SIGN_IN, mChoices.downloadSignIn)
+                     .putBoolean(KEY_DRAFT_BACKGROUND_MEDIA, mChoices.backgroundMedia)
+                     .putBoolean(KEY_DRAFT_BACKGROUND_MEDIA_KNOWN, mChoices.backgroundMediaKnown)
+                     .putInt(KEY_DRAFT_UPDATES, mChoices.updateChoice)
+@@ -1778,6 +1834,9 @@ public class BareWelcomeOverlay {
+                 prefs.getBoolean(KEY_DRAFT_EXTERNAL_DOWNLOADS, choices.externalDownloadManager);
+         choices.downloadManagerComponent =
+                 prefs.getString(KEY_DRAFT_DOWNLOAD_COMPONENT, choices.downloadManagerComponent);
++        choices.downloadSignIn =
++                prefs.getBoolean(KEY_DRAFT_DOWNLOAD_SIGN_IN, choices.downloadSignIn)
++                        && choices.externalDownloadManager;
+         choices.backgroundMedia =
+                 prefs.getBoolean(KEY_DRAFT_BACKGROUND_MEDIA, choices.backgroundMedia);
+         choices.backgroundMediaKnown =
+@@ -1815,6 +1874,7 @@ public class BareWelcomeOverlay {
+                 .remove(KEY_DRAFT_ADDRESS_BAR_TOP)
+                 .remove(KEY_DRAFT_EXTERNAL_DOWNLOADS)
+                 .remove(KEY_DRAFT_DOWNLOAD_COMPONENT)
++                .remove(KEY_DRAFT_DOWNLOAD_SIGN_IN)
+                 .remove(KEY_DRAFT_BACKGROUND_MEDIA)
+                 .remove(KEY_DRAFT_BACKGROUND_MEDIA_KNOWN)
+                 .remove(KEY_DRAFT_UPDATES)
+@@ -1887,6 +1947,10 @@ public class BareWelcomeOverlay {
+                 prefs.readString(
+                         ChromePreferenceKeys.DOWNLOAD_EXTERNAL_MANAGER_PACKAGE,
+                         choices.downloadManagerComponent);
++        choices.downloadSignIn =
++                choices.externalDownloadManager
++                        && prefs.readBoolean(
++                                ChromePreferenceKeys.DOWNLOAD_EXTERNAL_SEND_SIGN_IN, false);
+         if (BareUpdateCheck.getMode() == BareUpdateCheck.UpdateMode.MANUAL) {
+             choices.updateChoice = BareUpdateCheck.isReminderEnabled() ? 2 : 1;
+         }
+@@ -1921,6 +1985,10 @@ public class BareWelcomeOverlay {
+                 .writeString(
+                         ChromePreferenceKeys.DOWNLOAD_EXTERNAL_MANAGER_PACKAGE,
+                         choices.downloadManagerComponent);
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(
++                        ChromePreferenceKeys.DOWNLOAD_EXTERNAL_SEND_SIGN_IN,
++                        choices.externalDownloadManager && choices.downloadSignIn);
+         ChromeSharedPreferences.getInstance()
+                 .writeBoolean(
+                         ChromePreferenceKeys.BARE_BUNDLED_AD_BLOCKER_ENABLED, choices.adBlocker);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
+new file mode 100644
+index 00000000000..a9be5264bdb
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
+@@ -0,0 +1,113 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.settings;
++
++import android.content.Context;
++import android.content.res.ColorStateList;
++import android.view.View;
++import android.widget.ImageView;
++
++import androidx.core.widget.ImageViewCompat;
++
++import org.chromium.base.Callback;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.ui.actions.ActionId;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++
++/**
++ * Fills in the toolbar picture ({@code bare_toolbar_preview}) for a given arrangement.
++ *
++ * <p>Settings draws it from what is stored and the welcome draws it from what the user has picked
++ * so far, so the two look the same because they run this one piece of code.
++ */
++@NullMarked
++public final class BareToolbarPreviewBinder {
++    private static final @BareToolbarSlot int[] CONFIGURABLE_SLOTS = {
++        BareToolbarSlot.HOME, BareToolbarSlot.EXTRA
++    };
++
++    private BareToolbarPreviewBinder() {}
++
++    /**
++     * Draws the picture.
++     *
++     * @param root The inflated {@code bare_toolbar_preview}.
++     * @param first The action in the first changeable position.
++     * @param second The action in the second changeable position.
++     * @param minimal Whether to draw the one-row layout.
++     * @param onSlotClicked Called with the slot pressed, or null to leave the picture inert.
++     */
++    public static void bind(
++            View root,
++            @ActionId int first,
++            @ActionId int second,
++            boolean minimal,
++            @Nullable Callback<Integer> onSlotClicked) {
++        Context context = root.getContext();
++        root.findViewById(R.id.bare_preview_minimal)
++                .setVisibility(minimal ? View.VISIBLE : View.GONE);
++        root.findViewById(R.id.bare_preview_full).setVisibility(minimal ? View.GONE : View.VISIBLE);
++
++        if (minimal) {
++            bindFixed(root, R.id.bare_preview_minimal_new_tab, ActionId.NEW_TAB);
++            bindFixed(root, R.id.bare_preview_minimal_tab_switcher, ActionId.TAB_SWITCHER);
++            bindFixed(root, R.id.bare_preview_minimal_app_menu, ActionId.APP_MENU);
++            return;
++        }
++
++        for (@BareToolbarSlot int slot : CONFIGURABLE_SLOTS) {
++            ImageView view = root.findViewById(viewIdForSlot(slot));
++            @ActionId int actionId = slot == BareToolbarSlot.HOME ? first : second;
++
++            setIcon(view, actionId);
++            view.setContentDescription(
++                    context.getString(
++                            R.string.bare_toolbar_position_description,
++                            context.getString(BareToolbarActionUi.positionNameFor(slot)),
++                            context.getString(BareToolbarActionUi.labelFor(actionId))));
++            view.setOnClickListener(
++                    onSlotClicked == null ? null : v -> onSlotClicked.onResult(slot));
++            // After the listener: setting one makes a view clickable, even when it is null.
++            view.setClickable(onSlotClicked != null);
++            view.setFocusable(onSlotClicked != null);
++        }
++
++        bindFixed(root, R.id.bare_preview_new_tab, ActionId.NEW_TAB);
++        bindFixed(root, R.id.bare_preview_tab_switcher, ActionId.TAB_SWITCHER);
++        bindFixed(root, R.id.bare_preview_slot_app_menu, ActionId.APP_MENU);
++    }
++
++    /** The positions the user cannot change are drawn, and say so if asked. */
++    private static void bindFixed(View root, int viewId, @ActionId int actionId) {
++        Context context = root.getContext();
++        ImageView view = root.findViewById(viewId);
++        setIcon(view, actionId);
++        view.setContentDescription(
++                context.getString(
++                        R.string.bare_toolbar_position_fixed_description,
++                        context.getString(BareToolbarActionUi.labelFor(actionId))));
++    }
++
++    /**
++     * Draws one icon in the colour the toolbar draws its icons in. Tinted because several of
++     * these are black assets that the real bar tints as it draws them.
++     */
++    private static void setIcon(ImageView view, @ActionId int actionId) {
++        view.setImageResource(BareToolbarActionUi.iconFor(actionId));
++        ImageViewCompat.setImageTintList(
++                view,
++                ColorStateList.valueOf(
++                        SemanticColorUtils.getDefaultIconColor(view.getContext())));
++    }
++
++    private static int viewIdForSlot(@BareToolbarSlot int slot) {
++        return slot == BareToolbarSlot.HOME
++                ? R.id.bare_preview_slot_home
++                : R.id.bare_preview_slot_extra;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java
+index 4feeb39c1f7..cd0928d79b0 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java
+@@ -5,12 +5,9 @@
+ package org.chromium.chrome.browser.bare.settings;
+ 
+ import android.content.Context;
+-import android.content.res.ColorStateList;
+ import android.util.AttributeSet;
+ import android.view.View;
+-import android.widget.ImageView;
+ 
+-import androidx.core.widget.ImageViewCompat;
+ import androidx.preference.Preference;
+ import androidx.preference.PreferenceViewHolder;
+ 
+@@ -18,17 +15,18 @@ import org.chromium.base.Callback;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+-import org.chromium.chrome.browser.ui.actions.ActionId;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.ui.bottombar.BareToolbarLayout;
+ import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
+-import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ 
+ /**
+- * A picture of the bottom bar, with the two positions the user can change made pressable.
++ * A picture of the toolbar, with the two positions the user can change made pressable.
+  *
+  * <p>Shown instead of two rows naming two positions, because the thing being arranged is a row of
+  * buttons and a list is a poor drawing of one. Pressing a button in the picture is the same
+- * gesture as pressing it on the toolbar, which is where the user has seen it.
++ * gesture as pressing it on the toolbar, which is where the user has seen it. The welcome draws
++ * the same picture, through {@link BareToolbarPreviewBinder}.
+  *
+  * <p>Which positions can be changed is said by the picture itself. The three that cannot are
+  * drawn in the row exactly where they are on the bar, and do not light up or respond when pressed;
+@@ -41,10 +39,6 @@ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ @NullMarked
+ public class BareToolbarPreviewPreference extends Preference {
+ 
+-    private static final @BareToolbarSlot int[] CONFIGURABLE_SLOTS = {
+-        BareToolbarSlot.HOME, BareToolbarSlot.EXTRA
+-    };
+-
+     private @Nullable Callback<Integer> mOnSlotClicked;
+     private @Nullable View mRoot;
+ 
+@@ -72,59 +66,12 @@ public class BareToolbarPreviewPreference extends Preference {
+     }
+ 
+     private void bind(View root) {
+-        for (@BareToolbarSlot int slot : CONFIGURABLE_SLOTS) {
+-            ImageView view = root.findViewById(viewIdForSlot(slot));
+-            @ActionId int actionId = BareToolbarLayout.actionForSlot(slot);
+-
+-            setIcon(view, actionId);
+-            view.setContentDescription(
+-                    getContext()
+-                            .getString(
+-                                    R.string.bare_toolbar_position_description,
+-                                    getContext()
+-                                            .getString(
+-                                                    BareToolbarActionUi.positionNameFor(slot)),
+-                                    getContext()
+-                                            .getString(
+-                                                    BareToolbarActionUi.labelFor(actionId))));
+-            view.setOnClickListener(
+-                    v -> {
+-                        if (mOnSlotClicked != null) mOnSlotClicked.onResult(slot);
+-                    });
+-        }
+-
+-        bindFixed(root, R.id.bare_preview_new_tab, ActionId.NEW_TAB);
+-        bindFixed(root, R.id.bare_preview_tab_switcher, ActionId.TAB_SWITCHER);
+-        bindFixed(root, R.id.bare_preview_slot_app_menu, ActionId.APP_MENU);
+-    }
+-
+-    /** The three positions the user cannot change are drawn, and say so if asked. */
+-    private void bindFixed(View root, int viewId, @ActionId int actionId) {
+-        ImageView view = root.findViewById(viewId);
+-        setIcon(view, actionId);
+-        view.setContentDescription(
+-                getContext()
+-                        .getString(
+-                                R.string.bare_toolbar_position_fixed_description,
+-                                getContext().getString(BareToolbarActionUi.labelFor(actionId))));
+-    }
+-
+-    /**
+-     * Draws one icon in the colour the toolbar's icons are drawn in.
+-     *
+-     * <p>Tinted rather than taken as-is because several of these are black assets that the real
+-     * bar tints as it draws them; shown untinted they would be the only dark things on the page.
+-     */
+-    private void setIcon(ImageView view, @ActionId int actionId) {
+-        view.setImageResource(BareToolbarActionUi.iconFor(actionId));
+-        ImageViewCompat.setImageTintList(
+-                view,
+-                ColorStateList.valueOf(SemanticColorUtils.getDefaultIconColor(getContext())));
+-    }
+-
+-    private static int viewIdForSlot(@BareToolbarSlot int slot) {
+-        return slot == BareToolbarSlot.HOME
+-                ? R.id.bare_preview_slot_home
+-                : R.id.bare_preview_slot_extra;
++        BareToolbarPreviewBinder.bind(
++                root,
++                BareToolbarLayout.actionForSlot(BareToolbarSlot.HOME),
++                BareToolbarLayout.actionForSlot(BareToolbarSlot.EXTRA),
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, false),
++                mOnSlotClicked);
+     }
+ }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
+index c9e0fb869c9..9c4737a378d 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
+@@ -143,7 +143,8 @@ public class DownloadController {
+ 
+     /** Whether the user allowed their cookies to go with a download handed to another app. */
+     @CalledByNative
+-    private static boolean shouldSendSignInToExternalDownloadManager() {
++    @VisibleForTesting
++    static boolean shouldSendSignInToExternalDownloadManager() {
+         return ChromeSharedPreferences.getInstance()
+                 .readBoolean(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_SEND_SIGN_IN, false);
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/feedback/HelpAndFeedbackLauncherImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/feedback/HelpAndFeedbackLauncherImpl.java
+index b2efe1f4727..4f5a35bfdc2 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/feedback/HelpAndFeedbackLauncherImpl.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/feedback/HelpAndFeedbackLauncherImpl.java
+@@ -15,18 +15,15 @@ import android.app.Activity;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.net.Uri;
+-import android.os.SystemClock;
+ import android.provider.Browser;
+ import android.text.TextUtils;
+ 
+ import org.chromium.base.ServiceLoaderUtil;
+ import org.chromium.base.ThreadUtils;
+-import org.chromium.base.metrics.RecordHistogram;
+ import org.chromium.base.metrics.RecordUserAction;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+-import org.chromium.chrome.browser.crash.ChromePureJavaExceptionReporter;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.profiles.ProfileKeyedMap;
+ import org.chromium.components.embedder_support.util.UrlUtilities;
+@@ -38,8 +35,12 @@ import java.util.Map;
+  */
+ @NullMarked
+ public class HelpAndFeedbackLauncherImpl implements HelpAndFeedbackLauncher {
+-    protected static final String FALLBACK_SUPPORT_URL =
+-            "https://support.google.com/chrome/topic/6069782";
++    /**
++     * Where Help and Feedback lead. Bare has no help service or feedback form of its own, so every
++     * entry point opens the project page in a tab, where the guides and the issue tracker are.
++     */
++    public static final String FALLBACK_SUPPORT_URL =
++            "https://github.com/BareBrowser/bare-browser";
+ 
+     private static @Nullable ProfileKeyedMap<HelpAndFeedbackLauncher> sProfileToLauncherMap;
+     private final HelpAndFeedbackLauncherDelegate mDelegate;
+@@ -81,18 +82,7 @@ public class HelpAndFeedbackLauncherImpl implements HelpAndFeedbackLauncher {
+     @Override
+     public void show(final Activity activity, final String helpContext, @Nullable String url) {
+         RecordUserAction.record("MobileHelpAndFeedback");
+-        ScreenshotTask screenshotTask =
+-                FeedbackPolicyManager.getInstance().isUserFeedbackAllowed()
+-                        ? new ScreenshotTask(activity)
+-                        : null;
+-        new ChromeFeedbackCollector(
+-                activity,
+-                /* categoryTag= */ null,
+-                /* description= */ null,
+-                screenshotTask,
+-                new ChromeFeedbackCollector.InitParams(mProfile, url, helpContext),
+-                collector -> mDelegate.show(activity, helpContext, collector),
+-                mProfile);
++        launchFallbackSupportUri(activity);
+     }
+ 
+     /**
+@@ -116,24 +106,7 @@ public class HelpAndFeedbackLauncherImpl implements HelpAndFeedbackLauncher {
+             @Nullable final String categoryTag,
+             @ScreenshotMode int screenshotMode,
+             @Nullable final String feedbackContext) {
+-        if (!FeedbackPolicyManager.getInstance().isUserFeedbackAllowed()) {
+-            reportDisabledFeedbackRequest();
+-            return;
+-        }
+-        long startTime = SystemClock.elapsedRealtime();
+-        new ChromeFeedbackCollector(
+-                activity,
+-                categoryTag,
+-                /* description= */ null,
+-                new ScreenshotTask(activity, screenshotMode),
+-                new ChromeFeedbackCollector.InitParams(mProfile, url, feedbackContext),
+-                (collector) -> {
+-                    RecordHistogram.recordLongTimesHistogram(
+-                            "Feedback.Duration.FormOpenToSubmit",
+-                            SystemClock.elapsedRealtime() - startTime);
+-                    mDelegate.showFeedback(activity, collector);
+-                },
+-                mProfile);
++        launchFallbackSupportUri(activity);
+     }
+ 
+     /**
+@@ -172,18 +145,7 @@ public class HelpAndFeedbackLauncherImpl implements HelpAndFeedbackLauncher {
+             @Nullable String url,
+             @Nullable final String categoryTag,
+             @Nullable final Map<String, String> feedContext) {
+-        if (!FeedbackPolicyManager.getInstance().isUserFeedbackAllowed()) {
+-            reportDisabledFeedbackRequest();
+-            return;
+-        }
+-        new FeedFeedbackCollector(
+-                activity,
+-                categoryTag,
+-                /* description= */ null,
+-                new ScreenshotTask(activity),
+-                new FeedFeedbackCollector.InitParams(mProfile, url, feedContext),
+-                collector -> mDelegate.showFeedback(activity, collector),
+-                mProfile);
++        launchFallbackSupportUri(activity);
+     }
+ 
+     /**
+@@ -239,12 +201,4 @@ public class HelpAndFeedbackLauncherImpl implements HelpAndFeedbackLauncher {
+         intent.setPackage(context.getPackageName());
+         context.startActivity(intent);
+     }
+-
+-    private void reportDisabledFeedbackRequest() {
+-        Throwable throwable =
+-                new Throwable(
+-                        "Feedback requested when disallowed by policy. This is not a crash. See"
+-                                + " https://crbug.com/467060116 for details.");
+-        ChromePureJavaExceptionReporter.reportJavaException(throwable);
+-    }
+ }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/IncognitoMenuItemViewBinder.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/IncognitoMenuItemViewBinder.java
+index 8a8cf1a71be..eddb3d138cf 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/IncognitoMenuItemViewBinder.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/IncognitoMenuItemViewBinder.java
+@@ -4,6 +4,7 @@
+ 
+ package org.chromium.chrome.browser.tabbed_mode;
+ 
++import android.graphics.drawable.Drawable;
+ import android.view.View;
+ import android.widget.ImageView;
+ 
+@@ -36,7 +37,17 @@ class IncognitoMenuItemViewBinder {
+             if (model.get(AppMenuItemProperties.MANAGED)) {
+                 image.setImageResource(R.drawable.ic_domain);
+                 image.setVisibility(View.VISIBLE);
+-            } else {
++            } else if (model.get(AppMenuItemProperties.END_ICON) == null) {
++                image.setVisibility(View.GONE);
++            }
++        } else if (key == AppMenuItemProperties.END_ICON) {
++            // Bare: the eye drawn on each row while the menu is being edited.
++            ImageView image = view.findViewById(R.id.trailing_icon);
++            Drawable endIcon = model.get(AppMenuItemProperties.END_ICON);
++            if (endIcon != null) {
++                image.setImageDrawable(endIcon);
++                image.setVisibility(View.VISIBLE);
++            } else if (!model.get(AppMenuItemProperties.MANAGED)) {
+                 image.setVisibility(View.GONE);
+             }
+         } else if (key == AppMenuItemProperties.TITLE) {
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index 1bb0b7b70f5..fc342996ea2 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -445,7 +445,9 @@ if (is_android) {
+       "src/org/chromium/chrome/browser/bare/BareMediaProbeUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocolUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/BareWelcomeDownloadChoicesUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareWelcomeToolbarChoicesUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinderUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java",
+       "src/org/chromium/chrome/browser/BrowserExitReasonTrackerUnitTest.java",
+       "src/org/chromium/chrome/browser/ChromeActionModeHandlerUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomizationUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomizationUnitTest.java
+index b10fb7ac009..19477023b54 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomizationUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomizationUnitTest.java
+@@ -93,8 +93,23 @@ public class BareAppMenuCustomizationUnitTest {
+     public void testNamesAreStableAndSettingsCannotBeHidden() {
+         assertEquals("share", BareAppMenuCustomization.keyFor(R.id.share_menu_id));
+         assertNull(BareAppMenuCustomization.keyFor(R.id.preferences_id));
+-        assertNull(BareAppMenuCustomization.keyFor(R.id.bare_exit_id));
+         assertNull(BareAppMenuCustomization.keyFor(R.id.icon_row_menu_id));
++        // Everything else the menu can hold is on the list, Exit and the top buttons included.
++        assertEquals("exit", BareAppMenuCustomization.keyFor(R.id.bare_exit_id));
++        assertEquals("back", BareAppMenuCustomization.keyFor(R.id.back_menu_id));
++        assertEquals("reload", BareAppMenuCustomization.keyFor(R.id.reload_menu_id));
++        assertEquals(
++                "add_tab_to_new_group",
++                BareAppMenuCustomization.keyFor(R.id.add_tab_to_new_group_menu_id));
++    }
++
++    @Test
++    public void testNoTwoItemsShareAName() {
++        java.util.Set<String> seen = new java.util.HashSet<>();
++        int[] ids = BareAppMenuCustomization.idsForTesting();
++        for (int id : ids) {
++            assertTrue(seen.add(BareAppMenuCustomization.keyFor(id)));
++        }
+     }
+ 
+     @Test
+@@ -155,12 +170,180 @@ public class BareAppMenuCustomizationUnitTest {
+     }
+ 
+     @Test
+-    public void testTappingTheTipDismissesIt() {
++    public void testTheCrossOnTheTipStopsItForGood() {
++        PropertyModel never = item(R.id.bare_menu_tip_never_id).model;
++        assertTrue(BareAppMenuCustomization.shouldShowTip());
++        assertTrue(BareAppMenuCustomization.onRowClicked(never));
++        assertFalse(BareAppMenuCustomization.shouldShowTip());
++        assertFalse(BareAppMenuCustomization.isEditMode());
++        // And the next menu has no tip row in it.
++        ModelList list = apply(menu());
++        assertEquals(6, list.size());
++        for (int i = 0; i < list.size(); i++) {
++            assertFalse(idAt(list, i) == R.id.bare_menu_tip_id);
++        }
++    }
++
++    @Test
++    public void testTappingTheTipStartsEditingAndRetiresIt() {
+         PropertyModel tip = item(R.id.bare_menu_tip_id).model;
+         assertTrue(BareAppMenuCustomization.onRowClicked(tip));
++        assertTrue(BareAppMenuCustomization.isEditMode());
++        BareAppMenuCustomization.setEditMode(false);
+         assertFalse(BareAppMenuCustomization.shouldShowTip());
+     }
+ 
++    @Test
++    public void testTheTipIsOneCompactRowWithItsOwnCross() {
++        ModelList list = apply(menu());
++        assertEquals(7, list.size());
++        ListItem tip = list.get(0);
++        assertEquals(AppMenuItemType.TITLE_BUTTON, tip.type);
++        assertEquals(R.id.bare_menu_tip_id, tip.model.get(AppMenuItemProperties.MENU_ITEM_ID));
++        ModelList buttons = tip.model.get(AppMenuItemProperties.ADDITIONAL_ICONS);
++        assertEquals(1, buttons.size());
++        assertEquals(
++                R.id.bare_menu_tip_never_id,
++                buttons.get(0).model.get(AppMenuItemProperties.MENU_ITEM_ID));
++        assertEquals(
++                mContext.getString(R.string.bare_menu_tip_never),
++                buttons.get(0).model.get(AppMenuItemProperties.TITLE));
++    }
++
++    private static ListItem greyedItem(int id) {
++        PropertyModel model =
++                new PropertyModel.Builder(AppMenuItemProperties.ALL_KEYS)
++                        .with(AppMenuItemProperties.MENU_ITEM_ID, id)
++                        .with(AppMenuItemProperties.ENABLED, false)
++                        .build();
++        return new ListItem(AppMenuItemType.STANDARD, model);
++    }
++
++    @Test
++    public void testItemsTheMenuGreysOutCanBeChosenWhileEditing() {
++        BareAppMenuCustomization.dismissTip();
++        ModelList list = menu();
++        list.add(greyedItem(R.id.print_id));
++        // Outside edit mode a greyed item stays greyed.
++        ListItem outside = apply(list).get(list.size() - 1);
++        assertFalse(outside.model.get(AppMenuItemProperties.ENABLED));
++
++        ModelList again = menu();
++        again.add(greyedItem(R.id.print_id));
++        BareAppMenuCustomization.setEditMode(true);
++        ModelList editing = apply(again);
++        for (int i = 0; i < editing.size(); i++) {
++            ListItem each = editing.get(i);
++            if (BareAppMenuCustomization.keyFor(idAt(editing, i)) != null
++                    && each.type != AppMenuItemType.DIVIDER) {
++                assertTrue(each.model.get(AppMenuItemProperties.ENABLED));
++            }
++        }
++    }
++
++    @Test
++    public void testSubmenusAndSwitchRowsCanBeHiddenToo() {
++        BareAppMenuCustomization.dismissTip();
++        ModelList list = new ModelList();
++        list.add(item(R.id.new_tab_menu_id));
++        PropertyModel more =
++                new PropertyModel.Builder(AppMenuItemProperties.ALL_KEYS)
++                        .with(AppMenuItemProperties.MENU_ITEM_ID, R.id.more_tools_menu_id)
++                        .with(AppMenuItemProperties.ENABLED, true)
++                        .build();
++        list.add(new ListItem(AppMenuItemType.MENU_ITEM_WITH_SUBMENU, more));
++        PropertyModel desktop =
++                new PropertyModel.Builder(AppMenuItemProperties.ALL_KEYS)
++                        .with(AppMenuItemProperties.MENU_ITEM_ID, R.id.request_desktop_site_id)
++                        .with(AppMenuItemProperties.ENABLED, true)
++                        .build();
++        list.add(new ListItem(AppMenuItemType.TITLE_BUTTON, desktop));
++        list.add(item(R.id.preferences_id));
++        BareAppMenuCustomization.toggle(R.id.more_tools_menu_id);
++        BareAppMenuCustomization.toggle(R.id.request_desktop_site_id);
++        ModelList result = apply(list);
++        assertEquals(2, result.size());
++        assertEquals(R.id.preferences_id, idAt(result, 1));
++    }
++
++    @Test
++    public void testSettingsIsTheOnlyItemThatCannotBeChosen() {
++        BareAppMenuCustomization.dismissTip();
++        BareAppMenuCustomization.setEditMode(true);
++        PropertyModel settings = item(R.id.preferences_id).model;
++        assertTrue(BareAppMenuCustomization.onRowClicked(settings));
++        assertTrue(BareAppMenuCustomization.getHidden().isEmpty());
++        BareAppMenuCustomization.toggle(R.id.preferences_id);
++        assertTrue(BareAppMenuCustomization.getHidden().isEmpty());
++        // Exit can be.
++        assertTrue(BareAppMenuCustomization.onRowClicked(item(R.id.bare_exit_id).model));
++        assertTrue(BareAppMenuCustomization.getHidden().contains("exit"));
++    }
++
++    private static PropertyModel button(int id) {
++        return new PropertyModel.Builder(AppMenuItemProperties.ALL_ICON_KEYS)
++                .with(AppMenuItemProperties.MENU_ITEM_ID, id)
++                .with(AppMenuItemProperties.ENABLED, false)
++                .build();
++    }
++
++    private ListItem buttonRow() {
++        java.util.List<PropertyModel> buttons = new java.util.ArrayList<>();
++        buttons.add(button(R.id.back_menu_id));
++        buttons.add(button(R.id.forward_menu_id));
++        buttons.add(button(R.id.reload_menu_id));
++        return new ListItem(
++                AppMenuItemType.BUTTON_ROW,
++                AppMenuItemUtils.buildModelForIconRow(R.id.icon_row_menu_id, buttons, false));
++    }
++
++    @Test
++    public void testTopButtonsAreHiddenOneByOneAndTheRowGoesWhenEmpty() {
++        BareAppMenuCustomization.dismissTip();
++        ModelList list = new ModelList();
++        list.add(buttonRow());
++        list.add(item(R.id.preferences_id));
++        BareAppMenuCustomization.toggle(R.id.forward_menu_id);
++        ModelList result = apply(list);
++        assertEquals(2, result.size());
++        ModelList icons = result.get(0).model.get(AppMenuItemProperties.ADDITIONAL_ICONS);
++        assertEquals(2, icons.size());
++        assertEquals(
++                R.id.back_menu_id, icons.get(0).model.get(AppMenuItemProperties.MENU_ITEM_ID));
++        assertEquals(
++                R.id.reload_menu_id, icons.get(1).model.get(AppMenuItemProperties.MENU_ITEM_ID));
++
++        BareAppMenuCustomization.toggle(R.id.back_menu_id);
++        BareAppMenuCustomization.toggle(R.id.reload_menu_id);
++        ModelList none = new ModelList();
++        none.add(buttonRow());
++        none.add(item(R.id.preferences_id));
++        ModelList emptied = apply(none);
++        assertEquals(1, emptied.size());
++        assertEquals(R.id.preferences_id, idAt(emptied, 0));
++    }
++
++    @Test
++    public void testTopButtonsCanBeChosenWhileEditingEvenWhenGreyed() {
++        BareAppMenuCustomization.dismissTip();
++        BareAppMenuCustomization.toggle(R.id.forward_menu_id);
++        BareAppMenuCustomization.setEditMode(true);
++        ModelList list = new ModelList();
++        list.add(buttonRow());
++        ModelList result = apply(list);
++        // Done and the help line are added after the button row, which stays.
++        ListItem row = result.get(0);
++        assertEquals(AppMenuItemType.BUTTON_ROW, row.type);
++        ModelList icons = row.model.get(AppMenuItemProperties.ADDITIONAL_ICONS);
++        assertEquals(3, icons.size());
++        for (int i = 0; i < icons.size(); i++) {
++            assertTrue(icons.get(i).model.get(AppMenuItemProperties.ENABLED));
++        }
++        // A tap on one of them is a toggle, like any row.
++        assertTrue(BareAppMenuCustomization.onRowClicked(icons.get(0).model));
++        assertTrue(BareAppMenuCustomization.getHidden().contains("back"));
++    }
++
+     @Test
+     public void testLongPressOpensEditModeAndAnotherClosesIt() {
+         PropertyModel share = item(R.id.share_menu_id).model;
+@@ -172,8 +355,8 @@ public class BareAppMenuCustomizationUnitTest {
+ 
+     @Test
+     public void testLongPressOnAnythingElseDoesNotEdit() {
+-        PropertyModel back = item(R.id.back_menu_id).model;
+-        assertFalse(BareAppMenuCustomization.onRowLongPressed(back));
++        PropertyModel row = item(R.id.icon_row_menu_id).model;
++        assertFalse(BareAppMenuCustomization.onRowLongPressed(row));
+         assertFalse(BareAppMenuCustomization.isEditMode());
+     }
+ 
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareWelcomeDownloadChoicesUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareWelcomeDownloadChoicesUnitTest.java
+new file mode 100644
+index 00000000000..702e54a1ab1
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareWelcomeDownloadChoicesUnitTest.java
+@@ -0,0 +1,75 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.After;
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++/** Unit tests for the welcome's choice about sharing sign-in with a download manager. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareWelcomeDownloadChoicesUnitTest {
++    @Before
++    public void setUp() {
++        reset();
++    }
++
++    @After
++    public void tearDown() {
++        reset();
++    }
++
++    private static void reset() {
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_SEND_SIGN_IN);
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER);
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_MANAGER_PACKAGE);
++    }
++
++    private static boolean stored() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_SEND_SIGN_IN, false);
++    }
++
++    @Test
++    public void testSharingSignInIsOffByDefault() {
++        assertFalse(BareWelcomeOverlay.currentChoices(false).downloadSignIn);
++    }
++
++    @Test
++    public void testItIsStoredOnlyWhileAManagerIsInUse() {
++        BareWelcomeOverlay.Choices choices = BareWelcomeOverlay.currentChoices(false);
++        choices.externalDownloadManager = true;
++        choices.downloadSignIn = true;
++        BareWelcomeOverlay.applyChoices(choices);
++        assertTrue(stored());
++
++        // Turning the manager off takes the sharing with it, even if the switch was left on.
++        choices.externalDownloadManager = false;
++        BareWelcomeOverlay.applyChoices(choices);
++        assertFalse(stored());
++    }
++
++    @Test
++    public void testAReviewDoesNotShowSharingWithoutAManager() {
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_SEND_SIGN_IN, true);
++        assertFalse(BareWelcomeOverlay.currentChoices(true).downloadSignIn);
++
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER, true);
++        assertTrue(BareWelcomeOverlay.currentChoices(true).downloadSignIn);
++    }
++}
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinderUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinderUnitTest.java
+new file mode 100644
+index 00000000000..48ac2973ef4
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinderUnitTest.java
+@@ -0,0 +1,124 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.settings;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertTrue;
++
++import android.content.Context;
++import android.view.ContextThemeWrapper;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.widget.ImageView;
++
++import androidx.test.core.app.ApplicationProvider;
++
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.ui.actions.ActionId;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
++
++import java.util.ArrayList;
++import java.util.List;
++
++/** Unit tests for the toolbar picture that Settings and the welcome both draw. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareToolbarPreviewBinderUnitTest {
++    private View mRoot;
++    private Context mContext;
++
++    @Before
++    public void setUp() {
++        mContext =
++                new ContextThemeWrapper(
++                        ApplicationProvider.getApplicationContext(),
++                        R.style.Theme_BrowserUI_DayNight);
++        mRoot = LayoutInflater.from(mContext).inflate(R.layout.bare_toolbar_preview, null);
++    }
++
++    private boolean shown(int id) {
++        return mRoot.findViewById(id).getVisibility() == View.VISIBLE;
++    }
++
++    @Test
++    public void testTheFullLayoutShowsTheAddressBarAndAllFivePositions() {
++        BareToolbarPreviewBinder.bind(
++                mRoot, ActionId.HOME_BUTTON, ActionId.INCOGNITO, false, slot -> {});
++        assertTrue(shown(R.id.bare_preview_full));
++        assertFalse(shown(R.id.bare_preview_minimal));
++        for (int id :
++                new int[] {
++                    R.id.bare_preview_slot_home,
++                    R.id.bare_preview_slot_extra,
++                    R.id.bare_preview_new_tab,
++                    R.id.bare_preview_tab_switcher,
++                    R.id.bare_preview_slot_app_menu,
++                }) {
++            ImageView view = mRoot.findViewById(id);
++            assertNotNull(view.getDrawable());
++            assertFalse(view.getContentDescription().toString().isEmpty());
++        }
++    }
++
++    @Test
++    public void testTheMinimalLayoutIsOneRowWithTheThreeFixedButtons() {
++        BareToolbarPreviewBinder.bind(
++                mRoot, ActionId.HOME_BUTTON, ActionId.INCOGNITO, true, slot -> {});
++        assertTrue(shown(R.id.bare_preview_minimal));
++        assertFalse(shown(R.id.bare_preview_full));
++        for (int id :
++                new int[] {
++                    R.id.bare_preview_minimal_new_tab,
++                    R.id.bare_preview_minimal_tab_switcher,
++                    R.id.bare_preview_minimal_app_menu,
++                }) {
++            assertNotNull(((ImageView) mRoot.findViewById(id)).getDrawable());
++        }
++    }
++
++    @Test
++    public void testChoosingAButtonRedrawsItsPosition() {
++        BareToolbarPreviewBinder.bind(
++                mRoot, ActionId.HOME_BUTTON, ActionId.INCOGNITO, false, slot -> {});
++        ImageView first = mRoot.findViewById(R.id.bare_preview_slot_home);
++        String before = first.getContentDescription().toString();
++
++        BareToolbarPreviewBinder.bind(
++                mRoot, ActionId.FIND_IN_PAGE, ActionId.INCOGNITO, false, slot -> {});
++        assertFalse(before.equals(first.getContentDescription().toString()));
++    }
++
++    @Test
++    public void testOnlyTheTwoChangeablePositionsRespondToAPress() {
++        List<Integer> pressed = new ArrayList<>();
++        BareToolbarPreviewBinder.bind(
++                mRoot, ActionId.HOME_BUTTON, ActionId.INCOGNITO, false, pressed::add);
++
++        mRoot.findViewById(R.id.bare_preview_slot_home).performClick();
++        mRoot.findViewById(R.id.bare_preview_slot_extra).performClick();
++        mRoot.findViewById(R.id.bare_preview_new_tab).performClick();
++        mRoot.findViewById(R.id.bare_preview_tab_switcher).performClick();
++        mRoot.findViewById(R.id.bare_preview_slot_app_menu).performClick();
++
++        assertEquals(2, pressed.size());
++        assertEquals(BareToolbarSlot.HOME, (int) pressed.get(0));
++        assertEquals(BareToolbarSlot.EXTRA, (int) pressed.get(1));
++    }
++
++    @Test
++    public void testWithoutACallbackThePictureIsInert() {
++        BareToolbarPreviewBinder.bind(
++                mRoot, ActionId.HOME_BUTTON, ActionId.INCOGNITO, false, null);
++        View home = mRoot.findViewById(R.id.bare_preview_slot_home);
++        assertFalse(home.isClickable());
++        assertFalse(home.hasOnClickListeners());
++    }
++}
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/download/DownloadControllerHandoffUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/download/DownloadControllerHandoffUnitTest.java
+index fa1323d35dd..024f93f7f0f 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/download/DownloadControllerHandoffUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/download/DownloadControllerHandoffUnitTest.java
+@@ -18,6 +18,8 @@ import org.junit.Test;
+ import org.junit.runner.RunWith;
+ 
+ import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ 
+ /** Unit tests for the intent a download is handed to another app in. */
+ @RunWith(BaseRobolectricTestRunner.class)
+@@ -68,4 +70,28 @@ public class DownloadControllerHandoffUnitTest {
+         assertFalse(intent.getDataString().contains("session"));
+         assertTrue(intent.getExtras().keySet().contains(Browser.EXTRA_HEADERS));
+     }
++
++    @Test
++    public void testSharingSignInIsOffUntilTheUserTurnsItOn() {
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_SEND_SIGN_IN);
++        assertFalse(DownloadController.shouldSendSignInToExternalDownloadManager());
++        ChromeSharedPreferences.getInstance().writeBoolean(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_SEND_SIGN_IN, true);
++        assertTrue(DownloadController.shouldSendSignInToExternalDownloadManager());
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_SEND_SIGN_IN);
++    }
++
++    @Test
++    public void testTheRequestDiffersWithAndWithoutTheCookie() {
++        // Sharing off: the native side passes no cookie, and the intent has no Cookie header.
++        Intent off = DownloadController.buildHandoffIntent(URL, "", PAGE, AGENT, "");
++        // Sharing on: the cookie travels in the headers.
++        Intent on = DownloadController.buildHandoffIntent(URL, "", PAGE, AGENT, COOKIE);
++        assertFalse(off.getBundleExtra(Browser.EXTRA_HEADERS).containsKey("Cookie"));
++        assertEquals(COOKIE, on.getBundleExtra(Browser.EXTRA_HEADERS).getString("Cookie"));
++        // Everything else is the same either way.
++        assertEquals(off.getDataString(), on.getDataString());
++        assertEquals(
++                off.getBundleExtra(Browser.EXTRA_HEADERS).getString("Referer"),
++                on.getBundleExtra(Browser.EXTRA_HEADERS).getString("Referer"));
++    }
+ }
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/feedback/HelpAndFeedbackLauncherTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/feedback/HelpAndFeedbackLauncherTest.java
+index f37df9f1de0..ccd574aa89b 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/feedback/HelpAndFeedbackLauncherTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/feedback/HelpAndFeedbackLauncherTest.java
+@@ -4,12 +4,14 @@
+ 
+ package org.chromium.chrome.browser.feedback;
+ 
++import static org.junit.Assert.assertEquals;
+ import static org.mockito.ArgumentMatchers.any;
+ import static org.mockito.Mockito.never;
+ import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.when;
+ 
+ import android.app.Activity;
++import android.content.Intent;
+ 
+ import org.junit.After;
+ import org.junit.Assert;
+@@ -17,6 +19,7 @@ import org.junit.Before;
+ import org.junit.Rule;
+ import org.junit.Test;
+ import org.junit.runner.RunWith;
++import org.mockito.ArgumentCaptor;
+ import org.mockito.Mock;
+ import org.mockito.junit.MockitoJUnit;
+ import org.mockito.junit.MockitoRule;
+@@ -80,4 +83,43 @@ public class HelpAndFeedbackLauncherTest {
+ 
+         verify(mDelegate, never()).showFeedback(any(), any());
+     }
++
++    private Intent launchedIntent() {
++        ArgumentCaptor<Intent> intent = ArgumentCaptor.forClass(Intent.class);
++        verify(mActivity).startActivity(intent.capture());
++        return intent.getValue();
++    }
++
++    private void assertOpenedTheProjectPage() {
++        Intent intent = launchedIntent();
++        assertEquals(Intent.ACTION_VIEW, intent.getAction());
++        assertEquals("https://github.com/BareBrowser/bare-browser", intent.getDataString());
++        assertEquals("org.barebrowser", intent.getPackage());
++        verify(mDelegate, never()).show(any(), any(), any());
++        verify(mDelegate, never()).showFeedback(any(), any());
++    }
++
++    @Test
++    public void testHelpOpensTheProjectPage() {
++        when(mActivity.getPackageName()).thenReturn("org.barebrowser");
++        HelpAndFeedbackLauncherImpl.getForProfile(mProfile).show(mActivity, "context", "url");
++        assertOpenedTheProjectPage();
++    }
++
++    @Test
++    public void testHelpForAUrlOpensTheProjectPage() {
++        when(mActivity.getPackageName()).thenReturn("org.barebrowser");
++        HelpAndFeedbackLauncherImpl.getForProfile(mProfile)
++                .showHelpAndFeedbackForUrl(mActivity, "https://example.com/", "UserAction");
++        assertOpenedTheProjectPage();
++    }
++
++    @Test
++    public void testFeedbackOpensTheProjectPage() {
++        when(mActivity.getPackageName()).thenReturn("org.barebrowser");
++        when(mFeedbackPolicyManager.isUserFeedbackAllowed()).thenReturn(true);
++        HelpAndFeedbackLauncherImpl.getForProfile(mProfile)
++                .showFeedback(mActivity, "url", "category");
++        assertOpenedTheProjectPage();
++    }
+ }
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java
+index 5fe2c66d03c..f31563e320d 100644
+--- a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java
+@@ -87,6 +87,11 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+                     ChromeSharedPreferences.getInstance()
+                             .readBoolean(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_SEND_SIGN_IN, false));
+             signInPref.setOnPreferenceChangeListener(this);
++            signInPref.setVisible(
++                    ChromeSharedPreferences.getInstance()
++                            .readBoolean(
++                                    ChromePreferenceKeys.DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,
++                                    false));
+         }
+ 
+         populateDownloadManagerAppList();
+@@ -207,6 +212,10 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+                     .writeBoolean(
+                             ChromePreferenceKeys.DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,
+                             (boolean) newValue);
++            // The sign-in choice is about what is handed to that app, so it only shows
++            // while one is in use.
++            Preference signIn = findPreference(PREF_EXTERNAL_DOWNLOAD_SIGN_IN);
++            if (signIn != null) signIn.setVisible((boolean) newValue);
+             return true;
+         }
+ 
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 4fc2fc7b148..6f43c8599a0 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -2226,7 +2226,7 @@ Your Google account may have other forms of browsing history like searches and a
+         Share sign-in with the app
+       </message>
+       <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_SIGN_IN_SUMMARY" desc="Summary of the setting that sends cookies to the external download manager. Says what is always sent, what this adds, and that Incognito is excluded.">
+-        The app always gets the page address and this browser’s name. This also sends your cookies for the file’s site, so a file that needs you signed in can download. Never used in Incognito.
++        The app is always given the file’s address, the page it came from and this browser’s name. When this is on it also gets your cookies for the file’s site, so a file that needs you signed in can download. Off by default, and never used in Incognito.
+       </message>
+       <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_FAILED" desc="Toast shown when no app could be opened to take a download.">
+         Could not open the download manager
+@@ -4525,14 +4525,17 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_INCOGNITO_HAPTIC_SUMMARY" desc="Explains the haptic option. It follows the phone's touch feedback setting.">
+         A short vibration when you switch into Incognito, on phones that support it and have touch feedback on.
+       </message>
+-      <message name="IDS_BARE_MENU_TIP" desc="A tip at the top of the three-dot menu, shown the first few times. Tapping it dismisses it.">
+-        Tip: touch and hold an item to choose which ones this menu shows. Tap here to dismiss.
++      <message name="IDS_BARE_MENU_TIP" desc="A tip at the top of the three-dot menu, shown the first few times. Tapping it starts editing. [CHAR_LIMIT=40]">
++        Hold an item to edit
++      </message>
++      <message name="IDS_BARE_MENU_TIP_NEVER" desc="Label of the small cross on the menu tip. It stops the tip from being shown again. [CHAR_LIMIT=32]">
++        Never show again
+       </message>
+       <message name="IDS_BARE_MENU_EDIT_DONE" desc="Row at the top of the edit-mode menu that finishes editing. [CHAR_LIMIT=24]">
+         Done
+       </message>
+-      <message name="IDS_BARE_MENU_EDIT_HELP" desc="Explains edit mode of the three-dot menu. Settings and Exit cannot be hidden.">
+-        Tap an item to hide it or show it again. Settings and Exit always stay. Touch and hold to finish.
++      <message name="IDS_BARE_MENU_EDIT_HELP" desc="Explains edit mode of the three-dot menu. Settings cannot be hidden.">
++        Tap an item to hide it or show it again. Settings always stays. Touch and hold to finish.
+       </message>
+       <message name="IDS_BARE_MENU_HIDDEN_HEADING" desc="Heading in edit mode above the menu items that are currently hidden. [CHAR_LIMIT=24]">
+         Hidden
+@@ -4541,7 +4544,7 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+         Security options
+       </message>
+       <message name="IDS_BARE_SECURITY_ABOUT" desc="Explains the security options screen: each is a setting the browser already has, with a plain name.">
+-        Each switch here changes a setting the browser already has, so the same choice is also in the settings it came from. None of them is a promise that sites cannot track you.
++        Each switch here changes a setting the browser already has, so the same choice is also in the settings it came from. Websites can still use the information they receive, and characteristics of your browser, to recognize or track a visitor.
+       </message>
+       <message name="IDS_BARE_SECURITY_HTTPS_TITLE" desc="Security option: use https for every site. [CHAR_LIMIT=48]">
+         Secure connections only
+-- 
+2.34.1
+

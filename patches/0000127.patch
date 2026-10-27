@@ -1,0 +1,108 @@
+From 2ab0853c910ed56b87be96d337c4c67a6dc32462 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 11 Oct 2026 07:23:11 +0000
+Subject: [PATCH] Patch 0000127
+
+---
+ .../android/java/VersionConstants.java.version        |  6 +++++-
+ .../org/chromium/base/version_info/VersionInfo.java   |  3 +--
+ base/version_info/version_info.cc                     | 11 ++++++-----
+ base/version_info/version_info_values.h.version       |  4 ++--
+ .../chromium/chrome/browser/bare/BareUpdateCheck.java |  2 +-
+ 5 files changed, 15 insertions(+), 11 deletions(-)
+
+diff --git a/base/version_info/android/java/VersionConstants.java.version b/base/version_info/android/java/VersionConstants.java.version
+index 0d895fe2483..eaad7314e5b 100644
+--- a/base/version_info/android/java/VersionConstants.java.version
++++ b/base/version_info/android/java/VersionConstants.java.version
+@@ -8,9 +8,13 @@ import org.chromium.build.annotations.NullMarked;
+ 
+ // Constants shared by Android Chrome and WebView. Chrome specific constants are
+ // in ChromeVersionConstants.
+-// Note: PATCH, VERSION_NAME and VERSION_CODE should come from ApkInfo.
++// Note: VERSION_NAME and VERSION_CODE should come from ApkInfo.
+ @NullMarked
+ public class VersionConstants {
++    // Bare: the Chromium version. VersionInfo.getProductVersion() returns it, since
++    // Bare's versionName is Bare's own release number.
++    public static final String PRODUCT_VERSION = "@MAJOR@.@MINOR@.@BUILD@.@PATCH@";
++
+     @SuppressWarnings({"ComplexBooleanConstant", "IdentityBinaryExpression"})
+     public static final boolean IS_OFFICIAL_BUILD = @OFFICIAL_BUILD@ == 1;
+ 
+diff --git a/base/version_info/android/java/src/org/chromium/base/version_info/VersionInfo.java b/base/version_info/android/java/src/org/chromium/base/version_info/VersionInfo.java
+index d0897e80cdb..3906ee03667 100644
+--- a/base/version_info/android/java/src/org/chromium/base/version_info/VersionInfo.java
++++ b/base/version_info/android/java/src/org/chromium/base/version_info/VersionInfo.java
+@@ -4,7 +4,6 @@
+ 
+ package org.chromium.base.version_info;
+ 
+-import org.chromium.base.ApkInfo;
+ import org.chromium.base.ResettersForTesting;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+@@ -84,7 +83,7 @@ public class VersionInfo {
+      * @return The version number.
+      */
+     public static String getProductVersion() {
+-        return ApkInfo.getPackageVersionName();
++        return VersionConstants.PRODUCT_VERSION;
+     }
+ 
+     /**
+diff --git a/base/version_info/version_info.cc b/base/version_info/version_info.cc
+index 4b76dfc87b5..4795d7c3424 100644
+--- a/base/version_info/version_info.cc
++++ b/base/version_info/version_info.cc
+@@ -11,15 +11,16 @@
+ #include "base/strings/string_number_conversions.h"
+ #include "base/version.h"
+ 
+-#if BUILDFLAG(IS_ANDROID)
+-#include "base/android/apk_info.h"
+-#endif
+-
+ namespace version_info {
+ 
+ #if BUILDFLAG(IS_ANDROID)
++// Bare: the Chromium version, as everywhere else. Upstream reads the APK's
++// versionName here, which in Chrome is the same string. Bare's versionName is
++// Bare's own release number, so reading it would make the User-Agent say
++// Chrome/1.0.0, fail every minimum_chrome_version check, and leave
++// base::Version invalid, which variations then refuses to start with.
+ std::string_view GetVersionNumber() {
+-  return base::android::apk_info::package_version_name();
++  return PRODUCT_VERSION;
+ }
+ #endif
+ 
+diff --git a/base/version_info/version_info_values.h.version b/base/version_info/version_info_values.h.version
+index e7a14529a99..c481e03b0f6 100644
+--- a/base/version_info/version_info_values.h.version
++++ b/base/version_info/version_info_values.h.version
+@@ -8,9 +8,9 @@
+ #include "build/build_config.h"
+ 
+ #define PRODUCT_NAME "@PRODUCT_FULLNAME@"
+-#if !BUILDFLAG(IS_ANDROID)
++// Bare: defined on Android too. Bare sets its own versionName, so the
++// manifest cannot stand in for the Chromium version; see version_info.cc.
+ #define PRODUCT_VERSION "@MAJOR@.@MINOR@.@BUILD@.@PATCH@"
+-#endif
+ #define LAST_CHANGE "@LASTCHANGE@"
+ #define IS_OFFICIAL_BUILD @OFFICIAL_BUILD@
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
+index 90bcd96f74c..fd742032315 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
+@@ -289,7 +289,7 @@ public class BareUpdateCheck {
+     /**
+      * Bare's own version, read from the package.
+      *
+-     * <p>Not VersionConstants.PRODUCT_VERSION, which carries Chromium's version, 153.0.7999.0.
++     * <p>Not VersionConstants.PRODUCT_VERSION, which carries Chromium's version.
+      * Bare's version reaches the build through android_override_version_name and only ever lands
+      * in the manifest, so comparing against the Chromium constant would answer "up to date"
+      * forever.

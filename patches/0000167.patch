@@ -1,0 +1,333 @@
+From bd66bd452e5cfc692b87a4d53bc440649a11dbb0 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 21 Oct 2026 21:13:32 +0000
+Subject: [PATCH] Patch 0000167
+
+---
+ .../bare/BareToolbarActionCatalogue.java      | 46 ++++++++++-
+ .../bare/settings/BareToolbarActionUi.java    |  8 ++
+ .../tabbed_mode/TabbedRootUiCoordinator.java  |  8 +-
+ chrome/android/junit/BUILD.gn                 |  1 +
+ .../BareToolbarActionCatalogueUnitTest.java   | 77 +++++++++++++++++++
+ .../settings/BareToolbarSettingsUnitTest.java |  2 +-
+ .../chrome/browser/ui/actions/ActionId.java   |  4 +
+ chrome/browser/ui/android/bottombar/BUILD.gn  |  1 +
+ .../ui/bottombar/BareToolbarDefaults.java     |  4 +
+ .../strings/android_chrome_strings.grd        |  6 ++
+ 10 files changed, 154 insertions(+), 3 deletions(-)
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java
+index 813e1568366..dd904d50aff 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java
+@@ -5,6 +5,12 @@
+ package org.chromium.chrome.browser.bare;
+ 
+ import android.content.Context;
++import android.view.View;
++
++import androidx.annotation.DrawableRes;
++import androidx.annotation.StringRes;
++
++import org.chromium.base.Callback;
+ 
+ import org.chromium.base.lifetime.Destroyable;
+ import org.chromium.build.annotations.NullMarked;
+@@ -12,8 +18,12 @@ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.ActivityTabProvider;
+ import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
+ import org.chromium.chrome.browser.toolbar.optional_button.ButtonDataProvider;
++import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.ui.actions.ActionId;
++import org.chromium.chrome.browser.ui.actions.ActionProperties;
+ import org.chromium.chrome.browser.ui.actions.ActionRegistry;
++import org.chromium.chrome.browser.ui.actions.ActionUtils;
++import org.chromium.ui.modelutil.PropertyModel;
+ 
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -54,7 +64,21 @@ public class BareToolbarActionCatalogue implements Destroyable {
+             ProviderSource source,
+             ActivityTabProvider tabProvider,
+             ActionRegistry registry,
+-            Context context) {
++            Context context,
++            Runnable findInPage,
++            Runnable search) {
++        registerPlain(
++                registry,
++                ActionId.FIND_IN_PAGE,
++                R.drawable.ic_find_in_page,
++                R.string.bare_toolbar_action_find_in_page,
++                findInPage);
++        registerPlain(
++                registry,
++                ActionId.SEARCH,
++                R.drawable.ic_search_24dp,
++                R.string.bare_toolbar_action_search,
++                search);
+         adapt(source, tabProvider, registry, context, ActionId.SHARE, AdaptiveToolbarButtonVariant.SHARE);
+         adapt(
+                 source,
+@@ -72,6 +96,26 @@ public class BareToolbarActionCatalogue implements Destroyable {
+                 AdaptiveToolbarButtonVariant.ADD_TO_BOOKMARKS);
+     }
+ 
++    /**
++     * Publishes an action that needs nothing from the page: pressing it just runs something.
++     *
++     * <p>Find in page and Search are always available. Neither depends on what the tab holds, and
++     * both have somewhere to go on the new tab page too, so there is no state to follow.
++     */
++    private static void registerPlain(
++            ActionRegistry registry,
++            @ActionId int actionId,
++            @DrawableRes int icon,
++            @StringRes int label,
++            Runnable onPress) {
++        ActionUtils.registerAction(
++                registry, actionId, ActionProperties.BASE_KEYS, icon, label, label);
++        PropertyModel model = registry.get(actionId).get();
++        if (model != null) {
++            model.set(ActionProperties.ON_PRESS_CALLBACK, (Callback<View>) v -> onPress.run());
++        }
++    }
++
+     /**
+      * Publishes one action, if the provider behind it exists.
+      *
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java
+index 67bfacecd9b..4e7127b50c8 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java
+@@ -44,6 +44,10 @@ public final class BareToolbarActionUi {
+                 return R.string.adaptive_toolbar_button_preference_translate;
+             case ActionId.BOOKMARK:
+                 return R.string.bare_toolbar_action_bookmark;
++            case ActionId.FIND_IN_PAGE:
++                return R.string.bare_toolbar_action_find_in_page;
++            case ActionId.SEARCH:
++                return R.string.bare_toolbar_action_search;
+             case ActionId.NEW_TAB:
+                 return R.string.button_new_tab;
+             default:
+@@ -68,6 +72,10 @@ public final class BareToolbarActionUi {
+                 // The empty star. Whether a page is bookmarked is a fact about a page, and this
+                 // picture is not of any page.
+                 return R.drawable.ic_star_24dp;
++            case ActionId.FIND_IN_PAGE:
++                return R.drawable.ic_find_in_page;
++            case ActionId.SEARCH:
++                return R.drawable.ic_search_24dp;
+             case ActionId.NEW_TAB:
+                 return R.drawable.new_tab_icon;
+             default:
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
+index 49759fbf0b7..e92a65fcf9d 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
+@@ -293,6 +293,7 @@ import org.chromium.components.embedder_support.util.UrlUtilities;
+ import org.chromium.components.feature_engagement.EventConstants;
+ import org.chromium.components.feature_engagement.FeatureConstants;
+ import org.chromium.components.feature_engagement.Tracker;
++import org.chromium.components.omnibox.OmniboxFocusReason;
+ import org.chromium.components.prefs.PrefChangeRegistrar;
+ import org.chromium.components.signin.AccountManagerFacadeProvider;
+ import org.chromium.components.signin.SigninFeatureMap;
+@@ -1169,7 +1170,12 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+                             this::getButtonDataProvider,
+                             mActivityTabProvider,
+                             mActionRegistry,
+-                            mActivity);
++                            mActivity,
++                            () -> handleMenuOrKeyboardAction(R.id.find_in_page_id, false),
++                            // The omnibox searches with whichever engine is the default.
++                            () ->
++                                    mToolbarManager.focusAndSelectAllUrlBarText(
++                                            OmniboxFocusReason.MENU_OR_KEYBOARD_ACTION));
+         }
+     }
+ 
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index 7de8fdd28f7..a33c6eaf0b1 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -435,6 +435,7 @@ if (is_android) {
+       "src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapterUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java",
+       "src/org/chromium/chrome/browser/BrowserExitReasonTrackerUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java
+new file mode 100644
+index 00000000000..0374c098586
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java
+@@ -0,0 +1,77 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertNotNull;
++
++import android.app.Activity;
++import android.view.View;
++
++import androidx.test.ext.junit.rules.ActivityScenarioRule;
++
++import org.junit.Before;
++import org.junit.Rule;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.Callback;
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.ActivityTabProvider;
++import org.chromium.chrome.browser.ui.actions.ActionId;
++import org.chromium.chrome.browser.ui.actions.ActionProperties;
++import org.chromium.chrome.browser.ui.actions.ActionRegistry;
++import org.chromium.ui.base.TestActivity;
++import org.chromium.ui.modelutil.PropertyModel;
++
++/** Unit tests for the actions {@link BareToolbarActionCatalogue} registers itself. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareToolbarActionCatalogueUnitTest {
++    @Rule
++    public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
++            new ActivityScenarioRule<>(TestActivity.class);
++
++    private Activity mActivity;
++    private ActionRegistry mRegistry;
++    private int mFinds;
++    private int mSearches;
++
++    @Before
++    public void setUp() {
++        mActivityScenarioRule.getScenario().onActivity(activity -> mActivity = activity);
++        mRegistry = new ActionRegistry();
++        // No provider exists for any of the adapted actions here, which is the case where only the
++        // plain ones are published.
++        new BareToolbarActionCatalogue(
++                variant -> null,
++                new ActivityTabProvider(),
++                mRegistry,
++                mActivity,
++                () -> mFinds++,
++                () -> mSearches++);
++    }
++
++    private void press(@ActionId int action) {
++        PropertyModel model = mRegistry.get(action).get();
++        assertNotNull("action " + action + " is not registered", model);
++        Callback<View> callback = model.get(ActionProperties.ON_PRESS_CALLBACK);
++        assertNotNull(callback);
++        callback.onResult(new View(mActivity));
++    }
++
++    @Test
++    public void testFindInPageRunsItsHandler() {
++        press(ActionId.FIND_IN_PAGE);
++        assertEquals(1, mFinds);
++        assertEquals(0, mSearches);
++    }
++
++    @Test
++    public void testSearchRunsItsHandler() {
++        press(ActionId.SEARCH);
++        assertEquals(0, mFinds);
++        assertEquals(1, mSearches);
++    }
++}
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java
+index a6e2ac6c255..4fb20e35134 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java
+@@ -100,7 +100,7 @@ public class BareToolbarSettingsUnitTest {
+                     ActionId.APP_MENU,
+                     action);
+         }
+-        assertEquals(4, BareToolbarDefaults.CATALOGUE.length);
++        assertEquals(6, BareToolbarDefaults.CATALOGUE.length);
+     }
+ 
+     @Test
+diff --git a/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionId.java b/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionId.java
+index 2f997bbf546..0f48ffffd88 100644
+--- a/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionId.java
++++ b/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionId.java
+@@ -27,6 +27,8 @@ import java.lang.annotation.Target;
+     ActionId.SHARE,
+     ActionId.TRANSLATE,
+     ActionId.BOOKMARK,
++    ActionId.FIND_IN_PAGE,
++    ActionId.SEARCH,
+ })
+ @Retention(RetentionPolicy.SOURCE)
+ @Target(ElementType.TYPE_USE)
+@@ -44,4 +46,6 @@ public @interface ActionId {
+     int SHARE = 8;
+     int TRANSLATE = 9;
+     int BOOKMARK = 10;
++    int FIND_IN_PAGE = 11;
++    int SEARCH = 12;
+ }
+diff --git a/chrome/browser/ui/android/bottombar/BUILD.gn b/chrome/browser/ui/android/bottombar/BUILD.gn
+index e71f8bffe7c..8a06b850c42 100644
+--- a/chrome/browser/ui/android/bottombar/BUILD.gn
++++ b/chrome/browser/ui/android/bottombar/BUILD.gn
+@@ -67,6 +67,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSecondaryActions.java",
+     "java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSlot.java",
+     "java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAction.java",
++    "java/src/org/chromium/chrome/browser/ui/bottombar/BareTabSwitchDelegate.java",
+     "java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAdjuster.java",
+     "java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipePrefs.java",
+     "java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeSlider.java",
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
+index ffd99374621..a10c0fb702f 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
+@@ -106,6 +106,8 @@ public final class BareToolbarDefaults {
+         ActionId.INCOGNITO,
+         ActionId.SHARE,
+         ActionId.BOOKMARK,
++        ActionId.FIND_IN_PAGE,
++        ActionId.SEARCH,
+     };
+ 
+     /**
+@@ -148,6 +150,8 @@ public final class BareToolbarDefaults {
+             case ActionId.SHARE:
+             case ActionId.TRANSLATE:
+             case ActionId.BOOKMARK:
++            case ActionId.FIND_IN_PAGE:
++            case ActionId.SEARCH:
+                 return true;
+             default:
+                 return false;
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index eea97773c12..da022af7a3e 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4375,6 +4375,12 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_ADDRESS_BAR_SWIPE_SUMMARY" desc="Summary for the setting that lets a sideways swipe on the address bar switch tabs.">
+         Slide the address bar left or right to move to the next or previous tab
+       </message>
++      <message name="IDS_BARE_TOOLBAR_ACTION_FIND_IN_PAGE" desc="Name of the toolbar button that searches for text on the current page.">
++        Find in page
++      </message>
++      <message name="IDS_BARE_TOOLBAR_ACTION_SEARCH" desc="Name of the toolbar button that starts a search with the default search engine.">
++        Search
++      </message>
+       <message name="IDS_BARE_TOOLBAR_ACTION_HOME" desc="Name of the toolbar button that opens the home page.">
+         Home
+       </message>
+-- 
+2.34.1
+

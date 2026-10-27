@@ -1,0 +1,217 @@
+From 91a135f2219fb2591f668ee008c462faf80215c6 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 9 Sep 2026 21:18:23 +0000
+Subject: [PATCH] Patch 0000120
+
+---
+ .../chrome/browser/bare/BareUpdateCheck.java  | 61 +++++++++++---
+ chrome/android/junit/BUILD.gn                 |  1 +
+ .../browser/bare/BareUpdateCheckUnitTest.java | 80 +++++++++++++++++++
+ 3 files changed, 132 insertions(+), 10 deletions(-)
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
+index 6e201bf72a9..5d0eaee26b3 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
+@@ -47,13 +47,21 @@ public class BareUpdateCheck {
+         int MANUAL = 1;
+     }
+ 
++    /**
++     * Where releases live.
++     *
++     * <p>One constant rather than three literals, because the three URLs below have to move
++     * together and did not the last time the account name changed. Builds up to 1.0.0-alpha.2
++     * were compiled against the old account, so that name has to stay registered: those installs
++     * ask it for a feed for as long as they run.
++     */
++    private static final String REPO = "https://github.com/BareBrowser/bare-browser";
++
+     /** The public release feed. No API token, no rate limit worth worrying about. */
+-    private static final String RELEASES_FEED =
+-            "https://github.com/Shshtwy/bare-browser/releases.atom";
++    private static final String RELEASES_FEED = REPO + "/releases.atom";
+ 
+     /** Where a user is sent to read about and download a release. */
+-    public static final String RELEASES_PAGE =
+-            "https://github.com/Shshtwy/bare-browser/releases/latest";
++    public static final String RELEASES_PAGE = REPO + "/releases/latest";
+ 
+     /**
+      * The page for one specific release.
+@@ -62,19 +70,49 @@ public class BareUpdateCheck {
+      * the row just offered even if a newer one appears between the check and the tap.
+      */
+     public static String releasePageFor(String tag) {
+-        return "https://github.com/Shshtwy/bare-browser/releases/tag/" + tag;
++        if (!TAG.matcher(tag).matches()) return RELEASES_PAGE;
++        return REPO + "/releases/tag/" + tag;
+     }
+ 
+     private static final long CHECK_INTERVAL_MS = TimeUnit.DAYS.toMillis(1);
+     private static final long REMINDER_INTERVAL_MS = TimeUnit.DAYS.toMillis(7);
+     private static final int TIMEOUT_MS = 15000;
+ 
++    /**
++     * How much of the feed is read before giving up.
++     *
++     * <p>The tag wanted is in the first entry, so a feed that has not produced one inside this
++     * much text is not going to. Without a limit the read follows whatever the server sends, and
++     * a server that never stops sending is answered by growing a string until the browser dies.
++     */
++    private static final int MAX_FEED_BYTES = 512 * 1024;
++
++    /**
++     * A whole release tag in Bare's scheme, anchored.
++     *
++     * <p>The feed is read as text, so whatever sits between /releases/tag/ and the closing quote
++     * arrives here. Accepting only this shape is what keeps a tag from carrying ../ back up the
++     * path and sending the release row somewhere else on github.com, and it is also what keeps
++     * the numbers short enough for the parse below.
++     */
++    private static final Pattern TAG =
++            Pattern.compile("v\\d{1,4}\\.\\d{1,4}\\.\\d{1,4}(?:-[a-z]{1,12}\\.\\d{1,4})?");
++
+     /** Matches the tag out of a feed entry link, for example .../releases/tag/v1.0.0-alpha.2 */
+-    private static final Pattern TAG_IN_LINK = Pattern.compile("/releases/tag/([^\"']+)");
++    private static final Pattern TAG_IN_LINK =
++            Pattern.compile("/releases/tag/(" + TAG.pattern() + ")[\"']");
+ 
+-    /** MAJOR.MINOR.PATCH with an optional -channel.N suffix, which is Bare's own scheme. */
++    /**
++     * MAJOR.MINOR.PATCH with an optional -channel.N suffix, which is Bare's own scheme.
++     *
++     * <p>Matched whole rather than searched for, and each run of digits is bounded. Searching
++     * accepted a version inside a longer string, so a number too big for an int still matched on
++     * one of its own substrings and came back as an enormous version rather than an unreadable
++     * one. Matching whole leaves it unreadable, which the ordering below already treats as older.
++     */
+     private static final Pattern VERSION =
+-            Pattern.compile("v?(\\d+)\\.(\\d+)\\.(\\d+)(?:-([a-z]+)\\.(\\d+))?");
++            Pattern.compile(
++                    "v?(\\d{1,9})\\.(\\d{1,9})\\.(\\d{1,9})(?:-([a-z]{1,12})\\.(\\d{1,9}))?");
+ 
+     private BareUpdateCheck() {}
+ 
+@@ -223,8 +261,11 @@ public class BareUpdateCheck {
+             try (BufferedReader reader =
+                     new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
+                 String line;
++                int read = 0;
+                 // The feed is newest first, so the first tag link is the latest release.
+                 while ((line = reader.readLine()) != null) {
++                    read += line.length() + 1;
++                    if (read > MAX_FEED_BYTES) return null;
+                     Matcher matcher = TAG_IN_LINK.matcher(line);
+                     if (matcher.find()) return matcher.group(1);
+                 }
+@@ -272,8 +313,8 @@ public class BareUpdateCheck {
+     static int compare(String left, String right) {
+         Matcher a = VERSION.matcher(left);
+         Matcher b = VERSION.matcher(right);
+-        if (!a.find()) return -1;
+-        if (!b.find()) return 1;
++        if (!a.matches()) return -1;
++        if (!b.matches()) return 1;
+         for (int group = 1; group <= 3; group++) {
+             int diff =
+                     Integer.compare(
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index 60ad296ddc1..dd5a663dae5 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -434,6 +434,7 @@ if (is_android) {
+       "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinatorUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapterUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java",
+       "src/org/chromium/chrome/browser/BrowserExitReasonTrackerUnitTest.java",
+       "src/org/chromium/chrome/browser/ChromeActionModeHandlerUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java
+new file mode 100644
+index 00000000000..06b52dab57e
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java
+@@ -0,0 +1,80 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++
++/** Unit tests for the version ordering and the release URL the update check builds. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareUpdateCheckUnitTest {
++
++    @Test
++    public void testOrdersReleases() {
++        assertTrue(BareUpdateCheck.compare("v1.0.1", "v1.0.0") > 0);
++        assertTrue(BareUpdateCheck.compare("v1.1.0", "v1.0.9") > 0);
++        assertTrue(BareUpdateCheck.compare("v2.0.0", "v1.9.9") > 0);
++        assertEquals(0, BareUpdateCheck.compare("v1.0.0", "1.0.0"));
++    }
++
++    @Test
++    public void testReleaseOutranksItsPrerelease() {
++        assertTrue(BareUpdateCheck.compare("v1.0.0", "v1.0.0-alpha.9") > 0);
++        assertTrue(BareUpdateCheck.compare("v1.0.0-beta.1", "v1.0.0-alpha.1") > 0);
++        assertTrue(BareUpdateCheck.compare("v1.0.0-alpha.2", "v1.0.0-alpha.1") > 0);
++    }
++
++    @Test
++    public void testUnreadableVersionSortsOlder() {
++        assertTrue(BareUpdateCheck.compare("not-a-version", "v1.0.0") < 0);
++        assertTrue(BareUpdateCheck.compare("v1.0.0", "not-a-version") > 0);
++    }
++
++    /**
++     * A run of digits long enough to overflow an int used to throw out of the callback.
++     *
++     * <p>It now reads as unreadable rather than as an enormous version, so it sorts as older and
++     * never offers itself as an update.
++     */
++    @Test
++    public void testOverlongNumberSortsOlderAndDoesNotThrow() {
++        assertTrue(BareUpdateCheck.compare("v99999999999.0.0", "v1.0.0") < 0);
++        assertTrue(BareUpdateCheck.compare("v1.0.0-alpha.99999999999", "v1.0.0-alpha.1") < 0);
++    }
++
++    /** A version inside a longer string is not a version. */
++    @Test
++    public void testVersionMustBeTheWholeString() {
++        assertTrue(BareUpdateCheck.compare("release-v9.0.0-notes", "v1.0.0") < 0);
++    }
++
++    @Test
++    public void testReleasePageUsesTheTag() {
++        assertEquals(
++                "https://github.com/BareBrowser/bare-browser/releases/tag/v1.0.0-alpha.2",
++                BareUpdateCheck.releasePageFor("v1.0.0-alpha.2"));
++    }
++
++    /** A tag that is not one falls back to the releases page rather than building a path from it. */
++    @Test
++    public void testReleasePageRefusesAnythingElse() {
++        assertEquals(BareUpdateCheck.RELEASES_PAGE, BareUpdateCheck.releasePageFor("../../evil"));
++        assertEquals(
++                BareUpdateCheck.RELEASES_PAGE,
++                BareUpdateCheck.releasePageFor("v1.0.0/../../../other/releases/tag/v1"));
++        assertEquals(BareUpdateCheck.RELEASES_PAGE, BareUpdateCheck.releasePageFor(""));
++    }
++
++    @Test
++    public void testReleaseUrlsPointAtTheCurrentAccount() {
++        assertTrue(BareUpdateCheck.RELEASES_PAGE.startsWith(
++                "https://github.com/BareBrowser/bare-browser/"));
++    }
++}

@@ -1,0 +1,843 @@
+From 25b87cbb3b30577d940e6e6f16c2bfcbc9508359 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 06:53:18 +0000
+Subject: [PATCH] Patch 0000188
+
+---
+ chrome/android/chrome_java_resources.gni      |  1 +
+ .../java/res/values/bare_incognito_arrays.xml | 21 ++++
+ .../java/res/xml/privacy_preferences.xml      | 22 +++++
+ .../layouts/LayoutManagerChromePhone.java     | 10 +-
+ .../browser/ntp/IncognitoDescriptionView.java | 10 ++
+ .../browser/ntp/IncognitoNewTabPageView.java  |  8 +-
+ .../privacy/settings/PrivacySettings.java     | 46 +++++++++
+ .../browser/toolbar/ToolbarManager.java       | 16 ++++
+ chrome/android/junit/BUILD.gn                 |  1 +
+ .../BareIncognitoLockPolicyUnitTest.java      | 95 +++++++++++++++++++
+ .../DeviceAuthenticatorController.java        | 67 +++++++++++--
+ chrome/browser/incognito/BUILD.gn             |  1 +
+ .../reauth/BareIncognitoLockPolicy.java       | 79 +++++++++++++++
+ .../reauth/IncognitoReauthControllerImpl.java | 29 ++++++
+ .../reauth/IncognitoReauthManager.java        |  3 +
+ .../preferences/ChromePreferenceKeys.java     | 15 +++
+ .../strings/android_chrome_strings.grd        | 33 +++++++
+ components/new_or_sad_tab_strings.grdp        |  6 +-
+ 18 files changed, 444 insertions(+), 19 deletions(-)
+ create mode 100644 chrome/android/java/res/values/bare_incognito_arrays.xml
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/incognito/reauth/BareIncognitoLockPolicyUnitTest.java
+ create mode 100644 chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/BareIncognitoLockPolicy.java
+
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 04d2869700b..3dae327fad1 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -694,6 +694,7 @@ chrome_java_resources = [
+   "java/res/xml/bare_clear_on_exit_preferences.xml",
+   "java/res/drawable/bare_menu_eye.xml",
+   "java/res/drawable/bare_menu_eye_off.xml",
++  "java/res/values/bare_incognito_arrays.xml",
+   "java/res/xml/bare_extensions_preferences.xml",
+   "java/res/xml/bare_push_preferences.xml",
+   "java/res/xml/bare_security_preferences.xml",
+diff --git a/chrome/android/java/res/values/bare_incognito_arrays.xml b/chrome/android/java/res/values/bare_incognito_arrays.xml
+new file mode 100644
+index 00000000000..1322e2ea9a5
+--- /dev/null
++++ b/chrome/android/java/res/values/bare_incognito_arrays.xml
+@@ -0,0 +1,21 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<resources xmlns:tools="http://schemas.android.com/tools">
++    <string-array name="bare_incognito_wipe_entries" tools:ignore="InconsistentArrays">
++        <item>@string/bare_incognito_wipe_never</item>
++        <item>@string/bare_incognito_wipe_1</item>
++        <item>@string/bare_incognito_wipe_3</item>
++        <item>@string/bare_incognito_wipe_5</item>
++    </string-array>
++    <string-array name="bare_incognito_wipe_values" translatable="false">
++        <item>0</item>
++        <item>1</item>
++        <item>3</item>
++        <item>5</item>
++    </string-array>
++</resources>
+diff --git a/chrome/android/java/res/xml/privacy_preferences.xml b/chrome/android/java/res/xml/privacy_preferences.xml
+index 223d1e210d1..17cf588c9be 100644
+--- a/chrome/android/java/res/xml/privacy_preferences.xml
++++ b/chrome/android/java/res/xml/privacy_preferences.xml
+@@ -47,6 +47,28 @@ found in the LICENSE file.
+         android:title="@string/settings_incognito_tab_lock_title"
+         android:summary="@string/settings_incognito_tab_lock_summary_android_setting_off"
+         android:persistent="false" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_incognito_biometric_only"
++        android:title="@string/bare_incognito_biometric_only_title"
++        android:summary="@string/bare_incognito_biometric_only_summary"
++        android:persistent="false" />
++    <androidx.preference.ListPreference
++        android:key="bare_incognito_wipe_after"
++        android:title="@string/bare_incognito_wipe_title"
++        android:summary="%s"
++        android:persistent="false"
++        android:entries="@array/bare_incognito_wipe_entries"
++        android:entryValues="@array/bare_incognito_wipe_values" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_incognito_quiet_entry"
++        android:title="@string/bare_incognito_quiet_title"
++        android:summary="@string/bare_incognito_quiet_summary"
++        android:persistent="false" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_incognito_haptic"
++        android:title="@string/bare_incognito_haptic_title"
++        android:summary="@string/bare_incognito_haptic_summary"
++        android:persistent="false" />
+ 
+     <org.chromium.components.browser_ui.settings.ChromeBasePreferenceCategory
+         android:key="security_section"
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChromePhone.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChromePhone.java
+index 619a1b5cfa0..15c92ad4843 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChromePhone.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChromePhone.java
+@@ -18,6 +18,8 @@ import org.chromium.chrome.browser.compositor.CompositorViewHolder;
+ import org.chromium.chrome.browser.compositor.layouts.phone.NewTabAnimationLayout;
+ import org.chromium.chrome.browser.hub.HubLayoutDependencyHolder;
+ import org.chromium.chrome.browser.layouts.LayoutType;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tab_ui.TabContentManager;
+ import org.chromium.chrome.browser.tab_ui.TabSwitcher;
+@@ -169,7 +171,7 @@ public class LayoutManagerChromePhone extends LayoutManagerChrome {
+             // This check allows us to switch from the HubLayout to the SimpleAnimationLayout
+             // smoothly.
+             getActiveLayout().onTabCreating(sourceId);
+-        } else if (animationsEnabled()) {
++        } else if (animationsEnabled() && !(isIncognito && isQuietIncognitoEntry())) {
+             if (!isLayoutVisible(LayoutType.HUB)) {
+                 if (getActiveLayout() != null && getActiveLayout().isStartingToHide()) {
+                     setNextLayout(mNewTabAnimationLayout, true);
+@@ -185,6 +187,12 @@ public class LayoutManagerChromePhone extends LayoutManagerChrome {
+         }
+     }
+ 
++    /** Bare: whether a new Incognito tab appears without the new tab animation. */
++    private static boolean isQuietIncognitoEntry() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_INCOGNITO_QUIET_ENTRY, true);
++    }
++
+     /** @return Whether the {@link SceneOverlay}s handle tab creation. */
+     private boolean overlaysHandleTabCreating() {
+         Layout layout = getActiveLayout();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/IncognitoDescriptionView.java b/chrome/android/java/src/org/chromium/chrome/browser/ntp/IncognitoDescriptionView.java
+index d76fc6eedd7..74fd67dccc0 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ntp/IncognitoDescriptionView.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ntp/IncognitoDescriptionView.java
+@@ -420,6 +420,16 @@ public class IncognitoDescriptionView extends LinearLayout {
+         final String subtitleText =
+                 getContext().getString(R.string.new_tab_otr_subtitle_with_reading_list);
+ 
++        // Bare: the link went to a Google help page that describes Chrome. The page says what
++        // it has to, so there is nothing to link to.
++        if (true) {
++            mLearnMore.setVisibility(View.GONE);
++            mSubtitle.setText(subtitleText);
++            mSubtitle.setMovementMethod(null);
++            mSubtitle.setOnSpanLongClickListener(/* listener= */ null);
++            return;
++        }
++
+         final ChromeClickableSpan learnMoreSpan =
+                 new ChromeClickableSpan(mLearnMore.getSpanColor(), (_) -> mLearnMore.callOnClick());
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/IncognitoNewTabPageView.java b/chrome/android/java/src/org/chromium/chrome/browser/ntp/IncognitoNewTabPageView.java
+index 819dbd064dc..2a2794a8df1 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ntp/IncognitoNewTabPageView.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ntp/IncognitoNewTabPageView.java
+@@ -104,12 +104,8 @@ public class IncognitoNewTabPageView extends FrameLayout {
+         descriptionView.setLearnMoreOnclickListener(_ -> mManager.loadIncognitoLearnMore());
+         descriptionView.setContextMenuManager(contextMenuManager, navigationDelegate);
+ 
+-        // Inflate the tracking protection card.
+-        ViewStub cardStub = findViewById(R.id.cookie_card_stub);
+-        if (cardStub == null) return;
+-        cardStub.setLayoutResource(R.layout.incognito_tracking_protection_card);
+-        cardStub.inflate();
+-        descriptionView.formatTrackingProtectionText(getContext(), this);
++        // Bare: no tracking protection card. Whether third-party cookies are blocked is a setting
++        // the user controls, and the card's link went to a Google help page.
+     }
+ 
+     @Override
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
+index 6503b580921..25df211cca1 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
+@@ -20,6 +20,7 @@ import android.view.MenuItem;
+ import android.view.View;
+ 
+ import androidx.annotation.VisibleForTesting;
++import androidx.preference.ListPreference;
+ import androidx.preference.Preference;
+ 
+ import org.chromium.base.ApiCompatibilityUtils;
+@@ -35,6 +36,7 @@ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.enterprise.util.ManagedBrowserUtils;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.incognito.reauth.BareIncognitoLockPolicy;
+ import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthSettingSwitchPreference;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+@@ -91,6 +93,10 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+     private static final String PREF_SYNC_AND_SERVICES_LINK = "sync_and_services_link";
+     private static final String PREF_PRIVACY_GUIDE = "privacy_guide";
+     private static final String PREF_INCOGNITO_LOCK = "incognito_lock";
++    private static final String PREF_BARE_INCOGNITO_BIOMETRIC_ONLY = "bare_incognito_biometric_only";
++    private static final String PREF_BARE_INCOGNITO_WIPE_AFTER = "bare_incognito_wipe_after";
++    private static final String PREF_BARE_INCOGNITO_QUIET_ENTRY = "bare_incognito_quiet_entry";
++    private static final String PREF_BARE_INCOGNITO_HAPTIC = "bare_incognito_haptic";
+     private static final String PREF_JAVASCRIPT_OPTIMIZER = "javascript_optimizer";
+     @VisibleForTesting static final String PREF_DO_NOT_TRACK = "do_not_track";
+     @VisibleForTesting static final String PREF_UNIVERSAL_OPT_OUT = "universal_opt_out";
+@@ -169,6 +175,7 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+                 (IncognitoReauthSettingSwitchPreference) findPreference(PREF_INCOGNITO_LOCK);
+         mIncognitoLockSettings = new IncognitoLockSettings(incognitoReauthPreference, getProfile());
+         mIncognitoLockSettings.setUpIncognitoReauthPreference(getActivity());
++        initBareIncognitoPreferences();
+ 
+         maybeShowAdvancedProtectionSection();
+ 
+@@ -584,4 +591,43 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+ 
+                 }
+             };
++
++    /** Bare's additions to the Incognito section: how it unlocks, wiping, and how it is entered. */
++    private void initBareIncognitoPreferences() {
++        ChromeSwitchPreference biometricOnly = findPreference(PREF_BARE_INCOGNITO_BIOMETRIC_ONLY);
++        if (biometricOnly != null) {
++            biometricOnly.setChecked(BareIncognitoLockPolicy.isBiometricOnly());
++            biometricOnly.setOnPreferenceChangeListener(
++                    (preference, newValue) -> {
++                        BareIncognitoLockPolicy.setBiometricOnly((boolean) newValue);
++                        return true;
++                    });
++        }
++        ListPreference wipe = findPreference(PREF_BARE_INCOGNITO_WIPE_AFTER);
++        if (wipe != null) {
++            wipe.setValue(String.valueOf(BareIncognitoLockPolicy.getWipeAfter()));
++            wipe.setOnPreferenceChangeListener(
++                    (preference, newValue) -> {
++                        BareIncognitoLockPolicy.setWipeAfter(Integer.parseInt((String) newValue));
++                        return true;
++                    });
++        }
++        bindIncognitoSwitch(
++                PREF_BARE_INCOGNITO_QUIET_ENTRY,
++                ChromePreferenceKeys.BARE_INCOGNITO_QUIET_ENTRY);
++        bindIncognitoSwitch(
++                PREF_BARE_INCOGNITO_HAPTIC, ChromePreferenceKeys.BARE_INCOGNITO_ENTRY_HAPTIC);
++    }
++
++    /** A switch kept in shared preferences that is on unless the user turned it off. */
++    private void bindIncognitoSwitch(String preferenceKey, String storedKey) {
++        ChromeSwitchPreference preference = findPreference(preferenceKey);
++        if (preference == null) return;
++        preference.setChecked(ChromeSharedPreferences.getInstance().readBoolean(storedKey, true));
++        preference.setOnPreferenceChangeListener(
++                (p, newValue) -> {
++                    ChromeSharedPreferences.getInstance().writeBoolean(storedKey, (boolean) newValue);
++                    return true;
++                });
++    }
+ }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index d68f243c5d4..0d015c67afa 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assertNonNull;
+ import static org.chromium.build.NullUtil.assumeNonNull;
+ import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.ADAPTIVE_TOOLBAR_CUSTOMIZATION_SETTINGS;
+ 
++import android.view.HapticFeedbackConstants;
+ import android.app.Activity;
+ import android.content.ComponentCallbacks;
+ import android.content.Context;
+@@ -17,6 +18,7 @@ import android.content.res.Configuration;
+ import android.graphics.Point;
+ import android.graphics.Rect;
+ import android.graphics.drawable.Drawable;
++import android.os.Build;
+ import android.os.Handler;
+ import android.os.Looper;
+ import android.transition.ChangeBounds;
+@@ -150,6 +152,7 @@ import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler;
+ import org.chromium.chrome.browser.page_info.ChromePageInfo;
+ import org.chromium.chrome.browser.partnercustomizations.PartnerBrowserCustomizations;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.readaloud.ReadAloudController;
+ import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
+@@ -2745,6 +2748,19 @@ public class ToolbarManager
+                         ActionProperties.ON_PRESS_CALLBACK,
+                         v -> {
+                             boolean goingIncognito = !tabModelSelector.isIncognitoSelected();
++                            if (goingIncognito
++                                    && ChromeSharedPreferences.getInstance()
++                                            .readBoolean(
++                                                    ChromePreferenceKeys
++                                                            .BARE_INCOGNITO_ENTRY_HAPTIC,
++                                                    true)) {
++                                // Follows the phone's own touch feedback setting, and does
++                                // nothing on a phone that has no haptics.
++                                v.performHapticFeedback(
++                                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
++                                                ? HapticFeedbackConstants.CONFIRM
++                                                : HapticFeedbackConstants.VIRTUAL_KEY);
++                            }
+                             if (goingIncognito
+                                     && tabModelSelector.getModel(/* incognito= */ true).getCount()
+                                             == 0) {
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index 16baffd0af6..1bb0b7b70f5 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -439,6 +439,7 @@ if (is_android) {
+       "src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcherUnitTest.java",
+       "src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomizationUnitTest.java",
++      "src/org/chromium/chrome/browser/incognito/reauth/BareIncognitoLockPolicyUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java",
+       "src/org/chromium/chrome/browser/services/gcm/BarePushDistributorUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareMediaProbeUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/incognito/reauth/BareIncognitoLockPolicyUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/incognito/reauth/BareIncognitoLockPolicyUnitTest.java
+new file mode 100644
+index 00000000000..89ea60c7639
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/incognito/reauth/BareIncognitoLockPolicyUnitTest.java
+@@ -0,0 +1,95 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.incognito.reauth;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.After;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++/** Unit tests for {@link BareIncognitoLockPolicy}. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareIncognitoLockPolicyUnitTest {
++    @After
++    public void tearDown() {
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.BARE_INCOGNITO_BIOMETRIC_ONLY);
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.BARE_INCOGNITO_WIPE_AFTER);
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.BARE_INCOGNITO_FAILED_ATTEMPTS);
++    }
++
++    @Test
++    public void testDefaultsAreTheStockLockAndNoWipe() {
++        assertFalse(BareIncognitoLockPolicy.isBiometricOnly());
++        assertEquals(0, BareIncognitoLockPolicy.getWipeAfter());
++    }
++
++    @Test
++    public void testNeverWipesWhenOff() {
++        for (int i = 0; i < 20; i++) {
++            assertFalse(BareIncognitoLockPolicy.recordFailure());
++        }
++        assertEquals(0, BareIncognitoLockPolicy.getFailures());
++    }
++
++    @Test
++    public void testWipesOnTheLastAllowedFailureAndStartsOver() {
++        BareIncognitoLockPolicy.setWipeAfter(3);
++        assertFalse(BareIncognitoLockPolicy.recordFailure());
++        assertFalse(BareIncognitoLockPolicy.recordFailure());
++        assertTrue(BareIncognitoLockPolicy.recordFailure());
++        // The count starts over after a wipe.
++        assertEquals(0, BareIncognitoLockPolicy.getFailures());
++        assertFalse(BareIncognitoLockPolicy.recordFailure());
++    }
++
++    @Test
++    public void testOneFailureWipesWhenSetToOne() {
++        BareIncognitoLockPolicy.setWipeAfter(1);
++        assertTrue(BareIncognitoLockPolicy.recordFailure());
++    }
++
++    @Test
++    public void testAGoodUnlockClearsTheCount() {
++        BareIncognitoLockPolicy.setWipeAfter(3);
++        BareIncognitoLockPolicy.recordFailure();
++        BareIncognitoLockPolicy.recordFailure();
++        BareIncognitoLockPolicy.resetFailures();
++        assertFalse(BareIncognitoLockPolicy.recordFailure());
++        assertEquals(1, BareIncognitoLockPolicy.getFailures());
++    }
++
++    @Test
++    public void testChangingTheChoiceClearsTheCount() {
++        BareIncognitoLockPolicy.setWipeAfter(5);
++        BareIncognitoLockPolicy.recordFailure();
++        BareIncognitoLockPolicy.setWipeAfter(3);
++        assertEquals(0, BareIncognitoLockPolicy.getFailures());
++    }
++
++    @Test
++    public void testAValueThatIsNotOfferedMeansNever() {
++        ChromeSharedPreferences.getInstance()
++                .writeInt(ChromePreferenceKeys.BARE_INCOGNITO_WIPE_AFTER, 2);
++        assertEquals(0, BareIncognitoLockPolicy.getWipeAfter());
++    }
++
++    @Test
++    public void testBiometricOnlyIsStored() {
++        BareIncognitoLockPolicy.setBiometricOnly(true);
++        assertTrue(BareIncognitoLockPolicy.isBiometricOnly());
++        BareIncognitoLockPolicy.setBiometricOnly(false);
++        assertFalse(BareIncognitoLockPolicy.isBiometricOnly());
++    }
++}
+diff --git a/chrome/browser/device_reauth/android/java/src/org/chromium/chrome/browser/device_reauth/DeviceAuthenticatorController.java b/chrome/browser/device_reauth/android/java/src/org/chromium/chrome/browser/device_reauth/DeviceAuthenticatorController.java
+index 4d0196cb72e..3e22f443de9 100644
+--- a/chrome/browser/device_reauth/android/java/src/org/chromium/chrome/browser/device_reauth/DeviceAuthenticatorController.java
++++ b/chrome/browser/device_reauth/android/java/src/org/chromium/chrome/browser/device_reauth/DeviceAuthenticatorController.java
+@@ -24,7 +24,7 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ 
+ @NullMarked
+-class DeviceAuthenticatorController {
++public class DeviceAuthenticatorController {
+     FragmentActivity mActivity;
+     Delegate mDelegate;
+     private @Nullable BiometricPrompt mBiometricPrompt;
+@@ -40,6 +40,32 @@ class DeviceAuthenticatorController {
+         void onAuthenticationCompleted(@DeviceAuthUIResult int result);
+     }
+ 
++    // Bare: a caller can ask for the next prompt to take fingerprint or face only, and can ask
++    // whether the last one ended because the user cancelled it. Both are read and cleared around
++    // one prompt, so another caller of this class is not affected.
++    private static boolean sBiometricOnlyNext;
++    private static boolean sLastWasCancelled;
++    private static @Nullable Runnable sMismatchListener;
++
++    /**
++     * Called each time a fingerprint or face is not recognised during a prompt. The system shows
++     * the prompt's own retry and reports nothing else for a wrong screen lock PIN, so this is the
++     * one failed attempt the app is told about as it happens.
++     */
++    public static void setMismatchListener(@Nullable Runnable listener) {
++        sMismatchListener = listener;
++    }
++
++    /** The next prompt takes fingerprint or face only, if the device has one enrolled. */
++    public static void setBiometricOnlyForNextPrompt(boolean biometricOnly) {
++        sBiometricOnlyNext = biometricOnly;
++    }
++
++    /** Whether the last prompt ended because the user cancelled it rather than failing it. */
++    public static boolean wasLastPromptCancelled() {
++        return sLastWasCancelled;
++    }
++
+     public DeviceAuthenticatorController(FragmentActivity activity, Delegate delegate) {
+         mActivity = activity;
+         mDelegate = delegate;
+@@ -91,16 +117,31 @@ class DeviceAuthenticatorController {
+      * be called before this method.
+      */
+     public void authenticate() {
+-        PromptInfo promptInfo =
++        // Biometric only needs a biometric to be enrolled; without one the screen lock is the
++        // only way in, and refusing it would lock the user out of their own tabs.
++        boolean biometricOnly =
++                sBiometricOnlyNext
++                        && (canAuthenticateWithBiometric() == BiometricsAvailability.AVAILABLE
++                                || canAuthenticateWithBiometric()
++                                        == BiometricsAvailability.AVAILABLE_NO_FALLBACK);
++        sBiometricOnlyNext = false;
++        PromptInfo.Builder promptBuilder =
+                 new PromptInfo.Builder()
+                         .setTitle(
+                                 mActivity.getString(R.string.password_filling_reauth_prompt_title))
+-                        .setConfirmationRequired(false)
+-                        .setAllowedAuthenticators(
+-                                Authenticators.BIOMETRIC_STRONG
+-                                        | Authenticators.BIOMETRIC_WEAK
+-                                        | Authenticators.DEVICE_CREDENTIAL)
+-                        .build();
++                        .setConfirmationRequired(false);
++        if (biometricOnly) {
++            promptBuilder
++                    .setAllowedAuthenticators(
++                            Authenticators.BIOMETRIC_STRONG | Authenticators.BIOMETRIC_WEAK)
++                    .setNegativeButtonText(mActivity.getString(android.R.string.cancel));
++        } else {
++            promptBuilder.setAllowedAuthenticators(
++                    Authenticators.BIOMETRIC_STRONG
++                            | Authenticators.BIOMETRIC_WEAK
++                            | Authenticators.DEVICE_CREDENTIAL);
++        }
++        PromptInfo promptInfo = promptBuilder.build();
+         mBiometricPrompt =
+                 new BiometricPrompt(
+                         mActivity,
+@@ -108,13 +149,20 @@ class DeviceAuthenticatorController {
+                             @Override
+                             public void onAuthenticationError(
+                                     int errorCode, CharSequence errString) {
+-                                if (errorCode == BiometricPrompt.ERROR_USER_CANCELED) {
++                                if (errorCode == BiometricPrompt.ERROR_USER_CANCELED
++                                        || errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON) {
+                                     onAuthenticationCompleted(DeviceAuthUIResult.CANCELED_BY_USER);
+                                     return;
+                                 }
+                                 onAuthenticationCompleted(DeviceAuthUIResult.FAILED);
+                             }
+ 
++                            @Override
++                            public void onAuthenticationFailed() {
++                                Runnable listener = sMismatchListener;
++                                if (listener != null) listener.run();
++                            }
++
+                             @Override
+                             public void onAuthenticationSucceeded(
+                                     BiometricPrompt.AuthenticationResult result) {
+@@ -142,6 +190,7 @@ class DeviceAuthenticatorController {
+     }
+ 
+     private void onAuthenticationCompleted(@DeviceAuthUIResult int result) {
++        sLastWasCancelled = result == DeviceAuthUIResult.CANCELED_BY_USER;
+         mDelegate.onAuthenticationCompleted(result);
+     }
+ 
+diff --git a/chrome/browser/incognito/BUILD.gn b/chrome/browser/incognito/BUILD.gn
+index 03fe5409f90..f4bd66a79a7 100644
+--- a/chrome/browser/incognito/BUILD.gn
++++ b/chrome/browser/incognito/BUILD.gn
+@@ -9,6 +9,7 @@ android_library("java") {
+   sources = [
+     "android/java/src/org/chromium/chrome/browser/incognito/IncognitoStartup.java",
+     "android/java/src/org/chromium/chrome/browser/incognito/IncognitoTabPersistence.java",
++    "android/java/src/org/chromium/chrome/browser/incognito/reauth/BareIncognitoLockPolicy.java",
+     "android/java/src/org/chromium/chrome/browser/incognito/reauth/FullScreenIncognitoReauthCoordinator.java",
+     "android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthController.java",
+     "android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthControllerImpl.java",
+diff --git a/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/BareIncognitoLockPolicy.java b/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/BareIncognitoLockPolicy.java
+new file mode 100644
+index 00000000000..ce259ee0708
+--- /dev/null
++++ b/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/BareIncognitoLockPolicy.java
+@@ -0,0 +1,79 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.incognito.reauth;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++/**
++ * What Bare adds to the Incognito lock: unlocking with fingerprint or face only, and wiping
++ * Incognito after a number of failed unlocks in a row.
++ *
++ * <p>A failure is a prompt that ended without unlocking and was not simply cancelled. Cancelling
++ * does not count, so putting the phone down in the middle of the prompt cannot wipe anything. The
++ * count survives a restart and is cleared by a good unlock.
++ */
++@NullMarked
++public final class BareIncognitoLockPolicy {
++    /** The numbers of failed unlocks the user can pick; 0 never wipes. */
++    public static final int[] WIPE_CHOICES = {0, 1, 3, 5};
++
++    private BareIncognitoLockPolicy() {}
++
++    public static boolean isBiometricOnly() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_INCOGNITO_BIOMETRIC_ONLY, false);
++    }
++
++    public static void setBiometricOnly(boolean biometricOnly) {
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_INCOGNITO_BIOMETRIC_ONLY, biometricOnly);
++    }
++
++    /** How many failed unlocks in a row wipe Incognito, or 0 for never. */
++    public static int getWipeAfter() {
++        int stored =
++                ChromeSharedPreferences.getInstance()
++                        .readInt(ChromePreferenceKeys.BARE_INCOGNITO_WIPE_AFTER, 0);
++        for (int choice : WIPE_CHOICES) {
++            if (choice == stored) return stored;
++        }
++        return 0;
++    }
++
++    public static void setWipeAfter(int attempts) {
++        ChromeSharedPreferences.getInstance()
++                .writeInt(ChromePreferenceKeys.BARE_INCOGNITO_WIPE_AFTER, attempts);
++        resetFailures();
++    }
++
++    static int getFailures() {
++        return ChromeSharedPreferences.getInstance()
++                .readInt(ChromePreferenceKeys.BARE_INCOGNITO_FAILED_ATTEMPTS, 0);
++    }
++
++    static void resetFailures() {
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.BARE_INCOGNITO_FAILED_ATTEMPTS);
++    }
++
++    /**
++     * Counts one failed unlock. Returns whether that was the last one allowed, in which case the
++     * count is cleared and Incognito is to be wiped.
++     */
++    static boolean recordFailure() {
++        int wipeAfter = getWipeAfter();
++        if (wipeAfter == 0) return false;
++        int failures = getFailures() + 1;
++        if (failures >= wipeAfter) {
++            resetFailures();
++            return true;
++        }
++        ChromeSharedPreferences.getInstance()
++                .writeInt(ChromePreferenceKeys.BARE_INCOGNITO_FAILED_ATTEMPTS, failures);
++        return false;
++    }
++}
+diff --git a/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthControllerImpl.java b/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthControllerImpl.java
+index 9519243c95d..631a94e0254 100644
+--- a/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthControllerImpl.java
++++ b/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthControllerImpl.java
+@@ -4,6 +4,7 @@
+ 
+ package org.chromium.chrome.browser.incognito.reauth;
+ 
++import org.chromium.chrome.browser.device_reauth.DeviceAuthenticatorController;
+ import static org.chromium.build.NullUtil.assumeNonNull;
+ 
+ import android.os.Bundle;
+@@ -26,6 +27,7 @@ import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
+ import org.chromium.chrome.browser.lifecycle.SaveInstanceStateObserver;
+ import org.chromium.chrome.browser.lifecycle.StartStopWithNativeObserver;
+ import org.chromium.chrome.browser.profiles.Profile;
++import org.chromium.chrome.browser.tabmodel.IncognitoTabHostUtils;
+ import org.chromium.chrome.browser.tabmodel.IncognitoTabModelObserver;
+ import org.chromium.chrome.browser.tabmodel.TabModel;
+ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+@@ -82,6 +84,7 @@ public class IncognitoReauthControllerImpl
+ 
+                 @Override
+                 public void onIncognitoReauthSuccess() {
++                    BareIncognitoLockPolicy.resetFailures();
+                     mIncognitoReauthPending = false;
+                     hideDialogIfShowing(DialogDismissalCause.ACTION_ON_DIALOG_COMPLETED);
+                     for (IncognitoReauthManager.IncognitoReauthCallback callback :
+@@ -92,6 +95,13 @@ public class IncognitoReauthControllerImpl
+ 
+                 @Override
+                 public void onIncognitoReauthFailure() {
++                    // Bare: too many failed unlocks in a row wipe Incognito, if the user chose
++                    // that. A prompt the user cancelled is not a failure.
++                    if (!DeviceAuthenticatorController.wasLastPromptCancelled()
++                            && BareIncognitoLockPolicy.recordFailure()) {
++                        wipeIncognito();
++                        return;
++                    }
+                     for (IncognitoReauthManager.IncognitoReauthCallback callback :
+                             mIncognitoReauthCallbackList) {
+                         callback.onIncognitoReauthFailure();
+@@ -249,6 +259,8 @@ public class IncognitoReauthControllerImpl
+ 
+         mActivityLifecycleDispatcher.register(this);
+         ApplicationStatus.registerTaskVisibilityListener(this);
++        // Bare: a fingerprint or face that was not recognised counts as a failed attempt.
++        DeviceAuthenticatorController.setMismatchListener(this::onBiometricMismatch);
+ 
+         TabModelUtils.runOnTabStateInitialized(
+                 mTabModelSelector,
+@@ -263,6 +275,7 @@ public class IncognitoReauthControllerImpl
+     @Override
+     @SuppressWarnings("NullAway")
+     public void destroy() {
++        DeviceAuthenticatorController.setMismatchListener(null);
+         ApplicationStatus.unregisterTaskVisibilityListener(this);
+         mActivityLifecycleDispatcher.unregister(this);
+         mTabModelSelector.setIncognitoReauthDialogDelegate(null);
+@@ -405,6 +418,22 @@ public class IncognitoReauthControllerImpl
+         mOnBackPressedInFullScreenReauthCallback.setEnabled(showFullScreen);
+     }
+ 
++    /**
++     * Closes every Incognito tab, which also ends the Incognito session and so clears its cookies,
++     * history and site data. The regular tabs are shown first, since the session is only ended
++     * once nothing is showing it.
++     */
++    private void onBiometricMismatch() {
++        if (BareIncognitoLockPolicy.recordFailure()) wipeIncognito();
++    }
++
++    private void wipeIncognito() {
++        hideDialogIfShowing(DialogDismissalCause.ACTION_ON_DIALOG_COMPLETED);
++        mIncognitoReauthPending = false;
++        mTabModelSelector.selectModel(/* incognito= */ false);
++        IncognitoTabHostUtils.closeAllIncognitoTabs();
++    }
++
+     private void hideDialogIfShowing(@DialogDismissalCause int dismissalCause) {
+         if (mIncognitoReauthCoordinator != null) {
+             mOnBackPressedInFullScreenReauthCallback.setEnabled(false);
+diff --git a/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthManager.java b/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthManager.java
+index 10486421806..c634e0a4523 100644
+--- a/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthManager.java
++++ b/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthManager.java
+@@ -15,6 +15,7 @@ import org.chromium.base.TriStateUtils;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.chrome.browser.device_reauth.BiometricStatus;
+ import org.chromium.chrome.browser.device_reauth.DeviceAuthSource;
++import org.chromium.chrome.browser.device_reauth.DeviceAuthenticatorController;
+ import org.chromium.chrome.browser.device_reauth.ReauthenticatorBridge;
+ import org.chromium.chrome.browser.preferences.Pref;
+ import org.chromium.chrome.browser.profiles.Profile;
+@@ -65,6 +66,8 @@ public class IncognitoReauthManager {
+             return;
+         }
+ 
++        DeviceAuthenticatorController.setBiometricOnlyForNextPrompt(
++                BareIncognitoLockPolicy.isBiometricOnly());
+         mReauthenticatorBridge.reauthenticate(
+                 success -> {
+                     if (success) {
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index fa28634ed71..13ee1cabf64 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -459,10 +459,20 @@ public final class ChromePreferenceKeys {
+     /** Menu items the user has hidden from the three-dot menu, as stable names, not ids. */
+     public static final String BARE_APP_MENU_HIDDEN_ITEMS = "Bare.AppMenu.HiddenItems";
+ 
++    /** Incognito lock: unlock with fingerprint or face only, not the screen lock. */
++    public static final String BARE_INCOGNITO_BIOMETRIC_ONLY = "Bare.Incognito.BiometricOnly";
+ 
++    /** Incognito lock: wipe Incognito after this many failed unlocks in a row; 0 is never. */
++    public static final String BARE_INCOGNITO_WIPE_AFTER = "Bare.Incognito.WipeAfter";
+ 
++    /** Incognito lock: failed unlocks since the last good one. */
++    public static final String BARE_INCOGNITO_FAILED_ATTEMPTS = "Bare.Incognito.FailedAttempts";
+ 
++    /** Open the first Incognito tab without the new-tab animation. On unless turned off. */
++    public static final String BARE_INCOGNITO_QUIET_ENTRY = "Bare.Incognito.QuietEntry";
+ 
++    /** A short tick when switching into Incognito, where the device supports it. On unless off. */
++    public static final String BARE_INCOGNITO_ENTRY_HAPTIC = "Bare.Incognito.EntryHaptic";
+ 
+     /** How many times the tip about editing the menu has been shown; 3 or more is finished. */
+     public static final String BARE_APP_MENU_EDIT_TIP_COUNT = "Bare.AppMenu.EditTipCount";
+@@ -1369,6 +1379,11 @@ public final class ChromePreferenceKeys {
+                 BARE_USER_AGENT_CUSTOM,
+                 BARE_USER_AGENT_FIT_PHONE,
+                 BARE_APP_MENU_HIDDEN_ITEMS,
++                BARE_INCOGNITO_BIOMETRIC_ONLY,
++                BARE_INCOGNITO_WIPE_AFTER,
++                BARE_INCOGNITO_FAILED_ATTEMPTS,
++                BARE_INCOGNITO_QUIET_ENTRY,
++                BARE_INCOGNITO_ENTRY_HAPTIC,
+                 BARE_APP_MENU_EDIT_TIP_COUNT,
+                 BARE_MEDIA_FULLSCREEN_FOLLOWS_PHONE,
+                 BARE_USER_AGENT_PRESET,
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 4a0f4cfa047..4fc2fc7b148 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4492,6 +4492,39 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_MINIMAL_LAYOUT_SUMMARY" desc="Summary of the setting that removes the bottom button bar. Applies after a restart.">
+         One row only: the address bar with New tab, Tabs and Menu. Applies after a restart.
+       </message>
++      <message name="IDS_BARE_INCOGNITO_BIOMETRIC_ONLY_TITLE" desc="Incognito lock option: unlock with fingerprint or face only. [CHAR_LIMIT=48]">
++        Unlock with fingerprint or face only
++      </message>
++      <message name="IDS_BARE_INCOGNITO_BIOMETRIC_ONLY_SUMMARY" desc="Explains the biometric-only Incognito lock option and its fallback.">
++        Does not accept the screen lock PIN, pattern or password. Needs a fingerprint or face enrolled; without one the screen lock is used so you are never locked out. Applies when Lock Incognito tabs is on.
++      </message>
++      <message name="IDS_BARE_INCOGNITO_WIPE_TITLE" desc="Incognito lock option: wipe Incognito after failed unlocks. [CHAR_LIMIT=48]">
++        Wipe Incognito after failed unlocks
++      </message>
++      <message name="IDS_BARE_INCOGNITO_WIPE_NEVER" desc="Wipe option: never. [CHAR_LIMIT=24]">
++        Never
++      </message>
++      <message name="IDS_BARE_INCOGNITO_WIPE_1" desc="Wipe option: after one failed unlock. [CHAR_LIMIT=32]">
++        After 1 failed attempt
++      </message>
++      <message name="IDS_BARE_INCOGNITO_WIPE_3" desc="Wipe option: after three failed unlocks in a row. [CHAR_LIMIT=32]">
++        After 3 failed attempts
++      </message>
++      <message name="IDS_BARE_INCOGNITO_WIPE_5" desc="Wipe option: after five failed unlocks in a row. [CHAR_LIMIT=32]">
++        After 5 failed attempts
++      </message>
++      <message name="IDS_BARE_INCOGNITO_QUIET_TITLE" desc="Incognito option: no animation when the first Incognito tab opens. [CHAR_LIMIT=48]">
++        Quiet Incognito entry
++      </message>
++      <message name="IDS_BARE_INCOGNITO_QUIET_SUMMARY" desc="Explains the quiet Incognito entry option.">
++        Opens the first Incognito tab without the new tab animation.
++      </message>
++      <message name="IDS_BARE_INCOGNITO_HAPTIC_TITLE" desc="Incognito option: a short tick when switching into Incognito. [CHAR_LIMIT=48]">
++        Tick when entering Incognito
++      </message>
++      <message name="IDS_BARE_INCOGNITO_HAPTIC_SUMMARY" desc="Explains the haptic option. It follows the phone's touch feedback setting.">
++        A short vibration when you switch into Incognito, on phones that support it and have touch feedback on.
++      </message>
+       <message name="IDS_BARE_MENU_TIP" desc="A tip at the top of the three-dot menu, shown the first few times. Tapping it dismisses it.">
+         Tip: touch and hold an item to choose which ones this menu shows. Tap here to dismiss.
+       </message>
+diff --git a/components/new_or_sad_tab_strings.grdp b/components/new_or_sad_tab_strings.grdp
+index 30ef6692497..523022a307f 100644
+--- a/components/new_or_sad_tab_strings.grdp
++++ b/components/new_or_sad_tab_strings.grdp
+@@ -163,7 +163,7 @@
+         </message>
+       </if>
+       <message name="IDS_NEW_TAB_OTR_SUBTITLE_WITH_READING_LIST" desc="Subtitle of the Incognito new tab page, explaining to the user that the Incognito mode hides their browsing activity from other people using the same device. The second sentence clarifies that there are two important exceptions from this rule - downloaded files and added bookmarks will be persisted even after the Incognito session is closed." formatter_data="android_java">
+-        Others who use this device won’t see your activity, so you can browse more privately. This won't change how data is collected by websites you visit and the services they use, including Google. Downloads, bookmarks and reading list items will be saved.
++        Bare won’t keep a record of what you do in these tabs on this device, so other people who use it won’t see it. Websites, your network and any extension you allow here can still see your activity. Downloads and bookmarks you make are kept.
+       </message>
+        <if expr="_google_chrome">
+         <message name="IDS_NEW_TAB_OTR_NOT_SAVED" desc="Bullet points listing data that are not saved in the Incognito mode. 'Browsing history' means a history of visited websites. 'Cookies and site data' refers to data saved by websites on the user's device (e.g. sign-in state, preferences, etc.). 'Information entered in forms' refers to names, addresses, passwords etc. that users enter into forms on the web." formatter_data="android_java">
+@@ -189,8 +189,8 @@
+         Your activity <ph name="BEGIN_EMPHASIS">&lt;em&gt;</ph>might still be visible<ph name="END_EMPHASIS">&lt;/em&gt;</ph> to:
+         <ph name="BEGIN_LIST">&lt;ul&gt;</ph>
+           <ph name="LIST_ITEM">&lt;li&gt;</ph>Websites you visit
+-          <ph name="LIST_ITEM">&lt;li&gt;</ph>Your employer or school
+-          <ph name="LIST_ITEM">&lt;li&gt;</ph>Your internet service provider
++          <ph name="LIST_ITEM">&lt;li&gt;</ph>Extensions you allow in Incognito
++          <ph name="LIST_ITEM">&lt;li&gt;</ph>Your network, employer or school
+         <ph name="END_LIST">&lt;/ul&gt;</ph>
+       </message>
+       <message name="IDS_NEW_TAB_OPENS_HC_ARTICLE_IN_NEW_TAB" desc="ARIA (accessibility) label describing a link which opens a help center article in a new tab.">
+-- 
+2.34.1
+

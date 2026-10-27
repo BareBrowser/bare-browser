@@ -1,0 +1,55 @@
+From 3d1e85098a6fdec9c692d89d9bdb3a508bf03534 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Tue, 25 Aug 2026 00:39:09 +0000
+Subject: [PATCH] Patch 0000086
+
+---
+ .../chrome/browser/bare/BareUpdateCheck.java        | 10 ++++++++++
+ .../chrome/browser/settings/MainSettings.java       | 13 +++++++++++++
+ 2 files changed, 23 insertions(+)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
+index a47025fcf91..6e201bf72a9 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
+@@ -55,6 +55,16 @@ public class BareUpdateCheck {
+     public static final String RELEASES_PAGE =
+             "https://github.com/Shshtwy/bare-browser/releases/latest";
+ 
++    /**
++     * The page for one specific release.
++     *
++     * <p>The tag that was found is used rather than /latest, so the page describes the version
++     * the row just offered even if a newer one appears between the check and the tap.
++     */
++    public static String releasePageFor(String tag) {
++        return "https://github.com/Shshtwy/bare-browser/releases/tag/" + tag;
++    }
++
+     private static final long CHECK_INTERVAL_MS = TimeUnit.DAYS.toMillis(1);
+     private static final long REMINDER_INTERVAL_MS = TimeUnit.DAYS.toMillis(7);
+     private static final int TIMEOUT_MS = 15000;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+index 061296dff6f..1dd96d23a11 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+@@ -672,6 +672,19 @@ public class MainSettings extends ChromeBaseSettingsFragment
+                 pref -> {
+                     // Opening the row is acknowledgement, whether or not they go on to update.
+                     BareUpdateCheck.clearBadge();
++
++                    // If a release is already known to be newer, the useful thing is to show it
++                    // rather than ask the server again. Nothing is downloaded or installed here:
++                    // the page opens in a tab and what happens next is the user's decision.
++                    String latest = BareUpdateCheck.getLatestTag();
++                    if (latest != null && BareUpdateCheck.isNewerThanCurrent(latest)) {
++                        if (mSettingsCustomTabLauncher != null) {
++                            mSettingsCustomTabLauncher.openUrlInCct(
++                                    getContext(), BareUpdateCheck.releasePageFor(latest));
++                        }
++                        return true;
++                    }
++
+                     pref.setSummary(R.string.bare_update_checking);
+                     BareUpdateCheck.checkNow(
+                             found -> {

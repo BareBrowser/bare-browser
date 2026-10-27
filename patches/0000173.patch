@@ -1,0 +1,112 @@
+From ffd4127f73cdba33bafdb51e67745b04239cf570 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 21 Oct 2026 23:44:19 +0000
+Subject: [PATCH] Patch 0000173
+
+---
+ ...ktop_site_web_contents_observer_android.cc | 62 +++++++++++++++++++
+ ...sktop_site_web_contents_observer_android.h |  1 +
+ 2 files changed, 63 insertions(+)
+
+diff --git a/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc b/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
+index 4d9408f879c..363c177cc0e 100644
+--- a/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
++++ b/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
+@@ -14,6 +14,7 @@
+ #include "base/metrics/histogram_functions.h"
+ #include "base/strings/string_split.h"
+ #include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
+ #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+ #include "chrome/browser/flags/android/chrome_feature_list.h"
+ #include "chrome/browser/preferences/android/chrome_shared_preferences.h"
+@@ -26,6 +27,8 @@
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/common/isolated_world_ids.h"
+ #include "content/public/common/content_features.h"
+ #include "services/metrics/public/cpp/ukm_builders.h"
+ #include "ui/display/screen.h"
+@@ -132,6 +135,65 @@ void RequestDesktopSiteWebContentsObserverAndroid::DidStartNavigation(
+       .Record(ukm::UkmRecorder::Get());
+ }
+ 
++namespace {
++
++// Lays the Chrome Web Store out for a phone.
++//
++// The store gives the install button only to a desktop user agent, and its
++// desktop pages are built for a window at least 1280 px wide: the body and the
++// header carry that as a minimum width, so Chromium widens the page to fit and
++// the phone shows a crop of it. This runs in an isolated world, adds the rule
++// that drops the minimum, stacks the row that holds the category list and the
++// results, and gives the result grids two columns. It looks at the shapes
++// rather than the store's class names, which change with every deploy, and it
++// runs again when the page changes itself, as the store does without
++// navigating.
++const char kWebStoreFitScript[] = R"JS((function(){
++ if (window.__bareStoreFit) return 'already'; window.__bareStoreFit=true;
++ var STYLE='bare-store-fit';
++ var css='html,body,header,header *{min-width:0!important}';
++ function addCss(){ if(!document.getElementById(STYLE)){ var s=document.createElement('style'); s.id=STYLE; s.textContent=css; (document.head||document.documentElement).appendChild(s);} }
++ function fit(){
++  addCss();
++  var vw=screen.width; if(!(vw>0) || vw>700) return;
++  var main=document.querySelector('main'); if(!main) return;
++  for(var e=main.parentElement; e && e!==document.body; e=e.parentElement){
++    if(getComputedStyle(e).flexDirection==='row' && getComputedStyle(e).display.indexOf('flex')>=0) e.style.setProperty('flex-direction','column','important');
++  }
++  var grids=main.querySelectorAll('*');
++  for(var g=0;g<grids.length;g++){ if(getComputedStyle(grids[g]).display.indexOf('grid')>=0 && grids[g].getBoundingClientRect().width>vw*0.6){ grids[g].style.setProperty('grid-template-columns','repeat(2,minmax(0,1fr))','important'); } }
++  for(var pass=0;pass<4;pass++){
++    var changed=false, els=document.body.querySelectorAll('*');
++    for(var i=0;i<els.length;i++){
++      var el=els[i], cs=getComputedStyle(el); if(cs.position==='fixed') continue;
++      var r=el.getBoundingClientRect(); if(r.width<=vw+1 && r.left>=-1) continue;
++      if(cs.display.indexOf('grid')>=0){ el.style.setProperty('grid-template-columns','repeat(2,minmax(0,1fr))','important'); }
++      el.style.setProperty('width','100%','important'); el.style.setProperty('min-width','0','important'); el.style.setProperty('max-width','100%','important');
++      el.style.setProperty('margin-left','0','important'); el.style.setProperty('margin-right','0','important'); el.style.setProperty('box-sizing','border-box','important');
++      changed=true;
++    }
++    if(!changed) break;
++  }
++ }
++ window.__bareFit=fit; var t=0; function later(){ clearTimeout(t); t=setTimeout(fit,120); }
++ fit(); new MutationObserver(later).observe(document.documentElement,{childList:true,subtree:true});
++ return 'installed';
++})()
++)JS";
++
++}  // namespace
++
++void RequestDesktopSiteWebContentsObserverAndroid::DOMContentLoaded(
++    content::RenderFrameHost* render_frame_host) {
++  if (!render_frame_host->IsInPrimaryMainFrame() ||
++      !ShouldKeepWebStoreViewport(web_contents())) {
++    return;
++  }
++  render_frame_host->ExecuteJavaScriptInIsolatedWorld(
++      base::UTF8ToUTF16(std::string_view(kWebStoreFitScript)), base::NullCallback(),
++      content::ISOLATED_WORLD_ID_CONTENT_END);
++}
++
+ WEB_CONTENTS_USER_DATA_KEY_IMPL(RequestDesktopSiteWebContentsObserverAndroid);
+ 
+ // static
+diff --git a/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h b/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h
+index faede21f3af..ea9a1620729 100644
+--- a/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h
++++ b/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h
+@@ -28,6 +28,7 @@ class RequestDesktopSiteWebContentsObserverAndroid
+   // content::WebContentsObserver implementation.
+   void DidStartNavigation(
+       content::NavigationHandle* navigation_handle) override;
++  void DOMContentLoaded(content::RenderFrameHost* render_frame_host) override;
+ 
+   // The Chrome Web Store shows its install button only to a desktop user
+   // agent, so `url` on the store gets one unless the user has set desktop mode
+-- 
+2.34.1
+

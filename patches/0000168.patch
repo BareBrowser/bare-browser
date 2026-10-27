@@ -1,0 +1,422 @@
+From 8d4cc05c5449aad66deb70d35fb16cd1e7ba8d30 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 21 Oct 2026 21:43:42 +0000
+Subject: [PATCH] Patch 0000168
+
+---
+ .../java/res/xml/appearance_preferences.xml   |  7 +++
+ .../settings/AppearanceSettingsFragment.java  | 48 +++++++++++++++++++
+ .../preferences/ChromePreferenceKeys.java     |  8 ++++
+ .../ui/bottombar/BottomBarConfigUtils.java    | 32 +++++++++++++
+ .../BottomBarConfigUtilsUnitTest.java         | 46 ++++++++++++++++++
+ .../strings/android_chrome_strings.grd        | 15 ++++++
+ chrome/browser/ui/android/toolbar/BUILD.gn    |  1 +
+ .../toolbar/ToolbarVariationUtils.java        |  2 +
+ .../adaptive/AdaptiveToolbarFeatures.java     |  3 ++
+ .../adaptive/AdaptiveToolbarPrefs.java        |  8 +++-
+ .../browser/toolbar/top/ToolbarPhone.java     |  8 ++++
+ 11 files changed, 177 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/android/java/res/xml/appearance_preferences.xml b/chrome/android/java/res/xml/appearance_preferences.xml
+index df2c0d940a8..437a48c4e6c 100644
+--- a/chrome/android/java/res/xml/appearance_preferences.xml
++++ b/chrome/android/java/res/xml/appearance_preferences.xml
+@@ -46,4 +46,11 @@ exclusive options. -->
+         android:order="4"
+         android:title="@string/tab_position_settings_title" />
+ 
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_minimal_layout"
++        android:order="5"
++        android:persistent="false"
++        android:title="@string/bare_minimal_layout_title"
++        android:summary="@string/bare_minimal_layout_summary" />
++
+ </PreferenceScreen>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/appearance/settings/AppearanceSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/appearance/settings/AppearanceSettingsFragment.java
+index 774fe010ad7..d6b337f3063 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/appearance/settings/AppearanceSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/appearance/settings/AppearanceSettingsFragment.java
+@@ -9,6 +9,7 @@ import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
+ import android.os.Bundle;
+ 
+ import androidx.annotation.StringRes;
++import androidx.appcompat.app.AlertDialog;
+ import androidx.preference.Preference;
+ 
+ import org.chromium.base.Callback;
+@@ -23,15 +24,18 @@ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarConstants;
+ import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarUtils;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.lifetime.ApplicationLifetime;
+ import org.chromium.chrome.browser.night_mode.NightModeUtils;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.Pref;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.preferences.PrefServiceUtil;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
+ import org.chromium.chrome.browser.settings.ChromeManagedPreferenceDelegate;
+ import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
+ import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarStatePredictor;
++import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.chrome.browser.ui.vertical_tabs.VerticalTabUtils;
+ import org.chromium.components.bookmarks.BookmarkBarVisibilityState;
+ import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+@@ -40,6 +44,7 @@ import org.chromium.components.browser_ui.settings.SettingsUtils;
+ import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
+ import org.chromium.components.prefs.PrefChangeRegistrar;
+ import org.chromium.components.prefs.PrefChangeRegistrar.PrefObserver;
++import org.chromium.ui.base.DeviceFormFactor;
+ 
+ /** Fragment to manage appearance settings. */
+ @NullMarked
+@@ -51,6 +56,8 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
+     public static final String PREF_TOOLBAR_SHORTCUT = "toolbar_shortcut";
+     public static final String PREF_UI_THEME = "ui_theme";
+     public static final String PREF_TAB_POSITION = "tab_position";
++    public static final String PREF_MINIMAL_LAYOUT = "bare_minimal_layout";
++    private static final String PREF_BARE_TOOLBAR = "bare_toolbar";
+ 
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+             ObservableSuppliers.createMonotonic();
+@@ -72,6 +79,7 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
+         initBookmarkBarPref();
+         initToolbarShortcutPref();
+         initTabPositionPref();
++        initMinimalLayoutPref();
+     }
+ 
+     @Override
+@@ -276,6 +284,46 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
+                 });
+     }
+ 
++    /**
++     * The switch for the minimal layout, which leaves out the bottom bar.
++     *
++     * <p>Phones only, since tablets never had the bar. The layout is read when the process starts,
++     * so a change asks for a restart rather than rebuilding the toolbar under the user.
++     */
++    private void initMinimalLayoutPref() {
++        ChromeSwitchPreference minimal = findPreference(PREF_MINIMAL_LAYOUT);
++        if (minimal == null) return;
++        if (DeviceFormFactor.isNonMultiDisplayContextOnTablet(getContext())) {
++            removePreference(PREF_MINIMAL_LAYOUT);
++            return;
++        }
++        // The bar's own shortcuts mean nothing in the layout that has no bar.
++        if (BottomBarConfigUtils.isMinimalLayout()) removePreference(PREF_BARE_TOOLBAR);
++
++        minimal.setChecked(
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, false));
++        minimal.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    ChromeSharedPreferences.getInstance()
++                            .writeBoolean(
++                                    ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, (boolean) newValue);
++                    if (BottomBarConfigUtils.isMinimalLayoutChangePending()) {
++                        new AlertDialog.Builder(
++                                        requireContext(),
++                                        R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                                .setMessage(R.string.bare_minimal_layout_restart_message)
++                                .setPositiveButton(
++                                        R.string.bare_minimal_layout_restart,
++                                        (dialog, which) ->
++                                                ApplicationLifetime.terminate(/* restart= */ true))
++                                .setNegativeButton(R.string.bare_minimal_layout_later, null)
++                                .show();
++                    }
++                    return true;
++                });
++    }
++
+     private void removePreference(String prefKey) {
+         getPreferenceScreen().removePreference(findPreference(prefKey));
+     }
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index d7975d0e6ce..5485f4ebcf9 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -411,6 +411,13 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_ADDRESS_BAR_SWIPE_TABS = "Bare.Toolbar.AddressBarSwipeTabs";
+ 
++    /**
++     * De-Googled build: the minimal layout, which leaves out the bottom bar so the address bar is
++     * the only strip of controls. Read once when the process starts, so a change applies after a
++     * restart.
++     */
++    public static final String BARE_MINIMAL_LAYOUT = "Bare.Appearance.MinimalLayout";
++
+     /**
+      * De-Googled build: the user agent picked in Developer options, as a preset id, or empty for
+      * the default. "custom" takes its string from {@link #BARE_USER_AGENT_CUSTOM}.
+@@ -1307,6 +1314,7 @@ public final class ChromePreferenceKeys {
+                 BARE_USER_AGENT_CUSTOM,
+                 BARE_USER_AGENT_PRESET,
+                 BARE_ADDRESS_BAR_SWIPE_TABS,
++                BARE_MINIMAL_LAYOUT,
+                 BARE_AMOLED_WHEN_SYSTEM_DARK,
+                 WEBSTORE_DESKTOP_SITE_CLEARED,
+                 WEBSTORE_DESKTOP_SITE_SEEDED,
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
+index 0442b44b657..f9edca7ddd3 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
+@@ -27,11 +27,43 @@ public class BottomBarConfigUtils {
+ 
+     private BottomBarConfigUtils() {}
+ 
++    /** What the minimal layout setting said when the process started. */
++    private static @Nullable Boolean sMinimalLayout;
++
++    /**
++     * Whether the user chose the minimal layout, which drops the bottom bar and leaves the address
++     * bar as the only strip of controls.
++     *
++     * <p>Answered once, from what was stored when the process started. The bar is built at startup
++     * and everything that asks whether it exists has to keep getting the same answer, so a change
++     * made in Settings waits for the next start.
++     */
++    public static boolean isMinimalLayout() {
++        if (sMinimalLayout == null) {
++            sMinimalLayout =
++                    ChromeSharedPreferences.getInstance()
++                            .readBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, false);
++        }
++        return sMinimalLayout;
++    }
++
++    /** Whether the stored choice is different from the layout this process started with. */
++    public static boolean isMinimalLayoutChangePending() {
++        return ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, false)
++                != isMinimalLayout();
++    }
++
++    public static void setMinimalLayoutForTesting(@Nullable Boolean minimal) {
++        sMinimalLayout = minimal;
++    }
++
+     // LINT.IfChange(isBottomBarEnabled)
+     /** Whether the bottom bar is enabled. */
+     public static boolean isBottomBarEnabled(Context context) {
+         return !DeviceFormFactor.isNonMultiDisplayContextOnTablet(context)
+                 && !DeviceInfo.isAutomotive()
++                && !isMinimalLayout()
+                 && ChromeFeatureList.sAndroidBottomBar.isEnabled();
+     }
+     // LINT.ThenChange(//chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarVariationUtils.java:isToolbarUiRefactorEnabled)
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtilsUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtilsUnitTest.java
+index 55f36b7aef0..e9939d905b7 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtilsUnitTest.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtilsUnitTest.java
+@@ -13,6 +13,7 @@ import android.content.Context;
+ 
+ import androidx.test.core.app.ApplicationProvider;
+ 
++import org.junit.After;
+ import org.junit.Before;
+ import org.junit.Rule;
+ import org.junit.Test;
+@@ -27,6 +28,8 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
+ import org.chromium.base.test.util.Features.DisableFeatures;
+ import org.chromium.base.test.util.Features.EnableFeatures;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.ui.native_page.NativePage;
+ import org.chromium.url.JUnitTestGURLs;
+@@ -42,6 +45,11 @@ public class BottomBarConfigUtilsUnitTest {
+     @Mock private Tab mTab;
+     @Mock private NativePage mNativePage;
+ 
++    @After
++    public void tearDown() {
++        BottomBarConfigUtils.setMinimalLayoutForTesting(null);
++    }
++
+     @Before
+     public void setUp() {
+         mContext = ApplicationProvider.getApplicationContext();
+@@ -68,6 +76,44 @@ public class BottomBarConfigUtilsUnitTest {
+         assertFalse(BottomBarConfigUtils.isBottomBarEnabled(mContext));
+     }
+ 
++    @Test
++    @EnableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
++    public void testMinimalLayoutTakesTheBottomBarAway() {
++        BottomBarConfigUtils.setMinimalLayoutForTesting(true);
++        assertFalse(BottomBarConfigUtils.isBottomBarEnabled(mContext));
++        BottomBarConfigUtils.setMinimalLayoutForTesting(false);
++        assertTrue(BottomBarConfigUtils.isBottomBarEnabled(mContext));
++    }
++
++    @Test
++    public void testMinimalLayoutIsReadOnceAtStart() {
++        BottomBarConfigUtils.setMinimalLayoutForTesting(null);
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, true);
++        assertTrue(BottomBarConfigUtils.isMinimalLayout());
++
++        // A later change waits for the next start, and says so.
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, false);
++        assertTrue(BottomBarConfigUtils.isMinimalLayout());
++        assertTrue(BottomBarConfigUtils.isMinimalLayoutChangePending());
++
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, true);
++        assertFalse(BottomBarConfigUtils.isMinimalLayoutChangePending());
++
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT);
++        BottomBarConfigUtils.setMinimalLayoutForTesting(null);
++    }
++
++    @Test
++    public void testMinimalLayoutIsOffUntilChosen() {
++        BottomBarConfigUtils.setMinimalLayoutForTesting(null);
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT);
++        assertFalse(BottomBarConfigUtils.isMinimalLayout());
++        assertFalse(BottomBarConfigUtils.isMinimalLayoutChangePending());
++    }
++
+     @Test
+     @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
+     public void testIsBottomBarDisabled() {
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index da022af7a3e..137b34579e1 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4366,6 +4366,21 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_TOOLBAR_SWIPE_VOLUME" desc="Option meaning dragging sideways along the toolbar changes media volume.">
+         Volume
+       </message>
++      <message name="IDS_BARE_MINIMAL_LAYOUT_TITLE" desc="Setting that removes the bottom button bar and leaves only the address bar. [CHAR_LIMIT=40]">
++        Minimal address bar
++      </message>
++      <message name="IDS_BARE_MINIMAL_LAYOUT_SUMMARY" desc="Summary of the setting that removes the bottom button bar. Applies after a restart.">
++        One row only: the address bar with New tab, Tabs and Menu. Applies after a restart.
++      </message>
++      <message name="IDS_BARE_MINIMAL_LAYOUT_RESTART_MESSAGE" desc="Dialog text asking to restart the browser to apply the layout change.">
++        Restart Bare to change the layout.
++      </message>
++      <message name="IDS_BARE_MINIMAL_LAYOUT_RESTART" desc="Button that restarts the browser to apply the layout. [CHAR_LIMIT=20]">
++        Restart
++      </message>
++      <message name="IDS_BARE_MINIMAL_LAYOUT_LATER" desc="Button that closes the restart dialog without restarting. [CHAR_LIMIT=20]">
++        Later
++      </message>
+       <message name="IDS_BARE_TOOLBAR_SWIPE_SWITCH_TABS" desc="Option meaning dragging sideways along the toolbar moves to the next or previous tab.">
+         Switch tabs
+       </message>
+diff --git a/chrome/browser/ui/android/toolbar/BUILD.gn b/chrome/browser/ui/android/toolbar/BUILD.gn
+index 06c8a108a5f..674c8e7a57b 100644
+--- a/chrome/browser/ui/android/toolbar/BUILD.gn
++++ b/chrome/browser/ui/android/toolbar/BUILD.gn
+@@ -15,6 +15,7 @@ android_library("variation_utils_java") {
+   deps = [
+     "//base:build_info_java",
+     "//chrome/browser/flags:java",
++    "//chrome/browser/ui/android/bottombar:config_java",
+     "//ui/android:ui_no_recycler_view_java",
+   ]
+ }
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarVariationUtils.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarVariationUtils.java
+index 241d9954f79..773c6891648 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarVariationUtils.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarVariationUtils.java
+@@ -9,6 +9,7 @@ import android.content.Context;
+ import org.chromium.base.DeviceInfo;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.ui.base.DeviceFormFactor;
+ 
+ /** Utility class for determining the configuration of the toolbar variations. */
+@@ -61,6 +62,7 @@ public final class ToolbarVariationUtils {
+     public static boolean isToolbarUiRefactorEnabled(Context context) {
+         return !DeviceFormFactor.isNonMultiDisplayContextOnTablet(context)
+                 && !DeviceInfo.isAutomotive()
++                && !BottomBarConfigUtils.isMinimalLayout()
+                 && ChromeFeatureList.sAndroidBottomBar.isEnabled();
+     }
+     // LINT.ThenChange(//chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java:isBottomBarEnabled)
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java
+index 261c52838e9..05f060f0424 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java
+@@ -240,6 +240,9 @@ public class AdaptiveToolbarFeatures {
+ 
+     /** Returns the minimum device width below which the toolbar button isn't shown. */
+     public static int getDeviceMinimumWidthForShowingButton() {
++        // The minimal layout has no bottom bar to carry New tab, so the toolbar button is the only
++        // place for it and has to show on narrow phones too. The home button gives way instead.
++        if (BottomBarConfigUtils.isMinimalLayout()) return 0;
+         return DEFAULT_MIN_WIDTH_DP;
+     }
+ }
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarPrefs.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarPrefs.java
+index 3f8c65a7e98..fed0be34e96 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarPrefs.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarPrefs.java
+@@ -9,6 +9,7 @@ import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.ADAPT
+ 
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ 
+ /**
+  * A utility class for handling adaptive toolbar customization user settings used by {@link
+@@ -51,10 +52,15 @@ public class AdaptiveToolbarPrefs {
+         // Share is the most broadly useful of the fixed options. This only changes the default:
+         // every choice, AUTO included, is still offered under Settings > Appearance > Toolbar
+         // shortcut, and an explicit choice is stored and wins over this.
++        //
++        // With the minimal layout there is no bottom bar to hold a New tab button, so the shortcut
++        // takes that place until the user picks something else.
+         return ChromeSharedPreferences.getInstance()
+                 .readInt(
+                         ADAPTIVE_TOOLBAR_CUSTOMIZATION_SETTINGS,
+-                        AdaptiveToolbarButtonVariant.SHARE);
++                        BottomBarConfigUtils.isMinimalLayout()
++                                ? AdaptiveToolbarButtonVariant.NEW_TAB
++                                : AdaptiveToolbarButtonVariant.SHARE);
+     }
+ 
+     /**
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+index 8e38c6764d2..1627f7d6eb7 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+@@ -88,6 +88,7 @@ import org.chromium.chrome.browser.toolbar.ToolbarTabController;
+ import org.chromium.chrome.browser.toolbar.ToolbarVariationUtils;
+ import org.chromium.chrome.browser.toolbar.back_button.BackButtonCoordinator;
+ import org.chromium.chrome.browser.toolbar.forward_button.ForwardButtonCoordinator;
++import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarFeatures;
+ import org.chromium.chrome.browser.toolbar.home_button.HomeButtonCoordinator;
+ import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonCoordinator;
+ import org.chromium.chrome.browser.toolbar.optional_button.ButtonData;
+@@ -2125,8 +2126,15 @@ public class ToolbarPhone extends ToolbarLayout
+         boolean showBackButtonOutside = shouldShowBackButtonOutside();
+         // Enforce mutual exclusivity: if the back button should be shown outside,
+         // we must hide the home button to prevent them from overlapping.
++        // The minimal layout keeps New tab, Tabs and Menu on a narrow phone by dropping Home,
++        // which the menu and the new tab page still reach.
++        boolean dropHomeForRoom =
++                BottomBarConfigUtils.isMinimalLayout()
++                        && getResources().getConfiguration().screenWidthDp
++                                < AdaptiveToolbarFeatures.DEFAULT_MIN_WIDTH_DP;
+         boolean hideHomeButton =
+                 !mIsHomeButtonEnabled
++                        || dropHomeForRoom
+                         || showBackButtonOutside
+                         || (shouldModifyToolbarButtons
+                                 && !ToolbarVariationUtils.shouldHomeButtonBeAtStartOfToolbar());
+-- 
+2.34.1
+

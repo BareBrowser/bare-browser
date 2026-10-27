@@ -1,0 +1,206 @@
+From 27e44e8a75c3e769d1ba9f69375535271a2fb100 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 20 Aug 2026 06:54:26 +0000
+Subject: [PATCH] Patch 0000061
+
+---
+ chrome/android/java/res/values/ids.xml        |  1 +
+ .../contextmenu/ChromeContextMenuItem.java    | 15 +++++++++--
+ .../ChromeContextMenuPopulator.java           | 27 +++++++++++++++++++
+ .../strings/android_chrome_strings.grd        |  6 +++++
+ .../contextmenu/ContextMenuParams.java        | 12 +++++++++
+ .../contextmenu/ContextMenuUtils.java         |  8 +++++-
+ 6 files changed, 66 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
+index 39bdafed142..51713b52d47 100644
+--- a/chrome/android/java/res/values/ids.xml
++++ b/chrome/android/java/res/values/ids.xml
+@@ -142,6 +142,7 @@ found in the LICENSE file.
+     <item type="id" name="contextmenu_copy_video_frame" />
+     <item type="id" name="contextmenu_download_video_frame" />
+     <item type="id" name="contextmenu_picture_in_picture" />
++    <item type="id" name="contextmenu_save_audio" />
+     <item type="id" name="contextmenu_save_video" />
+     <!-- go/keep-sorted end -->
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
+index f10a5acd6b3..d5771c5c0b9 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
+@@ -88,7 +88,8 @@ class ChromeContextMenuItem {
+         Item.TRANSLATE,
+         Item.CREATE_QR_CODE,
+         Item.ASK_GEMINI,
+-        Item.ASK_GEMINI_IMAGE
++        Item.ASK_GEMINI_IMAGE,
++        Item.SAVE_AUDIO
+     })
+     @Retention(RetentionPolicy.SOURCE)
+     public @interface Item {
+@@ -158,8 +159,11 @@ class ChromeContextMenuItem {
+         int CREATE_QR_CODE = 52;
+         int ASK_GEMINI = 53;
+         int ASK_GEMINI_IMAGE = 54;
++        // Appended rather than grouped with SAVE_VIDEO: MENU_IDS and STRING_IDS are
++        // indexed by these values, so inserting in the middle renumbers the rest.
++        int SAVE_AUDIO = 55;
+         // ALWAYS UPDATE!
+-        int NUM_ENTRIES = 55;
++        int NUM_ENTRIES = 56;
+     }
+ 
+     /** Mapping from {@link Item} to the ID found in the ids.xml. */
+@@ -219,6 +223,7 @@ class ChromeContextMenuItem {
+         R.id.contextmenu_create_qr_code, // Item.CREATE_QR_CODE
+         R.id.contextmenu_ask_gemini, // Item.ASK_GEMINI
+         R.id.contextmenu_ask_gemini_image, // Item.ASK_GEMINI_IMAGE
++        R.id.contextmenu_save_audio, // Item.SAVE_AUDIO
+     };
+ 
+     /** Mapping from {@link Item} to the ID of the string that describes the action of the item. */
+@@ -278,6 +283,7 @@ class ChromeContextMenuItem {
+         R.string.contextmenu_create_qr_code, // Item.CREATE_QR_CODE
+         R.string.glic_button_entrypoint_ask_gemini_label, // Item.ASK_GEMINI
+         R.string.glic_button_entrypoint_ask_gemini_label, // Item.ASK_GEMINI_IMAGE
++        R.string.contextmenu_save_audio, // Item.SAVE_AUDIO
+     };
+ 
+     /**
+@@ -340,6 +346,11 @@ class ChromeContextMenuItem {
+                     return context.getString(R.string.contextmenu_save_video_as);
+                 }
+                 break;
++            case Item.SAVE_AUDIO:
++                if (isSaveAsEnabled()) {
++                    return context.getString(R.string.contextmenu_save_audio_as);
++                }
++                break;
+             case Item.OPEN_IN_BROWSER_ID:
+                 return DefaultBrowserMenuUtils.getTitleOpenInDefaultBrowser(false);
+             case Item.SEARCH_BY_IMAGE:
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
+index 3eac3fd3878..d4272bcbbad 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
+@@ -909,6 +909,25 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+             }
+         }
+ 
++        // Audio elements reach here with the same media flags as video, but upstream never
++        // built a group for them, so a long press on an <audio> element produced an empty
++        // menu. The download itself goes through exactly the same path as video.
++        if (mParams.isAudio() && areMandatoryFlowsCompleted(getProfile())) {
++            ModelList audioGroup = new ModelList();
++            if (mParams.canSaveMedia()
++                    && UrlUtilities.isDownloadableScheme(mParams.getSrcUrl())
++                    && mMode != ContextMenuMode.THIN_WEB_VIEW) {
++                audioGroup.add(
++                        createListItem(
++                                Item.SAVE_AUDIO,
++                                /* showInProductHelp= */ false,
++                                !mIsDownloadRestrictedByPolicy));
++            }
++            if (!audioGroup.isEmpty()) {
++                groupedItems.add(audioGroup);
++            }
++        }
++
+         if (mParams.getOpenedFromHighlight()) {
+             ModelList sharedHighlightingGroup = new ModelList();
+             if (mMode == ContextMenuMode.NORMAL) {
+@@ -1153,6 +1172,14 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+             } else if (mItemDelegate.startDownload(url, /* isLink= */ false)) {
+                 mNativeDelegate.startDownload(url, /* isMedia= */ true);
+             }
++        } else if (itemId == R.id.contextmenu_save_audio) {
++            // No UMA action recorded: the histogram enum is an upstream one and adding a value
++            // to it would mean touching enums.xml for a downstream-only menu item.
++            if (mIsDownloadRestrictedByPolicy) {
++                showDownloadRestrictedToast();
++            } else if (mItemDelegate.startDownload(mParams.getSrcUrl(), /* isLink= */ false)) {
++                mNativeDelegate.startDownload(mParams.getSrcUrl(), /* isMedia= */ true);
++            }
+         } else if (itemId == R.id.contextmenu_save_video) {
+             recordContextMenuSelection(ContextMenuUma.Action.SAVE_VIDEO);
+             if (mIsDownloadRestrictedByPolicy) {
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index db8280d5377..a4a331ac10c 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -2984,6 +2984,12 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_CONTEXTMENU_COPY_LINK_TO_HIGHLIGHT" desc="This string is shown in the context menu for copying the link-to-text.">
+         Copy link to highlight
+       </message>
++      <message name="IDS_CONTEXTMENU_SAVE_AUDIO" desc="Context sensitive menu item for saving the selected audio. [CHAR_LIMIT=30]">
++        Download audio
++      </message>
++      <message name="IDS_CONTEXTMENU_SAVE_AUDIO_AS" desc="Context sensitive menu item for saving the selected audio. [CHAR_LIMIT=30]">
++        Save audio as…
++      </message>
+       <message name="IDS_CONTEXTMENU_SAVE_VIDEO" desc="Context sensitive menu item for saving the selected video. [CHAR_LIMIT=30]">
+         Download video
+       </message>
+diff --git a/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuParams.java b/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuParams.java
+index 646fb253861..5cf42fa3b03 100644
+--- a/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuParams.java
++++ b/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuParams.java
+@@ -39,6 +39,7 @@ public class ContextMenuParams {
+     private final boolean mIsAnchor;
+     private final boolean mIsImage;
+     private final boolean mIsVideo;
++    private final boolean mIsAudio;
+     private final boolean mCanSaveMedia;
+ 
+     private final @ContextMenuDataMediaFlags int mMediaFlags;
+@@ -120,6 +121,16 @@ public class ContextMenuParams {
+         return mIsVideo;
+     }
+ 
++    /**
++     * Whether the context menu was opened on an audio element.
++     *
++     * <p>The media type has always been handed to this class, but only image and video were ever
++     * read out of it, so audio elements produced a menu with nothing on it.
++     */
++    public boolean isAudio() {
++        return mIsAudio;
++    }
++
+     public boolean canSaveMedia() {
+         return mCanSaveMedia;
+     }
+@@ -274,6 +285,7 @@ public class ContextMenuParams {
+         mIsAnchor = !linkUrl.isEmpty();
+         mIsImage = mediaType == ContextMenuDataMediaType.IMAGE;
+         mIsVideo = mediaType == ContextMenuDataMediaType.VIDEO;
++        mIsAudio = mediaType == ContextMenuDataMediaType.AUDIO;
+         mCanSaveMedia = canSaveMedia;
+         mMediaFlags = mediaFlags;
+         mTriggeringTouchXDp = triggeringTouchXDp;
+diff --git a/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuUtils.java b/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuUtils.java
+index 315ebd8d82f..b5d68373d65 100644
+--- a/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuUtils.java
++++ b/components/embedder_support/android/java/src/org/chromium/components/embedder_support/contextmenu/ContextMenuUtils.java
+@@ -196,7 +196,7 @@ public final class ContextMenuUtils {
+         if (!TextUtils.isEmpty(params.getLinkText())) {
+             return params.getLinkText();
+         }
+-        if (params.isImage() || params.isVideo() || params.isFile()) {
++        if (params.isImage() || params.isVideo() || params.isAudio() || params.isFile()) {
+             return URLUtil.guessFileName(params.getSrcUrl().getSpec(), null, null);
+         }
+         return "";
+@@ -213,6 +213,12 @@ public final class ContextMenuUtils {
+     public static String getContextMenuTypeForHistogram(ContextMenuParams params) {
+         if (params.isVideo()) {
+             return "Video";
++        } else if (params.isAudio()) {
++            // Upstream never opens a menu on an <audio> element, so this fell through to the
++            // anchor assertion below and took the browser down with it. The suffix is not in
++            // histogram_suffixes_list.xml, which is an upstream file and not worth touching for
++            // a downstream-only menu; the samples simply land unmapped.
++            return "Audio";
+         } else if (params.isImage()) {
+             return params.isAnchor() ? "ImageLink" : "Image";
+         } else if (params.getOpenedFromHighlight()) {

@@ -1,0 +1,67 @@
+From afe13278798ffaee8b924fa2d6f2b925a03c340e Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 19 Aug 2026 02:05:57 +0000
+Subject: [PATCH] Patch 0000045
+
+---
+ .../ntp/search/SearchBoxContainerView.java    | 31 ++++++++++++++++++-
+ 1 file changed, 30 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/search/SearchBoxContainerView.java b/chrome/android/java/src/org/chromium/chrome/browser/ntp/search/SearchBoxContainerView.java
+index 60f725724e3..cc1d014d218 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ntp/search/SearchBoxContainerView.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ntp/search/SearchBoxContainerView.java
+@@ -7,8 +7,10 @@ package org.chromium.chrome.browser.ntp.search;
+ import android.content.Context;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
++import android.graphics.Bitmap;
+ import android.graphics.Rect;
+ import android.graphics.Typeface;
++import android.graphics.drawable.BitmapDrawable;
+ import android.graphics.drawable.Drawable;
+ import android.graphics.drawable.LayerDrawable;
+ import android.graphics.drawable.RippleDrawable;
+@@ -25,6 +27,9 @@ import androidx.annotation.Px;
+ import androidx.core.widget.ImageViewCompat;
+ 
+ import org.chromium.build.annotations.NullMarked;
++import androidx.core.graphics.drawable.RoundedBitmapDrawable;
++import androidx.core.graphics.drawable.RoundedBitmapDrawableFactory;
++
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.ntp.NewTabPageUtils;
+@@ -106,7 +111,31 @@ public class SearchBoxContainerView extends LinearLayout {
+     }
+ 
+     void setDseIconDrawable(@Nullable Drawable drawable) {
+-        mDseIconView.setImageDrawable(drawable);
++        mDseIconView.setImageDrawable(makeCircular(drawable));
++    }
++
++    /**
++     * Bakes the circle into the drawable instead of relying only on the view's outline clip.
++     *
++     * <p>setClipToOutline() is applied by the render node while drawing with hardware
++     * acceleration, and is ignored when a view is drawn into a software Canvas. The tab switcher
++     * captures native page thumbnails exactly that way, through
++     * InvalidationAwareThumbnailProvider onto a Bitmap backed Canvas, so the search engine icon
++     * stayed square in the grid while being round on the page itself.
++     *
++     * <p>The outline clip is left in place for drawables that are not bitmaps.
++     */
++    private @Nullable Drawable makeCircular(@Nullable Drawable drawable) {
++        if (!(drawable instanceof BitmapDrawable)) {
++            return drawable;
++        }
++        Bitmap bitmap = ((BitmapDrawable) drawable).getBitmap();
++        if (bitmap == null) {
++            return drawable;
++        }
++        RoundedBitmapDrawable rounded = RoundedBitmapDrawableFactory.create(getResources(), bitmap);
++        rounded.setCircular(true);
++        return rounded;
+     }
+ 
+     void setPlusButtonClickListener(@Nullable OnClickListener listener) {

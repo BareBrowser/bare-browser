@@ -1,0 +1,241 @@
+From 6e326bd63dcba58b1b7660614ff222c09a22d98f Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 6 Sep 2026 16:01:18 +0000
+Subject: [PATCH] Patch 0000107
+
+---
+ .../ExternalNavigationHandler.java            |  39 ++++-
+ .../ExternalNavigationHandlerTest.java        | 138 ++++++++++++++++++
+ 2 files changed, 174 insertions(+), 3 deletions(-)
+
+diff --git a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
+index 144f71973d0..d7080c8ff0c 100644
+--- a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
++++ b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
+@@ -1986,11 +1986,33 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+ 
+         boolean shouldReturnAsResult = mDelegate.shouldReturnAsActivityResult(intentTargetUrl);
+ 
++        // A web page wrapped in an intent is still a web page.
++        //
++        // Sites hand the browser intent: URLs whose payload is an https page, with package=
++        // naming their app and usually a browser_fallback_url pointing back at the page.
++        // Google Maps issues one on its own the moment its page has loaded, sometimes while
++        // the tap that opened the page still counts as a gesture, so it cannot be told apart
++        // from a link the user tapped. Judged by its own scheme such a hop is an external
++        // protocol, the embedder was never asked its http(s) question, and the app opened
++        // whatever the user had chosen. The embedder is asked about the payload instead. When
++        // it keeps the page, the browser behaves as it does when no app is installed: the
++        // fallback address loads, or the wrapped page itself if there is none. Intents with
++        // payloads the browser cannot render, geo: or google.navigation: for instance, are
++        // not affected.
++        boolean isWebLinkWrappedInIntent =
++                UrlUtilities.hasIntentScheme(params.getUrl())
++                        && intentTargetUrl.isValid()
++                        && UrlUtilities.isHttpOrHttps(intentTargetUrl);
++        GURL urlForEmbedder = isWebLinkWrappedInIntent ? intentTargetUrl : params.getUrl();
++
+         ResolveActivitySupplier resolveActivity = new ResolveActivitySupplier(targetIntent);
+         if (shouldBlockExternalNavigationForHttpProtocols(
+-                mDelegate.allowExternalNavigationForHttpProtocols(params.getUrl()),
++                mDelegate.allowExternalNavigationForHttpProtocols(urlForEmbedder),
+                 shouldReturnAsResult,
+                 resolveActivity)) {
++            if (isWebLinkWrappedInIntent && browserFallbackUrl.isEmpty()) {
++                return OverrideUrlLoadingResult.forNavigateTab(intentTargetUrl, params);
++            }
+             return OverrideUrlLoadingResult.forNoOverride();
+         }
+ 
+@@ -2109,7 +2131,8 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+         //
+         // Incognito has already been dealt with further up and does not arrive here, so there is
+         // no arrangement in which this dialog and the leaving-incognito one both appear.
+-        if (!isExternalProtocol && mDelegate.shouldAskBeforeLeavingForApp(params.getUrl())) {
++        if ((!isExternalProtocol || isWebLinkWrappedInIntent)
++                && mDelegate.shouldAskBeforeLeavingForApp(urlForEmbedder)) {
+             OverrideUrlLoadingResult asked =
+                     askBeforeLeavingForApp(
+                             targetIntent,
+@@ -2233,7 +2256,17 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+         if (params.getRedirectHandler().isOnNavigation()) {
+             params.getRedirectHandler().setShouldNotOverrideUrlLoadingOnCurrentRedirectChain();
+         }
+-        callback.onResult(AsyncActionTakenParams.forNavigate(params.getUrl(), params));
++        // When the question was about a page wrapped in an intent: URL, the page is what to
++        // resume: its fallback address if the intent carried one, else the address it wrapped.
++        GURL resumeUrl = params.getUrl();
++        if (UrlUtilities.hasIntentScheme(resumeUrl)) {
++            if (browserFallbackUrl != null && !browserFallbackUrl.isEmpty()) {
++                resumeUrl = browserFallbackUrl;
++            } else if (intentTargetUrl != null && UrlUtilities.isHttpOrHttps(intentTargetUrl)) {
++                resumeUrl = intentTargetUrl;
++            }
++        }
++        callback.onResult(AsyncActionTakenParams.forNavigate(resumeUrl, params));
+     }
+ 
+     /** The dialog asking whether to open a link in the app that handles it. */
+diff --git a/components/external_intents/android/javatests/src/org/chromium/components/external_intents/ExternalNavigationHandlerTest.java b/components/external_intents/android/javatests/src/org/chromium/components/external_intents/ExternalNavigationHandlerTest.java
+index 1acaffee660..e4a5d7ffa6c 100644
+--- a/components/external_intents/android/javatests/src/org/chromium/components/external_intents/ExternalNavigationHandlerTest.java
++++ b/components/external_intents/android/javatests/src/org/chromium/components/external_intents/ExternalNavigationHandlerTest.java
+@@ -41,6 +41,7 @@ import org.mockito.junit.MockitoJUnit;
+ import org.mockito.junit.MockitoRule;
+ import org.mockito.quality.Strictness;
+ 
++import org.chromium.components.embedder_support.util.UrlUtilities;
+ import org.chromium.base.Callback;
+ import org.chromium.base.ContextUtils;
+ import org.chromium.base.ThreadUtils;
+@@ -1613,6 +1614,142 @@ public class ExternalNavigationHandlerTest {
+         }
+     }
+ 
++    private static final String MAPS_PAGE_URL = "https://maps.google.com/?q=Berlin";
++    private static final String MAPS_PACKAGE_NAME = "com.google.android.apps.maps";
++    // The hop Google Maps makes on its own once its page has loaded: an intent: URL whose
++    // payload is the page itself, naming the app, with the page as the fallback.
++    private static final String MAPS_INTENT_URL =
++            "intent://maps.google.com/?q=Berlin#Intent;scheme=https;package="
++                    + MAPS_PACKAGE_NAME
++                    + ";S."
++                    + ExternalNavigationHandler.EXTRA_BROWSER_FALLBACK_URL
++                    + "=https%3A%2F%2Fmaps.google.com%2F%3Fq%3DBerlin;end;";
++
++    /** A chain started by a link tap, then the page redirecting to the intent on its own. */
++    private RedirectHandler redirectHandlerForPageIssuedHop() {
++        RedirectHandler handler = redirectHandlerForLinkClick();
++        handler.updateNewUrlLoading(
++                PageTransition.LINK | PageTransition.CLIENT_REDIRECT, false, false, 0, false, true);
++        return handler;
++    }
++
++    @Test
++    @SmallTest
++    public void testNever_WebLinkWrappedInIntent_PageIssuedHopStaysInBrowser() {
++        mDelegate.setAllowExternalNavigationForHttpProtocols(false);
++        mDelegate.add(new IntentActivity(MAPS_PAGE_URL, MAPS_PACKAGE_NAME));
++
++        // The tapped page itself stays, as before.
++        checkUrl(MAPS_PAGE_URL, redirectHandlerForLinkClick())
++                .withHasUserGesture(true)
++                .expecting(OverrideUrlLoadingResultType.NO_OVERRIDE, IGNORE);
++
++        // The hop the page makes on its own carries the same page in an intent: it is judged
++        // as that page, blocked, and the fallback address loads in the browser.
++        checkUrl(MAPS_INTENT_URL, redirectHandlerForPageIssuedHop())
++                .withHasUserGesture(false)
++                .expecting(OverrideUrlLoadingResultType.OVERRIDE_WITH_NAVIGATE_TAB, IGNORE);
++        Assert.assertEquals(MAPS_PAGE_URL, mUrlHandler.mNewUrlAfterClobbering);
++        Assert.assertNull(mUrlHandler.mStartActivityIntent);
++    }
++
++    @Test
++    @SmallTest
++    public void testNever_IntentLinkWithWebPayloadTapped_StaysInBrowser() {
++        mDelegate.setAllowExternalNavigationForHttpProtocols(false);
++        mDelegate.add(new IntentActivity(MAPS_PAGE_URL, MAPS_PACKAGE_NAME));
++
++        // Sites can issue the hop while the tap still counts as a gesture, so a tapped intent
++        // link with a web payload is judged the same way: the page stays, through its
++        // fallback address.
++        checkUrl(MAPS_INTENT_URL, redirectHandlerForLinkClick())
++                .withHasUserGesture(true)
++                .expecting(OverrideUrlLoadingResultType.OVERRIDE_WITH_NAVIGATE_TAB, IGNORE);
++        Assert.assertEquals(MAPS_PAGE_URL, mUrlHandler.mNewUrlAfterClobbering);
++        Assert.assertNull(mUrlHandler.mStartActivityIntent);
++    }
++
++    @Test
++    @SmallTest
++    public void testNever_IntentLinkWithWebPayloadAndNoFallback_LoadsThePayload() {
++        mDelegate.setAllowExternalNavigationForHttpProtocols(false);
++        mDelegate.add(new IntentActivity(MAPS_PAGE_URL, MAPS_PACKAGE_NAME));
++
++        String noFallback =
++                "intent://maps.google.com/?q=Berlin#Intent;scheme=https;package="
++                        + MAPS_PACKAGE_NAME
++                        + ";end;";
++        checkUrl(noFallback, redirectHandlerForLinkClick())
++                .withHasUserGesture(true)
++                .expecting(OverrideUrlLoadingResultType.OVERRIDE_WITH_NAVIGATE_TAB, IGNORE);
++        Assert.assertEquals(MAPS_PAGE_URL, mUrlHandler.mNewUrlAfterClobbering);
++        Assert.assertNull(mUrlHandler.mStartActivityIntent);
++    }
++
++    @Test
++    @SmallTest
++    public void testNever_UnsupportedSchemeStillLeaves() {
++        mDelegate.setAllowExternalNavigationForHttpProtocols(false);
++        mDelegate.add(new IntentActivity("geo:", MAPS_PACKAGE_NAME));
++
++        // Nothing here can render geo:, so the http(s) answer does not apply to it.
++        checkUrl("geo:52.52,13.40?q=Berlin", redirectHandlerForLinkClick())
++                .withHasUserGesture(true)
++                .expecting(
++                        OverrideUrlLoadingResultType.OVERRIDE_WITH_EXTERNAL_INTENT,
++                        START_OTHER_ACTIVITY);
++    }
++
++    @Test
++    @SmallTest
++    public void testAlways_WebLinkWrappedInIntent_PageIssuedHopOpensTheApp() {
++        mDelegate.setAllowExternalNavigationForHttpProtocols(true);
++        mDelegate.add(new IntentActivity(MAPS_PAGE_URL, MAPS_PACKAGE_NAME));
++
++        checkUrl(MAPS_INTENT_URL, redirectHandlerForPageIssuedHop())
++                .withHasUserGesture(false)
++                .expecting(
++                        OverrideUrlLoadingResultType.OVERRIDE_WITH_EXTERNAL_INTENT,
++                        START_OTHER_ACTIVITY);
++    }
++
++    @Test
++    @SmallTest
++    public void testAsk_WebLinkWrappedInIntent_AsksAndStayHereResumesThePage() {
++        Intent testIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
++        testIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++        Activity activity =
++                InstrumentationRegistry.getInstrumentation().startActivitySync(testIntent);
++        mDelegate.setContext(activity);
++        mDelegate.setCanLoadUrlInTab(true);
++        mDelegate.setAllowExternalNavigationForHttpProtocols(true);
++        mDelegate.setShouldAskBeforeLeavingForApp(true);
++        mDelegate.add(new IntentActivity(MAPS_PAGE_URL, MAPS_PACKAGE_NAME));
++        try {
++            ThreadUtils.runOnUiThreadBlocking(
++                    () -> {
++                        checkUrl(MAPS_INTENT_URL, redirectHandlerForPageIssuedHop())
++                                .withHasUserGesture(false)
++                                .expecting(
++                                        OverrideUrlLoadingResultType.OVERRIDE_WITH_ASYNC_ACTION,
++                                        IGNORE);
++                        Assert.assertNotNull(
++                                "the hop should be asked about", mUrlHandler.mOpenInAppDialogDelegate);
++                        Assert.assertNull(mUrlHandler.mStartActivityIntent);
++                        mUrlHandler.mOpenInAppDialogDelegate.performClick(
++                                ModalDialogProperties.ButtonType.NEGATIVE);
++                    });
++            ThreadUtils.runOnUiThreadBlocking(
++                    () -> {
++                        // Staying resumes the page, not the intent: URL that wrapped it.
++                        Assert.assertEquals(MAPS_PAGE_URL, mUrlHandler.mNewUrlAfterClobbering);
++                        Assert.assertNull(mUrlHandler.mOpenInAppDialogDelegate);
++                    });
++        } finally {
++            activity.finish();
++        }
++    }
++
+     @Test
+     @MediumTest
+     public void testIncognitoAlertDialogDismissedOnNavigation() {
+@@ -3999,6 +4136,7 @@ public class ExternalNavigationHandlerTest {
+ 
+         @Override
+         public boolean allowExternalNavigationForHttpProtocols(GURL url) {
++            if (!UrlUtilities.isHttpOrHttps(url)) return true;
+             return mAllowExternalNavigationForHttpProtocols;
+         }
+ 

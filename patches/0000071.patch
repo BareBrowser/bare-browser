@@ -1,0 +1,706 @@
+From 48aef935d40468bd2171beb7996b46f97e66634c Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sat, 22 Aug 2026 07:40:03 +0000
+Subject: [PATCH] Patch 0000071
+
+---
+ chrome/android/chrome_java_sources.gni        |   1 +
+ .../android/java/res/xml/main_preferences.xml |   4 +
+ .../chrome/browser/ChromeTabbedActivity.java  |   4 +
+ .../chrome/browser/bare/BareUpdateCheck.java  | 249 ++++++++++++++++++
+ .../browser/bare/BareWelcomeOverlay.java      | 125 ++++++++-
+ .../chrome/browser/settings/MainSettings.java |  43 +++
+ .../browser/toolbar/ToolbarManager.java       |  11 +
+ .../preferences/ChromePreferenceKeys.java     |  23 ++
+ .../strings/android_chrome_strings.grd        |  30 +++
+ 9 files changed, 486 insertions(+), 4 deletions(-)
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
+
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 92531d15da5..03d07613a19 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -239,6 +239,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetView.java",
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetViewBinder.java",
+   "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
++  "java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java",
+   "java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java",
+   "java/src/org/chromium/chrome/browser/background_sync/BackgroundSyncBackgroundTask.java",
+   "java/src/org/chromium/chrome/browser/background_sync/BackgroundSyncBackgroundTaskScheduler.java",
+diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/java/res/xml/main_preferences.xml
+index d8edd9cf7ea..45fd637734f 100644
+--- a/chrome/android/java/res/xml/main_preferences.xml
++++ b/chrome/android/java/res/xml/main_preferences.xml
+@@ -132,5 +132,9 @@ found in the LICENSE file.
+         android:key="about_chrome"
+         android:order="31"
+         android:title="@string/prefs_about_chrome"/>
++    <org.chromium.components.browser_ui.settings.ChromeBasePreference
++        android:key="bare_check_for_updates"
++        android:order="32"
++        android:title="@string/bare_check_for_updates"/>
+ 
+ </PreferenceScreen>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index b31e0394843..58ba0d92acf 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -108,6 +108,7 @@ import org.chromium.chrome.browser.back_press.BackPressManager;
+ import org.chromium.chrome.browser.back_press.MinimizeAppAndCloseTabBackPressHandler;
+ import org.chromium.chrome.browser.back_press.MinimizeAppAndCloseTabBackPressHandler.MinimizeAppAndCloseTabType;
+ import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpenerImpl;
++import org.chromium.chrome.browser.bare.BareUpdateCheck;
+ import org.chromium.chrome.browser.bare.BareWelcomeOverlay;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+ import org.chromium.chrome.browser.bookmarks.BookmarkOpenerImpl;
+@@ -1751,6 +1752,9 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+ 
+     @Override
+     public void onResumeWithNative() {
++        // Looks for a newer release, at most once a day, and only while the browser is
++        // open. In manual mode this touches no network at all.
++        BareUpdateCheck.onBrowserForegrounded();
+         // While the super#onResumeWithNative call below also invokes #startUmaSession, we call
+         // it here (early) as well to setup the UMA activity state for any metrics emitted prior
+         // to call to super#onResumeWithNative below. It's safe to call #startUmaSession in both
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
+new file mode 100644
+index 00000000000..8564980e211
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
+@@ -0,0 +1,249 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.content.pm.PackageManager;
++
++import androidx.annotation.IntDef;
++
++import org.chromium.base.Callback;
++import org.chromium.base.ContextUtils;
++import org.chromium.base.ThreadUtils;
++import org.chromium.base.shared_preferences.SharedPreferencesManager;
++import org.chromium.base.task.PostTask;
++import org.chromium.base.task.TaskTraits;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++import java.io.BufferedReader;
++import java.io.InputStreamReader;
++import java.net.HttpURLConnection;
++import java.net.URL;
++import java.util.concurrent.TimeUnit;
++import java.util.regex.Matcher;
++import java.util.regex.Pattern;
++
++/**
++ * Looks for a newer Bare release on GitHub.
++ *
++ * <p>Bare ships outside any store. Nothing else tells a user that a fix exists, so this asks.
++ * It is also the only thing in the browser that contacts a server the user did not navigate to,
++ * which is why it stays small: one plain request to a public release feed, no identifier, no
++ * version number in the request, nothing scheduled in the background. A check happens while the
++ * browser is already open and already using the network, or when the user asks for one.
++ *
++ * <p>Manual mode means manual. Nothing leaves the device until the user taps, and the weekly
++ * reminder is a local timer, not a request.
++ */
++@NullMarked
++public class BareUpdateCheck {
++    @IntDef({UpdateMode.AUTOMATIC, UpdateMode.MANUAL})
++    public @interface UpdateMode {
++        int AUTOMATIC = 0;
++        int MANUAL = 1;
++    }
++
++    /** The public release feed. No API token, no rate limit worth worrying about. */
++    private static final String RELEASES_FEED =
++            "https://github.com/Shshtwy/bare-browser/releases.atom";
++
++    /** Where a user is sent to read about and download a release. */
++    public static final String RELEASES_PAGE =
++            "https://github.com/Shshtwy/bare-browser/releases/latest";
++
++    private static final long CHECK_INTERVAL_MS = TimeUnit.DAYS.toMillis(1);
++    private static final long REMINDER_INTERVAL_MS = TimeUnit.DAYS.toMillis(7);
++    private static final int TIMEOUT_MS = 15000;
++
++    /** Matches the tag out of a feed entry link, for example .../releases/tag/v1.0.0-alpha.2 */
++    private static final Pattern TAG_IN_LINK = Pattern.compile("/releases/tag/([^\"']+)");
++
++    /** MAJOR.MINOR.PATCH with an optional -channel.N suffix, which is Bare's own scheme. */
++    private static final Pattern VERSION =
++            Pattern.compile("v?(\\d+)\\.(\\d+)\\.(\\d+)(?:-([a-z]+)\\.(\\d+))?");
++
++    private BareUpdateCheck() {}
++
++    private static SharedPreferencesManager prefs() {
++        return ChromeSharedPreferences.getInstance();
++    }
++
++    public static @UpdateMode int getMode() {
++        return prefs().readInt(ChromePreferenceKeys.BARE_UPDATE_MODE, UpdateMode.AUTOMATIC);
++    }
++
++    public static void setMode(@UpdateMode int mode) {
++        prefs().writeInt(ChromePreferenceKeys.BARE_UPDATE_MODE, mode);
++    }
++
++    public static boolean isReminderEnabled() {
++        return prefs().readBoolean(ChromePreferenceKeys.BARE_UPDATE_REMINDER, false);
++    }
++
++    public static void setReminderEnabled(boolean enabled) {
++        prefs().writeBoolean(ChromePreferenceKeys.BARE_UPDATE_REMINDER, enabled);
++    }
++
++    /** The newest tag seen, or null if no check has found one. */
++    public static @Nullable String getLatestTag() {
++        String tag = prefs().readString(ChromePreferenceKeys.BARE_UPDATE_LATEST_TAG, "");
++        return tag.isEmpty() ? null : tag;
++    }
++
++    public static long getLastCheckMs() {
++        return prefs().readLong(ChromePreferenceKeys.BARE_UPDATE_LAST_CHECK_MS, 0);
++    }
++
++    /** Whether the menu, the settings row and the update row should carry a dot. */
++    public static boolean hasBadge() {
++        return prefs().readBoolean(ChromePreferenceKeys.BARE_UPDATE_BADGE, false);
++    }
++
++    /**
++     * Called when the user opens the update row: seeing it counts, acting on it is their
++     * choice.
++     */
++    public static void clearBadge() {
++        prefs().writeBoolean(ChromePreferenceKeys.BARE_UPDATE_BADGE, false);
++    }
++
++    /**
++     * Called when the browser comes to the foreground.
++     *
++     * <p>In automatic mode this checks at most once a day. In manual mode it never touches the
++     * network; it only decides whether the weekly nudge is due.
++     */
++    public static void onBrowserForegrounded() {
++        long since = System.currentTimeMillis() - getLastCheckMs();
++        if (getMode() == UpdateMode.MANUAL) {
++            if (isReminderEnabled() && since >= REMINDER_INTERVAL_MS) {
++                prefs().writeBoolean(ChromePreferenceKeys.BARE_UPDATE_BADGE, true);
++                touchLastCheck();
++            }
++            return;
++        }
++        if (since >= CHECK_INTERVAL_MS) check(null);
++    }
++
++    /** Asks now, whatever the mode. This is what the settings row calls. */
++    public static void checkNow(Callback<Boolean> onResult) {
++        check(onResult);
++    }
++
++    private static void check(@Nullable Callback<Boolean> onResult) {
++        PostTask.postTask(
++                TaskTraits.BEST_EFFORT_MAY_BLOCK,
++                () -> {
++                    String tag = fetchLatestTag();
++                    ThreadUtils.runOnUiThread(
++                            () -> {
++                                touchLastCheck();
++                                boolean newer = tag != null && isNewerThanCurrent(tag);
++                                if (tag != null) {
++                                    prefs().writeString(
++                                            ChromePreferenceKeys.BARE_UPDATE_LATEST_TAG, tag);
++                                }
++                                if (newer) {
++                                    prefs().writeBoolean(
++                                            ChromePreferenceKeys.BARE_UPDATE_BADGE, true);
++                                }
++                                if (onResult != null) onResult.onResult(newer);
++                            });
++                });
++    }
++
++    private static void touchLastCheck() {
++        prefs().writeLong(
++                ChromePreferenceKeys.BARE_UPDATE_LAST_CHECK_MS, System.currentTimeMillis());
++    }
++
++    /**
++     * Reads the first release tag out of the feed.
++     *
++     * <p>Deliberately plain: no cookies, no cache, no identifying header, and no version of its own
++     * in the request. The server learns an address asked for a public file, which is the least this
++     * can cost while still working.
++     */
++    private static @Nullable String fetchLatestTag() {
++        HttpURLConnection connection = null;
++        try {
++            connection = (HttpURLConnection) new URL(RELEASES_FEED).openConnection();
++            connection.setConnectTimeout(TIMEOUT_MS);
++            connection.setReadTimeout(TIMEOUT_MS);
++            connection.setInstanceFollowRedirects(true);
++            connection.setUseCaches(false);
++            connection.setRequestProperty("Accept", "application/atom+xml");
++            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) return null;
++            try (BufferedReader reader =
++                    new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
++                String line;
++                // The feed is newest first, so the first tag link is the latest release.
++                while ((line = reader.readLine()) != null) {
++                    Matcher matcher = TAG_IN_LINK.matcher(line);
++                    if (matcher.find()) return matcher.group(1);
++                }
++            }
++            return null;
++        } catch (Exception e) {
++            // An update check is not worth reporting to the user or crashing over.
++            return null;
++        } finally {
++            if (connection != null) connection.disconnect();
++        }
++    }
++
++    /** True when the tag names a version above the running one. */
++    public static boolean isNewerThanCurrent(String tag) {
++        String current = currentVersion();
++        return current != null && compare(tag, current) > 0;
++    }
++
++    /**
++     * Bare's own version, read from the package.
++     *
++     * <p>Not VersionConstants.PRODUCT_VERSION, which carries Chromium's version, 153.0.7999.0.
++     * Bare's version reaches the build through android_override_version_name and only ever lands
++     * in the manifest, so comparing against the Chromium constant would answer "up to date"
++     * forever.
++     */
++    private static @Nullable String currentVersion() {
++        try {
++            var context = ContextUtils.getApplicationContext();
++            return context.getPackageManager().getPackageInfo(context.getPackageName(), 0)
++                    .versionName;
++        } catch (PackageManager.NameNotFoundException e) {
++            return null;
++        }
++    }
++
++    /**
++     * Orders two versions in Bare's scheme.
++     *
++     * <p>A release with no channel suffix outranks a prerelease of the same numbers, so 1.0.0 is
++     * newer than 1.0.0-alpha.9. Anything unparseable sorts as older, which means a tag this build
++     * does not understand never presents itself as an update.
++     */
++    static int compare(String left, String right) {
++        Matcher a = VERSION.matcher(left);
++        Matcher b = VERSION.matcher(right);
++        if (!a.find()) return -1;
++        if (!b.find()) return 1;
++        for (int group = 1; group <= 3; group++) {
++            int diff =
++                    Integer.compare(
++                            Integer.parseInt(a.group(group)), Integer.parseInt(b.group(group)));
++            if (diff != 0) return diff;
++        }
++        boolean aPre = a.group(4) != null;
++        boolean bPre = b.group(4) != null;
++        if (aPre != bPre) return aPre ? -1 : 1;
++        if (!aPre) return 0;
++        int channel = a.group(4).compareTo(b.group(4));
++        if (channel != 0) return channel;
++        return Integer.compare(Integer.parseInt(a.group(5)), Integer.parseInt(b.group(5)));
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+index 7b99d0466db..bf22c06ca12 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+@@ -36,6 +36,7 @@ import androidx.annotation.RequiresApi;
+ import androidx.appcompat.app.AlertDialog;
+ 
+ import org.chromium.base.Callback;
++import org.chromium.base.shared_preferences.SharedPreferencesManager;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+@@ -70,6 +71,9 @@ public class BareWelcomeOverlay {
+     private static final String NOAI_KEYWORD = "noai.duckduckgo.com";
+     private static final String KEY_SHOWN = "shown";
+ 
++    /** The version whose welcome screen has been seen. Empty until one has. */
++    private static final String KEY_SHOWN_FOR_VERSION = "shown_for_version";
++
+     /** How long the circle takes to travel from the splash position down to its resting place. */
+     private static final long SETTLE_MS = 620;
+ 
+@@ -94,7 +98,12 @@ public class BareWelcomeOverlay {
+     /** Shows the welcome once per install. Does nothing on later launches. */
+     public static void maybeShow(Activity activity) {
+         SharedPreferences prefs = activity.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE);
+-        if (prefs.getBoolean(KEY_SHOWN, false)) return;
++        // Shown again when the version changes, so a release that adds a choice can ask about it
++        // rather than deciding on the user's behalf. Every row is seeded from what is already set,
++        // so a second showing is a review and not a reset.
++        String version = versionName(activity);
++        if (version.equals(prefs.getString(KEY_SHOWN_FOR_VERSION, ""))) return;
++        if (prefs.getBoolean(KEY_SHOWN, false) && version.isEmpty()) return;
+ 
+         @Nullable ViewGroup root = activity.findViewById(android.R.id.content);
+         if (root == null) return;
+@@ -110,7 +119,7 @@ public class BareWelcomeOverlay {
+         View footer = overlay.findViewById(R.id.bare_welcome_footer);
+         LinearLayout options = overlay.findViewById(R.id.bare_welcome_options);
+ 
+-        Choices choices = new Choices();
++        Choices choices = currentChoices();
+         buildOptions(activity, options, choices);
+ 
+         copy.setAlpha(0f);
+@@ -153,7 +162,10 @@ public class BareWelcomeOverlay {
+                     // Only now is the welcome spent. Leaving before pressing Start used to count
+                     // as having seen it, so the browser came back with defaults nobody chose and
+                     // no way to reach the screen again.
+-                    prefs.edit().putBoolean(KEY_SHOWN, true).apply();
++                    prefs.edit()
++                            .putBoolean(KEY_SHOWN, true)
++                            .putString(KEY_SHOWN_FOR_VERSION, versionName(activity))
++                            .apply();
+                     applyChoices(choices);
+                     playWipe(root, overlay, circle, copy, options, label, footer);
+                 });
+@@ -264,6 +276,9 @@ public class BareWelcomeOverlay {
+         // Flattened ComponentName of the chosen download app, empty to ask each time.
+         String downloadManagerComponent = "";
+         boolean backgroundMedia;
++        // 0 automatic, 1 manual, 2 manual with a weekly local reminder. The reminder is a timer,
++        // not a request, so it belongs with the mode rather than being a separate network choice.
++        int updateChoice;
+     }
+ 
+     /** What a row does when tapped. The row's own value label is handed back so it can update. */
+@@ -355,6 +370,29 @@ public class BareWelcomeOverlay {
+                 R.string.bare_welcome_opt_background_media,
+                 choices.backgroundMedia,
+                 on -> choices.backgroundMedia = on);
++
++        addRow(
++                inflater,
++                container,
++                R.drawable.ic_update_24dp,
++                R.string.bare_welcome_opt_updates,
++                activity.getString(updateValueLabel(choices.updateChoice)),
++                value ->
++                        showChooser(
++                                activity,
++                                R.string.bare_welcome_opt_updates,
++                                Arrays.asList(
++                                        activity.getString(
++                                                R.string.bare_welcome_value_update_auto),
++                                        activity.getString(
++                                                R.string.bare_welcome_value_update_manual),
++                                        activity.getString(
++                                                R.string.bare_welcome_value_update_manual_remind)),
++                                choices.updateChoice,
++                                index -> {
++                                    choices.updateChoice = index;
++                                    value.setText(updateValueLabel(index));
++                                }));
+     }
+ 
+     private static void addRow(
+@@ -583,6 +621,76 @@ public class BareWelcomeOverlay {
+                 });
+     }
+ 
++    /** Bare's own version, or empty if it cannot be read. */
++    private static String versionName(Activity activity) {
++        try {
++            String name =
++                    activity.getPackageManager()
++                            .getPackageInfo(activity.getPackageName(), 0)
++                            .versionName;
++            return name == null ? "" : name;
++        } catch (PackageManager.NameNotFoundException e) {
++            return "";
++        }
++    }
++
++    /**
++     * ToolbarPositionAndSource.TOP_SETTINGS, kept local to avoid depending on the toolbar
++     * module.
++     */
++    private static final int TOOLBAR_TOP_SETTINGS = 1;
++
++    /** ToolbarPositionAndSource.BOTTOM_SETTINGS. */
++    private static final int TOOLBAR_BOTTOM_SETTINGS = 3;
++
++    /** Reads the address bar position through both the old boolean and the current int. */
++    private static boolean readAddressBarOnTop(SharedPreferencesManager prefs, boolean fallback) {
++        try {
++            return prefs.readBoolean(ChromePreferenceKeys.TOOLBAR_TOP_ANCHORED, fallback);
++        } catch (ClassCastException e) {
++            int value = prefs.readInt(ChromePreferenceKeys.TOOLBAR_TOP_ANCHORED, -1);
++            if (value < 0) return fallback;
++            // Even values are the top positions, odd the bottom ones, per
++            // ToolbarPositionAndSource: TOP_LONG_PRESS 0, TOP_SETTINGS 1,
++            // BOTTOM_LONG_PRESS 2, BOTTOM_SETTINGS 3.
++            return value <= TOOLBAR_TOP_SETTINGS;
++        }
++    }
++
++    private static int updateValueLabel(int choice) {
++        if (choice == 1) return R.string.bare_welcome_value_update_manual;
++        if (choice == 2) return R.string.bare_welcome_value_update_manual_remind;
++        return R.string.bare_welcome_value_update_auto;
++    }
++
++    /**
++     * The choices to open the screen with: whatever is already in effect.
++     *
++     * <p>Only the shared preference values are read here. The profile ones, autofill, background
++     * media and the search engine, are not available this early in startup, so those rows keep
++     * their defaults, which are also what a first run gets.
++     */
++    private static Choices currentChoices() {
++        Choices choices = new Choices();
++        SharedPreferencesManager prefs = ChromeSharedPreferences.getInstance();
++        choices.addressBarOnTop = readAddressBarOnTop(prefs, choices.addressBarOnTop);
++        choices.adBlocker =
++                prefs.readBoolean(
++                        ChromePreferenceKeys.BARE_BUNDLED_AD_BLOCKER_ENABLED, choices.adBlocker);
++        choices.externalDownloadManager =
++                prefs.readBoolean(
++                        ChromePreferenceKeys.DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,
++                        choices.externalDownloadManager);
++        choices.downloadManagerComponent =
++                prefs.readString(
++                        ChromePreferenceKeys.DOWNLOAD_EXTERNAL_MANAGER_PACKAGE,
++                        choices.downloadManagerComponent);
++        if (BareUpdateCheck.getMode() == BareUpdateCheck.UpdateMode.MANUAL) {
++            choices.updateChoice = BareUpdateCheck.isReminderEnabled() ? 2 : 1;
++        }
++        return choices;
++    }
++
+     /**
+      * Writes the choices out when Start is pressed.
+      *
+@@ -592,7 +700,11 @@ public class BareWelcomeOverlay {
+      */
+     private static void applyChoices(Choices choices) {
+         ChromeSharedPreferences.getInstance()
+-                .writeBoolean(ChromePreferenceKeys.TOOLBAR_TOP_ANCHORED, choices.addressBarOnTop);
++                .writeInt(
++                        ChromePreferenceKeys.TOOLBAR_TOP_ANCHORED,
++                        choices.addressBarOnTop
++                                ? TOOLBAR_TOP_SETTINGS
++                                : TOOLBAR_BOTTOM_SETTINGS);
+         ChromeSharedPreferences.getInstance()
+                 .writeBoolean(
+                         ChromePreferenceKeys.DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,
+@@ -604,6 +716,11 @@ public class BareWelcomeOverlay {
+         ChromeSharedPreferences.getInstance()
+                 .writeBoolean(
+                         ChromePreferenceKeys.BARE_BUNDLED_AD_BLOCKER_ENABLED, choices.adBlocker);
++        BareUpdateCheck.setMode(
++                choices.updateChoice == 0
++                        ? BareUpdateCheck.UpdateMode.AUTOMATIC
++                        : BareUpdateCheck.UpdateMode.MANUAL);
++        BareUpdateCheck.setReminderEnabled(choices.updateChoice == 2);
+ 
+         whenProfileReady(
+                 profile -> {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+index 9ec19c3b7d3..061296dff6f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+@@ -41,6 +41,7 @@ import org.chromium.chrome.browser.autofill.settings.SettingsNavigationHelper;
+ import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsFragment;
+ import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsMediator;
+ import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsReferrer;
++import org.chromium.chrome.browser.bare.BareUpdateCheck;
+ import org.chromium.chrome.browser.device_lock.DeviceLockActivityLauncherImpl;
+ import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+@@ -114,6 +115,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
+             "account_and_google_services_section";
+     public static final String PREF_SIGN_IN = "sign_in";
+     public static final String PREF_GOOGLE_SERVICES = "google_services";
++    public static final String PREF_BARE_UPDATES = "bare_check_for_updates";
+     public static final String PREF_BASICS_SECTION = "basics_section";
+     public static final String PREF_SEARCH_ENGINE = "search_engine";
+     public static final String PREF_PASSWORDS = "passwords";
+@@ -421,6 +423,8 @@ public class MainSettings extends ChromeBaseSettingsFragment
+                     signinCoordinatorSupplier);
+         }
+ 
++        setUpUpdateRow();
++
+         cachePreferences();
+         updateAutofillPreferences();
+         updateGlicPreference();
+@@ -655,6 +659,45 @@ public class MainSettings extends ChromeBaseSettingsFragment
+         return preferenceInAllPreferences;
+     }
+ 
++    /**
++     * The update row. Its summary is the only place a manual-mode user learns anything, so it
++     * says what is known rather than staying blank: the newest release seen, or that nothing has
++     * been looked for yet.
++     */
++    private void setUpUpdateRow() {
++        Preference row = findPreference(PREF_BARE_UPDATES);
++        if (row == null) return;
++        updateRowSummary(row);
++        row.setOnPreferenceClickListener(
++                pref -> {
++                    // Opening the row is acknowledgement, whether or not they go on to update.
++                    BareUpdateCheck.clearBadge();
++                    pref.setSummary(R.string.bare_update_checking);
++                    BareUpdateCheck.checkNow(
++                            found -> {
++                                if (found == null) return;
++                                updateRowSummary(pref);
++                            });
++                    return true;
++                });
++    }
++
++    private void updateRowSummary(Preference row) {
++        String latest = BareUpdateCheck.getLatestTag();
++        if (latest == null) {
++            row.setSummary(
++                    BareUpdateCheck.getLastCheckMs() == 0
++                            ? R.string.bare_update_never_checked
++                            : R.string.bare_update_check_failed);
++            return;
++        }
++        if (BareUpdateCheck.isNewerThanCurrent(latest)) {
++            row.setSummary(getString(R.string.bare_update_available, latest));
++        } else {
++            row.setSummary(R.string.bare_update_up_to_date);
++        }
++    }
++
+     private void removePreferenceIfPresent(String key) {
+         Preference preference = getPreferenceScreen().findPreference(key);
+         if (preference != null) getPreferenceScreen().removePreference(preference);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index 881421081f8..8c821ebeaf9 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -73,6 +73,7 @@ import org.chromium.chrome.browser.back_press.BackPressManager;
+ import org.chromium.chrome.browser.back_press.BackPressMetrics;
+ import org.chromium.chrome.browser.back_press.BackPressMetrics.NavigationDirection;
+ import org.chromium.chrome.browser.back_press.BackPressMetrics.PredictiveGestureNavPhase;
++import org.chromium.chrome.browser.bare.BareUpdateCheck;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModelObserver;
+ import org.chromium.chrome.browser.bookmarks.TabBookmarker;
+@@ -1033,6 +1034,16 @@ public class ToolbarManager
+ 
+         Supplier<@Nullable MenuButtonState> menuButtonStateSupplier =
+                 () -> {
++                    // Bare looks for its own releases rather than going through Chrome's updater,
++                    // so the dot comes from that check. The badge itself is Chromium's, reused.
++                    if (BareUpdateCheck.hasBadge()) {
++                        MenuButtonState state = new MenuButtonState();
++                        state.menuContentDescription = R.string.bare_check_for_updates;
++                        state.darkBadgeIcon = R.drawable.badge_update_dark;
++                        state.lightBadgeIcon = R.drawable.badge_update_light;
++                        state.adaptiveBadgeIcon = R.drawable.badge_update_dark;
++                        return state;
++                    }
+                     if (mUpdateMenuItemHelper == null) return null;
+                     return mUpdateMenuItemHelper.getUiState().buttonState;
+                 };
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 35a0aa335f9..afc81dda75c 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -390,6 +390,24 @@ public final class ChromePreferenceKeys {
+     public static final String BARE_BUNDLED_AD_BLOCKER_ENABLED =
+             "Chrome.Bare.BundledAdBlockerEnabled";
+ 
++    /**
++     * How Bare looks for its own updates: 0 checks once a day while the browser is open, 1 never
++     * contacts the server unless the user asks. There is no background job either way.
++     */
++    public static final String BARE_UPDATE_MODE = "Chrome.Bare.UpdateMode";
++
++    /** Whether a manual-mode user wants a weekly nudge. The nudge itself uses no network. */
++    public static final String BARE_UPDATE_REMINDER = "Chrome.Bare.UpdateReminder";
++
++    /** When the release list was last fetched, or the reminder last shown, in millis. */
++    public static final String BARE_UPDATE_LAST_CHECK_MS = "Chrome.Bare.UpdateLastCheckMs";
++
++    /** The newest release tag seen, so a found update survives a restart. */
++    public static final String BARE_UPDATE_LATEST_TAG = "Chrome.Bare.UpdateLatestTag";
++
++    /** Whether the menu should carry a dot. Cleared when the user opens the update row. */
++    public static final String BARE_UPDATE_BADGE = "Chrome.Bare.UpdateBadge";
++
+     public static final String DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER =
+             "Chrome.Download.UseExternalDownloadManager";
+ 
+@@ -1201,6 +1219,11 @@ public final class ChromePreferenceKeys {
+                 AI_ASSISTANT_WEB_SUMMARIZATION_AVAILABILITY,
+                 AUTOFILL_ASSISTANT_FIRST_TIME_LITE_SCRIPT_USER,
+                 BARE_BUNDLED_AD_BLOCKER_ENABLED,
++                BARE_UPDATE_BADGE,
++                BARE_UPDATE_LAST_CHECK_MS,
++                BARE_UPDATE_LATEST_TAG,
++                BARE_UPDATE_MODE,
++                BARE_UPDATE_REMINDER,
+                 DOWNLOAD_EXTERNAL_MANAGER_PACKAGE,
+                 DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,
+                 WEBSTORE_DESKTOP_SITE_SEEDED,
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 10ebb903e2e..08aee43d654 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -3069,6 +3069,36 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_LIGHT_MODE" desc="Title of button that will change theme of distilled pages to light mode.">
+         Light
+       </message>
++      <message name="IDS_BARE_WELCOME_OPT_UPDATES" desc="Welcome screen row for how the browser looks for its own updates." translateable="false">
++        Updates
++      </message>
++      <message name="IDS_BARE_WELCOME_VALUE_UPDATE_AUTO" desc="Update setting: check once a day while the browser is open." translateable="false">
++        Automatically
++      </message>
++      <message name="IDS_BARE_WELCOME_VALUE_UPDATE_MANUAL" desc="Update setting: never contact the server unless asked." translateable="false">
++        Manually
++      </message>
++      <message name="IDS_BARE_WELCOME_VALUE_UPDATE_MANUAL_REMIND" desc="Update setting: manual, with a weekly local reminder that uses no network." translateable="false">
++        Manually, remind me weekly
++      </message>
++      <message name="IDS_BARE_CHECK_FOR_UPDATES" desc="Title of the settings row that looks for a newer version of the browser on GitHub.">
++        Check for updates
++      </message>
++      <message name="IDS_BARE_UPDATE_CHECKING" desc="Shown under the update row while the check is in progress.">
++        Checking…
++      </message>
++      <message name="IDS_BARE_UPDATE_AVAILABLE" desc="Shown under the update row when a newer release exists. %1$s is a version like 1.0.0-alpha.2.">
++        <ph name="VERSION">%1$s<ex>1.0.0-alpha.2</ex></ph> is available
++      </message>
++      <message name="IDS_BARE_UPDATE_UP_TO_DATE" desc="Shown under the update row when the running version is the newest.">
++        Bare is up to date
++      </message>
++      <message name="IDS_BARE_UPDATE_CHECK_FAILED" desc="Shown under the update row when the check could not reach the server.">
++        Could not reach GitHub
++      </message>
++      <message name="IDS_BARE_UPDATE_NEVER_CHECKED" desc="Shown under the update row when no check has ever run.">
++        Never checked
++      </message>
+       <message name="IDS_BARE_DARK_AMOLED_MODE" desc="Title of the theme option that uses true black backgrounds so AMOLED screens can switch those pixels off.">
+         Dark AMOLED
+       </message>

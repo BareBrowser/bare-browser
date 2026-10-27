@@ -1,0 +1,346 @@
+From b81f98800fba7c61ef9378e00b8cf2fca4a29b95 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 00:50:30 +0000
+Subject: [PATCH] Patch 0000175
+
+---
+ chrome/android/chrome_java_sources.gni        |   1 +
+ .../chrome/browser/bare/BareMediaProbe.java   | 116 ++++++++++++++++++
+ .../ChromeContextMenuPopulator.java           |  42 ++++++-
+ chrome/android/junit/BUILD.gn                 |   1 +
+ .../browser/bare/BareMediaProbeUnitTest.java  |  80 ++++++++++++
+ .../strings/android_chrome_strings.grd        |   3 +
+ 6 files changed, 239 insertions(+), 4 deletions(-)
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaProbe.java
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/BareMediaProbeUnitTest.java
+
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index e27343b48d9..7aad4967c9f 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -239,6 +239,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetView.java",
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetViewBinder.java",
+   "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
++  "java/src/org/chromium/chrome/browser/bare/BareMediaProbe.java",
+   "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
+   "java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaProbe.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaProbe.java
+new file mode 100644
+index 00000000000..fc6839d93e2
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaProbe.java
+@@ -0,0 +1,116 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.net.Uri;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import org.chromium.base.Callback;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.content_public.browser.WebContents;
++
++import java.util.Locale;
++
++/**
++ * Finds the file behind the video that was pressed.
++ *
++ * <p>A page that plays through Media Source gives its video element a blob: address, which is
++ * not a file, and the registry of what the tab fetched cannot say which of several videos was
++ * pressed. Pages in that shape often still know a plain file for the video they show, in their own
++ * data. This asks the page, at the place that was pressed, for the video there and for any file
++ * address its data names, and takes one only when that is unambiguous.
++ *
++ * <p>Nothing leaves the browser. The answer is an address, and the download that follows goes
++ * through the browser's own network stack with the profile's own cookies, the same as any other
++ * download.
++ */
++@NullMarked
++public final class BareMediaProbe {
++    private BareMediaProbe() {}
++
++    /**
++     * Finds the video under a point, reads its address, and collects file addresses from the
++     * page's data under the names pages use for them.
++     *
++     * <p>The video is the first video found under the point, looking through anything laid over
++     * it. {@code videos} counts the videos on the page that take up room, which is what makes a
++     * data address safe to use: with one, there is nothing to mix it up with.
++     */
++    static final String PROBE_SCRIPT =
++            "(function(x,y){function abs(u){try{return new URL(u,location.href).href;}"
++                    + "catch(e){return '';}}var v=null,els=document.elementsFromPoint(x,y);"
++                    + "for(var i=0;i<els.length&&!v;i++){var e=els[i];if(e.tagName==='VIDEO'){v=e;}"
++                    + "else if(e.querySelector){v=e.querySelector('video');}}var out={src:'',"
++                    + "videos:0,candidates:[]};var vs=document.querySelectorAll('video');"
++                    + "for(var j=0;j<vs.length;j++){var r=vs[j].getBoundingClientRect();"
++                    + "if(r.width>50&&r.height>50)out.videos++;}if(v){var s=v.currentSrc||v.src;"
++                    + "if(s&&!/^blob:/.test(s))out.src=abs(s);}var keys=['playable_url_quality_hd',"
++                    + "'browser_native_hd_url','playable_url','browser_native_sd_url','video_url',"
++                    + "'contentUrl'];var text='';var ss=document.querySelectorAll('script');"
++                    + "for(var k=0;k<ss.length;k++){text+=ss[k].textContent+' ';}"
++                    + "for(var q=0;q<keys.length;q++){var needle='\"'+keys[q]+'\":\"';var p=0;"
++                    + "while((p=text.indexOf(needle,p))>=0){p+=needle.length;var end=p;"
++                    + "while(end<text.length&&!(text.charCodeAt(end)===34&&text.charCodeAt(end-1)"
++                    + "!==92))end++;var raw=text.slice(p,end),u=raw;try{u=JSON.parse('\"'+raw+'\"');}"
++                    + "catch(e){}if(/^https?:/.test(u)&&out.candidates.indexOf(u)<0)"
++                    + "out.candidates.push(u);p=end;}}return JSON.stringify(out);})";
++
++    /** Asks the page about the point, and passes on the address to download, or null. */
++    public static void find(
++            @Nullable WebContents webContents, int xDp, int yDp, Callback<@Nullable String> done) {
++        if (webContents == null || webContents.isDestroyed()) {
++            done.onResult(null);
++            return;
++        }
++        BareScriptBridge.evaluate(
++                webContents,
++                PROBE_SCRIPT + "(" + xDp + "," + yDp + ")",
++                result -> done.onResult(choose(result)));
++    }
++
++    /**
++     * Picks the address out of what the script returned.
++     *
++     * <p>The video's own address wins when it is a file. A data address is used only when the page
++     * has exactly one video, because in a feed it could belong to any of them. Anything that is
++     * not a web address, or is not on https, is refused; http is let through only for the user's
++     * own machine, so that a page served locally can be tried.
++     */
++    static @Nullable String choose(@Nullable String scriptResult) {
++        if (scriptResult == null) return null;
++        try {
++            Object decoded = new org.json.JSONTokener(scriptResult).nextValue();
++            if (!(decoded instanceof String)) return null;
++            JSONObject json = new JSONObject((String) decoded);
++            String src = json.optString("src", "");
++            if (isFileAddress(src)) return src;
++            if (json.optInt("videos", 0) != 1) return null;
++            JSONArray candidates = json.optJSONArray("candidates");
++            if (candidates == null) return null;
++            for (int i = 0; i < candidates.length(); i++) {
++                String candidate = candidates.getString(i);
++                if (isFileAddress(candidate)) return candidate;
++            }
++            return null;
++        } catch (JSONException e) {
++            return null;
++        }
++    }
++
++    static boolean isFileAddress(String address) {
++        if (address.isEmpty()) return false;
++        Uri uri = Uri.parse(address);
++        String scheme = uri.getScheme();
++        String host = uri.getHost();
++        if (scheme == null || host == null) return false;
++        scheme = scheme.toLowerCase(Locale.ROOT);
++        if (scheme.equals("https")) return true;
++        return scheme.equals("http") && (host.equals("localhost") || host.startsWith("127."));
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
+index 7db359a7629..823928bab1b 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
+@@ -46,6 +46,7 @@ import org.chromium.base.shared_preferences.SharedPreferencesManager;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.BareMediaProbe;
+ import org.chromium.chrome.browser.bare.BareMediaRegistryBridge;
+ import org.chromium.chrome.browser.bookmarks.BookmarkUtils;
+ import org.chromium.chrome.browser.contextmenu.ChromeContextMenuItem.Item;
+@@ -946,7 +947,10 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+                 && mMode != ContextMenuMode.THIN_WEB_VIEW
+                 && areMandatoryFlowsCompleted(getProfile())) {
+             BareMediaRegistryBridge.DownloadSet detected = getDetectedMedia();
+-            if (detected != null) {
++            // The item is offered for any video the browser cannot save itself, not only when the
++            // tab has fetched something. Asking the page about the video that was pressed can
++            // find its file where the record of fetches cannot.
++            {
+                 ModelList detectedGroup = new ModelList();
+                 detectedGroup.add(
+                         createListItem(
+@@ -956,7 +960,7 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+                 // Adaptive streaming splits sound off into its own file, so the video on its
+                 // own is silent. Offer the audio as well rather than quietly handing over half
+                 // of what was playing.
+-                if (detected.audio != null) {
++                if (detected != null && detected.audio != null) {
+                     detectedGroup.add(
+                             createListItem(
+                                     Item.SAVE_DETECTED_AUDIO,
+@@ -1220,8 +1224,7 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+                 mNativeDelegate.startDownload(mParams.getSrcUrl(), /* isMedia= */ true);
+             }
+         } else if (itemId == R.id.contextmenu_save_detected_video) {
+-            BareMediaRegistryBridge.DownloadSet detected = getDetectedMedia();
+-            startDetectedDownload(detected == null ? null : detected.video);
++            startPressedVideoDownload();
+         } else if (itemId == R.id.contextmenu_save_detected_audio) {
+             BareMediaRegistryBridge.DownloadSet detected = getDetectedMedia();
+             startDetectedDownload(detected == null ? null : detected.audio);
+@@ -1937,6 +1940,37 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+      * through the same two calls as every other download item, so the same policy check and the
+      * same external download manager handoff apply.
+      */
++    /**
++     * Downloads the video that was pressed: the file the page itself names for it if it names one,
++     * otherwise the file the tab fetched.
++     */
++    private void startPressedVideoDownload() {
++        if (mIsDownloadRestrictedByPolicy) {
++            showDownloadRestrictedToast();
++            return;
++        }
++        BareMediaProbe.find(
++                mItemDelegate.getWebContents(),
++                mParams.getTriggeringTouchXDp(),
++                mParams.getTriggeringTouchYDp(),
++                address -> {
++                    if (address != null) {
++                        GURL url = new GURL(address);
++                        if (mItemDelegate.startDownload(url, /* isLink= */ false)) {
++                            mNativeDelegate.startDownload(url, /* isMedia= */ true);
++                        }
++                        return;
++                    }
++                    BareMediaRegistryBridge.DownloadSet detected = getDetectedMedia();
++                    if (detected != null) {
++                        startDetectedDownload(detected.video);
++                        return;
++                    }
++                    Toast.makeText(mContext, R.string.bare_video_not_found, Toast.LENGTH_LONG)
++                            .show();
++                });
++    }
++
+     private void startDetectedDownload(BareMediaRegistryBridge.@Nullable Candidate candidate) {
+         if (mIsDownloadRestrictedByPolicy) {
+             showDownloadRestrictedToast();
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index 062b4d6777c..ecaeefb254f 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -438,6 +438,7 @@ if (is_android) {
+       "src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/BareMediaProbeUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocolUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareWelcomeToolbarChoicesUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareMediaProbeUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareMediaProbeUnitTest.java
+new file mode 100644
+index 00000000000..3c74dbb75e1
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareMediaProbeUnitTest.java
+@@ -0,0 +1,80 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertTrue;
++
++import org.json.JSONObject;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++
++/** Unit tests for how {@link BareMediaProbe} chooses among what the page reports. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareMediaProbeUnitTest {
++    /** The script's answer is a JSON string, which is itself returned as a JSON string. */
++    private static String answer(String json) {
++        return JSONObject.quote(json);
++    }
++
++    @Test
++    public void testTheVideosOwnFileWins() {
++        String result =
++                answer(
++                        "{\"src\":\"https://cdn.example/v.mp4\",\"videos\":3,"
++                                + "\"candidates\":[\"https://cdn.example/other.mp4\"]}");
++        assertEquals("https://cdn.example/v.mp4", BareMediaProbe.choose(result));
++    }
++
++    @Test
++    public void testADataAddressNeedsExactlyOneVideoOnThePage() {
++        String one =
++                answer(
++                        "{\"src\":\"\",\"videos\":1,"
++                                + "\"candidates\":[\"https://cdn.example/a.mp4\","
++                                + "\"https://cdn.example/b.mp4\"]}");
++        assertEquals("https://cdn.example/a.mp4", BareMediaProbe.choose(one));
++
++        // In a feed the address could belong to any of the videos, so none is guessed.
++        String feed =
++                answer("{\"src\":\"\",\"videos\":4,\"candidates\":[\"https://cdn.example/a.mp4\"]}");
++        assertNull(BareMediaProbe.choose(feed));
++        String none =
++                answer("{\"src\":\"\",\"videos\":0,\"candidates\":[\"https://cdn.example/a.mp4\"]}");
++        assertNull(BareMediaProbe.choose(none));
++    }
++
++    @Test
++    public void testNothingFoundIsNull() {
++        assertNull(BareMediaProbe.choose(answer("{\"src\":\"\",\"videos\":1,\"candidates\":[]}")));
++        assertNull(BareMediaProbe.choose(null));
++        assertNull(BareMediaProbe.choose("not json"));
++        assertNull(BareMediaProbe.choose("null"));
++    }
++
++    @Test
++    public void testOnlyWebAddressesAreFiles() {
++        assertTrue(BareMediaProbe.isFileAddress("https://cdn.example/v.mp4"));
++        assertFalse(BareMediaProbe.isFileAddress("blob:https://site.example/1234"));
++        assertFalse(BareMediaProbe.isFileAddress("data:video/mp4;base64,AAAA"));
++        assertFalse(BareMediaProbe.isFileAddress("javascript:alert(1)"));
++        assertFalse(BareMediaProbe.isFileAddress("http://cdn.example/v.mp4"));
++        assertTrue(BareMediaProbe.isFileAddress("http://127.0.0.1:8000/clip.mp4"));
++        assertFalse(BareMediaProbe.isFileAddress(""));
++    }
++
++    @Test
++    public void testABadCandidateIsSkippedForAGoodOne() {
++        String result =
++                answer(
++                        "{\"src\":\"\",\"videos\":1,\"candidates\":[\"http://cdn.example/a.mp4\","
++                                + "\"https://cdn.example/b.mp4\"]}");
++        assertEquals("https://cdn.example/b.mp4", BareMediaProbe.choose(result));
++    }
++}
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 25dd795a923..24f8a89381b 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4375,6 +4375,9 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_TOOLBAR_SWIPE_VOLUME" desc="Option meaning dragging sideways along the toolbar changes media volume.">
+         Volume
+       </message>
++      <message name="IDS_BARE_VIDEO_NOT_FOUND" desc="Toast shown when the video that was pressed has no file the browser can download.">
++        Could not find a file for this video
++      </message>
+       <message name="IDS_BARE_TRANSLATE_SETTINGS_TITLE" desc="Title of the settings screen for translating pages. [CHAR_LIMIT=32]">
+         Translate pages
+       </message>
+-- 
+2.34.1
+

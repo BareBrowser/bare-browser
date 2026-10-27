@@ -1,0 +1,323 @@
+From 873b7d011ffaa0315370510541eebd9f8d836102 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Tue, 25 Aug 2026 06:46:04 +0000
+Subject: [PATCH] Patch 0000089
+
+---
+ .../browser/bare/BareWelcomeOverlay.java      | 219 ++++++++++++++----
+ 1 file changed, 174 insertions(+), 45 deletions(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+index 970d4c7fcc8..24c3f4b8e6b 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+@@ -125,7 +125,7 @@ public class BareWelcomeOverlay {
+         View footer = overlay.findViewById(R.id.bare_welcome_footer);
+         LinearLayout options = overlay.findViewById(R.id.bare_welcome_options);
+ 
+-        Choices choices = currentChoices();
++        Choices choices = currentChoices(prefs.getBoolean(KEY_SHOWN, false));
+         buildOptions(activity, options, choices);
+ 
+         copy.setAlpha(0f);
+@@ -314,6 +314,20 @@ public class BareWelcomeOverlay {
+         // 0 automatic, 1 manual, 2 manual with a weekly local reminder. The reminder is a timer,
+         // not a request, so it belongs with the mode rather than being a separate network choice.
+         int updateChoice;
++
++        // True when the welcome has been completed before, so this showing exists to ask about
++        // what a new release added rather than to set the browser up. A review starts from what
++        // the profile already holds; a first showing starts from Bare's own defaults.
++        boolean reviewing;
++
++        // The three values that live in the profile rather than in shared preferences: the
++        // engine, the autofill provider and background media. The profile is not up when the
++        // welcome is built, so each flag stays false until its live value has been read or the
++        // user has picked one. On a review, Start writes such a setting only once its flag is
++        // set, so a value that was never read cannot be written over what the user already chose.
++        boolean engineKnown;
++        boolean platformAutofillKnown;
++        boolean backgroundMediaKnown;
+     }
+ 
+     /** What a row does when tapped. The row's own value label is handed back so it can update. */
+@@ -329,13 +343,14 @@ public class BareWelcomeOverlay {
+     private static void buildOptions(Activity activity, LinearLayout container, Choices choices) {
+         LayoutInflater inflater = LayoutInflater.from(activity);
+ 
+-        addRow(
+-                inflater,
+-                container,
+-                R.drawable.ic_search_24dp,
+-                R.string.bare_welcome_opt_search,
+-                activity.getString(R.string.bare_welcome_value_noai),
+-                value -> chooseSearchEngine(activity, value, choices));
++        TextView engineValue =
++                addRow(
++                        inflater,
++                        container,
++                        R.drawable.ic_search_24dp,
++                        R.string.bare_welcome_opt_search,
++                        activity.getString(R.string.bare_welcome_value_noai),
++                        value -> chooseSearchEngine(activity, value, choices));
+ 
+         addToggleRow(
+                 inflater,
+@@ -350,7 +365,10 @@ public class BareWelcomeOverlay {
+                 container,
+                 R.drawable.ic_toolbar_24dp,
+                 R.string.bare_welcome_opt_address_bar,
+-                activity.getString(R.string.bare_welcome_value_top),
++                activity.getString(
++                        choices.addressBarOnTop
++                                ? R.string.bare_welcome_value_top
++                                : R.string.bare_welcome_value_bottom),
+                 value ->
+                         showChooser(
+                                 activity,
+@@ -367,44 +385,54 @@ public class BareWelcomeOverlay {
+                                                     : R.string.bare_welcome_value_bottom);
+                                 }));
+ 
+-        addRow(
+-                inflater,
+-                container,
+-                R.drawable.ic_password_manager_key,
+-                R.string.bare_welcome_opt_autofill,
+-                activity.getString(R.string.bare_welcome_value_platform_autofill),
+-                value ->
+-                        showChooser(
+-                                activity,
+-                                R.string.bare_welcome_opt_autofill,
+-                                Arrays.asList(
+-                                        activity.getString(
+-                                                R.string.bare_welcome_value_platform_autofill),
+-                                        activity.getString(R.string.bare_welcome_value_builtin)),
+-                                choices.platformAutofill ? 0 : 1,
+-                                index -> {
+-                                    choices.platformAutofill = index == 0;
+-                                    value.setText(
+-                                            choices.platformAutofill
+-                                                    ? R.string.bare_welcome_value_platform_autofill
+-                                                    : R.string.bare_welcome_value_builtin);
+-                                }));
++        TextView autofillValue =
++                addRow(
++                        inflater,
++                        container,
++                        R.drawable.ic_password_manager_key,
++                        R.string.bare_welcome_opt_autofill,
++                        activity.getString(R.string.bare_welcome_value_platform_autofill),
++                        value ->
++                                showChooser(
++                                        activity,
++                                        R.string.bare_welcome_opt_autofill,
++                                        Arrays.asList(
++                                                activity.getString(
++                                                        R.string
++                                                                .bare_welcome_value_platform_autofill),
++                                                activity.getString(
++                                                        R.string.bare_welcome_value_builtin)),
++                                        choices.platformAutofill ? 0 : 1,
++                                        index -> {
++                                            choices.platformAutofill = index == 0;
++                                            choices.platformAutofillKnown = true;
++                                            value.setText(
++                                                    choices.platformAutofill
++                                                            ? R.string
++                                                                    .bare_welcome_value_platform_autofill
++                                                            : R.string
++                                                                    .bare_welcome_value_builtin);
++                                        }));
+ 
+         addRow(
+                 inflater,
+                 container,
+                 R.drawable.ic_file_download_24dp,
+                 R.string.bare_welcome_opt_downloads,
+-                activity.getString(R.string.bare_welcome_value_off),
++                downloadLabel(activity, choices),
+                 value -> chooseDownloadManager(activity, value, choices));
+ 
+-        addToggleRow(
+-                inflater,
+-                container,
+-                R.drawable.ic_play_circle,
+-                R.string.bare_welcome_opt_background_media,
+-                choices.backgroundMedia,
+-                on -> choices.backgroundMedia = on);
++        MaterialSwitch backgroundToggle =
++                addToggleRow(
++                        inflater,
++                        container,
++                        R.drawable.ic_play_circle,
++                        R.string.bare_welcome_opt_background_media,
++                        choices.backgroundMedia,
++                        on -> {
++                            choices.backgroundMedia = on;
++                            choices.backgroundMediaKnown = true;
++                        });
+ 
+         addRow(
+                 inflater,
+@@ -428,9 +456,97 @@ public class BareWelcomeOverlay {
+                                     choices.updateChoice = index;
+                                     value.setText(updateValueLabel(index));
+                                 }));
++
++        if (choices.reviewing) {
++            seedFromProfile(activity, choices, engineValue, autofillValue, backgroundToggle);
++        }
+     }
+ 
+-    private static void addRow(
++    /**
++     * Moves the three profile-backed rows onto what the profile actually holds.
++     *
++     * <p>Only for a review. The welcome is built before native is up, so those three rows start at
++     * the defaults a fresh profile would be given. That is the right answer the first time and the
++     * wrong one on every later showing, where it would show a user their own settings replaced by
++     * defaults and then write those defaults back when they pressed Start. Rows the user has
++     * already touched are left alone, so a late read cannot undo a deliberate choice.
++     */
++    private static void seedFromProfile(
++            Activity activity,
++            Choices choices,
++            TextView engineValue,
++            TextView autofillValue,
++            MaterialSwitch backgroundToggle) {
++        whenProfileReady(
++                profile -> {
++                    PrefService prefs = UserPrefs.get(profile);
++
++                    if (!choices.platformAutofillKnown) {
++                        choices.platformAutofill =
++                                prefs.getBoolean(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL);
++                        choices.platformAutofillKnown = true;
++                        autofillValue.setText(
++                                choices.platformAutofill
++                                        ? R.string.bare_welcome_value_platform_autofill
++                                        : R.string.bare_welcome_value_builtin);
++                    }
++
++                    if (!choices.backgroundMediaKnown) {
++                        choices.backgroundMedia = prefs.getBoolean(Pref.BACKGROUND_MEDIA_PLAYBACK);
++                        choices.backgroundMediaKnown = true;
++                        backgroundToggle.setChecked(choices.backgroundMedia);
++                    }
++
++                    TemplateUrlService service = TemplateUrlServiceFactory.getForProfile(profile);
++                    if (service.isLoaded()) {
++                        seedEngine(service, choices, engineValue);
++                        return;
++                    }
++                    service.registerLoadListener(
++                            new TemplateUrlService.LoadListener() {
++                                @Override
++                                public void onTemplateUrlServiceLoaded() {
++                                    service.unregisterLoadListener(this);
++                                    seedEngine(service, choices, engineValue);
++                                }
++                            });
++                    service.load();
++                });
++    }
++
++    /** Moves the search engine row onto whatever the profile currently searches with. */
++    private static void seedEngine(
++            TemplateUrlService service, Choices choices, TextView engineValue) {
++        if (choices.engineKnown) return;
++        TemplateUrl current = service.getDefaultSearchEngineTemplateUrl();
++        if (current == null) return;
++        choices.engineKeyword = current.getKeyword();
++        choices.engineKnown = true;
++        engineValue.setText(current.getShortName());
++    }
++
++    /** The collapsed label for the downloads row: off, ask each time, or the chosen app. */
++    private static String downloadLabel(Activity activity, Choices choices) {
++        if (!choices.externalDownloadManager) {
++            return activity.getString(R.string.bare_welcome_value_off);
++        }
++        ComponentName component =
++                ComponentName.unflattenFromString(choices.downloadManagerComponent);
++        if (component != null) {
++            try {
++                CharSequence label =
++                        activity.getPackageManager()
++                                .getActivityInfo(component, 0)
++                                .loadLabel(activity.getPackageManager());
++                if (label != null && label.length() > 0) return label.toString();
++            } catch (PackageManager.NameNotFoundException e) {
++                // The app it names is gone, so fall through to asking each time.
++            }
++        }
++        return activity.getString(R.string.bare_welcome_value_ask);
++    }
++
++    private static TextView addRow(
+             LayoutInflater inflater,
+             LinearLayout container,
+             int iconRes,
+@@ -442,10 +558,11 @@ public class BareWelcomeOverlay {
+         value.setText(initialValue);
+         row.setOnClickListener(view -> action.onTapped(value));
+         container.addView(row);
++        return value;
+     }
+ 
+     /** A row that is simply on or off, shown as a switch rather than a value to tap through. */
+-    private static void addToggleRow(
++    private static MaterialSwitch addToggleRow(
+             LayoutInflater inflater,
+             LinearLayout container,
+             int iconRes,
+@@ -466,6 +583,7 @@ public class BareWelcomeOverlay {
+                     onChanged.onResult(toggle.isChecked());
+                 });
+         container.addView(row);
++        return toggle;
+     }
+ 
+     private static View newRow(
+@@ -652,6 +770,7 @@ public class BareWelcomeOverlay {
+                 selected,
+                 index -> {
+                     choices.engineKeyword = engines.get(index).getKeyword();
++                    choices.engineKnown = true;
+                     value.setText(engines.get(index).getShortName());
+                 });
+     }
+@@ -705,8 +824,9 @@ public class BareWelcomeOverlay {
+      * media and the search engine, are not available this early in startup, so those rows keep
+      * their defaults, which are also what a first run gets.
+      */
+-    private static Choices currentChoices() {
++    private static Choices currentChoices(boolean reviewing) {
+         Choices choices = new Choices();
++        choices.reviewing = reviewing;
+         SharedPreferencesManager prefs = ChromeSharedPreferences.getInstance();
+         choices.addressBarOnTop = readAddressBarOnTop(prefs, choices.addressBarOnTop);
+         choices.adBlocker =
+@@ -762,9 +882,18 @@ public class BareWelcomeOverlay {
+         whenProfileReady(
+                 profile -> {
+                     PrefService prefs = UserPrefs.get(profile);
+-                    prefs.setBoolean(
+-                            Pref.AUTOFILL_USING_PLATFORM_AUTOFILL, choices.platformAutofill);
+-                    prefs.setBoolean(Pref.BACKGROUND_MEDIA_PLAYBACK, choices.backgroundMedia);
++                    // On a first showing these carry Bare's own defaults and are always written.
++                    // On a review they are only written once the live value has been read, so a
++                    // Start pressed before the profile answered leaves the setting as it was.
++                    if (!choices.reviewing || choices.platformAutofillKnown) {
++                        prefs.setBoolean(
++                                Pref.AUTOFILL_USING_PLATFORM_AUTOFILL, choices.platformAutofill);
++                    }
++                    if (!choices.reviewing || choices.backgroundMediaKnown) {
++                        prefs.setBoolean(
++                                Pref.BACKGROUND_MEDIA_PLAYBACK, choices.backgroundMedia);
++                    }
++                    if (choices.reviewing && !choices.engineKnown) return;
+ 
+                     TemplateUrlService service = TemplateUrlServiceFactory.getForProfile(profile);
+                     if (service.isLoaded()) {

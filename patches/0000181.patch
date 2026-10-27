@@ -1,0 +1,561 @@
+From 972dacf6a7d5d8b283e25d717e1e5a5f0ec532a3 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 05:47:45 +0000
+Subject: [PATCH] Patch 0000181
+
+---
+ chrome/android/chrome_java_sources.gni        |   1 +
+ .../browser/bare/BareCrxDownloadWatcher.java  | 178 ++++++++++++++++++
+ .../init/ProcessInitializationHandler.java    |   3 +
+ chrome/android/junit/BUILD.gn                 |   1 +
+ .../bare/BareCrxDownloadWatcherUnitTest.java  |  66 +++++++
+ .../chrome_download_manager_delegate.cc       |   5 +-
+ chrome/browser/ui/android/extensions/BUILD.gn |   1 +
+ .../extensions/extension_util_bridge.cc       | 126 +++++++++++++
+ .../ui/extensions/ExtensionUtilBridge.java    |  19 ++
+ .../strings/android_chrome_strings.grd        |  15 ++
+ 10 files changed, 414 insertions(+), 1 deletion(-)
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcher.java
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcherUnitTest.java
+
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 41cea0da4ef..7c4900f716c 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -239,6 +239,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetView.java",
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetViewBinder.java",
+   "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
++  "java/src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcher.java",
+   "java/src/org/chromium/chrome/browser/bare/BareMediaProbe.java",
+   "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
+   "java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcher.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcher.java
+new file mode 100644
+index 00000000000..35730a52675
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcher.java
+@@ -0,0 +1,178 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.app.Activity;
++import android.content.Context;
++import android.net.Uri;
++import android.widget.Toast;
++
++import androidx.appcompat.app.AlertDialog;
++
++import org.chromium.base.ApplicationStatus;
++import org.chromium.base.ContextUtils;
++import org.chromium.base.Log;
++import org.chromium.base.task.PostTask;
++import org.chromium.base.task.TaskTraits;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.app.ChromeActivity;
++import org.chromium.chrome.browser.download.items.OfflineContentAggregatorFactory;
++import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.chrome.browser.ui.extensions.ExtensionUtilBridge;
++import org.chromium.components.offline_items_collection.ContentId;
++import org.chromium.components.offline_items_collection.OfflineContentProvider;
++import org.chromium.components.offline_items_collection.OfflineItem;
++import org.chromium.components.offline_items_collection.OfflineItemState;
++import org.chromium.components.offline_items_collection.UpdateDelta;
++import org.chromium.content_public.browser.WebContents;
++
++import java.io.File;
++import java.io.FileInputStream;
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.io.InputStream;
++import java.io.OutputStream;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Locale;
++import java.util.Set;
++
++/**
++ * Offers to install an extension when a .crx file has finished downloading, so that one fetched
++ * from a project's release page is not left sitting in Downloads. Only a download that finishes
++ * while Bare is running is offered; the ones already there at startup are not. The install itself
++ * is the same one Load CRX uses, including its prompt, and nothing is installed without it.
++ */
++@NullMarked
++public final class BareCrxDownloadWatcher implements OfflineContentProvider.Observer {
++    private static final String TAG = "BareCrx";
++    private static final long MAX_BYTES = 256L * 1024 * 1024;
++    private static final String CRX_MIME = "application/x-chrome-extension";
++
++    private static @Nullable BareCrxDownloadWatcher sInstance;
++
++    private final Set<ContentId> mOffered = new HashSet<>();
++
++    private BareCrxDownloadWatcher() {}
++
++    /** Starts watching, once. Needs native code, since the download list lives there. */
++    public static void start(OfflineContentProvider provider) {
++        if (sInstance != null) return;
++        sInstance = new BareCrxDownloadWatcher();
++        provider.addObserver(sInstance);
++    }
++
++    /** Whether the item is a finished extension package. */
++    static boolean isFinishedCrx(OfflineItem item) {
++        if (item.state != OfflineItemState.COMPLETE) return false;
++        if (CRX_MIME.equals(item.mimeType)) return true;
++        // Release pages often serve the file as a generic download, so go by the name as well.
++        String path = item.filePath == null ? "" : item.filePath.toLowerCase(Locale.ROOT);
++        String title = item.title == null ? "" : item.title.toLowerCase(Locale.ROOT);
++        return path.endsWith(".crx") || title.endsWith(".crx");
++    }
++
++    @Override
++    public void onItemsAdded(List<OfflineItem> items) {}
++
++    @Override
++    public void onItemRemoved(ContentId id) {
++        mOffered.remove(id);
++    }
++
++    @Override
++    public void onItemUpdated(OfflineItem item, @Nullable UpdateDelta updateDelta) {
++        // Only the moment a download finishes, not a later update to one that already had.
++        if (updateDelta == null || !updateDelta.stateChanged) return;
++        if (!isFinishedCrx(item) || item.filePath == null || item.filePath.isEmpty()) return;
++        if (!mOffered.add(item.id)) return;
++        offer(item.id, item.title == null ? item.filePath : item.title, item.filePath);
++    }
++
++    /**
++     * Copies the downloaded file somewhere native code can read it, then installs from there. A
++     * download is often kept behind a content address that only Android's content resolver can
++     * open, so reading it by path from native code fails.
++     */
++    private static void install(WebContents webContents, String path) {
++        Context context = ContextUtils.getApplicationContext();
++        PostTask.postTask(
++                TaskTraits.BEST_EFFORT_MAY_BLOCK,
++                () -> {
++                    File copy = new File(context.getCacheDir(), "bare-crx-offer.crx");
++                    try (InputStream in = open(context, path);
++                            OutputStream out = new FileOutputStream(copy)) {
++                        byte[] buffer = new byte[64 * 1024];
++                        long total = 0;
++                        int read;
++                        while ((read = in.read(buffer)) > 0) {
++                            total += read;
++                            // Larger than any extension Bare expects; the installer checks again.
++                            if (total > MAX_BYTES) throw new IOException("too large");
++                            out.write(buffer, 0, read);
++                        }
++                    } catch (IOException | RuntimeException e) {
++                        Log.w(TAG, "Could not read the downloaded extension", e);
++                        PostTask.postTask(
++                                TaskTraits.UI_DEFAULT,
++                                () ->
++                                        Toast.makeText(
++                                                        context,
++                                                        R.string.bare_crx_offer_unreadable,
++                                                        Toast.LENGTH_LONG)
++                                                .show());
++                        return;
++                    }
++                    PostTask.postTask(
++                            TaskTraits.UI_DEFAULT,
++                            () ->
++                                    ExtensionUtilBridge.installCrxFromFile(
++                                            webContents, copy.getAbsolutePath()));
++                });
++    }
++
++    private static InputStream open(Context context, String path) throws IOException {
++        if (path.startsWith("content:")) {
++            InputStream stream = context.getContentResolver().openInputStream(Uri.parse(path));
++            if (stream == null) throw new IOException("no stream");
++            return stream;
++        }
++        return new FileInputStream(path);
++    }
++
++    private static void offer(ContentId id, String name, String path) {
++        Activity activity = ApplicationStatus.getLastTrackedFocusedActivity();
++        if (!(activity instanceof ChromeActivity chromeActivity)) return;
++        Tab tab = chromeActivity.getActivityTab();
++        if (tab == null || tab.isIncognito()) return;
++        WebContents webContents = tab.getWebContents();
++        if (webContents == null) return;
++        new AlertDialog.Builder(activity, R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                .setTitle(R.string.bare_crx_offer_title)
++                .setMessage(activity.getString(R.string.bare_crx_offer_message, name))
++                .setPositiveButton(
++                        R.string.bare_crx_offer_install,
++                        (dialog, which) -> {
++                            // The file may have moved since it finished, as a download is first
++                            // written somewhere temporary and then published, so ask where it is
++                            // now.
++                            OfflineContentAggregatorFactory.get()
++                                    .getItemById(
++                                            id,
++                                            current ->
++                                                    install(
++                                                            webContents,
++                                                            current != null
++                                                                            && current.filePath
++                                                                                    != null
++                                                                    ? current.filePath
++                                                                    : path));
++                        })
++                .setNegativeButton(R.string.bare_crx_offer_not_now, null)
++                .show();
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
+index 4384d42c31c..862d39590c0 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
+@@ -61,7 +61,9 @@ import org.chromium.chrome.browser.content_capture.ContentCaptureHistoryDeletion
+ import org.chromium.chrome.browser.crash.CrashUploadCountStore;
+ import org.chromium.chrome.browser.crash.LogcatExtractionRunnable;
+ import org.chromium.chrome.browser.crash.MinidumpUploadServiceImpl;
++import org.chromium.chrome.browser.bare.BareCrxDownloadWatcher;
+ import org.chromium.chrome.browser.download.DownloadManagerService;
++import org.chromium.chrome.browser.download.items.OfflineContentAggregatorFactory;
+ import org.chromium.chrome.browser.download.OfflineContentAvailabilityStatusProvider;
+ import org.chromium.chrome.browser.feedback.FeedbackPolicyManager;
+ import org.chromium.chrome.browser.firstrun.TosDialogBehaviorSharedPrefInvalidator;
+@@ -401,6 +403,7 @@ public class ProcessInitializationHandler {
+     /** Performs the post native initialization. */
+     @CallSuper
+     protected void handlePostNativeInitialization() {
++        BareCrxDownloadWatcher.start(OfflineContentAggregatorFactory.get());
+         // Triggered early in post native startup to allow any flags that have not be accessed to
+         // use the most up to date flag state from the server
+         // (see ChromeCachedFlags#cacheNativeFlags for more details).
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index fd5f07bd3ec..d10cf41139c 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -437,6 +437,7 @@ if (is_android) {
+       "src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcherUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java",
+       "src/org/chromium/chrome/browser/services/gcm/BarePushDistributorUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareMediaProbeUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcherUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcherUnitTest.java
+new file mode 100644
+index 00000000000..cdcd1da7ba7
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcherUnitTest.java
+@@ -0,0 +1,66 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.components.offline_items_collection.OfflineItem;
++import org.chromium.components.offline_items_collection.OfflineItemState;
++
++/** Unit tests for {@link BareCrxDownloadWatcher}. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareCrxDownloadWatcherUnitTest {
++    private static OfflineItem item(String title, String path, String mime, int state) {
++        OfflineItem item = new OfflineItem();
++        item.title = title;
++        item.filePath = path;
++        item.mimeType = mime;
++        item.state = state;
++        return item;
++    }
++
++    @Test
++    public void testExtensionMimeTypeIsOffered() {
++        assertTrue(
++                BareCrxDownloadWatcher.isFinishedCrx(
++                        item("a", "/d/a", "application/x-chrome-extension",
++                                OfflineItemState.COMPLETE)));
++    }
++
++    @Test
++    public void testGenericDownloadWithCrxNameIsOffered() {
++        assertTrue(
++                BareCrxDownloadWatcher.isFinishedCrx(
++                        item("ublock.crx", "/d/ublock.crx", "application/octet-stream",
++                                OfflineItemState.COMPLETE)));
++        assertTrue(
++                BareCrxDownloadWatcher.isFinishedCrx(
++                        item("x", "/d/UBLOCK.CRX", "application/octet-stream",
++                                OfflineItemState.COMPLETE)));
++    }
++
++    @Test
++    public void testAnUnfinishedDownloadIsNot() {
++        assertFalse(
++                BareCrxDownloadWatcher.isFinishedCrx(
++                        item("a.crx", "/d/a.crx", "application/x-chrome-extension",
++                                OfflineItemState.IN_PROGRESS)));
++    }
++
++    @Test
++    public void testOtherFilesAreNot() {
++        assertFalse(
++                BareCrxDownloadWatcher.isFinishedCrx(
++                        item("a.zip", "/d/a.zip", "application/zip", OfflineItemState.COMPLETE)));
++        assertFalse(
++                BareCrxDownloadWatcher.isFinishedCrx(
++                        item("crx.txt", "/d/crx.txt", "text/plain", OfflineItemState.COMPLETE)));
++    }
++}
+diff --git a/chrome/browser/download/chrome_download_manager_delegate.cc b/chrome/browser/download/chrome_download_manager_delegate.cc
+index 7fa9608340a..764663384ba 100644
+--- a/chrome/browser/download/chrome_download_manager_delegate.cc
++++ b/chrome/browser/download/chrome_download_manager_delegate.cc
+@@ -1162,7 +1162,10 @@ bool ChromeDownloadManagerDelegate::ShouldCompleteDownload(
+ bool ChromeDownloadManagerDelegate::ShouldOpenDownload(
+     DownloadItem* item,
+     content::DownloadOpenDelayedCallback callback) {
+-#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
++  // Bare: on Android a finished .crx is not installed here. This path has no install prompt on
++  // Android, so it would try to install and then delete the file. BareCrxDownloadWatcher asks
++  // the user first and installs through the same prompt as Load CRX.
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE) && !BUILDFLAG(IS_ANDROID)
+   if (extensions::util::IsExtensionDownload(*item) &&
+       !extensions::WebstoreInstaller::GetAssociatedApproval(*item) &&
+       !profile_->IsOffTheRecord()) {
+diff --git a/chrome/browser/ui/android/extensions/BUILD.gn b/chrome/browser/ui/android/extensions/BUILD.gn
+index a983eec6472..f26f0a390e3 100644
+--- a/chrome/browser/ui/android/extensions/BUILD.gn
++++ b/chrome/browser/ui/android/extensions/BUILD.gn
+@@ -64,6 +64,7 @@ if (enable_extensions_core) {
+       "//chrome/browser/ui/extensions:extensions_menu_handler",
+       "//chrome/browser/ui/side_panel",
+       "//chrome/browser/ui/toolbar",
++      "//components/crx_file",
+       "//content/public/browser",
+       "//extensions/browser",
+       "//extensions/browser:extension_action_enums",
+diff --git a/chrome/browser/ui/android/extensions/extension_util_bridge.cc b/chrome/browser/ui/android/extensions/extension_util_bridge.cc
+index bcef7fed907..9ec7a3d95e6 100644
+--- a/chrome/browser/ui/android/extensions/extension_util_bridge.cc
++++ b/chrome/browser/ui/android/extensions/extension_util_bridge.cc
+@@ -10,7 +10,20 @@
+ #include "base/android/jni_array.h"
+ #include "base/android/jni_string.h"
+ #include "base/android/scoped_java_ref.h"
++#include "base/files/file.h"
+ #include "base/files/file_util.h"
++#include "base/functional/bind.h"
++#include "base/strings/strcat.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/thread_pool.h"
++#include "chrome/browser/extensions/bare_bundled_extensions_loader.h"
++#include "chrome/browser/extensions/extension_install_prompt.h"
++#include "components/crx_file/crx_verifier.h"
++#include "content/public/browser/browser_context.h"
++#include "extensions/browser/crx_installer.h"
++#include "extensions/browser/extension_registry.h"
++#include "extensions/browser/install/crx_install_error.h"
++#include "extensions/common/extension.h"
+ #include "chrome/browser/extensions/api/omnibox/omnibox_api.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "content/public/browser/web_contents.h"
+@@ -111,4 +124,117 @@ void JNI_ExtensionUtilBridge_OnOmniboxExtensionInputEntered(
+       web_contents, std::string(url.host()), input_text, disposition);
+ }
+ 
++
++namespace {
++
++struct CrxCheck {
++  std::string error;
++  std::string crx_id;
++};
++
++// Reads and verifies a downloaded file off the UI thread. The same checks as Load CRX on the
++// extensions page, which this mirrors: a size limit, then the format and signature, which also
++// give the id the file would install under.
++CrxCheck CheckCrxFile(const base::FilePath& path) {
++  constexpr int64_t kMaxCrxBytes = 256 * 1024 * 1024;
++  CrxCheck checked;
++  base::File file(path, base::File::FLAG_OPEN | base::File::FLAG_READ);
++  if (!file.IsValid()) {
++    checked.error = "Bare could not read that file.";
++    return checked;
++  }
++  int64_t length = file.GetLength();
++  if (length < 0) {
++    checked.error = "Bare could not read that file.";
++    return checked;
++  }
++  if (length > kMaxCrxBytes) {
++    checked.error = "That file is too large to be an extension.";
++    return checked;
++  }
++  file.Close();
++  std::string public_key;
++  crx_file::VerifierResult result = crx_file::Verify(
++      path, crx_file::VerifierFormat::CRX3, {}, {}, &public_key,
++      &checked.crx_id, /*compressed_verified_contents=*/nullptr);
++  if (result != crx_file::VerifierResult::OK_FULL) {
++    checked.error =
++        "That file is not a packed extension, or it is damaged. Bare installs "
++        "signed .crx files only.";
++    checked.crx_id.clear();
++  }
++  return checked;
++}
++
++void ReportCrxError(const std::string& message) {
++  extensions::Java_ExtensionUtilBridge_onCrxInstallError(
++      base::android::AttachCurrentThread(), message);
++}
++
++void OnCrxInstalled(const std::optional<extensions::CrxInstallError>& error) {
++  if (!error || (error->type() == extensions::CrxInstallErrorType::OTHER &&
++                 (error->detail() ==
++                      extensions::CrxInstallErrorDetail::USER_CANCELED ||
++                  error->detail() ==
++                      extensions::CrxInstallErrorDetail::USER_ABORTED))) {
++    return;
++  }
++  ReportCrxError(base::UTF16ToUTF8(error->message()));
++}
++
++void StartCrxInstall(base::WeakPtr<content::WebContents> web_contents,
++                     const base::FilePath& path,
++                     CrxCheck checked) {
++  if (!checked.error.empty()) {
++    ReportCrxError(checked.error);
++    return;
++  }
++  if (!web_contents) {
++    return;
++  }
++  content::BrowserContext* context = web_contents->GetBrowserContext();
++
++  // A file signed with the key of the uBlock Origin Bare ships would replace it in place and keep
++  // Bare's provenance, so it is declined here as it is on the extensions page.
++  const extensions::Extension* installed =
++      extensions::ExtensionRegistry::Get(context)->GetInstalledExtension(
++          checked.crx_id);
++  if (installed && extensions::IsProvisionedByBare(context, *installed)) {
++    ReportCrxError(base::StrCat(
++        {installed->name(),
++         " comes with Bare and keeps itself up to date. To install it from a "
++         "file instead, remove it first."}));
++    return;
++  }
++
++  auto prompt = std::make_unique<ExtensionInstallPrompt>(
++      web_contents.get(),
++      std::make_unique<extensions::InstallPromptData>(
++          extensions::InstallPromptData::UNSET_PROMPT_TYPE));
++  scoped_refptr<extensions::CrxInstaller> installer =
++      extensions::CrxInstaller::Create(context, std::move(prompt));
++  installer->set_error_on_unsupported_requirements(true);
++  installer->set_off_store_install_allow_reason(
++      extensions::CrxInstaller::OffStoreInstallAllowedFromSettingsPage);
++  installer->set_install_immediately(true);
++  installer->AddInstallerCallback(base::BindOnce(&OnCrxInstalled));
++  // The downloaded file itself, never deleted: the installer copies it before unpacking.
++  installer->InstallCrx(path);
++}
++
++}  // namespace
++
++// static
++void JNI_ExtensionUtilBridge_InstallCrxFromFile(
++    JNIEnv* env,
++    content::WebContents* web_contents,
++    const std::string& path) {
++  CHECK(web_contents);
++  base::FilePath file_path(path);
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(&CheckCrxFile, file_path),
++      base::BindOnce(&StartCrxInstall, web_contents->GetWeakPtr(), file_path));
++}
++
+ DEFINE_JNI(ExtensionUtilBridge)
+diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionUtilBridge.java b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionUtilBridge.java
+index 98c4cce3dd9..86143e77cec 100644
+--- a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionUtilBridge.java
++++ b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionUtilBridge.java
+@@ -14,6 +14,8 @@ import android.net.Uri;
+ import android.os.Environment;
+ import android.provider.MediaStore;
+ 
++import android.widget.Toast;
++
+ import org.jni_zero.CalledByNative;
+ import org.jni_zero.JNINamespace;
+ import org.jni_zero.JniType;
+@@ -164,8 +166,25 @@ public class ExtensionUtilBridge {
+                 .onOmniboxExtensionInputEntered(webContents, url, openInNewTab, openInNewWindow);
+     }
+ 
++    /**
++     * Starts installing a downloaded .crx file. The install prompt is shown on the tab, and a
++     * file that cannot be installed comes back through {@link #onCrxInstallError}.
++     */
++    public static void installCrxFromFile(WebContents webContents, String path) {
++        ExtensionUtilBridgeJni.get().installCrxFromFile(webContents, path);
++    }
++
++    @CalledByNative
++    private static void onCrxInstallError(@JniType("std::string") String message) {
++        Toast.makeText(ContextUtils.getApplicationContext(), message, Toast.LENGTH_LONG).show();
++    }
++
+     @NativeMethods
+     interface Natives {
++        void installCrxFromFile(
++                @JniType("content::WebContents*") WebContents webContents,
++                @JniType("std::string") String path);
++
+         @Nullable Bitmap getExtensionOmniboxIcon(
+                 @JniType("Profile*") Profile profile, @JniType("std::string") String extensionId);
+ 
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index a4ee2791ab4..798d88527c6 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4489,6 +4489,21 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_MINIMAL_LAYOUT_SUMMARY" desc="Summary of the setting that removes the bottom button bar. Applies after a restart.">
+         One row only: the address bar with New tab, Tabs and Menu. Applies after a restart.
+       </message>
++      <message name="IDS_BARE_CRX_OFFER_TITLE" desc="Title of the dialog offered when an extension file has finished downloading. [CHAR_LIMIT=40]">
++        Install this extension?
++      </message>
++      <message name="IDS_BARE_CRX_OFFER_MESSAGE" desc="Dialog text offered when an extension file has finished downloading. FILE is the name of the downloaded file.">
++        <ph name="FILE">%1$s<ex>ublock.crx</ex></ph> has finished downloading. Bare can’t check whether an extension is safe. Install it only if you trust where it came from.
++      </message>
++      <message name="IDS_BARE_CRX_OFFER_INSTALL" desc="Button that continues to install a downloaded extension. [CHAR_LIMIT=20]">
++        Install
++      </message>
++      <message name="IDS_BARE_CRX_OFFER_UNREADABLE" desc="Toast when a downloaded extension file could not be read to install it.">
++        Bare could not read the downloaded file.
++      </message>
++      <message name="IDS_BARE_CRX_OFFER_NOT_NOW" desc="Button that leaves a downloaded extension file uninstalled. [CHAR_LIMIT=20]">
++        Not now
++      </message>
+       <message name="IDS_BARE_MINIMAL_LAYOUT_USE_MINIMAL" desc="Address bar long press menu item that switches to the minimal toolbar. [CHAR_LIMIT=40]">
+         Use minimal toolbar
+       </message>
+-- 
+2.34.1
+

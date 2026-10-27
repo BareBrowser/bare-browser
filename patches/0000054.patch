@@ -1,0 +1,42 @@
+From f676ca860fc39417811a0ded99c90db21f4ae8fb Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 19 Aug 2026 20:12:02 +0000
+Subject: [PATCH] Patch 0000054
+
+---
+ extensions/browser/manifest_v2_handler.cc | 22 +++++++++++++++++++++-
+ 1 file changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/extensions/browser/manifest_v2_handler.cc b/extensions/browser/manifest_v2_handler.cc
+index 5841d3dfbc8..e58b1f5eb50 100644
+--- a/extensions/browser/manifest_v2_handler.cc
++++ b/extensions/browser/manifest_v2_handler.cc
+@@ -114,7 +114,27 @@ bool ShouldDisableLegacyExtensions() {
+     return false;
+   }
+ 
+-  return true;
++  // Bare: keep Manifest V2 working.
++  //
++  // Upstream returns true unconditionally here. There is no longer a flag, a
++  // policy or an enterprise escape hatch: the whole deprecation experiment
++  // (ManifestV2ExperimentManager, ExtensionManifestV2Availability and the rest)
++  // was deleted once the removal completed, leaving this one hardcoded return.
++  //
++  // It is the only input to all three enforcement points, so returning false
++  // restores the lot together: ShouldBlockExtensionInstallation lets an MV2
++  // extension install, ShouldBlockExtensionEnable stops
++  // StandardManagementPolicyProvider::MustRemainDisabled from forcing it back
++  // off, and DisableAffectedExtensions stops sweeping it away at startup.
++  //
++  // Nothing else has to change for content blockers to work. The
++  // webRequestBlocking permission is still declared for any MV2 extension with
++  // no location restriction, and the background page, webRequest and content
++  // script machinery all compile in this configuration already.
++  //
++  // This matches what Brave does, which injects the same early return into this
++  // same function.
++  return false;
+ }
+ 
+ }  // namespace

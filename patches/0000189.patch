@@ -1,0 +1,87 @@
+From a432e6659694bbf2737f3eb58e0955a22ee931ee Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 14:45:23 +0000
+Subject: [PATCH] Patch 0000189
+
+---
+ .../browser/tabmodel/ChromeTabCreator.java    | 50 +++++++++++++++++++
+ 1 file changed, 50 insertions(+)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/ChromeTabCreator.java b/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/ChromeTabCreator.java
+index 9af65f6d01d..2cfe98deb0c 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/ChromeTabCreator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/ChromeTabCreator.java
+@@ -9,6 +9,8 @@ import static org.chromium.build.NullUtil.assumeNonNull;
+ 
+ import android.app.Activity;
+ import android.content.Intent;
++import android.os.Handler;
++import android.os.Looper;
+ import android.text.TextUtils;
+ 
+ import org.chromium.base.IntentUtils;
+@@ -190,6 +192,45 @@ public class ChromeTabCreator implements TabCreator, NeedsTabModel, NeedsTabMode
+         TabCreatorUtil.launchNtp(this, getProfile(), type);
+     }
+ 
++    private boolean isIncognitoProfileShuttingDown() {
++        ProfileProvider provider = mProfileProviderSupplier.get();
++        if (provider == null) return false;
++        Profile profile = provider.getOffTheRecordProfile(/* createIfNeeded= */ false);
++        return profile != null && profile.shutdownStarted();
++    }
++
++    private void retryAfterIncognitoProfileGone(
++            LoadUrlParams loadUrlParams,
++            @Nullable String title,
++            @TabLaunchType int type,
++            @Nullable Tab parent,
++            int position,
++            @Nullable Intent intent,
++            boolean copyHistory,
++            int attempt) {
++        new Handler(Looper.getMainLooper())
++                .postDelayed(
++                        () -> {
++                            if (mTabModel == null) return;
++                            if (isIncognitoProfileShuttingDown() && attempt < 100) {
++                                retryAfterIncognitoProfileGone(
++                                        loadUrlParams,
++                                        title,
++                                        type,
++                                        parent,
++                                        position,
++                                        intent,
++                                        copyHistory,
++                                        attempt + 1);
++                                return;
++                            }
++                            createNewTab(
++                                    loadUrlParams, title, type, parent, position, intent,
++                                    copyHistory);
++                        },
++                        100);
++    }
++
+     private Profile getProfile() {
+         return ProfileProvider.getOrCreateProfile(
+                 assertNonNull(mProfileProviderSupplier.get()), mIncognito);
+@@ -379,6 +420,15 @@ public class ChromeTabCreator implements TabCreator, NeedsTabModel, NeedsTabMode
+             @Nullable Intent intent,
+             boolean copyHistory) {
+         if (mTabModel == null || mOrderController == null) return null;
++        if (mIncognito && isIncognitoProfileShuttingDown()) {
++            // The last Incognito tab of a finished window has just been closed and its profile is
++            // waiting for its renderers to exit. A tab made now would be built on that dying
++            // profile and Chromium would abort, so wait until the profile is gone and a fresh
++            // one can be made.
++            retryAfterIncognitoProfileGone(
++                    loadUrlParams, title, type, parent, position, intent, copyHistory, 0);
++            return null;
++        }
+         // Measure tab creation duration for different launch types to understand tab creation
+         // performance.
+         try (TraceEvent te = TraceEvent.scoped("ChromeTabCreator.createNewTab");
+-- 
+2.34.1
+

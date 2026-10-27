@@ -1,0 +1,113 @@
+From 961544587b2812c03a5ecf25bfcdd4d3a27a801f Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 19 Aug 2026 07:19:53 +0000
+Subject: [PATCH] Patch 0000048
+
+---
+ .../blink/public/platform/web_media_player.h       |  5 +++++
+ .../renderer/core/html/media/html_media_element.cc | 10 ++++++++++
+ .../platform/media/web_media_player_impl.cc        | 14 ++++++++++----
+ .../platform/media/web_media_player_impl.h         |  7 +++++++
+ 4 files changed, 32 insertions(+), 4 deletions(-)
+
+diff --git a/third_party/blink/public/platform/web_media_player.h b/third_party/blink/public/platform/web_media_player.h
+index 674144762d0..3fdaca8d3bf 100644
+--- a/third_party/blink/public/platform/web_media_player.h
++++ b/third_party/blink/public/platform/web_media_player.h
+@@ -232,6 +232,11 @@ class WebMediaPlayer {
+       bool should_pause_when_frame_is_hidden) = 0;
+   virtual bool GetShouldPauseWhenFrameIsHidden() { return false; }
+ 
++  // Bare: when set, the player keeps its permission to play in the background
++  // as the page or frame is hidden, rather than dropping it and pausing. Left
++  // non-pure so other WebMediaPlayer implementations are unaffected.
++  virtual void SetBackgroundMediaPlaybackEnabled(bool enabled) {}
++
+   // The associated media element is going to enter Picture-in-Picture. This
+   // method should make sure the player is set up for this and has a SurfaceId
+   // as it will be needed.
+diff --git a/third_party/blink/renderer/core/html/media/html_media_element.cc b/third_party/blink/renderer/core/html/media/html_media_element.cc
+index 89585ca9641..ed4fad3f395 100644
+--- a/third_party/blink/renderer/core/html/media/html_media_element.cc
++++ b/third_party/blink/renderer/core/html/media/html_media_element.cc
+@@ -1796,6 +1796,16 @@ void HTMLMediaElement::StartPlayerLoad() {
+   const auto preload = EffectivePreloadType();
+   web_media_player_->SetPreload(preload);
+ 
++  // Bare: tell the player whether this document may keep media running while
++  // hidden, so it does not give up its background playback permission the
++  // moment the browser is backgrounded. Re-read on every load, which covers
++  // navigations that change the setting.
++  {
++    Settings* media_settings = GetDocument().GetSettings();
++    web_media_player_->SetBackgroundMediaPlaybackEnabled(
++        media_settings && media_settings->GetBackgroundMediaPlaybackEnabled());
++  }
++
+   web_media_player_->RequestRemotePlaybackDisabled(
+       FastHasAttribute(html_names::kDisableremoteplaybackAttr));
+ 
+diff --git a/third_party/blink/renderer/platform/media/web_media_player_impl.cc b/third_party/blink/renderer/platform/media/web_media_player_impl.cc
+index c86d7cf5258..ab9cb035960 100644
+--- a/third_party/blink/renderer/platform/media/web_media_player_impl.cc
++++ b/third_party/blink/renderer/platform/media/web_media_player_impl.cc
+@@ -1295,6 +1295,10 @@ bool WebMediaPlayerImpl::GetShouldPauseWhenFrameIsHidden() {
+   return should_pause_when_frame_is_hidden_;
+ }
+ 
++void WebMediaPlayerImpl::SetBackgroundMediaPlaybackEnabled(bool enabled) {
++  background_media_playback_enabled_ = enabled;
++}
++
+ void WebMediaPlayerImpl::OnRequestPictureInPicture() {
+   ActivateSurfaceLayerForVideo();
+ 
+@@ -2650,8 +2654,9 @@ void WebMediaPlayerImpl::OnVideoPipelineInfoChange(
+ void WebMediaPlayerImpl::OnPageHidden() {
+   DCHECK(main_task_runner_->BelongsToCurrentThread());
+ 
+-  // Backgrounding a video requires a user gesture to resume playback.
+-  if (IsPageHidden()) {
++  // Backgrounding a video requires a user gesture to resume playback, unless
++  // this document is allowed to keep playing in the background (Bare).
++  if (IsPageHidden() && !background_media_playback_enabled_) {
+     allow_background_video_playback_ = false;
+   }
+ 
+@@ -2771,8 +2776,9 @@ void WebMediaPlayerImpl::OnFrameHidden() {
+   DCHECK(main_task_runner_->BelongsToCurrentThread());
+   is_frame_hidden_ = true;
+ 
+-  // Backgrounding a video requires a user gesture to resume playback.
+-  if (IsFrameHidden()) {
++  // Backgrounding a video requires a user gesture to resume playback, unless
++  // this document is allowed to keep playing in the background (Bare).
++  if (IsFrameHidden() && !background_media_playback_enabled_) {
+     allow_background_video_playback_ = false;
+   }
+ 
+diff --git a/third_party/blink/renderer/platform/media/web_media_player_impl.h b/third_party/blink/renderer/platform/media/web_media_player_impl.h
+index e870a7901be..d798ef2b4e5 100644
+--- a/third_party/blink/renderer/platform/media/web_media_player_impl.h
++++ b/third_party/blink/renderer/platform/media/web_media_player_impl.h
+@@ -262,6 +262,8 @@ class PLATFORM_EXPORT WebMediaPlayerImpl
+       bool should_pause_when_frame_is_hidden) override;
+   bool GetShouldPauseWhenFrameIsHidden() override;
+ 
++  void SetBackgroundMediaPlaybackEnabled(bool enabled) override;
++
+   bool HasAvailableVideoFrame() const override;
+   bool HasReadableVideoFrame() const override;
+ 
+@@ -1030,6 +1032,11 @@ class PLATFORM_EXPORT WebMediaPlayerImpl
+   // the background. Affects the value of ShouldPausePlaybackWhenHidden().
+   bool allow_background_video_playback_ = true;
+ 
++  // Bare: mirrors the document's background media playback setting. While true,
++  // hiding the page or frame does not clear the flag above, which is what
++  // otherwise forces a pause the instant the browser is backgrounded.
++  bool background_media_playback_enabled_ = false;
++
+   // Whether embedded media experience is currently enabled.
+   bool embedded_media_experience_enabled_ = false;
+ 

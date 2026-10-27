@@ -1,0 +1,1393 @@
+From 85c6036d7824fbf7e62a688e77c888b5df1379d1 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 00:50:16 +0000
+Subject: [PATCH] Patch 0000174
+
+---
+ chrome/android/BUILD.gn                       |   1 +
+ chrome/android/chrome_java_resources.gni      |   1 +
+ chrome/android/chrome_java_sources.gni        |   5 +
+ .../res/xml/bare_translate_preferences.xml    |  30 +++
+ .../android/java/res/xml/main_preferences.xml |   5 +
+ .../chrome/browser/app/ChromeActivity.java    |   3 +-
+ .../AppMenuPropertiesDelegateImpl.java        |   5 +-
+ .../chrome/browser/bare/BareScriptBridge.java |  59 +++++
+ .../bare/translate/BarePageTranslator.java    | 241 ++++++++++++++++++
+ .../bare/translate/BareTranslateProtocol.java | 155 +++++++++++
+ .../bare/translate/BareTranslateSettings.java | 110 ++++++++
+ .../BareTranslateSettingsFragment.java        | 161 ++++++++++++
+ .../browser/translate/TranslateUtils.java     |   5 +-
+ chrome/android/junit/BUILD.gn                 |   2 +
+ .../BareTranslateProtocolUnitTest.java        | 151 +++++++++++
+ .../BareTranslateSettingsUnitTest.java        |  77 ++++++
+ .../preferences/ChromePreferenceKeys.java     |  14 +
+ chrome/browser/ui/android/BUILD.gn            |   1 +
+ .../browser/ui/android/bare_script_bridge.cc  |  61 +++++
+ .../strings/android_chrome_strings.grd        |  57 +++++
+ 20 files changed, 1141 insertions(+), 3 deletions(-)
+ create mode 100644 chrome/android/java/res/xml/bare_translate_preferences.xml
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocol.java
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettings.java
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocolUnitTest.java
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsUnitTest.java
+ create mode 100644 chrome/browser/ui/android/bare_script_bridge.cc
+
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+index 5a3d7f5e59e..64f3dfdd15d 100644
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -3079,6 +3079,7 @@ if (_is_default_toolchain) {
+       "java/src/org/chromium/chrome/browser/backup/ChromeBackupWatcher.java",
+       "java/src/org/chromium/chrome/browser/backup/DictPrefBackupSerializer.java",
+       "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
++      "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
+       "java/src/org/chromium/chrome/browser/browserservices/digitalgoods/SiteIsolator.java",
+       "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappBridge.java",
+       "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappGeolocationBridge.java",
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index cec0fbbc334..9ddb66cdb96 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -692,6 +692,7 @@ chrome_java_resources = [
+   "java/res/xml/appearance_preferences.xml",
+   "java/res/xml/bare_clear_on_exit_preferences.xml",
+   "java/res/xml/bare_extensions_preferences.xml",
++  "java/res/xml/bare_translate_preferences.xml",
+   "java/res/xml/bare_toolbar_preferences.xml",
+   "java/res/xml/bookmark_bar_preferences.xml",
+   "java/res/xml/bookmark_widget_info.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 32005a39347..e27343b48d9 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -239,11 +239,16 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetView.java",
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetViewBinder.java",
+   "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
++  "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
+   "java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareClearOnExitSettings.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java",
++  "java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java",
++  "java/src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocol.java",
++  "java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettings.java",
++  "java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java",
+   "java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java",
+diff --git a/chrome/android/java/res/xml/bare_translate_preferences.xml b/chrome/android/java/res/xml/bare_translate_preferences.xml
+new file mode 100644
+index 00000000000..5bd02d906ea
+--- /dev/null
++++ b/chrome/android/java/res/xml/bare_translate_preferences.xml
+@@ -0,0 +1,30 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
++
++    <org.chromium.components.browser_ui.settings.TextMessagePreference
++        android:key="bare_translate_about"
++        android:order="0"
++        android:summary="@string/bare_translate_about" />
++
++    <Preference
++        android:key="bare_translate_server"
++        android:order="1"
++        android:title="@string/bare_translate_server_title" />
++
++    <Preference
++        android:key="bare_translate_key"
++        android:order="2"
++        android:title="@string/bare_translate_key_title" />
++
++    <ListPreference
++        android:key="bare_translate_target"
++        android:order="3"
++        android:title="@string/bare_translate_target_title" />
++
++</PreferenceScreen>
+diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/java/res/xml/main_preferences.xml
+index 5763b6762cb..66ee27559e2 100644
+--- a/chrome/android/java/res/xml/main_preferences.xml
++++ b/chrome/android/java/res/xml/main_preferences.xml
+@@ -96,6 +96,11 @@ found in the LICENSE file.
+         android:key="appearance"
+         android:order="23"
+         android:title="@string/appearance_settings" />
++    <Preference
++        android:fragment="org.chromium.chrome.browser.bare.translate.BareTranslateSettingsFragment"
++        android:key="bare_translate"
++        android:order="24"
++        android:title="@string/bare_translate_settings_title" />
+     <Preference
+         android:fragment="org.chromium.chrome.browser.bare.settings.BareExtensionsSettingsFragment"
+         android:key="bare_extensions"
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index c12d36a700e..f0c977a49bc 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -104,6 +104,7 @@ import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
+ import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
+ import org.chromium.chrome.browser.back_press.BackPressManager;
+ import org.chromium.chrome.browser.bare.BareClearOnExit;
++import org.chromium.chrome.browser.bare.translate.BarePageTranslator;
+ import org.chromium.chrome.browser.back_press.CloseListenerManager;
+ import org.chromium.chrome.browser.base.ColdStartTracker;
+ import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpener;
+@@ -3323,7 +3324,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+             RecordUserAction.record("MobileMenuTranslate");
+             Tracker tracker = TrackerFactory.getTrackerForProfile(currentTab.getProfile());
+             tracker.notifyEvent(EventConstants.TRANSLATE_MENU_BUTTON_CLICKED);
+-            TranslateBridge.translateTabWhenReady(currentTab);
++            BarePageTranslator.onMenuItemClicked(this, currentTab);
+             return true;
+         }
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
+index 5a3fabf1d79..c0fb2497501 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
+@@ -42,6 +42,7 @@ import org.chromium.build.annotations.RequiresNonNull;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.ActivityTabProvider;
+ import org.chromium.chrome.browser.accessibility.PageZoomMenuItemViewBinder;
++import org.chromium.chrome.browser.bare.translate.BarePageTranslator;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+ import org.chromium.chrome.browser.bookmarks.PowerBookmarkUtils;
+ import org.chromium.chrome.browser.commerce.ShoppingServiceFactory;
+@@ -407,7 +408,9 @@ public abstract class AppMenuPropertiesDelegateImpl implements AppMenuProperties
+                         mContext,
+                         mAppMenuItemTheme,
+                         R.id.translate_id,
+-                        R.string.menu_translate,
++                        BarePageTranslator.isTranslated(currentTab)
++                                ? R.string.bare_translate_show_original
++                                : R.string.menu_translate,
+                         showIcon ? R.drawable.ic_translate : 0,
+                         isMenuIconAtStart()));
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java
+new file mode 100644
+index 00000000000..206f67c4b89
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java
+@@ -0,0 +1,59 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import org.jni_zero.CalledByNative;
++import org.jni_zero.JniType;
++import org.jni_zero.NativeMethods;
++
++import org.chromium.base.Callback;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.content_public.browser.WebContents;
++
++/**
++ * Runs a script in a page's main frame, in a world of its own.
++ *
++ * <p>WebContents.evaluateJavaScript runs in the page's own world and is refused for web pages: the
++ * browser stops if it is asked to. This runs the script in an isolated world instead, which sees
++ * the page's DOM but not its variables, and which the page cannot see or change. Variables the
++ * script leaves behind stay in that world, so a later call finds what an earlier one set up.
++ *
++ * <p>The result comes back as JSON text, the same shape evaluateJavaScript returns: a string
++ * comes back as a quoted JSON string.
++ */
++@NullMarked
++public final class BareScriptBridge {
++    private BareScriptBridge() {}
++
++    /**
++     * Runs {@code script}, and passes its result to {@code callback} if one is given. The callback
++     * gets null if there is no page to run it in.
++     */
++    public static void evaluate(
++            @Nullable WebContents webContents,
++            String script,
++            @Nullable Callback<@Nullable String> callback) {
++        if (webContents == null || webContents.isDestroyed()) {
++            if (callback != null) callback.onResult(null);
++            return;
++        }
++        BareScriptBridgeJni.get().evaluate(webContents, script, callback);
++    }
++
++    @CalledByNative
++    private static void onResult(
++            Callback<@Nullable String> callback, @JniType("std::string") String json) {
++        callback.onResult(json);
++    }
++
++    @NativeMethods
++    interface Natives {
++        void evaluate(
++                WebContents webContents,
++                String script,
++                @Nullable Callback<@Nullable String> callback);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
+new file mode 100644
+index 00000000000..f858a82a4b3
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
+@@ -0,0 +1,241 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.translate;
++
++import android.app.Activity;
++import android.content.Context;
++import android.widget.Toast;
++
++import androidx.appcompat.app.AlertDialog;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONTokener;
++
++import org.chromium.base.Log;
++import org.chromium.base.task.PostTask;
++import org.chromium.base.task.TaskTraits;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.BareScriptBridge;
++import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.content_public.browser.WebContents;
++
++import java.io.ByteArrayOutputStream;
++import java.io.InputStream;
++import java.io.OutputStream;
++import java.net.HttpURLConnection;
++import java.net.URL;
++import java.nio.charset.StandardCharsets;
++import java.util.ArrayList;
++import java.util.HashMap;
++import java.util.List;
++import java.util.Map;
++
++/**
++ * Translates the text of a page by sending it to the server the user chose, and puts the result
++ * back in place.
++ *
++ * <p>The page is read through a script that collects its visible text nodes, the text goes to the
++ * server in batches, and each batch is written straight back into the nodes it came from, so the
++ * page fills in as the answers arrive and keeps its own layout, links and scripts. The original
++ * text is kept in the page so that translating again restores it.
++ *
++ * <p>What is sent is the text of the page and the target language, with the API key if the user
++ * gave one. No cookies, address, or identifier are sent, and nothing is sent until the user has
++ * agreed, once for each server, to sending page text to it.
++ */
++@NullMarked
++public final class BarePageTranslator {
++    private static final String TAG = "BareTranslate";
++
++    /** The tabs showing a translation, by tab id, with the address that was translated. */
++    private static final Map<Integer, String> sTranslated = new HashMap<>();
++
++    private BarePageTranslator() {}
++
++    /**
++     * Collects the text nodes of the page. Returns the strings as JSON and keeps the nodes in a
++     * page-side object that the later calls write into.
++     */
++    static final String COLLECT_SCRIPT =
++            "(function(){var SKIP={SCRIPT:1,STYLE:1,NOSCRIPT:1,CODE:1,PRE:1,TEXTAREA:1,SVG:1,"
++                    + "IFRAME:1};var nodes=[],texts=[];function ok(n){for(var p=n.parentElement;p;"
++                    + "p=p.parentElement){if(SKIP[p.tagName]||p.isContentEditable||"
++                    + "p.getAttribute('translate')==='no')return false;}return true;}"
++                    + "var w=document.createTreeWalker(document.body||document.documentElement,"
++                    + "NodeFilter.SHOW_TEXT);var total=0;while(w.nextNode()&&nodes.length<4000"
++                    + "&&total<300000){var n=w.currentNode,t=n.nodeValue;if(t.trim().length<2||"
++                    + "!/\\p{L}/u.test(t)||!ok(n))continue;nodes.push(n);texts.push(t);"
++                    + "total+=t.length;}var orig=texts.slice();window.__bareTr={nodes:nodes,"
++                    + "orig:orig,apply:function(s,a){for(var i=0;i<a.length;i++){var n=nodes[s+i];"
++                    + "if(!n||typeof a[i]!=='string')continue;var o=orig[s+i];"
++                    + "n.nodeValue=o.match(/^\\s*/)[0]+a[i].trim()+o.match(/\\s*$/)[0];}return 1;},"
++                    + "restore:function(){for(var i=0;i<nodes.length;i++)nodes[i].nodeValue="
++                    + "orig[i];window.__bareTr=null;return 1;}};return JSON.stringify(texts.map("
++                    + "function(t){return t.trim();}));})()";
++
++    static final String RESTORE_SCRIPT =
++            "(function(){return window.__bareTr?window.__bareTr.restore():0;})()";
++
++    /** Whether the tab is showing a translation of its current page. */
++    public static boolean isTranslated(@Nullable Tab tab) {
++        if (tab == null) return false;
++        String url = sTranslated.get(tab.getId());
++        return url != null && url.equals(tab.getUrl().getSpec());
++    }
++
++    /** What the menu item does: translates the page, or puts the original back. */
++    public static void onMenuItemClicked(Activity activity, Tab tab) {
++        WebContents webContents = tab.getWebContents();
++        if (webContents == null) return;
++        if (isTranslated(tab)) {
++            BareScriptBridge.evaluate(webContents, RESTORE_SCRIPT, null);
++            sTranslated.remove(tab.getId());
++            return;
++        }
++        if (!BareTranslateSettings.isConfigured()) {
++            Toast.makeText(activity, R.string.bare_translate_not_set_up, Toast.LENGTH_LONG).show();
++            return;
++        }
++        if (BareTranslateSettings.hasConsent()) {
++            start(activity, tab);
++            return;
++        }
++        String host = BareTranslateSettings.getEndpointHost();
++        new AlertDialog.Builder(activity, R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                .setTitle(R.string.bare_translate_consent_title)
++                .setMessage(activity.getString(R.string.bare_translate_consent_message, host))
++                .setPositiveButton(
++                        R.string.bare_translate_consent_ok,
++                        (dialog, which) -> {
++                            BareTranslateSettings.setConsentedHost(host);
++                            start(activity, tab);
++                        })
++                .setNegativeButton(R.string.cancel, null)
++                .show();
++    }
++
++    private static void start(Context context, Tab tab) {
++        WebContents webContents = tab.getWebContents();
++        if (webContents == null) return;
++        final String url = tab.getUrl().getSpec();
++        final int tabId = tab.getId();
++        Toast.makeText(context, R.string.bare_translate_working, Toast.LENGTH_SHORT).show();
++        BareScriptBridge.evaluate(
++                webContents,
++                COLLECT_SCRIPT,
++                result -> {
++                    List<String> texts = decodeCollected(result);
++                    if (texts == null || texts.isEmpty()) {
++                        Toast.makeText(context, R.string.bare_translate_nothing, Toast.LENGTH_LONG)
++                                .show();
++                        return;
++                    }
++                    List<int[]> batches =
++                            BareTranslateProtocol.batches(
++                                    texts,
++                                    BareTranslateProtocol.MAX_ITEMS_PER_REQUEST,
++                                    BareTranslateProtocol.MAX_CHARS_PER_REQUEST);
++                    String endpoint = BareTranslateSettings.getEndpoint();
++                    String key = BareTranslateSettings.getApiKey();
++                    String target = BareTranslateSettings.getTargetLanguage();
++                    sTranslated.put(tabId, url);
++                    PostTask.postTask(
++                            TaskTraits.BEST_EFFORT_MAY_BLOCK,
++                            () -> run(context, webContents, texts, batches, endpoint, key, target));
++                });
++    }
++
++    /** Reads the string the collect script returned: a JSON string holding a JSON array. */
++    static @Nullable List<String> decodeCollected(@Nullable String result) {
++        if (result == null) return null;
++        try {
++            Object value = new JSONTokener(result).nextValue();
++            if (!(value instanceof String)) return null;
++            JSONArray array = new JSONArray((String) value);
++            List<String> texts = new ArrayList<>();
++            for (int i = 0; i < array.length(); i++) texts.add(array.getString(i));
++            return texts;
++        } catch (JSONException e) {
++            return null;
++        }
++    }
++
++    /** Runs on a background thread: one request per batch, each written back as it arrives. */
++    private static void run(
++            Context context,
++            WebContents webContents,
++            List<String> texts,
++            List<int[]> batches,
++            String endpoint,
++            String key,
++            String target) {
++        for (int[] range : batches) {
++            List<String> chunk = texts.subList(range[0], range[1]);
++            @Nullable List<String> translated;
++            try {
++                translated = post(endpoint, key, target, chunk);
++            } catch (Exception e) {
++                Log.w(TAG, "Translation request failed: %s", e.getClass().getSimpleName());
++                translated = null;
++            }
++            if (translated == null) {
++                PostTask.postTask(
++                        TaskTraits.UI_DEFAULT,
++                        () ->
++                                Toast.makeText(
++                                                context,
++                                                R.string.bare_translate_failed,
++                                                Toast.LENGTH_LONG)
++                                        .show());
++                return;
++            }
++            final String script =
++                    "window.__bareTr&&window.__bareTr.apply("
++                            + range[0]
++                            + ","
++                            + new JSONArray(translated)
++                            + ")";
++            PostTask.postTask(
++                    TaskTraits.UI_DEFAULT, () -> BareScriptBridge.evaluate(webContents, script, null));
++        }
++    }
++
++    private static @Nullable List<String> post(
++            String endpoint, String key, String target, List<String> chunk) throws Exception {
++        HttpURLConnection connection =
++                (HttpURLConnection)
++                        new URL(BareTranslateProtocol.translateUrl(endpoint)).openConnection();
++        try {
++            connection.setRequestMethod("POST");
++            connection.setConnectTimeout(15000);
++            connection.setReadTimeout(30000);
++            connection.setDoOutput(true);
++            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
++            byte[] body =
++                    BareTranslateProtocol.requestBody(chunk, target, key)
++                            .getBytes(StandardCharsets.UTF_8);
++            try (OutputStream out = connection.getOutputStream()) {
++                out.write(body);
++            }
++            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) return null;
++            return BareTranslateProtocol.parseResponse(readAll(connection), chunk.size());
++        } finally {
++            connection.disconnect();
++        }
++    }
++
++    private static String readAll(HttpURLConnection connection) throws Exception {
++        try (InputStream in = connection.getInputStream();
++                ByteArrayOutputStream out = new ByteArrayOutputStream()) {
++            byte[] buffer = new byte[8192];
++            int read;
++            while ((read = in.read(buffer)) > 0) out.write(buffer, 0, read);
++            return out.toString("UTF-8");
++        }
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocol.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocol.java
+new file mode 100644
+index 00000000000..0e4d8951af4
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocol.java
+@@ -0,0 +1,155 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.translate;
++
++import android.net.Uri;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Locale;
++
++/**
++ * The request and response of a LibreTranslate-style server, which is a plain JSON POST that takes
++ * a list of strings and returns a list of strings. Kept free of Android networking so that it can
++ * be tested without a server.
++ */
++@NullMarked
++public final class BareTranslateProtocol {
++    /** Most strings sent in one request. */
++    public static final int MAX_ITEMS_PER_REQUEST = 40;
++
++    /** Most characters sent in one request, counted before escaping. */
++    public static final int MAX_CHARS_PER_REQUEST = 4000;
++
++    private BareTranslateProtocol() {}
++
++    /**
++     * Whether an address is one text may be sent to.
++     *
++     * <p>https is required, because the text of a page is the user's. Plain http is accepted for
++     * the addresses that stay on the user's own network, which is where a server run at home or
++     * on a laptop lives.
++     */
++    public static boolean isAllowedEndpoint(String endpoint) {
++        if (endpoint.isEmpty()) return false;
++        Uri uri = Uri.parse(endpoint);
++        String scheme = uri.getScheme();
++        String host = uri.getHost();
++        if (scheme == null || host == null || host.isEmpty()) return false;
++        scheme = scheme.toLowerCase(Locale.ROOT);
++        if (scheme.equals("https")) return true;
++        return scheme.equals("http") && isLocalHost(host);
++    }
++
++    static boolean isLocalHost(String host) {
++        String h = host.toLowerCase(Locale.ROOT);
++        if (h.equals("localhost") || h.endsWith(".local") || h.endsWith(".lan")) return true;
++        if (h.startsWith("127.") || h.startsWith("10.") || h.startsWith("192.168.")) return true;
++        if (h.startsWith("172.")) {
++            String[] parts = h.split("\\.");
++            if (parts.length == 4) {
++                try {
++                    int second = Integer.parseInt(parts[1]);
++                    return second >= 16 && second <= 31;
++                } catch (NumberFormatException e) {
++                    return false;
++                }
++            }
++        }
++        return false;
++    }
++
++    /** The address requests are posted to, whether or not the user typed the /translate part. */
++    public static String translateUrl(String endpoint) {
++        String base = endpoint.trim();
++        while (base.endsWith("/")) base = base.substring(0, base.length() - 1);
++        return base.endsWith("/translate") ? base : base + "/translate";
++    }
++
++    /**
++     * Splits strings into requests.
++     *
++     * @return Pairs of start index and end index (exclusive) into {@code texts}, in order. A single
++     *     string longer than the limit goes alone.
++     */
++    public static List<int[]> batches(List<String> texts, int maxItems, int maxChars) {
++        List<int[]> result = new ArrayList<>();
++        int start = 0;
++        int chars = 0;
++        for (int i = 0; i < texts.size(); i++) {
++            int length = texts.get(i).length();
++            boolean full = i - start >= maxItems || (i > start && chars + length > maxChars);
++            if (full) {
++                result.add(new int[] {start, i});
++                start = i;
++                chars = 0;
++            }
++            chars += length;
++        }
++        if (start < texts.size()) result.add(new int[] {start, texts.size()});
++        return result;
++    }
++
++    /** The JSON body asking for a translation of {@code strings} into {@code target}. */
++    public static String requestBody(List<String> strings, String target, String apiKey) {
++        try {
++            JSONObject body = new JSONObject();
++            body.put("q", new JSONArray(strings));
++            body.put("source", "auto");
++            body.put("target", target);
++            body.put("format", "text");
++            if (!apiKey.isEmpty()) body.put("api_key", apiKey);
++            return body.toString();
++        } catch (JSONException e) {
++            throw new IllegalStateException(e);
++        }
++    }
++
++    /**
++     * Reads the translated strings out of a response.
++     *
++     * @return The strings, or null if the response is not a list of exactly {@code expected}.
++     */
++    public static @Nullable List<String> parseResponse(String body, int expected) {
++        try {
++            JSONObject json = new JSONObject(body);
++            JSONArray array = json.optJSONArray("translatedText");
++            if (array == null) {
++                // A single string back for a single string sent.
++                String single = json.optString("translatedText", "");
++                if (expected == 1 && !single.isEmpty()) {
++                    List<String> one = new ArrayList<>();
++                    one.add(single);
++                    return one;
++                }
++                return null;
++            }
++            if (array.length() != expected) return null;
++            List<String> result = new ArrayList<>();
++            for (int i = 0; i < array.length(); i++) {
++                result.add(array.getString(i));
++            }
++            return result;
++        } catch (JSONException e) {
++            return null;
++        }
++    }
++
++    /** The message a server put in an error response, if it did. */
++    public static String errorMessage(String body) {
++        try {
++            return new JSONObject(body).optString("error", "");
++        } catch (JSONException e) {
++            return "";
++        }
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettings.java
+new file mode 100644
+index 00000000000..1ed5351932c
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettings.java
+@@ -0,0 +1,110 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.translate;
++
++import android.net.Uri;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++import java.util.Arrays;
++import java.util.List;
++import java.util.Locale;
++
++/**
++ * Where page translation sends its text, and into which language.
++ *
++ * <p>Bare ships no translation service and no default address for one. Nothing is translated and
++ * the menu item stays hidden until the user has entered the address of a server of their own
++ * choosing, so no page text leaves the device by default.
++ */
++@NullMarked
++public final class BareTranslateSettings {
++    /** The languages offered as a target, as the codes the server expects. */
++    public static final List<String> TARGET_LANGUAGES =
++            Arrays.asList(
++                    "en", "ar", "az", "zh", "cs", "da", "nl", "eo", "fi", "fr", "de", "el", "he",
++                    "hi", "hu", "id", "ga", "it", "ja", "ko", "fa", "pl", "pt", "ru", "sk", "es",
++                    "sv", "tr", "uk", "vi");
++
++    private BareTranslateSettings() {}
++
++    /** The address the user entered, or empty. */
++    public static String getEndpoint() {
++        return ChromeSharedPreferences.getInstance()
++                .readString(ChromePreferenceKeys.BARE_TRANSLATE_ENDPOINT, "")
++                .trim();
++    }
++
++    public static void setEndpoint(String endpoint) {
++        String trimmed = endpoint.trim();
++        if (trimmed.isEmpty()) {
++            ChromeSharedPreferences.getInstance()
++                    .removeKey(ChromePreferenceKeys.BARE_TRANSLATE_ENDPOINT);
++        } else {
++            ChromeSharedPreferences.getInstance()
++                    .writeString(ChromePreferenceKeys.BARE_TRANSLATE_ENDPOINT, trimmed);
++        }
++    }
++
++    public static String getApiKey() {
++        return ChromeSharedPreferences.getInstance()
++                .readString(ChromePreferenceKeys.BARE_TRANSLATE_API_KEY, "");
++    }
++
++    public static void setApiKey(String key) {
++        if (key.isEmpty()) {
++            ChromeSharedPreferences.getInstance()
++                    .removeKey(ChromePreferenceKeys.BARE_TRANSLATE_API_KEY);
++        } else {
++            ChromeSharedPreferences.getInstance()
++                    .writeString(ChromePreferenceKeys.BARE_TRANSLATE_API_KEY, key);
++        }
++    }
++
++    /** The language to translate into: the one chosen, else the device's, else English. */
++    public static String getTargetLanguage() {
++        String stored =
++                ChromeSharedPreferences.getInstance()
++                        .readString(ChromePreferenceKeys.BARE_TRANSLATE_TARGET, "");
++        if (TARGET_LANGUAGES.contains(stored)) return stored;
++        String device = Locale.getDefault().getLanguage();
++        return TARGET_LANGUAGES.contains(device) ? device : "en";
++    }
++
++    public static void setTargetLanguage(String language) {
++        ChromeSharedPreferences.getInstance()
++                .writeString(ChromePreferenceKeys.BARE_TRANSLATE_TARGET, language);
++    }
++
++    /** Whether there is a usable address, which is what turns the feature on. */
++    public static boolean isConfigured() {
++        return BareTranslateProtocol.isAllowedEndpoint(getEndpoint());
++    }
++
++    /** The host the user has agreed to send page text to, or empty. */
++    public static String getConsentedHost() {
++        return ChromeSharedPreferences.getInstance()
++                .readString(ChromePreferenceKeys.BARE_TRANSLATE_CONSENT_HOST, "");
++    }
++
++    public static void setConsentedHost(String host) {
++        ChromeSharedPreferences.getInstance()
++                .writeString(ChromePreferenceKeys.BARE_TRANSLATE_CONSENT_HOST, host);
++    }
++
++    /** The host of the configured address, or empty. */
++    public static String getEndpointHost() {
++        String host = Uri.parse(getEndpoint()).getHost();
++        return host == null ? "" : host;
++    }
++
++    /** Whether the user has already agreed to send text to the configured host. */
++    public static boolean hasConsent() {
++        String host = getEndpointHost();
++        return !host.isEmpty() && host.equals(getConsentedHost());
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java
+new file mode 100644
+index 00000000000..6301fe0894b
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java
+@@ -0,0 +1,161 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.translate;
++
++import android.app.AlertDialog;
++import android.content.Context;
++import android.os.Bundle;
++import android.text.InputType;
++import android.widget.EditText;
++import android.widget.FrameLayout;
++
++import androidx.preference.ListPreference;
++import androidx.preference.Preference;
++
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.components.browser_ui.settings.SettingsUtils;
++
++import java.util.Locale;
++
++/** Settings for translating pages through a server the user chooses. */
++@NullMarked
++public class BareTranslateSettingsFragment extends ChromeBaseSettingsFragment {
++    static final String PREF_SERVER = "bare_translate_server";
++    static final String PREF_KEY = "bare_translate_key";
++    static final String PREF_TARGET = "bare_translate_target";
++
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++            ObservableSuppliers.createMonotonic();
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        mPageTitle.set(getTitle(getContext()));
++        SettingsUtils.addPreferencesFromResource(this, R.xml.bare_translate_preferences);
++
++        Preference server = findPreference(PREF_SERVER);
++        assert server != null;
++        server.setOnPreferenceClickListener(
++                preference -> {
++                    askForText(
++                            R.string.bare_translate_server_title,
++                            R.string.bare_translate_server_hint,
++                            BareTranslateSettings.getEndpoint(),
++                            InputType.TYPE_TEXT_VARIATION_URI,
++                            value -> {
++                                BareTranslateSettings.setEndpoint(value);
++                                updateSummaries();
++                            });
++                    return true;
++                });
++        Preference key = findPreference(PREF_KEY);
++        assert key != null;
++        key.setOnPreferenceClickListener(
++                preference -> {
++                    askForText(
++                            R.string.bare_translate_key_title,
++                            R.string.bare_translate_key_hint,
++                            BareTranslateSettings.getApiKey(),
++                            InputType.TYPE_TEXT_VARIATION_PASSWORD,
++                            value -> {
++                                BareTranslateSettings.setApiKey(value.trim());
++                                updateSummaries();
++                            });
++                    return true;
++                });
++
++        ListPreference target = findPreference(PREF_TARGET);
++        assert target != null;
++        target.setPersistent(false);
++        int count = BareTranslateSettings.TARGET_LANGUAGES.size();
++        CharSequence[] names = new CharSequence[count];
++        CharSequence[] codes = new CharSequence[count];
++        for (int i = 0; i < count; i++) {
++            String code = BareTranslateSettings.TARGET_LANGUAGES.get(i);
++            Locale locale = Locale.forLanguageTag(code);
++            names[i] = locale.getDisplayLanguage(locale) + " (" + code + ")";
++            codes[i] = code;
++        }
++        target.setEntries(names);
++        target.setEntryValues(codes);
++        target.setValue(BareTranslateSettings.getTargetLanguage());
++        target.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    BareTranslateSettings.setTargetLanguage((String) newValue);
++                    updateSummaries();
++                    return true;
++                });
++        updateSummaries();
++    }
++
++    private void updateSummaries() {
++        Preference server = findPreference(PREF_SERVER);
++        Preference key = findPreference(PREF_KEY);
++        ListPreference target = findPreference(PREF_TARGET);
++        if (server == null || key == null || target == null) return;
++        String endpoint = BareTranslateSettings.getEndpoint();
++        if (endpoint.isEmpty()) {
++            server.setSummary(R.string.bare_translate_server_unset);
++        } else if (!BareTranslateSettings.isConfigured()) {
++            server.setSummary(getString(R.string.bare_translate_server_refused, endpoint));
++        } else {
++            server.setSummary(endpoint);
++        }
++        key.setSummary(
++                BareTranslateSettings.getApiKey().isEmpty()
++                        ? R.string.bare_translate_key_unset
++                        : R.string.bare_translate_key_set);
++        target.setSummary(target.getEntry());
++    }
++
++    private interface OnText {
++        void onText(String value);
++    }
++
++    private void askForText(int titleRes, int hintRes, String current, int inputType, OnText done) {
++        Context context = requireContext();
++        EditText input = new EditText(context);
++        input.setInputType(InputType.TYPE_CLASS_TEXT | inputType);
++        input.setHint(hintRes);
++        input.setText(current);
++        input.setSingleLine(true);
++        FrameLayout frame = new FrameLayout(context);
++        int pad = Math.round(20 * context.getResources().getDisplayMetrics().density);
++        frame.setPadding(pad, pad / 2, pad, 0);
++        frame.addView(input);
++        new AlertDialog.Builder(context, R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                .setTitle(titleRes)
++                .setView(frame)
++                .setPositiveButton(
++                        android.R.string.ok,
++                        (dialog, which) -> done.onText(input.getText().toString()))
++                .setNegativeButton(android.R.string.cancel, null)
++                .show();
++    }
++
++    @Override
++    public MonotonicObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    public static String getTitle(Context context) {
++        return context.getString(R.string.bare_translate_settings_title);
++    }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++
++    @Override
++    public @Nullable String getMainMenuKey() {
++        return "bare_translate";
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java b/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
+index 3b53af65a4a..b3c00fb5b88 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
+@@ -5,6 +5,7 @@
+ package org.chromium.chrome.browser.translate;
+ 
+ import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.bare.translate.BareTranslateSettings;
+ import org.chromium.chrome.browser.tab.Tab;
+ 
+ /** Utility classes related to the translate feature. */
+@@ -27,8 +28,10 @@ public class TranslateUtils {
+      * @param menuLogging Whether logging should be performed in this check.
+      */
+     public static boolean canTranslateCurrentTab(Tab tab, boolean menuLogging) {
++        // De-Googled build: the item shows when the user has pointed page translation at a server.
++        // Google's own service needs an API key this build does not have.
+         return !tab.isNativePage()
+                 && tab.getWebContents() != null
+-                && TranslateBridge.canManuallyTranslate(tab, menuLogging);
++                && BareTranslateSettings.isConfigured();
+     }
+ }
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index 64aaf6185bf..062b4d6777c 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -438,6 +438,8 @@ if (is_android) {
+       "src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocolUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareWelcomeToolbarChoicesUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java",
+       "src/org/chromium/chrome/browser/BrowserExitReasonTrackerUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocolUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocolUnitTest.java
+new file mode 100644
+index 00000000000..07c147208dd
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocolUnitTest.java
+@@ -0,0 +1,151 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.translate;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertTrue;
++
++import org.json.JSONArray;
++import org.json.JSONObject;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++
++import java.util.Arrays;
++import java.util.Collections;
++import java.util.List;
++
++/** Unit tests for {@link BareTranslateProtocol}. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareTranslateProtocolUnitTest {
++    @Test
++    public void testHttpsIsAllowedAnywhere() {
++        assertTrue(BareTranslateProtocol.isAllowedEndpoint("https://translate.example.com"));
++        assertTrue(BareTranslateProtocol.isAllowedEndpoint("https://203.0.113.5:5000/translate"));
++    }
++
++    @Test
++    public void testPlainHttpOnlyOnTheUsersOwnNetwork() {
++        assertTrue(BareTranslateProtocol.isAllowedEndpoint("http://localhost:5000"));
++        assertTrue(BareTranslateProtocol.isAllowedEndpoint("http://127.0.0.1:8001"));
++        assertTrue(BareTranslateProtocol.isAllowedEndpoint("http://192.168.1.20:5000"));
++        assertTrue(BareTranslateProtocol.isAllowedEndpoint("http://10.0.0.4"));
++        assertTrue(BareTranslateProtocol.isAllowedEndpoint("http://172.20.1.1"));
++        assertTrue(BareTranslateProtocol.isAllowedEndpoint("http://nas.local:5000"));
++        assertFalse(BareTranslateProtocol.isAllowedEndpoint("http://172.32.1.1"));
++        assertFalse(BareTranslateProtocol.isAllowedEndpoint("http://translate.example.com"));
++        assertFalse(BareTranslateProtocol.isAllowedEndpoint("http://8.8.8.8"));
++    }
++
++    @Test
++    public void testNothingElseIsAllowed() {
++        assertFalse(BareTranslateProtocol.isAllowedEndpoint(""));
++        assertFalse(BareTranslateProtocol.isAllowedEndpoint("translate.example.com"));
++        assertFalse(BareTranslateProtocol.isAllowedEndpoint("ftp://translate.example.com"));
++        assertFalse(BareTranslateProtocol.isAllowedEndpoint("https://"));
++    }
++
++    @Test
++    public void testTheTranslatePathIsAddedOnce() {
++        assertEquals(
++                "https://t.example.com/translate",
++                BareTranslateProtocol.translateUrl("https://t.example.com"));
++        assertEquals(
++                "https://t.example.com/translate",
++                BareTranslateProtocol.translateUrl("https://t.example.com///"));
++        assertEquals(
++                "https://t.example.com/translate",
++                BareTranslateProtocol.translateUrl("https://t.example.com/translate"));
++        assertEquals(
++                "https://t.example.com/api/translate",
++                BareTranslateProtocol.translateUrl("https://t.example.com/api"));
++    }
++
++    @Test
++    public void testBatchesRespectBothLimits() {
++        List<String> texts = Arrays.asList("aaaa", "bbbb", "cccc", "dddd", "eeee");
++        List<int[]> byItems = BareTranslateProtocol.batches(texts, 2, 1000);
++        assertEquals(3, byItems.size());
++        assertEquals(0, byItems.get(0)[0]);
++        assertEquals(2, byItems.get(0)[1]);
++        assertEquals(4, byItems.get(2)[0]);
++        assertEquals(5, byItems.get(2)[1]);
++
++        List<int[]> byChars = BareTranslateProtocol.batches(texts, 100, 9);
++        assertEquals(3, byChars.size());
++        assertEquals(2, byChars.get(0)[1]);
++    }
++
++    @Test
++    public void testOneLongStringGoesAlone() {
++        List<String> texts = Arrays.asList("x", "yyyyyyyyyyyy", "z");
++        List<int[]> batches = BareTranslateProtocol.batches(texts, 10, 5);
++        assertEquals(3, batches.size());
++        assertEquals(1, batches.get(1)[0]);
++        assertEquals(2, batches.get(1)[1]);
++    }
++
++    @Test
++    public void testNoTextsMeansNoRequests() {
++        assertTrue(
++                BareTranslateProtocol.batches(Collections.<String>emptyList(), 10, 100).isEmpty());
++    }
++
++    @Test
++    public void testRequestBodyCarriesTheTextAndTheLanguageOnly() throws Exception {
++        JSONObject body =
++                new JSONObject(
++                        BareTranslateProtocol.requestBody(Arrays.asList("hola", "adios"), "en", ""));
++        JSONArray q = body.getJSONArray("q");
++        assertEquals("hola", q.getString(0));
++        assertEquals("adios", q.getString(1));
++        assertEquals("auto", body.getString("source"));
++        assertEquals("en", body.getString("target"));
++        assertFalse(body.has("api_key"));
++        assertEquals(4, body.length());
++    }
++
++    @Test
++    public void testTheKeyIsSentOnlyWhenGiven() throws Exception {
++        JSONObject body =
++                new JSONObject(
++                        BareTranslateProtocol.requestBody(Arrays.asList("hola"), "en", "k-123"));
++        assertEquals("k-123", body.getString("api_key"));
++    }
++
++    @Test
++    public void testAnAnswerOfTheRightLengthIsRead() {
++        List<String> parsed =
++                BareTranslateProtocol.parseResponse("{\"translatedText\":[\"hello\",\"bye\"]}", 2);
++        assertNotNull(parsed);
++        assertEquals("hello", parsed.get(0));
++        assertEquals("bye", parsed.get(1));
++    }
++
++    @Test
++    public void testAnAnswerOfTheWrongLengthIsRefused() {
++        assertNull(BareTranslateProtocol.parseResponse("{\"translatedText\":[\"hello\"]}", 2));
++        assertNull(BareTranslateProtocol.parseResponse("{\"error\":\"nope\"}", 1));
++        assertNull(BareTranslateProtocol.parseResponse("not json", 1));
++    }
++
++    @Test
++    public void testASingleStringAnswerIsAcceptedForOne() {
++        List<String> parsed =
++                BareTranslateProtocol.parseResponse("{\"translatedText\":\"hello\"}", 1);
++        assertNotNull(parsed);
++        assertEquals("hello", parsed.get(0));
++    }
++
++    @Test
++    public void testErrorMessagesAreRead() {
++        assertEquals("rate limited", BareTranslateProtocol.errorMessage("{\"error\":\"rate limited\"}"));
++        assertEquals("", BareTranslateProtocol.errorMessage("oops"));
++    }
++}
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsUnitTest.java
+new file mode 100644
+index 00000000000..11c930edb45
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsUnitTest.java
+@@ -0,0 +1,77 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.translate;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.After;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++/** Unit tests for {@link BareTranslateSettings}. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareTranslateSettingsUnitTest {
++    @After
++    public void tearDown() {
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_TRANSLATE_ENDPOINT);
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_TRANSLATE_API_KEY);
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_TRANSLATE_TARGET);
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.BARE_TRANSLATE_CONSENT_HOST);
++    }
++
++    @Test
++    public void testNothingIsConfiguredUntilTheUserSetsAnAddress() {
++        assertFalse(BareTranslateSettings.isConfigured());
++        assertEquals("", BareTranslateSettings.getEndpoint());
++    }
++
++    @Test
++    public void testAnAddressTurnsItOnAndAnUnusableOneDoesNot() {
++        BareTranslateSettings.setEndpoint("  https://t.example.com  ");
++        assertTrue(BareTranslateSettings.isConfigured());
++        assertEquals("https://t.example.com", BareTranslateSettings.getEndpoint());
++
++        BareTranslateSettings.setEndpoint("http://t.example.com");
++        assertFalse(BareTranslateSettings.isConfigured());
++
++        BareTranslateSettings.setEndpoint("");
++        assertFalse(BareTranslateSettings.isConfigured());
++    }
++
++    @Test
++    public void testTheTargetFallsBackToEnglishForAnUnknownCode() {
++        BareTranslateSettings.setTargetLanguage("xx");
++        assertTrue(BareTranslateSettings.TARGET_LANGUAGES.contains(BareTranslateSettings.getTargetLanguage()));
++        BareTranslateSettings.setTargetLanguage("es");
++        assertEquals("es", BareTranslateSettings.getTargetLanguage());
++    }
++
++    @Test
++    public void testConsentBelongsToOneHost() {
++        BareTranslateSettings.setEndpoint("https://one.example.com");
++        assertFalse(BareTranslateSettings.hasConsent());
++        BareTranslateSettings.setConsentedHost("one.example.com");
++        assertTrue(BareTranslateSettings.hasConsent());
++
++        // Pointing it somewhere else asks again.
++        BareTranslateSettings.setEndpoint("https://two.example.com");
++        assertFalse(BareTranslateSettings.hasConsent());
++    }
++
++    @Test
++    public void testTheKeyIsKeptAndCleared() {
++        BareTranslateSettings.setApiKey("abc");
++        assertEquals("abc", BareTranslateSettings.getApiKey());
++        BareTranslateSettings.setApiKey("");
++        assertEquals("", BareTranslateSettings.getApiKey());
++    }
++}
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 3fee108063a..21ea1b53881 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -417,6 +417,16 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_EXTENSION_PRESENTATION = "Bare.Extensions.Presentation";
+ 
++    /**
++     * De-Googled build: the address of the translation server the user entered, their API key for
++     * it, the language to translate into, and the host they agreed to send page text to. None of
++     * them has a default, and nothing is translated until the address is set.
++     */
++    public static final String BARE_TRANSLATE_ENDPOINT = "Bare.Translate.Endpoint";
++    public static final String BARE_TRANSLATE_API_KEY = "Bare.Translate.ApiKey";
++    public static final String BARE_TRANSLATE_TARGET = "Bare.Translate.Target";
++    public static final String BARE_TRANSLATE_CONSENT_HOST = "Bare.Translate.ConsentHost";
++
+     /**
+      * De-Googled build: the minimal layout, which leaves out the bottom bar so the address bar is
+      * the only strip of controls. Read once when the process starts, so a change applies after a
+@@ -1329,6 +1339,10 @@ public final class ChromePreferenceKeys {
+                 BARE_USER_AGENT_PRESET,
+                 BARE_ADDRESS_BAR_SWIPE_TABS,
+                 BARE_EXTENSION_PRESENTATION,
++                BARE_TRANSLATE_API_KEY,
++                BARE_TRANSLATE_CONSENT_HOST,
++                BARE_TRANSLATE_ENDPOINT,
++                BARE_TRANSLATE_TARGET,
+                 BARE_MINIMAL_LAYOUT,
+                 BARE_AMOLED_WHEN_SYSTEM_DARK,
+                 WEBSTORE_DESKTOP_SITE_CLEARED,
+diff --git a/chrome/browser/ui/android/BUILD.gn b/chrome/browser/ui/android/BUILD.gn
+index f545872877c..a8d61cb0fd0 100644
+--- a/chrome/browser/ui/android/BUILD.gn
++++ b/chrome/browser/ui/android/BUILD.gn
+@@ -64,6 +64,7 @@ if (is_android) {
+       # and the content browser dependency it needs.
+       "bare_media_registry.cc",
+       "bare_media_registry.h",
++      "bare_script_bridge.cc",
+       "context_menu_helper.cc",
+       "context_menu_helper.h",
+       "extension_tab_context_menu_bridge.cc",
+diff --git a/chrome/browser/ui/android/bare_script_bridge.cc b/chrome/browser/ui/android/bare_script_bridge.cc
+new file mode 100644
+index 00000000000..e91952294d8
+--- /dev/null
++++ b/chrome/browser/ui/android/bare_script_bridge.cc
+@@ -0,0 +1,61 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "base/android/jni_android.h"
++#include "base/android/jni_string.h"
++#include "base/android/scoped_java_ref.h"
++#include "base/functional/bind.h"
++#include "base/json/json_writer.h"
++#include "base/values.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/common/isolated_world_ids.h"
++
++// Must come after all headers that specialize FromJniType() / ToJniType().
++#include "chrome/android/chrome_jni_headers/BareScriptBridge_jni.h"
++
++namespace {
++
++// One world for everything Bare runs in a page, apart from the store's layout
++// script, which has its own. A world keeps the variables a script leaves, which
++// is what lets a page be read in one call and written back in a later one.
++constexpr int32_t kBareWorld = content::ISOLATED_WORLD_ID_CONTENT_END + 1;
++
++void OnResult(base::android::ScopedJavaGlobalRef<jobject> callback,
++              base::Value value) {
++  std::string json;
++  if (std::optional<std::string> written = base::WriteJson(value)) {
++    json = std::move(*written);
++  }
++  Java_BareScriptBridge_onResult(base::android::AttachCurrentThread(),
++                                 callback, json);
++}
++
++}  // namespace
++
++static void JNI_BareScriptBridge_Evaluate(
++    JNIEnv* env,
++    const base::android::JavaRef<jobject>& jweb_contents,
++    const base::android::JavaRef<jstring>& jscript,
++    const base::android::JavaRef<jobject>& jcallback) {
++  content::WebContents* web_contents =
++      content::WebContents::FromJavaWebContents(jweb_contents);
++  if (!web_contents) {
++    return;
++  }
++  content::RenderFrameHost* frame = web_contents->GetPrimaryMainFrame();
++  if (!frame || !frame->IsRenderFrameLive()) {
++    return;
++  }
++  content::RenderFrameHost::JavaScriptResultCallback callback;
++  if (jcallback) {
++    callback = base::BindOnce(
++        &OnResult, base::android::ScopedJavaGlobalRef<jobject>(jcallback));
++  }
++  frame->ExecuteJavaScriptInIsolatedWorld(
++      base::android::ConvertJavaStringToUTF16(env, jscript),
++      std::move(callback), kBareWorld);
++}
++
++DEFINE_JNI(BareScriptBridge)
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 24e34e52851..25dd795a923 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4375,6 +4375,63 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_TOOLBAR_SWIPE_VOLUME" desc="Option meaning dragging sideways along the toolbar changes media volume.">
+         Volume
+       </message>
++      <message name="IDS_BARE_TRANSLATE_SETTINGS_TITLE" desc="Title of the settings screen for translating pages. [CHAR_LIMIT=32]">
++        Translate pages
++      </message>
++      <message name="IDS_BARE_TRANSLATE_ABOUT" desc="Explains page translation: it sends page text to a server the user chooses.">
++        Bare does not include a translation service. Enter the address of a LibreTranslate-compatible server, such as one you run yourself, and Translate appears in the menu. Translating sends the text of the page to that server, and nothing else.
++      </message>
++      <message name="IDS_BARE_TRANSLATE_SERVER_TITLE" desc="Setting for the address of the translation server. [CHAR_LIMIT=32]">
++        Server address
++      </message>
++      <message name="IDS_BARE_TRANSLATE_SERVER_HINT" desc="Hint in the translation server address field.">
++        https://translate.example.com
++      </message>
++      <message name="IDS_BARE_TRANSLATE_SERVER_UNSET" desc="Summary of the server address setting when none is set.">
++        Not set
++      </message>
++      <message name="IDS_BARE_TRANSLATE_SERVER_REFUSED" desc="Summary shown when the entered server address cannot be used because it is not https or a private network address.">
++        <ph name="ADDRESS">%1$s<ex>http://example.com</ex></ph> cannot be used. Use https, or an address on your own network.
++      </message>
++      <message name="IDS_BARE_TRANSLATE_KEY_TITLE" desc="Setting for the API key of the translation server. [CHAR_LIMIT=32]">
++        API key
++      </message>
++      <message name="IDS_BARE_TRANSLATE_KEY_HINT" desc="Hint in the API key field.">
++        Leave empty if the server does not need one
++      </message>
++      <message name="IDS_BARE_TRANSLATE_KEY_SET" desc="Summary of the API key setting when a key is stored.">
++        Set
++      </message>
++      <message name="IDS_BARE_TRANSLATE_KEY_UNSET" desc="Summary of the API key setting when no key is stored.">
++        Not set
++      </message>
++      <message name="IDS_BARE_TRANSLATE_TARGET_TITLE" desc="Setting for the language pages are translated into. [CHAR_LIMIT=32]">
++        Translate into
++      </message>
++      <message name="IDS_BARE_TRANSLATE_SHOW_ORIGINAL" desc="App menu item that puts the original text of a translated page back. [CHAR_LIMIT=32]">
++        Show original
++      </message>
++      <message name="IDS_BARE_TRANSLATE_NOT_SET_UP" desc="Toast when translating without a server address set.">
++        Set a translation server in Settings first
++      </message>
++      <message name="IDS_BARE_TRANSLATE_WORKING" desc="Toast shown when translation starts.">
++        Translating…
++      </message>
++      <message name="IDS_BARE_TRANSLATE_NOTHING" desc="Toast shown when the page has no text to translate.">
++        Nothing to translate on this page
++      </message>
++      <message name="IDS_BARE_TRANSLATE_FAILED" desc="Toast shown when the translation server did not answer or answered with something unusable.">
++        The translation server did not answer
++      </message>
++      <message name="IDS_BARE_TRANSLATE_CONSENT_TITLE" desc="Title of the dialog that asks before sending page text to a translation server.">
++        Send this page’s text?
++      </message>
++      <message name="IDS_BARE_TRANSLATE_CONSENT_MESSAGE" desc="Dialog text: translating sends the page text to the named server, which Bare does not control.">
++        Translating sends the text of the page to <ph name="HOST">%1$s<ex>translate.example.com</ex></ph>. Bare does not control that server, so what it does with the text is up to whoever runs it.
++      </message>
++      <message name="IDS_BARE_TRANSLATE_CONSENT_OK" desc="Button that agrees to send page text to the translation server. [CHAR_LIMIT=24]">
++        Translate
++      </message>
+       <message name="IDS_BARE_EXTENSIONS_SETTINGS_TITLE" desc="Title of the settings screen for extensions. [CHAR_LIMIT=32]">
+         Extensions
+       </message>
+-- 
+2.34.1
+

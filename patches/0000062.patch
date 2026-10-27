@@ -1,0 +1,598 @@
+From 67421c379da15969a515f149e73d91054982e8e5 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 20 Aug 2026 10:29:58 +0000
+Subject: [PATCH] Patch 0000062
+
+---
+ chrome/android/BUILD.gn                       |   1 +
+ chrome/android/chrome_java_sources.gni        |   1 +
+ chrome/android/java/res/values/ids.xml        |   1 +
+ .../browser/bare/BareMediaRegistryBridge.java |  86 ++++++++
+ .../contextmenu/ChromeContextMenuItem.java    |   8 +-
+ .../ChromeContextMenuPopulator.java           |  43 ++++
+ chrome/browser/ui/android/BUILD.gn            |   7 +
+ .../browser/ui/android/bare_media_registry.cc | 196 ++++++++++++++++++
+ .../browser/ui/android/bare_media_registry.h  |  78 +++++++
+ chrome/browser/ui/tab_helpers.cc              |   4 +
+ 10 files changed, 423 insertions(+), 2 deletions(-)
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java
+ create mode 100644 chrome/browser/ui/android/bare_media_registry.cc
+ create mode 100644 chrome/browser/ui/android/bare_media_registry.h
+
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+index cb7f8481537..5a3d7f5e59e 100644
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -3078,6 +3078,7 @@ if (_is_default_toolchain) {
+       "java/src/org/chromium/chrome/browser/backup/ChromeBackupAgentImpl.java",
+       "java/src/org/chromium/chrome/browser/backup/ChromeBackupWatcher.java",
+       "java/src/org/chromium/chrome/browser/backup/DictPrefBackupSerializer.java",
++      "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
+       "java/src/org/chromium/chrome/browser/browserservices/digitalgoods/SiteIsolator.java",
+       "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappBridge.java",
+       "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappGeolocationBridge.java",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 9274abb5edc..92531d15da5 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -238,6 +238,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetProperties.java",
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetView.java",
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetViewBinder.java",
++  "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
+   "java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java",
+   "java/src/org/chromium/chrome/browser/background_sync/BackgroundSyncBackgroundTask.java",
+   "java/src/org/chromium/chrome/browser/background_sync/BackgroundSyncBackgroundTaskScheduler.java",
+diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
+index 51713b52d47..21d823ab713 100644
+--- a/chrome/android/java/res/values/ids.xml
++++ b/chrome/android/java/res/values/ids.xml
+@@ -143,6 +143,7 @@ found in the LICENSE file.
+     <item type="id" name="contextmenu_download_video_frame" />
+     <item type="id" name="contextmenu_picture_in_picture" />
+     <item type="id" name="contextmenu_save_audio" />
++    <item type="id" name="contextmenu_save_detected_video" />
+     <item type="id" name="contextmenu_save_video" />
+     <!-- go/keep-sorted end -->
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java
+new file mode 100644
+index 00000000000..b20692d9531
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java
+@@ -0,0 +1,86 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import org.jni_zero.CalledByNative;
++import org.jni_zero.JniType;
++import org.jni_zero.NativeMethods;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.content_public.browser.WebContents;
++import org.chromium.url.GURL;
++
++import java.util.ArrayList;
++import java.util.List;
++
++/**
++ * Reads back the media a tab has fetched, as recorded by BareMediaRegistry on the native side.
++ *
++ * <p>Nothing here starts a download or touches the network. It answers one question, what media
++ * has this tab loaded, and leaves acting on the answer to the context menu.
++ */
++@NullMarked
++public class BareMediaRegistryBridge {
++    /** One piece of media the tab fetched. */
++    public static class Candidate {
++        public final GURL url;
++        public final String mimeType;
++        public final long sizeBytes;
++
++        Candidate(GURL url, String mimeType, long sizeBytes) {
++            this.url = url;
++            this.mimeType = mimeType;
++            this.sizeBytes = sizeBytes;
++        }
++
++        public boolean isVideo() {
++            return mimeType.startsWith("video/");
++        }
++
++        public boolean isAudio() {
++            return mimeType.startsWith("audio/");
++        }
++    }
++
++    private BareMediaRegistryBridge() {}
++
++    /** Returns what the tab has fetched, oldest first. Empty if it has fetched nothing. */
++    public static List<Candidate> getCandidates(@Nullable WebContents webContents) {
++        List<Candidate> candidates = new ArrayList<>();
++        if (webContents == null || webContents.isDestroyed()) return candidates;
++        BareMediaRegistryBridgeJni.get().getCandidates(webContents, candidates);
++        return candidates;
++    }
++
++    /**
++     * Returns the largest video the tab has fetched, or null if it has fetched none. Largest is
++     * the right pick: adaptive streaming fetches several renditions of the same content, and the
++     * biggest of them is the best quality one.
++     */
++    public static @Nullable Candidate getLargestVideo(@Nullable WebContents webContents) {
++        Candidate best = null;
++        for (Candidate candidate : getCandidates(webContents)) {
++            if (!candidate.isVideo()) continue;
++            if (best == null || candidate.sizeBytes > best.sizeBytes) best = candidate;
++        }
++        return best;
++    }
++
++    @SuppressWarnings("unchecked")
++    @CalledByNative
++    private static void addCandidate(
++            Object out,
++            @JniType("std::string") String url,
++            @JniType("std::string") String mimeType,
++            long sizeBytes) {
++        ((List<Candidate>) out).add(new Candidate(new GURL(url), mimeType, sizeBytes));
++    }
++
++    @NativeMethods
++    interface Natives {
++        void getCandidates(WebContents webContents, Object out);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
+index d5771c5c0b9..40184c49097 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
+@@ -89,7 +89,8 @@ class ChromeContextMenuItem {
+         Item.CREATE_QR_CODE,
+         Item.ASK_GEMINI,
+         Item.ASK_GEMINI_IMAGE,
+-        Item.SAVE_AUDIO
++        Item.SAVE_AUDIO,
++        Item.SAVE_DETECTED_VIDEO
+     })
+     @Retention(RetentionPolicy.SOURCE)
+     public @interface Item {
+@@ -162,8 +163,9 @@ class ChromeContextMenuItem {
+         // Appended rather than grouped with SAVE_VIDEO: MENU_IDS and STRING_IDS are
+         // indexed by these values, so inserting in the middle renumbers the rest.
+         int SAVE_AUDIO = 55;
++        int SAVE_DETECTED_VIDEO = 56;
+         // ALWAYS UPDATE!
+-        int NUM_ENTRIES = 56;
++        int NUM_ENTRIES = 57;
+     }
+ 
+     /** Mapping from {@link Item} to the ID found in the ids.xml. */
+@@ -224,6 +226,7 @@ class ChromeContextMenuItem {
+         R.id.contextmenu_ask_gemini, // Item.ASK_GEMINI
+         R.id.contextmenu_ask_gemini_image, // Item.ASK_GEMINI_IMAGE
+         R.id.contextmenu_save_audio, // Item.SAVE_AUDIO
++        R.id.contextmenu_save_detected_video, // Item.SAVE_DETECTED_VIDEO
+     };
+ 
+     /** Mapping from {@link Item} to the ID of the string that describes the action of the item. */
+@@ -284,6 +287,7 @@ class ChromeContextMenuItem {
+         R.string.glic_button_entrypoint_ask_gemini_label, // Item.ASK_GEMINI
+         R.string.glic_button_entrypoint_ask_gemini_label, // Item.ASK_GEMINI_IMAGE
+         R.string.contextmenu_save_audio, // Item.SAVE_AUDIO
++        R.string.contextmenu_save_video, // Item.SAVE_DETECTED_VIDEO
+     };
+ 
+     /**
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
+index d4272bcbbad..d883c9f1591 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
+@@ -46,6 +46,7 @@ import org.chromium.base.shared_preferences.SharedPreferencesManager;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.BareMediaRegistryBridge;
+ import org.chromium.chrome.browser.bookmarks.BookmarkUtils;
+ import org.chromium.chrome.browser.contextmenu.ChromeContextMenuItem.Item;
+ import org.chromium.chrome.browser.contextmenu.ContextMenuCoordinator.ContextMenuItemType;
+@@ -928,6 +929,32 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+             }
+         }
+ 
++        // A video assembled by script through Media Source has no src worth downloading:
++        // the element points at a blob with no file behind it, and the real files were fetched
++        // separately and never appear as anyone's src. Blink knows this and clears the save
++        // flag, so upstream offers nothing at all here. BareMediaRegistry has been watching
++        // those fetches, so when the ordinary item cannot be offered, offer the largest video
++        // the tab actually loaded instead.
++        //
++        // The test is the ordinary item's own condition, negated, rather than a guess about
++        // schemes: blob counts as downloadable, so checking the scheme would have matched
++        // nothing. This way the two items can never both appear, and never both be missing.
++        boolean upstreamOffersVideoDownload =
++                mParams.canSaveMedia() && UrlUtilities.isDownloadableScheme(mParams.getSrcUrl());
++        if (mParams.isVideo()
++                && !upstreamOffersVideoDownload
++                && mMode != ContextMenuMode.THIN_WEB_VIEW
++                && areMandatoryFlowsCompleted(getProfile())
++                && getLargestDetectedVideo() != null) {
++            ModelList detectedVideoGroup = new ModelList();
++            detectedVideoGroup.add(
++                    createListItem(
++                            Item.SAVE_DETECTED_VIDEO,
++                            /* showInProductHelp= */ false,
++                            !mIsDownloadRestrictedByPolicy));
++            groupedItems.add(detectedVideoGroup);
++        }
++
+         if (mParams.getOpenedFromHighlight()) {
+             ModelList sharedHighlightingGroup = new ModelList();
+             if (mMode == ContextMenuMode.NORMAL) {
+@@ -1180,6 +1207,17 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+             } else if (mItemDelegate.startDownload(mParams.getSrcUrl(), /* isLink= */ false)) {
+                 mNativeDelegate.startDownload(mParams.getSrcUrl(), /* isMedia= */ true);
+             }
++        } else if (itemId == R.id.contextmenu_save_detected_video) {
++            // Re-read rather than remembering what the menu was built from, so this cannot act
++            // on a URL the tab has since replaced. Same download path as every other item, so
++            // the same policy check and the same external download manager handoff apply.
++            BareMediaRegistryBridge.Candidate detected = getLargestDetectedVideo();
++            if (mIsDownloadRestrictedByPolicy) {
++                showDownloadRestrictedToast();
++            } else if (detected != null
++                    && mItemDelegate.startDownload(detected.url, /* isLink= */ false)) {
++                mNativeDelegate.startDownload(detected.url, /* isMedia= */ true);
++            }
+         } else if (itemId == R.id.contextmenu_save_video) {
+             recordContextMenuSelection(ContextMenuUma.Action.SAVE_VIDEO);
+             if (mIsDownloadRestrictedByPolicy) {
+@@ -1881,6 +1919,11 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+                 && !LocaleManager.getInstance().needToCheckForSearchEnginePromo();
+     }
+ 
++    /** The biggest video this tab has fetched, or null if it has fetched none. */
++    private BareMediaRegistryBridge.@Nullable Candidate getLargestDetectedVideo() {
++        return BareMediaRegistryBridge.getLargestVideo(mItemDelegate.getWebContents());
++    }
++
+     /** Returns the profile of the current tab via the item delegate. */
+     private Profile getProfile() {
+         return Profile.fromWebContents(mItemDelegate.getWebContents());
+diff --git a/chrome/browser/ui/android/BUILD.gn b/chrome/browser/ui/android/BUILD.gn
+index c26e65db351..f545872877c 100644
+--- a/chrome/browser/ui/android/BUILD.gn
++++ b/chrome/browser/ui/android/BUILD.gn
+@@ -59,6 +59,11 @@ if (is_android) {
+ 
+   source_set("context_menu_helper") {
+     sources = [
++      # Bare: the media registry lives here because the context menu is the
++      # only thing that reads it, and this target already has the JNI headers
++      # and the content browser dependency it needs.
++      "bare_media_registry.cc",
++      "bare_media_registry.h",
+       "context_menu_helper.cc",
+       "context_menu_helper.h",
+       "extension_tab_context_menu_bridge.cc",
+@@ -72,6 +77,8 @@ if (is_android) {
+       "//content/public/browser",
+       "//extensions/buildflags",
+       "//mojo/public/cpp/bindings",
++      "//net",
++      "//services/network/public/mojom",
+       "//third_party/blink/public/mojom:mojom_platform",
+       "//ui/android",
+       "//ui/gfx/geometry",
+diff --git a/chrome/browser/ui/android/bare_media_registry.cc b/chrome/browser/ui/android/bare_media_registry.cc
+new file mode 100644
+index 00000000000..93b22d8be34
+--- /dev/null
++++ b/chrome/browser/ui/android/bare_media_registry.cc
+@@ -0,0 +1,196 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/android/bare_media_registry.h"
++
++#include <algorithm>
++
++#include "base/android/jni_android.h"
++#include "base/android/jni_string.h"
++#include "base/android/scoped_java_ref.h"
++#include "base/strings/string_util.h"
++#include "content/public/browser/page.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "net/base/net_errors.h"
++#include "services/network/public/mojom/fetch_api.mojom-shared.h"
++#include "third_party/blink/public/mojom/loader/resource_load_info.mojom.h"
++
++// Must come after all headers that specialize FromJniType() / ToJniType().
++#include "chrome/android/chrome_jni_headers/BareMediaRegistryBridge_jni.h"
++
++namespace bare {
++
++namespace {
++
++// A tab left on a video heavy page must not accumulate an unbounded history.
++// Oldest entries are dropped once this many are held.
++constexpr size_t kMaxCandidates = 64;
++
++// Floors that keep ordinary page furniture out of the list. Sprites, icons,
++// tracking pixels and interface sounds all sit comfortably below these;
++// anything a person would actually mean to keep sits comfortably above.
++constexpr base::ByteSize kMinImageSize = base::KiB(40);
++constexpr base::ByteSize kMinAudioVideoSize = base::KiB(96);
++
++bool IsMediaMimeType(std::string_view mime) {
++  return base::StartsWith(mime, "video/",
++                          base::CompareCase::INSENSITIVE_ASCII) ||
++         base::StartsWith(mime, "audio/",
++                          base::CompareCase::INSENSITIVE_ASCII);
++}
++
++bool IsImageMimeType(std::string_view mime) {
++  // SVG is left out on purpose: it is almost always page furniture rather than
++  // something anyone means to save.
++  return base::StartsWith(mime, "image/",
++                          base::CompareCase::INSENSITIVE_ASCII) &&
++         !base::EqualsCaseInsensitiveASCII(mime, "image/svg+xml");
++}
++
++}  // namespace
++
++BareMediaRegistry::BareMediaRegistry(content::WebContents* web_contents)
++    : content::WebContentsObserver(web_contents),
++      content::WebContentsUserData<BareMediaRegistry>(*web_contents) {}
++
++BareMediaRegistry::~BareMediaRegistry() = default;
++
++// static
++GURL BareMediaRegistry::NormalizeForDownload(const GURL& url) {
++  GURL::Replacements strip_ref;
++  strip_ref.ClearRef();
++  return url.ReplaceComponents(strip_ref);
++}
++
++void BareMediaRegistry::ResourceLoadComplete(
++    content::RenderFrameHost* render_frame_host,
++    const content::GlobalRequestID& request_id,
++    const GURL& original_url,
++    const blink::mojom::ResourceLoadInfo& resource_load_info) {
++  // Prerendered and back forward cached pages load media the person never
++  // asked to see. Only what the visible page fetched is offered.
++  if (!render_frame_host || !render_frame_host->GetPage().IsPrimary()) {
++    return;
++  }
++  if (resource_load_info.net_error != net::OK) {
++    return;
++  }
++
++  const GURL& url = resource_load_info.final_url;
++
++  // Anything that cannot be fetched again on its own terms is not a download.
++  // blob: and data: in particular have nothing behind them to re-request.
++  if (!url.SchemeIsHTTPOrHTTPS()) {
++    return;
++  }
++  if (resource_load_info.method != "GET") {
++    return;
++  }
++
++  const auto destination = resource_load_info.request_destination;
++
++  // Scripts, styles, fonts and documents are never offered, whatever content
++  // type they happen to carry.
++  switch (destination) {
++    case network::mojom::RequestDestination::kScript:
++    case network::mojom::RequestDestination::kStyle:
++    case network::mojom::RequestDestination::kFont:
++    case network::mojom::RequestDestination::kDocument:
++    case network::mojom::RequestDestination::kIframe:
++    case network::mojom::RequestDestination::kFrame:
++    case network::mojom::RequestDestination::kFencedframe:
++    case network::mojom::RequestDestination::kManifest:
++    case network::mojom::RequestDestination::kWorker:
++    case network::mojom::RequestDestination::kSharedWorker:
++    case network::mojom::RequestDestination::kServiceWorker:
++    case network::mojom::RequestDestination::kReport:
++    case network::mojom::RequestDestination::kXslt:
++      return;
++    default:
++      break;
++  }
++
++  // Two ways in. The destination is the reliable signal for a <video>, <audio>
++  // or <img> element. Media assembled by script through Media Source arrives
++  // with an empty destination, because to the loader it is an ordinary fetch,
++  // so there the content type is the only thing that identifies it. That
++  // second case is the one this class exists for.
++  const std::string& mime = resource_load_info.mime_type;
++  const bool looks_like_media =
++      destination == network::mojom::RequestDestination::kVideo ||
++      destination == network::mojom::RequestDestination::kAudio ||
++      IsMediaMimeType(mime);
++  const bool looks_like_image =
++      destination == network::mojom::RequestDestination::kImage ||
++      IsImageMimeType(mime);
++
++  const base::ByteSize size = resource_load_info.total_received_bytes;
++  if (looks_like_media) {
++    if (size < kMinAudioVideoSize) {
++      return;
++    }
++  } else if (looks_like_image) {
++    if (size < kMinImageSize) {
++      return;
++    }
++  } else {
++    return;
++  }
++
++  Remember(url, mime, size);
++}
++
++void BareMediaRegistry::Remember(const GURL& url,
++                                 const std::string& mime_type,
++                                 base::ByteSize size) {
++  const GURL normalized = NormalizeForDownload(url);
++
++  // A file delivered in range requests completes once per range, so the same
++  // resource turns up again and again. Keep the largest sighting, which is the
++  // closest thing available to the real size.
++  auto existing = std::ranges::find_if(
++      candidates_,
++      [&normalized](const Candidate& c) { return c.url == normalized; });
++  if (existing != candidates_.end()) {
++    existing->size = std::max(existing->size, size);
++    return;
++  }
++
++  candidates_.push_back({normalized, mime_type, size});
++  while (candidates_.size() > kMaxCandidates) {
++    candidates_.pop_front();
++  }
++}
++
++void BareMediaRegistry::PrimaryPageChanged(content::Page& page) {
++  // What the previous page fetched is not offered for this one.
++  candidates_.clear();
++}
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(BareMediaRegistry);
++
++}  // namespace bare
++
++static void JNI_BareMediaRegistryBridge_GetCandidates(
++    JNIEnv* env,
++    const base::android::JavaRef<jobject>& jweb_contents,
++    const base::android::JavaRef<jobject>& jout) {
++  content::WebContents* web_contents =
++      content::WebContents::FromJavaWebContents(jweb_contents);
++  if (!web_contents) {
++    return;
++  }
++  auto* registry = bare::BareMediaRegistry::FromWebContents(web_contents);
++  if (!registry) {
++    return;
++  }
++  for (const auto& candidate : registry->candidates()) {
++    Java_BareMediaRegistryBridge_addCandidate(
++        env, jout, candidate.url.spec(), candidate.mime_type,
++        static_cast<int64_t>(candidate.size.InBytes()));
++  }
++}
++
++DEFINE_JNI(BareMediaRegistryBridge)
+diff --git a/chrome/browser/ui/android/bare_media_registry.h b/chrome/browser/ui/android/bare_media_registry.h
+new file mode 100644
+index 00000000000..e13e52f943c
+--- /dev/null
++++ b/chrome/browser/ui/android/bare_media_registry.h
+@@ -0,0 +1,78 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_ANDROID_BARE_MEDIA_REGISTRY_H_
++#define CHROME_BROWSER_UI_ANDROID_BARE_MEDIA_REGISTRY_H_
++
++#include <string>
++
++#include "base/byte_size.h"
++#include "base/containers/circular_deque.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "content/public/browser/web_contents_user_data.h"
++#include "url/gurl.h"
++
++namespace bare {
++
++// Remembers the media a tab has actually fetched, so the context menu can offer
++// a download for media the page never exposes as a plain element src.
++//
++// This only watches. It observes ResourceLoadComplete, which reports what the
++// network stack has already finished doing, and never intercepts, rewrites,
++// re-requests or otherwise takes part in loading anything. There is no
++// throttle, no request handler and no second HTTP stack. A download started
++// from what is recorded here goes out through the ordinary download path like
++// any other, so the same policy checks and the same external download manager
++// handoff apply.
++//
++// The list is per tab and is dropped whenever the primary page changes.
++class BareMediaRegistry
++    : public content::WebContentsObserver,
++      public content::WebContentsUserData<BareMediaRegistry> {
++ public:
++  struct Candidate {
++    GURL url;
++    std::string mime_type;
++    base::ByteSize size;
++  };
++
++  BareMediaRegistry(const BareMediaRegistry&) = delete;
++  BareMediaRegistry& operator=(const BareMediaRegistry&) = delete;
++
++  ~BareMediaRegistry() override;
++
++  // Most recently seen last.
++  const base::circular_deque<Candidate>& candidates() const {
++    return candidates_;
++  }
++
++  // Drops the fragment and nothing else. Query parameters are kept, because on
++  // most sites they carry the signature or expiry the CDN requires and removing
++  // them turns a working URL into a 403.
++  static GURL NormalizeForDownload(const GURL& url);
++
++  // content::WebContentsObserver:
++  void ResourceLoadComplete(
++      content::RenderFrameHost* render_frame_host,
++      const content::GlobalRequestID& request_id,
++      const GURL& original_url,
++      const blink::mojom::ResourceLoadInfo& resource_load_info) override;
++  void PrimaryPageChanged(content::Page& page) override;
++
++ private:
++  explicit BareMediaRegistry(content::WebContents* web_contents);
++  friend class content::WebContentsUserData<BareMediaRegistry>;
++
++  void Remember(const GURL& url,
++                const std::string& mime_type,
++                base::ByteSize size);
++
++  base::circular_deque<Candidate> candidates_;
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++}  // namespace bare
++
++#endif  // CHROME_BROWSER_UI_ANDROID_BARE_MEDIA_REGISTRY_H_
+diff --git a/chrome/browser/ui/tab_helpers.cc b/chrome/browser/ui/tab_helpers.cc
+index f7e2862c79b..b2b0bd59685 100644
+--- a/chrome/browser/ui/tab_helpers.cc
++++ b/chrome/browser/ui/tab_helpers.cc
+@@ -147,6 +147,7 @@
+ #include "chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h"
+ #include "chrome/browser/facilitated_payments/ui/chrome_facilitated_payments_client.h"
+ #include "chrome/browser/flags/android/chrome_feature_list.h"
++#include "chrome/browser/ui/android/bare_media_registry.h"
+ #include "chrome/browser/ui/android/context_menu_helper.h"
+ #include "chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_android.h"
+ #include "components/content_capture/common/content_capture_features.h"
+@@ -534,6 +535,9 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents,
+                           *web_contents));
+   }
+   ContextMenuHelper::CreateForWebContents(web_contents);
++  // Bare: records the media this tab fetches, so the context menu can offer a
++  // download for media the page never exposes as an element src.
++  bare::BareMediaRegistry::CreateForWebContents(web_contents);
+ 
+   javascript_dialogs::TabModalDialogManager::CreateForWebContents(
+       web_contents,

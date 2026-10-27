@@ -1,0 +1,41 @@
+From 4afc48d31dd7d55efef8925182711bdc06171a5e Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Tue, 25 Aug 2026 18:13:27 +0000
+Subject: [PATCH] Patch 0000092
+
+---
+ .../modules/chrome_feature_modules.gni        | 20 ++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/android/modules/chrome_feature_modules.gni b/chrome/android/modules/chrome_feature_modules.gni
+index a34a5fe8753..8403bbe4b3e 100644
+--- a/chrome/android/modules/chrome_feature_modules.gni
++++ b/chrome/android/modules/chrome_feature_modules.gni
+@@ -30,8 +30,26 @@ import("//device/vr/buildflags/buildflags.gni")
+ chrome_module_descs = [
+   on_demand_module_desc,
+   stack_unwinder_module_desc,
+-  xr_module_desc,
+ ]
++
++# Ship the XR module only when something in the build asks for it.
++#
++# The list above is assembled without consulting the XR buildflags, so the
++# module was packaged even with enable_vr, enable_arcore, enable_openxr and
++# enable_cardboard all off. It is not small: the AndroidX XR and ARCore AARs
++# bring libimpress_api_jni.so and four smaller libraries, about 20 MB of native
++# code in the APK, none of which anything can reach once the XR code that would
++# call it has been compiled out.
++#
++# The two entry points into the module, in ChromeTabbedActivity, are both behind
++# DeviceInfo.isXr(), so on a phone the module is never asked for. That also says
++# what this gives up: on an Android XR device the browser would no longer get a
++# SceneCore session, which is how a flat browser window is placed in a spatial
++# environment. This build targets phones and has XR compiled out already, so
++# that is a trade worth making here rather than a loss.
++if (enable_vr || enable_arcore) {
++  chrome_module_descs += [ xr_module_desc ]
++}
+ if (dfmify_dev_ui) {
+   chrome_module_descs += [ dev_ui_module_desc ]
+ }

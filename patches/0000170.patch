@@ -1,0 +1,511 @@
+From fe628cee2d6e8967620e4e978cda151f05a6dab5 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 21 Oct 2026 22:58:53 +0000
+Subject: [PATCH] Patch 0000170
+
+---
+ chrome/android/chrome_java_resources.gni      |   1 +
+ chrome/android/chrome_java_sources.gni        |   1 +
+ .../res/xml/bare_extensions_preferences.xml   |  17 +++
+ .../android/java/res/xml/main_preferences.xml |   5 +
+ .../BareExtensionsSettingsFragment.java       |  66 ++++++++++
+ chrome/browser/extensions/BUILD.gn            |   2 +
+ .../bare_bundled_extension_recovery.cc        |  23 +++-
+ .../extensions/bare_extension_importance.cc   | 114 ++++++++++++++++++
+ .../extensions/bare_extension_importance.h    |  19 +++
+ .../extensions/external_provider_impl.cc      |   2 +
+ chrome/browser/prefs/browser_prefs.cc         |   1 +
+ .../strings/android_chrome_strings.grd        |   9 ++
+ chrome/common/pref_names.h                    |   7 ++
+ .../recovery_policy.cc                        |   3 +-
+ .../bare_bundled_extensions/recovery_policy.h |   4 +
+ .../recovery_policy_unittest.cc               |  15 +++
+ 16 files changed, 286 insertions(+), 3 deletions(-)
+ create mode 100644 chrome/android/java/res/xml/bare_extensions_preferences.xml
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java
+ create mode 100644 chrome/browser/extensions/bare_extension_importance.cc
+ create mode 100644 chrome/browser/extensions/bare_extension_importance.h
+
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 6cadc3d341b..cec0fbbc334 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -691,6 +691,7 @@ chrome_java_resources = [
+   "java/res/xml/ad_services_config.xml",
+   "java/res/xml/appearance_preferences.xml",
+   "java/res/xml/bare_clear_on_exit_preferences.xml",
++  "java/res/xml/bare_extensions_preferences.xml",
+   "java/res/xml/bare_toolbar_preferences.xml",
+   "java/res/xml/bookmark_bar_preferences.xml",
+   "java/res/xml/bookmark_widget_info.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 2181a915c49..32005a39347 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -243,6 +243,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareClearOnExitSettings.java",
++  "java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java",
+   "java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java",
+diff --git a/chrome/android/java/res/xml/bare_extensions_preferences.xml b/chrome/android/java/res/xml/bare_extensions_preferences.xml
+new file mode 100644
+index 00000000000..830c8280202
+--- /dev/null
++++ b/chrome/android/java/res/xml/bare_extensions_preferences.xml
+@@ -0,0 +1,17 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
++
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_keep_extensions_running"
++        android:order="0"
++        android:persistent="false"
++        android:title="@string/bare_keep_extensions_title"
++        android:summary="@string/bare_keep_extensions_summary" />
++
++</PreferenceScreen>
+diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/java/res/xml/main_preferences.xml
+index 7f8b9781d2f..5763b6762cb 100644
+--- a/chrome/android/java/res/xml/main_preferences.xml
++++ b/chrome/android/java/res/xml/main_preferences.xml
+@@ -96,6 +96,11 @@ found in the LICENSE file.
+         android:key="appearance"
+         android:order="23"
+         android:title="@string/appearance_settings" />
++    <Preference
++        android:fragment="org.chromium.chrome.browser.bare.settings.BareExtensionsSettingsFragment"
++        android:key="bare_extensions"
++        android:order="24"
++        android:title="@string/bare_extensions_settings_title" />
+     <Preference
+         android:fragment="org.chromium.chrome.browser.media.settings.MediaSettingsFragment"
+         android:key="media"
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java
+new file mode 100644
+index 00000000000..efaf9ed7b91
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java
+@@ -0,0 +1,66 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.settings;
++
++import android.content.Context;
++import android.os.Bundle;
++
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.preferences.Pref;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
++import org.chromium.components.browser_ui.settings.SettingsUtils;
++import org.chromium.components.user_prefs.UserPrefs;
++
++/** Settings for how extensions run and how they open. */
++@NullMarked
++public class BareExtensionsSettingsFragment extends ChromeBaseSettingsFragment {
++
++    public static final String PREF_KEEP_RUNNING = "bare_keep_extensions_running";
++
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++            ObservableSuppliers.createMonotonic();
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        mPageTitle.set(getTitle(getContext()));
++        SettingsUtils.addPreferencesFromResource(this, R.xml.bare_extensions_preferences);
++
++        ChromeSwitchPreference keepRunning = findPreference(PREF_KEEP_RUNNING);
++        assert keepRunning != null;
++        keepRunning.setChecked(
++                UserPrefs.get(getProfile()).getBoolean(Pref.BARE_KEEP_EXTENSIONS_ALIVE));
++        keepRunning.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    UserPrefs.get(getProfile())
++                            .setBoolean(Pref.BARE_KEEP_EXTENSIONS_ALIVE, (boolean) newValue);
++                    return true;
++                });
++    }
++
++    @Override
++    public MonotonicObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    public static String getTitle(Context context) {
++        return context.getString(R.string.bare_extensions_settings_title);
++    }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++
++    @Override
++    public @Nullable String getMainMenuKey() {
++        return "bare_extensions";
++    }
++}
+diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
+index 95237c7c366..9676effe72e 100644
+--- a/chrome/browser/extensions/BUILD.gn
++++ b/chrome/browser/extensions/BUILD.gn
+@@ -354,6 +354,8 @@ source_set("extensions") {
+     "bare_bundled_extension_recovery.h",
+     "bare_bundled_extensions_loader.cc",
+     "bare_bundled_extensions_loader.h",
++    "bare_extension_importance.cc",
++    "bare_extension_importance.h",
+     "external_provider_impl.cc",
+     "external_provider_impl.h",
+     "external_provider_manager.cc",
+diff --git a/chrome/browser/extensions/bare_bundled_extension_recovery.cc b/chrome/browser/extensions/bare_bundled_extension_recovery.cc
+index 07ef09b1813..0e7eb87c4f2 100644
+--- a/chrome/browser/extensions/bare_bundled_extension_recovery.cc
++++ b/chrome/browser/extensions/bare_bundled_extension_recovery.cc
+@@ -17,6 +17,8 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "chrome/browser/extensions/bare_bundled_extensions_loader.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/common/pref_names.h"
++#include "components/prefs/pref_service.h"
+ #include "components/bare_bundled_extensions/recovery_policy.h"
+ #include "extensions/browser/extension_prefs.h"
+ #include "extensions/browser/extension_registrar.h"
+@@ -50,7 +52,7 @@ class BundledExtensionRecovery : public ExtensionRegistryObserver {
+   // ExtensionRegistryObserver:
+   void OnExtensionLoaded(content::BrowserContext* browser_context,
+                          const Extension* extension) override {
+-    if (IsClaimed(*extension)) {
++    if (IsRecoverable(*extension)) {
+       BackoffFor(extension->id()).OnLoaded();
+     }
+   }
+@@ -61,7 +63,7 @@ class BundledExtensionRecovery : public ExtensionRegistryObserver {
+     // A disable, an update, a removal and a browser shutdown all arrive with
+     // other reasons, or not at all.
+     if (reason != UnloadedExtensionReason::TERMINATE ||
+-        !IsClaimed(*extension)) {
++        !IsRecoverable(*extension)) {
+       return;
+     }
+     Schedule(extension->id());
+@@ -79,6 +81,21 @@ class BundledExtensionRecovery : public ExtensionRegistryObserver {
+            loader_->ClaimsExtension(extension.id());
+   }
+ 
++  // An extension the user installed, while they want extensions kept running.
++  // Policy, component and external-pref extensions are not theirs to keep.
++  bool IsKeptRunningBySetting(const Extension& extension) const {
++    if (!profile_->GetPrefs()->GetBoolean(prefs::kBareKeepExtensionsAlive)) {
++      return false;
++    }
++    const mojom::ManifestLocation location = extension.location();
++    return location == mojom::ManifestLocation::kInternal ||
++           location == mojom::ManifestLocation::kUnpacked;
++  }
++
++  bool IsRecoverable(const Extension& extension) const {
++    return IsClaimed(extension) || IsKeptRunningBySetting(extension);
++  }
++
+   bare_bundled_extensions::RecoveryBackoff& BackoffFor(const ExtensionId& id) {
+     std::unique_ptr<bare_bundled_extensions::RecoveryBackoff>& backoff =
+         backoff_[id];
+@@ -113,6 +130,8 @@ class BundledExtensionRecovery : public ExtensionRegistryObserver {
+     bare_bundled_extensions::RecoveryFacts facts;
+     facts.still_terminated = terminated != nullptr;
+     facts.claimed_by_bare = terminated && IsClaimed(*terminated);
++    facts.kept_running_by_setting =
++        terminated && IsKeptRunningBySetting(*terminated);
+     facts.removed_by_user = prefs->IsExternalExtensionUninstalled(id);
+     facts.has_disable_reasons = !prefs->GetDisableReasons(id).empty();
+     facts.reload_too_frequent =
+diff --git a/chrome/browser/extensions/bare_extension_importance.cc b/chrome/browser/extensions/bare_extension_importance.cc
+new file mode 100644
+index 00000000000..96539af5a20
+--- /dev/null
++++ b/chrome/browser/extensions/bare_extension_importance.cc
+@@ -0,0 +1,114 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/extensions/bare_extension_importance.h"
++
++#include "build/build_config.h"
++
++#if BUILDFLAG(IS_ANDROID)
++#include "base/functional/bind.h"
++#include "base/scoped_observation.h"
++#include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/common/pref_names.h"
++#include "components/prefs/pref_change_registrar.h"
++#include "components/prefs/pref_service.h"
++#include "content/public/browser/android/child_process_importance.h"
++#include "content/public/browser/web_contents.h"
++#include "extensions/browser/extension_host.h"
++#include "extensions/browser/extension_host_registry.h"
++#include "extensions/browser/process_manager.h"
++#include "extensions/common/mojom/view_type.mojom.h"
++#endif  // BUILDFLAG(IS_ANDROID)
++
++namespace extensions {
++
++#if BUILDFLAG(IS_ANDROID)
++namespace {
++
++// Gives each extension background page a binding Android counts when it picks
++// what to kill.
++//
++// A Manifest V2 background page has no tab in front of it, no media and no
++// service worker, so Chromium ranks its renderer as low as a process can be,
++// with a binding Android may drop first. Android's memory killer takes such a
++// process soon after Bare leaves the foreground, and the extension stops
++// working until it is loaded again. Moderate importance is the level a page
++// that is on screen but not the main frame gets, and it adds the binding that
++// keeps the process in step with the browser's own.
++//
++// This lowers the odds. It does not make the process unkillable: a phone short
++// enough of memory will still take it, and BundledExtensionRecovery loads the
++// extension again afterwards.
++class ExtensionImportanceKeeper : public ExtensionHostRegistry::Observer {
++ public:
++  explicit ExtensionImportanceKeeper(Profile* profile) : profile_(profile) {
++    observation_.Observe(ExtensionHostRegistry::Get(profile_));
++    pref_registrar_.Init(profile_->GetPrefs());
++    pref_registrar_.Add(
++        prefs::kBareKeepExtensionsAlive,
++        base::BindRepeating(&ExtensionImportanceKeeper::OnPrefChanged,
++                            base::Unretained(this)));
++  }
++
++  ExtensionImportanceKeeper(const ExtensionImportanceKeeper&) = delete;
++  ExtensionImportanceKeeper& operator=(const ExtensionImportanceKeeper&) =
++      delete;
++
++  ~ExtensionImportanceKeeper() override = default;
++
++ private:
++  void OnExtensionHostRenderProcessReady(
++      content::BrowserContext* browser_context,
++      ExtensionHost* host) override {
++    if (host->extension_host_type() !=
++        mojom::ViewType::kExtensionBackgroundPage) {
++      return;
++    }
++    Apply(host);
++  }
++
++  void OnExtensionHostRegistryShutdown(ExtensionHostRegistry* registry) override {
++    observation_.Reset();
++    pref_registrar_.RemoveAll();
++    base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
++                                                                 this);
++  }
++
++  void OnPrefChanged() {
++    ProcessManager* manager = ProcessManager::Get(profile_);
++    if (!manager) {
++      return;
++    }
++    for (ExtensionHost* host : manager->background_hosts()) {
++      Apply(host);
++    }
++  }
++
++  void Apply(ExtensionHost* host) {
++    const bool keep =
++        profile_->GetPrefs()->GetBoolean(prefs::kBareKeepExtensionsAlive);
++    host->host_contents()->SetPrimaryPageImportance(
++        keep ? content::ChildProcessImportance::MODERATE
++             : content::ChildProcessImportance::NORMAL,
++        content::ChildProcessImportance::NORMAL);
++  }
++
++  raw_ptr<Profile> profile_;
++  PrefChangeRegistrar pref_registrar_;
++  base::ScopedObservation<ExtensionHostRegistry,
++                          ExtensionHostRegistry::Observer>
++      observation_{this};
++};
++
++}  // namespace
++
++void StartExtensionImportanceKeeper(Profile* profile) {
++  new ExtensionImportanceKeeper(profile);  // Owns itself.
++}
++#else
++void StartExtensionImportanceKeeper(Profile* profile) {}
++#endif  // BUILDFLAG(IS_ANDROID)
++
++}  // namespace extensions
+diff --git a/chrome/browser/extensions/bare_extension_importance.h b/chrome/browser/extensions/bare_extension_importance.h
+new file mode 100644
+index 00000000000..20efe80c344
+--- /dev/null
++++ b/chrome/browser/extensions/bare_extension_importance.h
+@@ -0,0 +1,19 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_EXTENSIONS_BARE_EXTENSION_IMPORTANCE_H_
++#define CHROME_BROWSER_EXTENSIONS_BARE_EXTENSION_IMPORTANCE_H_
++
++class Profile;
++
++namespace extensions {
++
++// Starts the observer that keeps extension background pages from being the
++// first thing Android's memory killer takes. It owns itself and goes away with
++// the profile's extension host registry.
++void StartExtensionImportanceKeeper(Profile* profile);
++
++}  // namespace extensions
++
++#endif  // CHROME_BROWSER_EXTENSIONS_BARE_EXTENSION_IMPORTANCE_H_
+diff --git a/chrome/browser/extensions/external_provider_impl.cc b/chrome/browser/extensions/external_provider_impl.cc
+index 055119107ea..4dbcd43a9e5 100644
+--- a/chrome/browser/extensions/external_provider_impl.cc
++++ b/chrome/browser/extensions/external_provider_impl.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/extensions/external_provider_impl.h"
+ 
+ #include "chrome/browser/extensions/bare_bundled_extension_recovery.h"
++#include "chrome/browser/extensions/bare_extension_importance.h"
+ #include "chrome/browser/extensions/bare_bundled_extensions_loader.h"
+ 
+ #include <stddef.h>
+@@ -961,6 +962,7 @@ void ExternalProviderImpl::CreateExternalProviders(
+   ApplyBundledExtensionCarryOver(profile);
+   RememberBundledExtensionsLoader(profile, bare_loader);
+   StartBundledExtensionRecovery(profile, bare_loader);
++  StartExtensionImportanceKeeper(profile);
+ #endif
+ 
+ #if BUILDFLAG(ENABLE_EXTENSIONS)
+diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
+index 7b100128e85..72a76a2e3e1 100644
+--- a/chrome/browser/prefs/browser_prefs.cc
++++ b/chrome/browser/prefs/browser_prefs.cc
+@@ -2366,6 +2366,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
+   registry->RegisterBooleanPref(prefs::kViewSourceLineWrappingEnabled, false);
+ #if BUILDFLAG(IS_ANDROID)
+   registry->RegisterBooleanPref(prefs::kBackgroundMediaPlayback, false);
++  registry->RegisterBooleanPref(prefs::kBareKeepExtensionsAlive, true);
+   registry->RegisterIntegerPref(prefs::kClearOnExitTypes, 0);
+   registry->RegisterBooleanPref(prefs::kClearOnExitPending, false);
+ #endif  // BUILDFLAG(IS_ANDROID)
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 137b34579e1..116ce0fae97 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4366,6 +4366,15 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_TOOLBAR_SWIPE_VOLUME" desc="Option meaning dragging sideways along the toolbar changes media volume.">
+         Volume
+       </message>
++      <message name="IDS_BARE_EXTENSIONS_SETTINGS_TITLE" desc="Title of the settings screen for extensions. [CHAR_LIMIT=32]">
++        Extensions
++      </message>
++      <message name="IDS_BARE_KEEP_EXTENSIONS_TITLE" desc="Setting that keeps extensions running while the browser is in the background. [CHAR_LIMIT=48]">
++        Keep extensions running
++      </message>
++      <message name="IDS_BARE_KEEP_EXTENSIONS_SUMMARY" desc="Summary of the setting that keeps extensions running in the background. Says what it does and that it costs some memory and battery.">
++        Make it less likely that Android stops extensions while you are in another app, and load them again if it does. Uses a little more memory and battery.
++      </message>
+       <message name="IDS_BARE_MINIMAL_LAYOUT_TITLE" desc="Setting that removes the bottom button bar and leaves only the address bar. [CHAR_LIMIT=40]">
+         Minimal address bar
+       </message>
+diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
+index bd1201d6774..8d1cf882053 100644
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -349,6 +349,13 @@ inline constexpr char kWebKitAmoledDarkBackgroundsEnabled[] =
+ inline constexpr char kBackgroundMediaPlayback[] =
+     "bare.background_media_playback";
+ 
++// Bare Browser: whether extension background pages are kept from being the first
++// thing Android's memory killer takes, and loaded again when it takes one
++// anyway. On by default. Read by the extension importance keeper and by the
++// bundled-extension recovery, and exposed to Java through the generated Pref
++// class.
++inline constexpr char kBareKeepExtensionsAlive[] = "bare.keep_extensions_alive";
++
+ // Bare Browser: which browsing data the Exit item in the app menu clears, as a
+ // bitmask of BrowsingDataType values. Zero, the default, clears nothing and
+ // makes Exit close the browser and no more. Exposed to Java through the
+diff --git a/components/bare_bundled_extensions/recovery_policy.cc b/components/bare_bundled_extensions/recovery_policy.cc
+index 32e40bd8b9a..5aa8328b8a0 100644
+--- a/components/bare_bundled_extensions/recovery_policy.cc
++++ b/components/bare_bundled_extensions/recovery_policy.cc
+@@ -7,7 +7,8 @@
+ namespace bare_bundled_extensions {
+ 
+ bool ShouldRecover(const RecoveryFacts& facts) {
+-  return facts.claimed_by_bare && facts.still_terminated &&
++  return (facts.claimed_by_bare || facts.kept_running_by_setting) &&
++         facts.still_terminated &&
+          !facts.removed_by_user && !facts.has_disable_reasons &&
+          !facts.reload_too_frequent;
+ }
+diff --git a/components/bare_bundled_extensions/recovery_policy.h b/components/bare_bundled_extensions/recovery_policy.h
+index 1ab2031ef4f..36d7f2f52a3 100644
+--- a/components/bare_bundled_extensions/recovery_policy.h
++++ b/components/bare_bundled_extensions/recovery_policy.h
+@@ -19,6 +19,10 @@ namespace bare_bundled_extensions {
+ struct RecoveryFacts {
+   // Bare's provider still claims it, at the location it installs to.
+   bool claimed_by_bare = false;
++  // It is not one Bare shipped, but the user installed it and has asked for
++  // extensions to be kept running. The same rules apply to it as to a bundled
++  // one: nothing the user disabled or removed is brought back.
++  bool kept_running_by_setting = false;
+   // It is still in the terminated set. Disabling, removing or reloading it
+   // takes it out of that set.
+   bool still_terminated = false;
+diff --git a/components/bare_bundled_extensions/recovery_policy_unittest.cc b/components/bare_bundled_extensions/recovery_policy_unittest.cc
+index a321730abfb..8bc70b8ee38 100644
+--- a/components/bare_bundled_extensions/recovery_policy_unittest.cc
++++ b/components/bare_bundled_extensions/recovery_policy_unittest.cc
+@@ -28,6 +28,21 @@ TEST(RecoveryPolicyTest, OnlyWhatBareProvisionedIsTouched) {
+   EXPECT_FALSE(ShouldRecover(facts));
+ }
+ 
++TEST(RecoveryPolicyTest, AnExtensionTheUserInstalledIsRecoveredWhenAsked) {
++  RecoveryFacts facts = Recoverable();
++  facts.claimed_by_bare = false;
++  facts.kept_running_by_setting = true;
++  EXPECT_TRUE(ShouldRecover(facts));
++}
++
++TEST(RecoveryPolicyTest, TheSettingDoesNotOverrideADisable) {
++  RecoveryFacts facts = Recoverable();
++  facts.claimed_by_bare = false;
++  facts.kept_running_by_setting = true;
++  facts.has_disable_reasons = true;
++  EXPECT_FALSE(ShouldRecover(facts));
++}
++
+ TEST(RecoveryPolicyTest, AnExtensionNoLongerTerminatedIsLeftAlone) {
+   RecoveryFacts facts = Recoverable();
+   facts.still_terminated = false;
+-- 
+2.34.1
+

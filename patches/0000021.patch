@@ -1,0 +1,158 @@
+From bbbc82266e84c0bc922752f6796a571d437ed1be Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 16 Aug 2026 17:29:29 +0000
+Subject: [PATCH] Patch 0000021
+
+---
+ .../browser/download/DownloadController.java  | 68 +++++++++++++++++++
+ .../download/android/download_controller.cc   | 10 +++
+ .../download/android/download_controller.h    |  6 ++
+ .../chrome_download_manager_delegate.cc       | 11 +++
+ 4 files changed, 95 insertions(+)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
+index 75a5626886d..2c7fa8f43dc 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
+@@ -10,6 +10,14 @@ import org.jni_zero.CalledByNative;
+ import org.jni_zero.JniType;
+ import org.jni_zero.NativeMethods;
+ 
++import android.content.Context;
++import android.content.Intent;
++import android.content.pm.PackageManager;
++import android.content.pm.ResolveInfo;
++import android.net.Uri;
++
++import org.chromium.base.ContextUtils;
++import org.chromium.base.Log;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.pdf.PdfPage;
+@@ -28,6 +36,66 @@ import org.chromium.url.Origin;
+ /** Java counterpart of android DownloadController. Owned by native. */
+ @NullMarked
+ public class DownloadController {
++    private static final String TAG = "DownloadController";
++
++    /**
++     * De-Googled build: offer the download to an installed download manager.
++     *
++     * <p>Builds an ACTION_VIEW intent for the download and shows a chooser, so an app such as 1DM
++     * can take it. Returns true only if a chooser was actually shown, so that Chromium falls back
++     * to downloading the file itself when no suitable app is installed.
++     *
++     * <p>Chromium registers as a handler for http(s) ACTION_VIEW itself, so it is filtered out of
++     * the candidate list. Without that the chooser would offer this browser as a place to send its
++     * own download, which at best is confusing and at worst loops.
++     *
++     * <p>Known limitation: the interception point in ChromeDownloadManagerDelegate does not carry
++     * the request cookie, so a download that depends on being signed in will fail in the external
++     * app. Passing credentials needs a different interception layer.
++     */
++    @CalledByNative
++    private static boolean maybeSendToExternalDownloadManager(
++            GURL url, @JniType("std::string") String mimeType) {
++        Context context = ContextUtils.getApplicationContext();
++        if (context == null) return false;
++
++        Intent intent = new Intent(Intent.ACTION_VIEW);
++        Uri uri = Uri.parse(url.getSpec());
++        if (mimeType != null && !mimeType.isEmpty()) {
++            intent.setDataAndType(uri, mimeType);
++        } else {
++            intent.setData(uri);
++        }
++
++        PackageManager pm = context.getPackageManager();
++        String self = context.getPackageName();
++        Intent chooserTarget = null;
++        for (ResolveInfo info : pm.queryIntentActivities(intent, 0)) {
++            if (info.activityInfo == null) continue;
++            if (self.equals(info.activityInfo.packageName)) continue;
++
++            Intent candidate = new Intent(intent);
++            candidate.setPackage(info.activityInfo.packageName);
++            chooserTarget = candidate;
++            break;
++        }
++
++        if (chooserTarget == null) {
++            Log.i(TAG, "No external download handler installed, downloading in browser.");
++            return false;
++        }
++
++        Intent chooser = Intent.createChooser(intent, null);
++        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++        try {
++            context.startActivity(chooser);
++            return true;
++        } catch (android.content.ActivityNotFoundException e) {
++            Log.w(TAG, "Failed to launch external download handler, downloading in browser.");
++            return false;
++        }
++    }
++
+     /**
+      * Called to download the given URL triggered from a tab.
+      *
+diff --git a/chrome/browser/download/android/download_controller.cc b/chrome/browser/download/android/download_controller.cc
+index cea6ca0ab64..8665d0e9f4a 100644
+--- a/chrome/browser/download/android/download_controller.cc
++++ b/chrome/browser/download/android/download_controller.cc
+@@ -331,6 +331,16 @@ DownloadController::DownloadController() = default;
+ 
+ DownloadController::~DownloadController() = default;
+ 
++bool DownloadController::MaybeSendToExternalDownloadManager(
++    const GURL& url,
++    const std::string& mime_type) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  JNIEnv* env = base::android::AttachCurrentThread();
++  ScopedJavaLocalRef<jobject> jurl = url::GURLAndroid::FromNativeGURL(env, url);
++  return Java_DownloadController_maybeSendToExternalDownloadManager(env, jurl,
++                                                                    mime_type);
++}
++
+ void DownloadController::CreateAndroidDownload(
+     const content::WebContents::Getter& wc_getter,
+     const DownloadInfo& info) {
+diff --git a/chrome/browser/download/android/download_controller.h b/chrome/browser/download/android/download_controller.h
+index 6fe6fc9fec3..5d4567b9aa3 100644
+--- a/chrome/browser/download/android/download_controller.h
++++ b/chrome/browser/download/android/download_controller.h
+@@ -46,6 +46,12 @@ class DownloadController : public DownloadControllerBase {
+   void CreateAndroidDownload(const content::WebContents::Getter& wc_getter,
+                              const DownloadInfo& info) override;
+ 
++  // De-Googled build: offers the download to an installed download manager and
++  // returns true if one took it. Returns false when no suitable app is
++  // installed, so the caller downloads the file in the browser as usual.
++  static bool MaybeSendToExternalDownloadManager(const GURL& url,
++                                                 const std::string& mime_type);
++
+   // UMA histogram enum for download storage permission requests. Keep this
+   // in sync with MobileDownloadStoragePermission in histograms.xml. This should
+   // be append only.
+diff --git a/chrome/browser/download/chrome_download_manager_delegate.cc b/chrome/browser/download/chrome_download_manager_delegate.cc
+index 0cfc34d1e08..df3ffb37615 100644
+--- a/chrome/browser/download/chrome_download_manager_delegate.cc
++++ b/chrome/browser/download/chrome_download_manager_delegate.cc
+@@ -1238,6 +1238,17 @@ bool ChromeDownloadManagerDelegate::InterceptDownloadIfApplicable(
+     bool is_transient,
+     bool is_content_initiated,
+     content::WebContents* web_contents) {
++#if BUILDFLAG(IS_ANDROID)
++  // De-Googled build: give an installed download manager first refusal.
++  //
++  // Returns false when no suitable app is installed, in which case the download
++  // proceeds in the browser as usual. Note this hook carries no cookie, so a
++  // download that depends on being signed in will fail in the external app.
++  if (DownloadController::MaybeSendToExternalDownloadManager(url, mime_type)) {
++    return true;
++  }
++#endif  // BUILDFLAG(IS_ANDROID)
++
+   PolicyBlocklistService* service =
+       ChromePolicyBlocklistServiceFactory::GetForProfile(profile_);
+   policy::URLBlocklist::URLBlocklistState blocklist_state =

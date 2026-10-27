@@ -1,0 +1,134 @@
+From 77cd2757cc699e9d1b1ed5565d268dede74eac5b Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 19 Aug 2026 07:36:56 +0000
+Subject: [PATCH] Patch 0000053
+
+---
+ .../core/page/context_menu_controller.cc      | 75 ++++++++++++++++++-
+ .../core/page/context_menu_controller.h       |  5 ++
+ 2 files changed, 76 insertions(+), 4 deletions(-)
+
+diff --git a/third_party/blink/renderer/core/page/context_menu_controller.cc b/third_party/blink/renderer/core/page/context_menu_controller.cc
+index 48672107f71..869f47d0146 100644
+--- a/third_party/blink/renderer/core/page/context_menu_controller.cc
++++ b/third_party/blink/renderer/core/page/context_menu_controller.cc
+@@ -261,6 +261,42 @@ void ContextMenuController::CustomContextMenuItemSelected(unsigned action) {
+   ClearContextMenu();
+ }
+ 
++Node* ContextMenuController::GetPenetratingMediaNode() {
++  // Bare: upstream penetrates overlays only when looking for an image, and
++  // leaves a note about extending it ("Consider extending penetration to all
++  // media types"). This is that extension for media. A site that lays an empty
++  // transparent element over a <video> otherwise suppresses the whole media
++  // menu, not just Save.
++  //
++  // The image-selection UMA is deliberately not recorded here, since those
++  // histograms describe image selection specifically.
++  LocalFrame* top_hit_frame =
++      hit_test_result_.InnerNode()->GetDocument().GetFrame();
++
++  for (const auto& raw_node : hit_test_result_.ListBasedTestResult()) {
++    Node* node = raw_node.Get();
++
++    // Stay inside the frame that was actually hit.
++    if (top_hit_frame != node->GetDocument().GetFrame()) {
++      return nullptr;
++    }
++
++    if (IsA<HTMLMediaElement>(node)) {
++      return node;
++    }
++
++    // Anything genuinely opaque hides what is below it, so stop there. A
++    // transparent covering element does not, which is the case this exists for.
++    if (node->GetLayoutBox() != nullptr &&
++        node->GetLayoutBox()->BackgroundIsKnownToBeOpaqueInRect(
++            HitTestLocation::RectForPoint(
++                hit_test_result_.PointInInnerNodeFrame()))) {
++      return nullptr;
++    }
++  }
++  return nullptr;
++}
++
+ Node* ContextMenuController::GetContextMenuNodeWithImageContents() {
+   uint32_t outcome = 0;
+   uint32_t hit_test_depth = 0;
+@@ -331,9 +367,24 @@ Node* ContextMenuController::GetContextMenuNodeWithImageContents() {
+     }
+   }
+   // If there is anything preventing this image selection, return nullptr.
++  //
++  // Bare: a contextmenu listener somewhere up the tree is not treated as a
++  // blocker. Sites routinely register one on <body> or the document, together
++  // with an empty transparent element laid over the picture, for no reason
++  // other than to stop the browser offering to save an image the user is
++  // already looking at. A listener that genuinely drives the page's own menu
++  // calls preventDefault(), and then no browser menu is built at all and this
++  // code never runs. So by the time we get here the listener has not
++  // suppressed anything, and honouring it only removes options from a menu
++  // that is being shown regardless.
++  //
++  // The opaque and cross-frame blockers below are left alone: those describe
++  // an image the user genuinely cannot see, rather than one deliberately
++  // covered up.
+   uint32_t blocking_image_selection_mask =
+       ~(EnumToBitmask(ImageSelectionOutcome::kImageFoundStandard) |
+-        EnumToBitmask(ImageSelectionOutcome::kImageFoundPenetrating));
++        EnumToBitmask(ImageSelectionOutcome::kImageFoundPenetrating) |
++        EnumToBitmask(ImageSelectionOutcome::kFoundContextMenuListener));
+   if (outcome & blocking_image_selection_mask) {
+     return nullptr;
+   }
+@@ -555,15 +606,31 @@ bool ContextMenuController::ShowContextMenu(
+     }
+   }
+ 
++  // Bare: when nothing media-like was hit directly, look underneath for one.
++  // All of the checks below read from the topmost node, so an empty element
++  // laid over a video makes the entire media menu vanish.
++  HTMLMediaElement* covered_media_element = nullptr;
++  if (result.AbsoluteMediaURL().IsEmpty() &&
++      !result.GetMediaStreamDescriptor() && !result.GetMediaSourceHandle()) {
++    covered_media_element =
++        DynamicTo<HTMLMediaElement>(GetPenetratingMediaNode());
++  }
++
+   if (!result.AbsoluteMediaURL().IsEmpty() ||
+-      result.GetMediaStreamDescriptor() || result.GetMediaSourceHandle()) {
+-    if (!result.AbsoluteMediaURL().IsEmpty())
++      result.GetMediaStreamDescriptor() || result.GetMediaSourceHandle() ||
++      covered_media_element) {
++    if (!result.AbsoluteMediaURL().IsEmpty()) {
+       data.src_url = GURL(result.AbsoluteMediaURL());
++    } else if (covered_media_element) {
++      data.src_url = GURL(covered_media_element->currentSrc());
++    }
+ 
+     // We know that if absoluteMediaURL() is not empty or element has a media
+     // stream descriptor or element has a media source handle, then this is a
+     // media element.
+-    auto* media_element = To<HTMLMediaElement>(result.InnerNode());
++    auto* media_element = covered_media_element
++                              ? covered_media_element
++                              : To<HTMLMediaElement>(result.InnerNode());
+     if (IsA<HTMLVideoElement>(*media_element)) {
+       // A video element should be presented as an audio element when it has an
+       // audio track but no video track.
+diff --git a/third_party/blink/renderer/core/page/context_menu_controller.h b/third_party/blink/renderer/core/page/context_menu_controller.h
+index c5c79917195..2e7f0474002 100644
+--- a/third_party/blink/renderer/core/page/context_menu_controller.h
++++ b/third_party/blink/renderer/core/page/context_menu_controller.h
+@@ -133,6 +133,11 @@ class CORE_EXPORT ContextMenuController
+ 
+   Node* GetContextMenuNodeWithImageContents();
+ 
++  // Bare: the media equivalent of the above. Returns the first media element
++  // underneath the hit point, so a <video> covered by a transparent element is
++  // still offered a menu.
++  Node* GetPenetratingMediaNode();
++
+   HeapMojoAssociatedReceiver<mojom::blink::ContextMenuClient,
+                              ContextMenuController>
+       context_menu_client_receiver_{this, nullptr};

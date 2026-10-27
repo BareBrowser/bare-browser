@@ -1,0 +1,60 @@
+From 5ca351026eb25618c7062a7a7e48cef7ef260237 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Tue, 25 Aug 2026 00:55:41 +0000
+Subject: [PATCH] Patch 0000088
+
+---
+ .../ui/actions/ActionButtonBinder.java        | 26 ++++++++++++++++---
+ 1 file changed, 22 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionButtonBinder.java b/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionButtonBinder.java
+index b2907e932aa..78dc8384945 100644
+--- a/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionButtonBinder.java
++++ b/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionButtonBinder.java
+@@ -53,9 +53,15 @@ public class ActionButtonBinder {
+             targetView.setContentDescription(
+                     resolver != null ? resolver.resolve(view.getContext()) : "");
+         } else if (ActionProperties.TOOLTIP_TEXT_RESOLVER == propertyKey) {
+-            TextResolver resolver = model.get(ActionProperties.TOOLTIP_TEXT_RESOLVER);
+-            TooltipCompat.setTooltipText(
+-                    targetView, resolver != null ? resolver.resolve(view.getContext()) : null);
++            // De-Googled build: no tooltip on the bar buttons.
++            //
++            // A long press raised a label repeating what the icon already says, on a bar of
++            // five icons the user chose to have. Null rather than skipping the branch, so a
++            // tooltip set before this point is cleared when the model rebinds.
++            //
++            // The content description is bound separately above and is untouched, so screen
++            // readers still announce every button.
++            TooltipCompat.setTooltipText(targetView, null);
+         } else if (ActionProperties.IS_SELECTED == propertyKey) {
+             boolean selected = model.get(ActionProperties.IS_SELECTED);
+             targetView.setSelected(selected);
+@@ -64,6 +70,14 @@ public class ActionButtonBinder {
+             Callback<View> callback = model.get(ActionProperties.ON_PRESS_CALLBACK);
+             boolean hasPressCallback = callback != null;
+             targetView.setOnClickListener(hasPressCallback ? callback::onResult : null);
++            // Swallow a long press for buttons that have no action bound for one. Left alone
++            // the gesture fell through to the ordinary click on release, so holding New tab
++            // opened a tab and holding the incognito button switched mode. Buttons that do
++            // bind ON_LONG_PRESS_CALLBACK overwrite this with their own listener below.
++            if (!model.containsKey(ActionProperties.ON_LONG_PRESS_CALLBACK)
++                    || model.get(ActionProperties.ON_LONG_PRESS_CALLBACK) == null) {
++                targetView.setOnLongClickListener(v -> true);
++            }
+             @ButtonState
+             int buttonState =
+                     model.containsKey(ActionProperties.BUTTON_STATE)
+@@ -72,7 +86,11 @@ public class ActionButtonBinder {
+             ActionUtils.applyButtonState(targetView, buttonState, hasPressCallback);
+         } else if (ActionProperties.ON_LONG_PRESS_CALLBACK == propertyKey) {
+             Callback<View> callback = model.get(ActionProperties.ON_LONG_PRESS_CALLBACK);
+-            OnLongClickListener listener = null;
++            // Swallow the press when the button has nothing to do with one. Left null, the
++            // gesture fell through and fired the ordinary click on release, so holding New
++            // tab opened a tab and holding the incognito button switched mode, neither of
++            // which the user asked for. Buttons that do have a long press keep it.
++            OnLongClickListener listener = v -> true;
+             if (callback != null) {
+                 listener =
+                         v -> {

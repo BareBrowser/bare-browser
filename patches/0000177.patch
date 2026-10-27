@@ -1,0 +1,160 @@
+From ed62e8e84321e580c076ea140c72953e4bd38648 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 04:51:17 +0000
+Subject: [PATCH] Patch 0000177
+
+---
+ .../bare/translate/BarePageTranslator.java    | 60 ++++++++++++++++++-
+ .../browser/translate/TranslateUtils.java     |  9 +--
+ .../strings/android_chrome_strings.grd        | 17 +++++-
+ 3 files changed, 78 insertions(+), 8 deletions(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
+index f858a82a4b3..b950dea5fa1 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
+@@ -6,6 +6,9 @@ package org.chromium.chrome.browser.bare.translate;
+ 
+ import android.app.Activity;
+ import android.content.Context;
++import android.text.InputType;
++import android.widget.EditText;
++import android.widget.FrameLayout;
+ import android.widget.Toast;
+ 
+ import androidx.appcompat.app.AlertDialog;
+@@ -21,6 +24,7 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.bare.BareScriptBridge;
++import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.content_public.browser.WebContents;
+ 
+@@ -98,7 +102,7 @@ public final class BarePageTranslator {
+             return;
+         }
+         if (!BareTranslateSettings.isConfigured()) {
+-            Toast.makeText(activity, R.string.bare_translate_not_set_up, Toast.LENGTH_LONG).show();
++            showSetupDialog(activity, tab);
+             return;
+         }
+         if (BareTranslateSettings.hasConsent()) {
+@@ -119,6 +123,60 @@ public final class BarePageTranslator {
+                 .show();
+     }
+ 
++    /**
++     * Asks for the address of a translation server. This is what the menu item does until one is
++     * set, so that the feature can be found without knowing where its setting is.
++     */
++    private static void showSetupDialog(Activity activity, Tab tab) {
++        EditText field = new EditText(activity);
++        field.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
++        field.setSingleLine(true);
++        field.setHint(R.string.bare_translate_server_hint);
++        String existing = BareTranslateSettings.getEndpoint();
++        if (!existing.isEmpty()) field.setText(existing);
++        FrameLayout holder = new FrameLayout(activity);
++        int pad = (int) (20 * activity.getResources().getDisplayMetrics().density);
++        holder.setPadding(pad, pad / 2, pad, 0);
++        holder.addView(field);
++        AlertDialog dialog =
++                new AlertDialog.Builder(activity, R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                        .setTitle(R.string.bare_translate_setup_title)
++                        .setMessage(R.string.bare_translate_setup_message)
++                        .setView(holder)
++                        .setPositiveButton(R.string.bare_translate_setup_save, null)
++                        .setNeutralButton(R.string.bare_translate_setup_settings, null)
++                        .setNegativeButton(R.string.cancel, null)
++                        .create();
++        dialog.setOnShowListener(
++                d -> {
++                    // Set here so that a refused address leaves the dialog open.
++                    dialog.getButton(AlertDialog.BUTTON_POSITIVE)
++                            .setOnClickListener(
++                                    v -> {
++                                        String entered = field.getText().toString().trim();
++                                        if (!BareTranslateProtocol.isAllowedEndpoint(entered)) {
++                                            field.setError(
++                                                    activity.getString(
++                                                            R.string.bare_translate_setup_refused));
++                                            return;
++                                        }
++                                        BareTranslateSettings.setEndpoint(entered);
++                                        dialog.dismiss();
++                                        onMenuItemClicked(activity, tab);
++                                    });
++                    dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
++                            .setOnClickListener(
++                                    v -> {
++                                        dialog.dismiss();
++                                        SettingsNavigationFactory.createSettingsNavigation()
++                                                .startSettings(
++                                                        activity,
++                                                        BareTranslateSettingsFragment.class);
++                                    });
++                });
++        dialog.show();
++    }
++
+     private static void start(Context context, Tab tab) {
+         WebContents webContents = tab.getWebContents();
+         if (webContents == null) return;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java b/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
+index b3c00fb5b88..edaa32e3da5 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
+@@ -5,7 +5,6 @@
+ package org.chromium.chrome.browser.translate;
+ 
+ import org.chromium.build.annotations.NullMarked;
+-import org.chromium.chrome.browser.bare.translate.BareTranslateSettings;
+ import org.chromium.chrome.browser.tab.Tab;
+ 
+ /** Utility classes related to the translate feature. */
+@@ -28,10 +27,8 @@ public class TranslateUtils {
+      * @param menuLogging Whether logging should be performed in this check.
+      */
+     public static boolean canTranslateCurrentTab(Tab tab, boolean menuLogging) {
+-        // De-Googled build: the item shows when the user has pointed page translation at a server.
+-        // Google's own service needs an API key this build does not have.
+-        return !tab.isNativePage()
+-                && tab.getWebContents() != null
+-                && BareTranslateSettings.isConfigured();
++        // De-Googled build: the item always shows, so it can be found. Without a server it asks
++        // for one. Google's own service needs an API key this build does not have.
++        return !tab.isNativePage() && tab.getWebContents() != null;
+     }
+ }
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index dac980e32d8..9ba1064ca8a 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4394,7 +4394,22 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+         Translate pages
+       </message>
+       <message name="IDS_BARE_TRANSLATE_ABOUT" desc="Explains page translation: it sends page text to a server the user chooses.">
+-        Bare does not include a translation service. Enter the address of a LibreTranslate-compatible server, such as one you run yourself, and Translate appears in the menu. Translating sends the text of the page to that server, and nothing else.
++        Google Translate is not part of Bare: it needs access to Google that Bare does not have. Instead, enter the address of a LibreTranslate-compatible server, such as one you run yourself. Then Translate in the menu sends the text of the page to that server, and nothing else.
++      </message>
++      <message name="IDS_BARE_TRANSLATE_SETUP_TITLE" desc="Title of the dialog shown by the Translate menu item when no translation server is set. [CHAR_LIMIT=40]">
++        Set up page translation
++      </message>
++      <message name="IDS_BARE_TRANSLATE_SETUP_MESSAGE" desc="Dialog text: Google Translate is not available; page translation needs the address of a server the user chooses.">
++        Google Translate is not part of Bare. To translate pages, enter the address of a LibreTranslate-compatible server, such as one you run yourself. Translating sends the text of the page to that server.
++      </message>
++      <message name="IDS_BARE_TRANSLATE_SETUP_SAVE" desc="Button that saves the translation server address and translates the page. [CHAR_LIMIT=24]">
++        Save and translate
++      </message>
++      <message name="IDS_BARE_TRANSLATE_SETUP_SETTINGS" desc="Button that opens the translation settings screen. [CHAR_LIMIT=16]">
++        Settings
++      </message>
++      <message name="IDS_BARE_TRANSLATE_SETUP_REFUSED" desc="Error under the address field: only https or an address on a private network can be used.">
++        Use https, or an address on your own network
+       </message>
+       <message name="IDS_BARE_TRANSLATE_SERVER_TITLE" desc="Setting for the address of the translation server. [CHAR_LIMIT=32]">
+         Server address
+-- 
+2.34.1
+

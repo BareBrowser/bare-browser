@@ -1,0 +1,153 @@
+From e9fce57058ccc04b13fdcdfe38469770b8b455da Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Fri, 23 Oct 2026 01:40:57 +0000
+Subject: [PATCH] Patch 0000194
+
+---
+ .../BareToolbarPreviewPreference.java         | 17 +++--
+ chrome/android/junit/BUILD.gn                 |  1 +
+ .../BareToolbarPreviewPreferenceUnitTest.java | 71 +++++++++++++++++++
+ 3 files changed, 85 insertions(+), 4 deletions(-)
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreferenceUnitTest.java
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java
+index de29d4a22c6..d9c1c3c8944 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java
+@@ -19,6 +19,7 @@ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.ui.bottombar.BareToolbarLayout;
+ import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
++import org.chromium.components.browser_ui.widget.containment.ContainmentItem;
+ 
+ /**
+  * A picture of the toolbar, with the two positions the user can change made pressable.
+@@ -37,7 +38,7 @@ import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
+  * shows is which button is where.
+  */
+ @NullMarked
+-public class BareToolbarPreviewPreference extends Preference {
++public class BareToolbarPreviewPreference extends Preference implements ContainmentItem {
+ 
+     private @Nullable Callback<Integer> mOnSlotClicked;
+     private @Nullable View mRoot;
+@@ -48,6 +49,17 @@ public class BareToolbarPreviewPreference extends Preference {
+         setSelectable(false);
+     }
+ 
++    /**
++     * The picture draws its own rounded card, so the settings list must not put its white one
++     * behind it. The list restyles every row's background after the row is bound, so this is the
++     * only place it can be turned off; clearing the background in {@code onBindViewHolder} is
++     * undone straight away.
++     */
++    @Override
++    public @BackgroundStyle int getCustomBackgroundStyle() {
++        return BackgroundStyle.NONE;
++    }
++
+     /** Called with the slot the user pressed. */
+     public void setOnSlotClicked(Callback<Integer> callback) {
+         mOnSlotClicked = callback;
+@@ -61,9 +73,6 @@ public class BareToolbarPreviewPreference extends Preference {
+     @Override
+     public void onBindViewHolder(PreferenceViewHolder holder) {
+         super.onBindViewHolder(holder);
+-        // The picture draws its own rounded card, so the preference's square one would only show
+-        // as a rim around its corners.
+-        holder.itemView.setBackground(null);
+         mRoot = holder.itemView;
+         bind(holder.itemView);
+     }
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index fc342996ea2..ce45a6f2852 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -448,6 +448,7 @@ if (is_android) {
+       "src/org/chromium/chrome/browser/bare/BareWelcomeDownloadChoicesUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareWelcomeToolbarChoicesUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinderUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreferenceUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java",
+       "src/org/chromium/chrome/browser/BrowserExitReasonTrackerUnitTest.java",
+       "src/org/chromium/chrome/browser/ChromeActionModeHandlerUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreferenceUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreferenceUnitTest.java
+new file mode 100644
+index 00000000000..e64d8dabb8a
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreferenceUnitTest.java
+@@ -0,0 +1,71 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.settings;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertNotEquals;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertNull;
++
++import android.content.Context;
++import android.view.ContextThemeWrapper;
++import android.view.View;
++
++import androidx.preference.Preference;
++import androidx.test.core.app.ApplicationProvider;
++
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.R;
++import org.chromium.components.browser_ui.widget.containment.ContainerStyle;
++import org.chromium.components.browser_ui.widget.containment.ContainmentItem;
++import org.chromium.components.browser_ui.widget.containment.ContainmentItemController;
++import org.chromium.components.browser_ui.widget.containment.ContainmentViewStyler;
++
++import java.util.ArrayList;
++
++/**
++ * Unit tests for how the toolbar picture sits in the settings list.
++ *
++ * <p>The list restyles every row's background after the row is bound. The picture draws its own
++ * card, so the row has to ask for no background; otherwise the list's white card shows around it.
++ */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareToolbarPreviewPreferenceUnitTest {
++    private final Context mContext =
++            new ContextThemeWrapper(
++                    ApplicationProvider.getApplicationContext(), R.style.Theme_BrowserUI_DayNight);
++
++    @Test
++    public void testThePictureAsksTheListForNoBackground() {
++        BareToolbarPreviewPreference picture = new BareToolbarPreviewPreference(mContext, null);
++        assertEquals(
++                ContainmentItem.BackgroundStyle.NONE, picture.getCustomBackgroundStyle());
++    }
++
++    @Test
++    public void testTheListLeavesTheRowWithoutABackground() {
++        ArrayList<Preference> rows = new ArrayList<>();
++        rows.add(new BareToolbarPreviewPreference(mContext, null));
++        rows.add(new Preference(mContext));
++
++        ArrayList<ContainerStyle> styles =
++                new ContainmentItemController(mContext).generatePreferenceStyles(rows);
++
++        assertEquals(ContainerStyle.EMPTY, styles.get(0));
++        // An ordinary row next to it still gets the list's card.
++        assertNotEquals(ContainerStyle.EMPTY, styles.get(1));
++
++        View picture = new View(mContext);
++        ContainmentViewStyler.applyBackgroundStyle(picture, styles.get(0));
++        assertNull(picture.getBackground());
++
++        View ordinary = new View(mContext);
++        ContainmentViewStyler.applyBackgroundStyle(ordinary, styles.get(1));
++        assertNotNull(ordinary.getBackground());
++    }
++}
+-- 
+2.34.1
+

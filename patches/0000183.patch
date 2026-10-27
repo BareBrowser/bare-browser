@@ -1,0 +1,167 @@
+From 565ab3983b9e07b2aa37389b96882856be435772 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 05:47:47 +0000
+Subject: [PATCH] Patch 0000183
+
+---
+ .../java/res/xml/developer_preferences.xml        |  5 +++++
+ .../tracing/settings/DeveloperSettings.java       | 12 ++++++++++++
+ .../tracing/settings/UserAgentPresets.java        | 15 +++++++++++++++
+ .../browser/preferences/ChromePreferenceKeys.java |  6 ++++++
+ .../ui/android/strings/android_chrome_strings.grd |  6 ++++++
+ content/browser/web_contents/web_contents_impl.cc | 12 ++++++++++++
+ 6 files changed, 56 insertions(+)
+
+diff --git a/chrome/android/java/res/xml/developer_preferences.xml b/chrome/android/java/res/xml/developer_preferences.xml
+index 96f5bdda00b..5f1665d2bdd 100644
+--- a/chrome/android/java/res/xml/developer_preferences.xml
++++ b/chrome/android/java/res/xml/developer_preferences.xml
+@@ -15,6 +15,11 @@ found in the LICENSE file.
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
+         android:key="user_agent"
+         android:title="@string/bare_user_agent_title" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="user_agent_fit_phone"
++        android:persistent="false"
++        android:title="@string/bare_user_agent_fit_title"
++        android:summary="@string/bare_user_agent_fit_summary" />
+     <org.chromium.components.browser_ui.settings.TextMessagePreference
+         android:key="user_agent_note"
+         android:title="@string/bare_user_agent_note"
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/DeveloperSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/DeveloperSettings.java
+index c5b2dd38545..deb014d7d82 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/DeveloperSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/DeveloperSettings.java
+@@ -31,6 +31,7 @@ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
+ import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+ import org.chromium.components.browser_ui.settings.EmbeddableSettingsPage;
+ import org.chromium.components.browser_ui.settings.SettingsUtils;
+ import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
+@@ -41,6 +42,7 @@ public class DeveloperSettings extends ChromeBaseSettingsFragment
+         implements EmbeddableSettingsPage {
+     private static final String UI_PREF_BETA_STABLE_HINT = "beta_stable_hint";
+     private static final String UI_PREF_USER_AGENT = "user_agent";
++    private static final String UI_PREF_USER_AGENT_FIT = "user_agent_fit_phone";
+ 
+     // Non-translated strings:
+     private static final String MSG_DEVELOPER_OPTIONS_TITLE = "Developer options";
+@@ -86,6 +88,16 @@ public class DeveloperSettings extends ChromeBaseSettingsFragment
+                     });
+         }
+         updateUserAgentSummary();
++
++        ChromeSwitchPreference fit = findPreference(UI_PREF_USER_AGENT_FIT);
++        if (fit != null) {
++            fit.setChecked(UserAgentPresets.isFitPhoneSaved());
++            fit.setOnPreferenceChangeListener(
++                    (preference, newValue) -> {
++                        UserAgentPresets.saveFitPhone((boolean) newValue);
++                        return true;
++                    });
++        }
+     }
+ 
+     private String userAgentLabel(String id, String custom) {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/UserAgentPresets.java b/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/UserAgentPresets.java
+index d887ebb5a68..67a684dde1a 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/UserAgentPresets.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/UserAgentPresets.java
+@@ -25,6 +25,9 @@ public final class UserAgentPresets {
+ 
+     public static final String SWITCH_CUSTOM = "bare-user-agent-custom";
+ 
++    /** Read by content/browser/web_contents/web_contents_impl.cc under the same name. */
++    public static final String SWITCH_FIT_PHONE = "bare-user-agent-fit-phone";
++
+     static final String DEFAULT = "";
+     static final String CUSTOM = "custom";
+ 
+@@ -72,6 +75,18 @@ public final class UserAgentPresets {
+             commandLine.appendSwitchWithValue(SWITCH_CUSTOM, custom);
+         }
+         commandLine.appendSwitchWithValue(SWITCH_PRESET, id);
++        if (isFitPhoneSaved()) commandLine.appendSwitch(SWITCH_FIT_PHONE);
++    }
++
++    /** Whether the saved choice keeps pages to the phone's width. */
++    static boolean isFitPhoneSaved() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_USER_AGENT_FIT_PHONE, false);
++    }
++
++    static void saveFitPhone(boolean fit) {
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_USER_AGENT_FIT_PHONE, fit);
+     }
+ 
+     /** Whether this process runs with a user agent other than the default. */
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 3e1e6d9bdc5..34328460151 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -450,6 +450,11 @@ public final class ChromePreferenceKeys {
+     /** De-Googled build: the user agent string typed under Other in Developer options. */
+     public static final String BARE_USER_AGENT_CUSTOM = "Bare.UserAgent.Custom";
+ 
++    /**
++     * Whether a chosen user agent is kept to the phone's own width instead of the page's default
++     * wide viewport. Passed to native code as a switch at startup.
++     */
++    public static final String BARE_USER_AGENT_FIT_PHONE = "Bare.UserAgent.FitPhone";
+ 
+     /**
+      * Whether fullscreen video follows the phone's orientation (the default) instead of the
+@@ -1351,6 +1356,7 @@ public final class ChromePreferenceKeys {
+                 DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,
+                 DOWNLOAD_EXTERNAL_SEND_SIGN_IN,
+                 BARE_USER_AGENT_CUSTOM,
++                BARE_USER_AGENT_FIT_PHONE,
+                 BARE_MEDIA_FULLSCREEN_FOLLOWS_PHONE,
+                 BARE_USER_AGENT_PRESET,
+                 BARE_ADDRESS_BAR_SWIPE_TABS,
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 1947a7f31a2..aeff51f8b03 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4510,6 +4510,12 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_MEDIA_FULLSCREEN_ORIENTATION_SUMMARY" desc="Summary of the setting that stops pages from forcing landscape in fullscreen video.">
+         Fullscreen video turns only when the phone does, and respects your rotation lock. Turn this off to let a page switch to landscape itself.
+       </message>
++      <message name="IDS_BARE_USER_AGENT_FIT_TITLE" desc="Developer option: keep pages to the phone's width with the chosen user agent. [CHAR_LIMIT=48]">
++        Fit page to phone width
++      </message>
++      <message name="IDS_BARE_USER_AGENT_FIT_SUMMARY" desc="Summary: with a chosen user agent, lay pages out at the phone's width. Applies after a restart.">
++        Keeps the chosen user agent but lays pages out at the phone’s own width instead of a wide desktop-sized one. Applies after a restart.
++      </message>
+       <message name="IDS_BARE_MINIMAL_LAYOUT_USE_MINIMAL" desc="Address bar long press menu item that switches to the minimal toolbar. [CHAR_LIMIT=40]">
+         Use minimal toolbar
+       </message>
+diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
+index 3bdd2490dc5..b78f45a8fde 100644
+--- a/content/browser/web_contents/web_contents_impl.cc
++++ b/content/browser/web_contents/web_contents_impl.cc
+@@ -4102,6 +4102,18 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences(
+ #endif
+   }
+ 
++#if BUILDFLAG(IS_ANDROID)
++  // Bare: with a user agent chosen in Developer options, "Fit page to phone width" lays pages
++  // out at the phone's own width. Without it a page that has no viewport tag gets the wide
++  // default viewport. The user agent string is not touched.
++  if (command_line.HasSwitch("bare-user-agent-fit-phone")) {
++    // The default viewport style lays a page with no viewport tag out at the device width, which
++    // is how a tablet shows desktop pages; the mobile style gives it a wide one.
++    prefs.viewport_style = blink::mojom::ViewportStyle::kDefault;
++    prefs.viewport_meta_enabled = true;
++  }
++#endif
++
+   prefs.spatial_navigation_enabled =
+       command_line.HasSwitch(switches::kEnableSpatialNavigation);
+ 
+-- 
+2.34.1
+

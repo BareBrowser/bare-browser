@@ -1,0 +1,671 @@
+From f9b7e899a400d4f2ad3a386bf43470bb239dd405 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 06:53:17 +0000
+Subject: [PATCH] Patch 0000187
+
+---
+ chrome/android/chrome_java_resources.gni      |   2 +
+ chrome/android/chrome_java_sources.gni        |   2 +
+ .../res/layout/bare_welcome_page_security.xml |  85 +++++++++++
+ .../res/xml/bare_security_preferences.xml     |  43 ++++++
+ .../android/java/res/xml/main_preferences.xml |   5 +
+ .../values/channel_constants.xml              |  11 ++
+ .../browser/bare/BareSecurityChoices.java     |  76 ++++++++++
+ .../browser/bare/BareWelcomeOverlay.java      | 140 +++++++++++++++++-
+ .../BareSecuritySettingsFragment.java         |  81 ++++++++++
+ .../strings/android_chrome_strings.grd        |  30 ++++
+ 10 files changed, 472 insertions(+), 3 deletions(-)
+ create mode 100644 chrome/android/java/res/layout/bare_welcome_page_security.xml
+ create mode 100644 chrome/android/java/res/xml/bare_security_preferences.xml
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSecuritySettingsFragment.java
+
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index e9fc20c4f0e..04d2869700b 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -476,6 +476,7 @@ chrome_java_resources = [
+   "java/res/layout/bare_welcome_page_finish.xml",
+   "java/res/layout/bare_welcome_page_ready.xml",
+   "java/res/layout/bare_welcome_page_welcome.xml",
++  "java/res/layout/bare_welcome_page_security.xml",
+   "java/res/layout/bare_welcome_page_toolbar.xml",
+   "java/res/layout/bare_welcome_page_yours.xml",
+   "java/res/layout/bookmark_activity.xml",
+@@ -695,6 +696,7 @@ chrome_java_resources = [
+   "java/res/drawable/bare_menu_eye_off.xml",
+   "java/res/xml/bare_extensions_preferences.xml",
+   "java/res/xml/bare_push_preferences.xml",
++  "java/res/xml/bare_security_preferences.xml",
+   "java/res/xml/bare_translate_preferences.xml",
+   "java/res/xml/bare_toolbar_preferences.xml",
+   "java/res/xml/bookmark_bar_preferences.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 3f0a0dbd094..8a6d2537889 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -242,6 +242,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
+   "java/src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcher.java",
+   "java/src/org/chromium/chrome/browser/bare/BareMediaProbe.java",
++  "java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java",
+   "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
+   "java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java",
+@@ -249,6 +250,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/settings/BareClearOnExitSettings.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BarePushSettingsFragment.java",
++  "java/src/org/chromium/chrome/browser/bare/settings/BareSecuritySettingsFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java",
+   "java/src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocol.java",
+   "java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettings.java",
+diff --git a/chrome/android/java/res/layout/bare_welcome_page_security.xml b/chrome/android/java/res/layout/bare_welcome_page_security.xml
+new file mode 100644
+index 00000000000..5835dbc21e2
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_welcome_page_security.xml
+@@ -0,0 +1,85 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="match_parent"
++    android:fillViewport="true"
++    android:scrollbarStyle="outsideOverlay">
++
++    <LinearLayout
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:orientation="vertical"
++        android:paddingStart="20dp"
++        android:paddingTop="28dp"
++        android:paddingEnd="20dp"
++        android:paddingBottom="16dp">
++
++        <TextView
++            android:id="@+id/bare_page_title"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:paddingStart="4dp"
++            android:paddingEnd="4dp"
++            android:accessibilityHeading="true"
++            android:text="@string/bare_welcome_security_title"
++            android:textColor="@color/bare_welcome_title"
++            android:textSize="28sp"
++            android:fontFamily="sans-serif-medium" />
++
++        <TextView
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="10dp"
++            android:layout_marginBottom="24dp"
++            android:paddingStart="4dp"
++            android:paddingEnd="4dp"
++            android:text="@string/bare_welcome_security_intro"
++            android:textColor="@color/bare_welcome_body"
++            android:textSize="14sp"
++            android:lineSpacingMultiplier="1.2" />
++
++        <LinearLayout
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:orientation="vertical"
++            android:background="@drawable/bare_welcome_group_bg">
++
++            <include android:id="@+id/bare_row_https" layout="@layout/bare_welcome_option_row" />
++            <View
++                android:layout_width="match_parent"
++                android:layout_height="1dp"
++                android:layout_marginStart="56dp"
++                android:background="@color/bare_welcome_divider" />
++            <include android:id="@+id/bare_row_cookies" layout="@layout/bare_welcome_option_row" />
++            <View
++                android:layout_width="match_parent"
++                android:layout_height="1dp"
++                android:layout_marginStart="56dp"
++                android:background="@color/bare_welcome_divider" />
++            <include android:id="@+id/bare_row_webrtc" layout="@layout/bare_welcome_option_row" />
++            <View
++                android:layout_width="match_parent"
++                android:layout_height="1dp"
++                android:layout_marginStart="56dp"
++                android:background="@color/bare_welcome_divider" />
++            <include android:id="@+id/bare_row_hardened" layout="@layout/bare_welcome_option_row" />
++        </LinearLayout>
++
++        <TextView
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="16dp"
++            android:paddingStart="8dp"
++            android:paddingEnd="8dp"
++            android:text="@string/bare_welcome_security_note"
++            android:textColor="@color/bare_welcome_body"
++            android:textSize="12sp"
++            android:lineSpacingMultiplier="1.2" />
++    </LinearLayout>
++</ScrollView>
+diff --git a/chrome/android/java/res/xml/bare_security_preferences.xml b/chrome/android/java/res/xml/bare_security_preferences.xml
+new file mode 100644
+index 00000000000..4f78df0d34d
+--- /dev/null
++++ b/chrome/android/java/res/xml/bare_security_preferences.xml
+@@ -0,0 +1,43 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
++
++    <org.chromium.components.browser_ui.settings.TextMessagePreference
++        android:key="bare_security_about"
++        android:order="0"
++        android:summary="@string/bare_security_about" />
++
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_sec_https"
++        android:order="1"
++        android:persistent="false"
++        android:title="@string/bare_security_https_title"
++        android:summary="@string/bare_security_https_summary" />
++
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_sec_cookies"
++        android:order="2"
++        android:persistent="false"
++        android:title="@string/bare_security_cookies_title"
++        android:summary="@string/bare_security_cookies_summary" />
++
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_sec_webrtc"
++        android:order="3"
++        android:persistent="false"
++        android:title="@string/bare_security_webrtc_title"
++        android:summary="@string/bare_security_webrtc_summary" />
++
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_sec_hardened"
++        android:order="4"
++        android:persistent="false"
++        android:title="@string/bare_security_hardened_title"
++        android:summary="@string/bare_security_hardened_summary" />
++
++</PreferenceScreen>
+diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/java/res/xml/main_preferences.xml
+index 9392906b3ea..076eba6d0a6 100644
+--- a/chrome/android/java/res/xml/main_preferences.xml
++++ b/chrome/android/java/res/xml/main_preferences.xml
+@@ -96,6 +96,11 @@ found in the LICENSE file.
+         android:key="appearance"
+         android:order="23"
+         android:title="@string/appearance_settings" />
++    <Preference
++        android:fragment="org.chromium.chrome.browser.bare.settings.BareSecuritySettingsFragment"
++        android:key="bare_security"
++        android:order="23"
++        android:title="@string/bare_security_title" />
+     <Preference
+         android:fragment="org.chromium.chrome.browser.bare.settings.BarePushSettingsFragment"
+         android:key="bare_push"
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 58c66989eae..96dc3f97854 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -34,6 +34,17 @@ found in the LICENSE file.
+     <string name="bare_welcome_hint_address_swipe" translatable="false">Slide it left or right to switch tabs</string>
+     <string name="bare_welcome_opt_bar_swipe" translatable="false">Swipe the bottom bar</string>
+     <string name="bare_welcome_hint_bar_swipe" translatable="false">What a sideways drag along the bar does</string>
++    <string name="bare_welcome_security_title">Keep it safer</string>
++    <string name="bare_welcome_security_intro">Four choices that make the browser harder to attack or follow you. Each can be changed later in Settings, Security options.</string>
++    <string name="bare_welcome_opt_https">Secure connections</string>
++    <string name="bare_welcome_hint_https">Open pages over https and warn before a plain http page</string>
++    <string name="bare_welcome_opt_cookies">Block third-party cookies</string>
++    <string name="bare_welcome_hint_cookies">Other sites cannot set cookies while you visit one</string>
++    <string name="bare_welcome_opt_webrtc">Hide local network address</string>
++    <string name="bare_welcome_hint_webrtc">Sites cannot learn your phone’s address on your network</string>
++    <string name="bare_welcome_opt_hardened">Hardened JavaScript</string>
++    <string name="bare_welcome_hint_hardened">Safer against browser exploits, slower on heavy sites</string>
++    <string name="bare_welcome_security_note">None of these is a promise that sites cannot track you. Incognito can also lock its tabs behind your screen lock, in Settings, Privacy and security.</string>
+     <string name="bare_welcome_browsing_title" translatable="false">Your browsing, your way</string>
+     <string name="bare_welcome_browsing_intro" translatable="false">Choose how downloads, audio and notifications behave.</string>
+     <string name="bare_welcome_ready_title" translatable="false">Ready for everyday browsing</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java
+new file mode 100644
+index 00000000000..aca90e5154b
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java
+@@ -0,0 +1,76 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.preferences.Pref;
++import org.chromium.chrome.browser.profiles.Profile;
++import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge;
++import org.chromium.components.content_settings.ContentSettingsType;
++import org.chromium.components.content_settings.CookieControlsMode;
++import org.chromium.components.content_settings.PrefNames;
++import org.chromium.components.prefs.PrefService;
++import org.chromium.components.user_prefs.UserPrefs;
++
++/**
++ * The security choices Bare offers in one place, so that Settings and the welcome read and write
++ * the same preferences the same way. Each one is a setting Chromium already has; this only gives
++ * it a clear name and a single switch.
++ */
++@NullMarked
++public final class BareSecurityChoices {
++    /** The value the web RTC policy takes when local addresses are hidden from sites. */
++    static final String WEBRTC_PUBLIC_ONLY = "default_public_interface_only";
++
++    static final String WEBRTC_DEFAULT = "default";
++
++    private BareSecurityChoices() {}
++
++    /** Upgrade pages to https and warn before opening a plain http one. */
++    public static boolean isSecureConnections(Profile profile) {
++        return UserPrefs.get(profile).getBoolean(Pref.HTTPS_ONLY_MODE_ENABLED);
++    }
++
++    public static void setSecureConnections(Profile profile, boolean on) {
++        UserPrefs.get(profile).setBoolean(Pref.HTTPS_ONLY_MODE_ENABLED, on);
++    }
++
++    /** Block cookies set by sites other than the one being visited, in every tab. */
++    public static boolean isBlockThirdPartyCookies(Profile profile) {
++        return UserPrefs.get(profile).getInteger(PrefNames.COOKIE_CONTROLS_MODE)
++                == CookieControlsMode.BLOCK_THIRD_PARTY;
++    }
++
++    public static void setBlockThirdPartyCookies(Profile profile, boolean on) {
++        // Off goes back to Chromium's own default, which blocks them in Incognito only.
++        UserPrefs.get(profile)
++                .setInteger(
++                        PrefNames.COOKIE_CONTROLS_MODE,
++                        on ? CookieControlsMode.BLOCK_THIRD_PARTY : CookieControlsMode.INCOGNITO_ONLY);
++    }
++
++    /** Run JavaScript without the optimizing compiler, for every site. */
++    public static boolean isHardenedJavaScript(Profile profile) {
++        return !WebsitePreferenceBridge.isContentSettingEnabled(
++                profile, ContentSettingsType.JAVASCRIPT_OPTIMIZER);
++    }
++
++    public static void setHardenedJavaScript(Profile profile, boolean on) {
++        WebsitePreferenceBridge.setContentSettingEnabled(
++                profile, ContentSettingsType.JAVASCRIPT_OPTIMIZER, !on);
++    }
++
++    /** Keep a page from learning the phone's local network address through WebRTC. */
++    public static boolean isHideLocalAddress(Profile profile) {
++        PrefService prefs = UserPrefs.get(profile);
++        return !WEBRTC_DEFAULT.equals(prefs.getString(Pref.WEB_RTCIP_HANDLING_POLICY));
++    }
++
++    public static void setHideLocalAddress(Profile profile, boolean on) {
++        UserPrefs.get(profile)
++                .setString(
++                        Pref.WEB_RTCIP_HANDLING_POLICY, on ? WEBRTC_PUBLIC_ONLY : WEBRTC_DEFAULT);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+index 288c616c793..f1e16b44b89 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+@@ -139,13 +139,16 @@ public class BareWelcomeOverlay {
+     private static final String KEY_DRAFT_BUTTONS_TOUCHED = "draft_buttons_touched";
+     private static final String KEY_DRAFT_ADDRESS_SWIPE = "draft_address_swipe";
+     private static final String KEY_DRAFT_BAR_SWIPE = "draft_bar_swipe";
++    private static final String KEY_DRAFT_SECURITY = "draft_security";
++    private static final String KEY_DRAFT_SECURITY_TOUCHED = "draft_security_touched";
+ 
+     private static final int PAGE_WELCOME = 0;
+     private static final int PAGE_TOOLBAR = 2;
+     private static final int PAGE_BROWSING = 3;
+-    private static final int PAGE_READY = 4;
+-    private static final int PAGE_FINISH = 5;
+-    private static final int PAGE_COUNT = 6;
++    private static final int PAGE_SECURITY = 4;
++    private static final int PAGE_READY = 5;
++    private static final int PAGE_FINISH = 6;
++    private static final int PAGE_COUNT = 7;
+ 
+     private static final long SLIDE_MS = 380;
+     private static final long LOGO_IN_MS = 650;
+@@ -233,6 +236,15 @@ public class BareWelcomeOverlay {
+         // flag is set, so a value that was never read cannot replace what the user already chose.
+         boolean engineKnown;
+         boolean backgroundMediaKnown;
++
++        // The security page. Each is written on Start only once the user has touched it or, on a
++        // first showing, always; a review writes only what the user changed, so a setting the
++        // user already had is not replaced by a default they were never shown.
++        boolean secureConnections = true;
++        boolean blockThirdPartyCookies = true;
++        boolean hideLocalAddress = true;
++        boolean hardenedJavaScript;
++        int securityTouched;
+     }
+ 
+     /** Reports which entry of a chooser was picked. */
+@@ -272,6 +284,7 @@ public class BareWelcomeOverlay {
+ 
+         private @Nullable TextView mEngineValue;
+         private @Nullable MaterialSwitch mBackgroundSwitch;
++        private final MaterialSwitch[] mSecuritySwitches = new MaterialSwitch[4];
+         private @Nullable View mDefaultRow;
+         private @Nullable View mNotificationsRow;
+         private @Nullable OnBackPressedCallback mBackCallback;
+@@ -310,6 +323,7 @@ public class BareWelcomeOverlay {
+                 R.layout.bare_welcome_page_yours,
+                 R.layout.bare_welcome_page_toolbar,
+                 R.layout.bare_welcome_page_browsing,
++                R.layout.bare_welcome_page_security,
+                 R.layout.bare_welcome_page_ready,
+                 R.layout.bare_welcome_page_finish,
+             };
+@@ -349,6 +363,7 @@ public class BareWelcomeOverlay {
+             buildYoursPage(mPages[1]);
+             buildToolbarPage(mPages[PAGE_TOOLBAR]);
+             buildBrowsingPage(mPages[PAGE_BROWSING]);
++            buildSecurityPage(mPages[PAGE_SECURITY]);
+             buildReadyPage(mPages[PAGE_READY]);
+             buildFinishPage(mPages[PAGE_FINISH]);
+ 
+@@ -884,6 +899,92 @@ public class BareWelcomeOverlay {
+         // ---------------------------------------------------------------------------------------
+         // Page 4: external downloads, background media, notifications.
+ 
++        // ---------------------------------------------------------------------------------------
++        // The security page: four switches over settings Chromium already has.
++
++        private void buildSecurityPage(View page) {
++            securityRow(
++                    0,
++                    page.findViewById(R.id.bare_row_https),
++                    R.drawable.ic_lock_24dp,
++                    R.string.bare_welcome_opt_https,
++                    R.string.bare_welcome_hint_https,
++                    mChoices.secureConnections,
++                    on -> mChoices.secureConnections = on);
++            securityRow(
++                    1,
++                    page.findViewById(R.id.bare_row_cookies),
++                    R.drawable.ic_block,
++                    R.string.bare_welcome_opt_cookies,
++                    R.string.bare_welcome_hint_cookies,
++                    mChoices.blockThirdPartyCookies,
++                    on -> mChoices.blockThirdPartyCookies = on);
++            securityRow(
++                    2,
++                    page.findViewById(R.id.bare_row_webrtc),
++                    R.drawable.ic_visibility_off_black,
++                    R.string.bare_welcome_opt_webrtc,
++                    R.string.bare_welcome_hint_webrtc,
++                    mChoices.hideLocalAddress,
++                    on -> mChoices.hideLocalAddress = on);
++            securityRow(
++                    3,
++                    page.findViewById(R.id.bare_row_hardened),
++                    R.drawable.ic_shield_24dp,
++                    R.string.bare_welcome_opt_hardened,
++                    R.string.bare_welcome_hint_hardened,
++                    mChoices.hardenedJavaScript,
++                    on -> mChoices.hardenedJavaScript = on);
++
++            // On a review the rows show what the profile holds, since a switch that showed a
++            // default would say something false about a setting the user may have changed.
++            if (mChoices.reviewing) {
++                whenProfileReady(
++                        profile -> {
++                            if ((mChoices.securityTouched & 1) == 0) {
++                                mChoices.secureConnections =
++                                        BareSecurityChoices.isSecureConnections(profile);
++                                mSecuritySwitches[0].setChecked(mChoices.secureConnections);
++                            }
++                            if ((mChoices.securityTouched & 2) == 0) {
++                                mChoices.blockThirdPartyCookies =
++                                        BareSecurityChoices.isBlockThirdPartyCookies(profile);
++                                mSecuritySwitches[1].setChecked(mChoices.blockThirdPartyCookies);
++                            }
++                            if ((mChoices.securityTouched & 4) == 0) {
++                                mChoices.hideLocalAddress =
++                                        BareSecurityChoices.isHideLocalAddress(profile);
++                                mSecuritySwitches[2].setChecked(mChoices.hideLocalAddress);
++                            }
++                            if ((mChoices.securityTouched & 8) == 0) {
++                                mChoices.hardenedJavaScript =
++                                        BareSecurityChoices.isHardenedJavaScript(profile);
++                                mSecuritySwitches[3].setChecked(mChoices.hardenedJavaScript);
++                            }
++                        });
++            }
++        }
++
++        private void securityRow(
++                int index,
++                View row,
++                int iconRes,
++                int labelRes,
++                int hintRes,
++                boolean initial,
++                Callback<Boolean> set) {
++            setUpRow(row, iconRes, labelRes, hintRes);
++            mSecuritySwitches[index] =
++                    switchRow(
++                            row,
++                            initial,
++                            on -> {
++                                set.onResult(on);
++                                mChoices.securityTouched |= 1 << index;
++                                saveDraft();
++                            });
++        }
++
+         private void buildBrowsingPage(View page) {
+             View downloads = page.findViewById(R.id.bare_row_downloads);
+             setUpRow(
+@@ -1651,6 +1752,13 @@ public class BareWelcomeOverlay {
+                     .putBoolean(KEY_DRAFT_BUTTONS_TOUCHED, mChoices.buttonsTouched)
+                     .putBoolean(KEY_DRAFT_ADDRESS_SWIPE, mChoices.addressBarSwipe)
+                     .putInt(KEY_DRAFT_BAR_SWIPE, mChoices.barSwipe)
++                    .putInt(
++                            KEY_DRAFT_SECURITY,
++                            (mChoices.secureConnections ? 1 : 0)
++                                    | (mChoices.blockThirdPartyCookies ? 2 : 0)
++                                    | (mChoices.hideLocalAddress ? 4 : 0)
++                                    | (mChoices.hardenedJavaScript ? 8 : 0))
++                    .putInt(KEY_DRAFT_SECURITY_TOUCHED, mChoices.securityTouched)
+                     .apply();
+         }
+ 
+@@ -1683,6 +1791,14 @@ public class BareWelcomeOverlay {
+         choices.addressBarSwipe =
+                 prefs.getBoolean(KEY_DRAFT_ADDRESS_SWIPE, choices.addressBarSwipe);
+         choices.barSwipe = prefs.getInt(KEY_DRAFT_BAR_SWIPE, choices.barSwipe);
++        if (prefs.contains(KEY_DRAFT_SECURITY)) {
++            int security = prefs.getInt(KEY_DRAFT_SECURITY, 0);
++            choices.secureConnections = (security & 1) != 0;
++            choices.blockThirdPartyCookies = (security & 2) != 0;
++            choices.hideLocalAddress = (security & 4) != 0;
++            choices.hardenedJavaScript = (security & 8) != 0;
++            choices.securityTouched = prefs.getInt(KEY_DRAFT_SECURITY_TOUCHED, 0);
++        }
+         int page = prefs.getInt(KEY_DRAFT_PAGE, PAGE_WELCOME);
+         return Math.max(PAGE_WELCOME, Math.min(page, PAGE_FINISH));
+     }
+@@ -1693,6 +1809,8 @@ public class BareWelcomeOverlay {
+                 .remove(KEY_DRAFT_PAGE)
+                 .remove(KEY_DRAFT_ENGINE)
+                 .remove(KEY_DRAFT_ENGINE_KNOWN)
++                .remove(KEY_DRAFT_SECURITY)
++                .remove(KEY_DRAFT_SECURITY_TOUCHED)
+                 .remove(KEY_DRAFT_AD_BLOCKER)
+                 .remove(KEY_DRAFT_ADDRESS_BAR_TOP)
+                 .remove(KEY_DRAFT_EXTERNAL_DOWNLOADS)
+@@ -1840,6 +1958,22 @@ public class BareWelcomeOverlay {
+                     if (!choices.reviewing || choices.backgroundMediaKnown) {
+                         prefs.setBoolean(Pref.BACKGROUND_MEDIA_PLAYBACK, choices.backgroundMedia);
+                     }
++                    // A first showing writes all four; a review only what was touched.
++                    int touched = choices.reviewing ? choices.securityTouched : 0xf;
++                    if ((touched & 1) != 0) {
++                        BareSecurityChoices.setSecureConnections(profile, choices.secureConnections);
++                    }
++                    if ((touched & 2) != 0) {
++                        BareSecurityChoices.setBlockThirdPartyCookies(
++                                profile, choices.blockThirdPartyCookies);
++                    }
++                    if ((touched & 4) != 0) {
++                        BareSecurityChoices.setHideLocalAddress(profile, choices.hideLocalAddress);
++                    }
++                    if ((touched & 8) != 0) {
++                        BareSecurityChoices.setHardenedJavaScript(
++                                profile, choices.hardenedJavaScript);
++                    }
+                     if (choices.reviewing && !choices.engineKnown) return;
+                     whenTemplateUrlServiceLoaded(
+                             service -> service.setSearchEngine(choices.engineKeyword));
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSecuritySettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSecuritySettingsFragment.java
+new file mode 100644
+index 00000000000..2c5092ba3e0
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSecuritySettingsFragment.java
+@@ -0,0 +1,81 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.settings;
++
++import android.content.Context;
++import android.os.Bundle;
++
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.BareSecurityChoices;
++import org.chromium.chrome.browser.profiles.Profile;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
++import org.chromium.components.browser_ui.settings.SettingsUtils;
++
++import java.util.function.BiConsumer;
++import java.util.function.Function;
++
++/** Settings for the browser's security choices, each a switch over a setting Chromium has. */
++@NullMarked
++public class BareSecuritySettingsFragment extends ChromeBaseSettingsFragment {
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++            ObservableSuppliers.createMonotonic();
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        mPageTitle.set(getTitle(getContext()));
++        SettingsUtils.addPreferencesFromResource(this, R.xml.bare_security_preferences);
++        Profile profile = getProfile();
++        bind("bare_sec_https", profile, BareSecurityChoices::isSecureConnections,
++                BareSecurityChoices::setSecureConnections);
++        bind("bare_sec_cookies", profile, BareSecurityChoices::isBlockThirdPartyCookies,
++                BareSecurityChoices::setBlockThirdPartyCookies);
++        bind("bare_sec_webrtc", profile, BareSecurityChoices::isHideLocalAddress,
++                BareSecurityChoices::setHideLocalAddress);
++        bind("bare_sec_hardened", profile, BareSecurityChoices::isHardenedJavaScript,
++                BareSecurityChoices::setHardenedJavaScript);
++    }
++
++    private void bind(
++            String key,
++            Profile profile,
++            Function<Profile, Boolean> read,
++            SetChoice write) {
++        ChromeSwitchPreference preference = findPreference(key);
++        assert preference != null;
++        preference.setChecked(read.apply(profile));
++        preference.setOnPreferenceChangeListener(
++                (p, newValue) -> {
++                    write.accept(profile, (boolean) newValue);
++                    return true;
++                });
++    }
++
++    private interface SetChoice extends BiConsumer<Profile, Boolean> {}
++
++    @Override
++    public MonotonicObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    public static String getTitle(Context context) {
++        return context.getString(R.string.bare_security_title);
++    }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++
++    @Override
++    public @Nullable String getMainMenuKey() {
++        return "bare_security";
++    }
++}
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index cd156cffd75..4a0f4cfa047 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4504,6 +4504,36 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_MENU_HIDDEN_HEADING" desc="Heading in edit mode above the menu items that are currently hidden. [CHAR_LIMIT=24]">
+         Hidden
+       </message>
++      <message name="IDS_BARE_SECURITY_TITLE" desc="Title of the settings screen for security choices. [CHAR_LIMIT=32]">
++        Security options
++      </message>
++      <message name="IDS_BARE_SECURITY_ABOUT" desc="Explains the security options screen: each is a setting the browser already has, with a plain name.">
++        Each switch here changes a setting the browser already has, so the same choice is also in the settings it came from. None of them is a promise that sites cannot track you.
++      </message>
++      <message name="IDS_BARE_SECURITY_HTTPS_TITLE" desc="Security option: use https for every site. [CHAR_LIMIT=48]">
++        Secure connections only
++      </message>
++      <message name="IDS_BARE_SECURITY_HTTPS_SUMMARY" desc="Summary of the security option that upgrades pages to https and warns before a plain http page.">
++        Opens pages over https and warns before loading one that only offers plain http. Addresses on your own network are left alone.
++      </message>
++      <message name="IDS_BARE_SECURITY_COOKIES_TITLE" desc="Security option: block third-party cookies. [CHAR_LIMIT=48]">
++        Block third-party cookies
++      </message>
++      <message name="IDS_BARE_SECURITY_COOKIES_SUMMARY" desc="Summary of the security option that blocks cookies from sites other than the one you are on, in every tab.">
++        Stops other sites from setting cookies while you visit one, in every tab and not only in Incognito. Some embedded content and sign-in flows can break.
++      </message>
++      <message name="IDS_BARE_SECURITY_WEBRTC_TITLE" desc="Security option: keep the local network address away from sites. [CHAR_LIMIT=48]">
++        Hide local network address
++      </message>
++      <message name="IDS_BARE_SECURITY_WEBRTC_SUMMARY" desc="Summary of the security option that stops WebRTC from showing the phone's local address to sites.">
++        Stops sites from learning your phone’s address on your local network through calls and video chat. Calls still work.
++      </message>
++      <message name="IDS_BARE_SECURITY_HARDENED_TITLE" desc="Security option: run JavaScript without the optimizing compiler. [CHAR_LIMIT=48]">
++        Hardened JavaScript
++      </message>
++      <message name="IDS_BARE_SECURITY_HARDENED_SUMMARY" desc="Summary of the security option that turns off the JavaScript optimizer.">
++        Turns off the JavaScript optimizer for every site. A whole class of browser exploits depends on it, at the cost of slower pages and heavier sites. You can allow it for a site in Site settings.
++      </message>
+       <message name="IDS_BARE_CRX_OFFER_TITLE" desc="Title of the dialog offered when an extension file has finished downloading. [CHAR_LIMIT=40]">
+         Install this extension?
+       </message>
+-- 
+2.34.1
+

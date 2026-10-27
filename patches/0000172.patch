@@ -1,0 +1,609 @@
+From 1a2ddd19ddcf6bf84a13f5d0a9749ff0e0d2e6ff Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 21 Oct 2026 23:44:18 +0000
+Subject: [PATCH] Patch 0000172
+
+---
+ .../res/xml/bare_extensions_preferences.xml   |   7 +-
+ .../BareExtensionsSettingsFragment.java       |  34 ++++
+ chrome/android/junit/BUILD.gn                 |   1 +
+ .../BareExtensionPresentationUnitTest.java    |  56 ++++++
+ .../preferences/ChromePreferenceKeys.java     |   7 +
+ chrome/browser/ui/android/extensions/BUILD.gn |   2 +
+ .../extension_action_popup_contents.cc        |   4 +
+ .../extensions/BareExtensionPresentation.java |  48 +++++
+ .../ExtensionActionPopupContents.java         |   9 +
+ .../strings/android_chrome_strings.grd        |  12 ++
+ .../extensions/ExtensionActionPopup.java      | 179 +++++++++++++++---
+ 11 files changed, 336 insertions(+), 23 deletions(-)
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/BareExtensionPresentationUnitTest.java
+ create mode 100644 chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/BareExtensionPresentation.java
+
+diff --git a/chrome/android/java/res/xml/bare_extensions_preferences.xml b/chrome/android/java/res/xml/bare_extensions_preferences.xml
+index 830c8280202..31b0e2c30f1 100644
+--- a/chrome/android/java/res/xml/bare_extensions_preferences.xml
++++ b/chrome/android/java/res/xml/bare_extensions_preferences.xml
+@@ -7,9 +7,14 @@ found in the LICENSE file.
+ 
+ <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+ 
++    <ListPreference
++        android:key="bare_extension_presentation"
++        android:order="0"
++        android:title="@string/bare_extensions_open_title" />
++
+     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+         android:key="bare_keep_extensions_running"
+-        android:order="0"
++        android:order="1"
+         android:persistent="false"
+         android:title="@string/bare_keep_extensions_title"
+         android:summary="@string/bare_keep_extensions_summary" />
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java
+index efaf9ed7b91..0cfe6ecd39d 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java
+@@ -7,6 +7,8 @@ package org.chromium.chrome.browser.bare.settings;
+ import android.content.Context;
+ import android.os.Bundle;
+ 
++import androidx.preference.ListPreference;
++
+ import org.chromium.base.supplier.MonotonicObservableSupplier;
+ import org.chromium.base.supplier.ObservableSuppliers;
+ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+@@ -15,6 +17,7 @@ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.preferences.Pref;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.chrome.browser.ui.extensions.BareExtensionPresentation;
+ import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+ import org.chromium.components.browser_ui.settings.SettingsUtils;
+ import org.chromium.components.user_prefs.UserPrefs;
+@@ -24,6 +27,7 @@ import org.chromium.components.user_prefs.UserPrefs;
+ public class BareExtensionsSettingsFragment extends ChromeBaseSettingsFragment {
+ 
+     public static final String PREF_KEEP_RUNNING = "bare_keep_extensions_running";
++    public static final String PREF_PRESENTATION = "bare_extension_presentation";
+ 
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+             ObservableSuppliers.createMonotonic();
+@@ -33,6 +37,29 @@ public class BareExtensionsSettingsFragment extends ChromeBaseSettingsFragment {
+         mPageTitle.set(getTitle(getContext()));
+         SettingsUtils.addPreferencesFromResource(this, R.xml.bare_extensions_preferences);
+ 
++        ListPreference presentation = findPreference(PREF_PRESENTATION);
++        assert presentation != null;
++        presentation.setPersistent(false);
++        presentation.setEntries(
++                new CharSequence[] {
++                    getString(R.string.bare_extensions_open_popup),
++                    getString(R.string.bare_extensions_open_full_screen),
++                });
++        presentation.setEntryValues(
++                new CharSequence[] {
++                    String.valueOf(BareExtensionPresentation.POPUP),
++                    String.valueOf(BareExtensionPresentation.FULL_SCREEN),
++                });
++        presentation.setValue(String.valueOf(BareExtensionPresentation.get()));
++        presentation.setSummary(presentationLabel(BareExtensionPresentation.get()));
++        presentation.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    int chosen = Integer.parseInt((String) newValue);
++                    BareExtensionPresentation.set(chosen);
++                    preference.setSummary(presentationLabel(chosen));
++                    return true;
++                });
++
+         ChromeSwitchPreference keepRunning = findPreference(PREF_KEEP_RUNNING);
+         assert keepRunning != null;
+         keepRunning.setChecked(
+@@ -45,6 +72,13 @@ public class BareExtensionsSettingsFragment extends ChromeBaseSettingsFragment {
+                 });
+     }
+ 
++    private String presentationLabel(int presentation) {
++        return getString(
++                presentation == BareExtensionPresentation.FULL_SCREEN
++                        ? R.string.bare_extensions_open_full_screen
++                        : R.string.bare_extensions_open_popup);
++    }
++
+     @Override
+     public MonotonicObservableSupplier<String> getPageTitle() {
+         return mPageTitle;
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index 771d0b398c7..64aaf6185bf 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -433,6 +433,7 @@ if (is_android) {
+       "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarAppMenuUpdateBadgeControllerUnitTest.java",
+       "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinatorUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapterUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/BareExtensionPresentationUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareExtensionPresentationUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareExtensionPresentationUnitTest.java
+new file mode 100644
+index 00000000000..68ede105d96
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareExtensionPresentationUnitTest.java
+@@ -0,0 +1,56 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.After;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.ui.extensions.BareExtensionPresentation;
++
++/** Unit tests for {@link BareExtensionPresentation}. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareExtensionPresentationUnitTest {
++    @After
++    public void tearDown() {
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.BARE_EXTENSION_PRESENTATION);
++    }
++
++    @Test
++    public void testTheStoredNothingIsThePopup() {
++        assertEquals(BareExtensionPresentation.POPUP, BareExtensionPresentation.get());
++        assertFalse(BareExtensionPresentation.isFullScreen());
++    }
++
++    @Test
++    public void testFullScreenIsRemembered() {
++        BareExtensionPresentation.set(BareExtensionPresentation.FULL_SCREEN);
++        assertTrue(BareExtensionPresentation.isFullScreen());
++    }
++
++    @Test
++    public void testChoosingThePopupForgetsTheKey() {
++        BareExtensionPresentation.set(BareExtensionPresentation.FULL_SCREEN);
++        BareExtensionPresentation.set(BareExtensionPresentation.POPUP);
++        assertFalse(
++                ChromeSharedPreferences.getInstance()
++                        .contains(ChromePreferenceKeys.BARE_EXTENSION_PRESENTATION));
++    }
++
++    @Test
++    public void testAValueThisBuildDoesNotOfferIsThePopup() {
++        ChromeSharedPreferences.getInstance()
++                .writeInt(ChromePreferenceKeys.BARE_EXTENSION_PRESENTATION, 7);
++        assertFalse(BareExtensionPresentation.isFullScreen());
++    }
++}
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 8c610c885cb..3fee108063a 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -411,6 +411,12 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_ADDRESS_BAR_SWIPE_TABS = "Bare.Toolbar.AddressBarSwipeTabs";
+ 
++    /**
++     * De-Googled build: how an extension's own interface opens. 0 or absent is the popup under its
++     * toolbar button, 1 is a full-screen view with a close button.
++     */
++    public static final String BARE_EXTENSION_PRESENTATION = "Bare.Extensions.Presentation";
++
+     /**
+      * De-Googled build: the minimal layout, which leaves out the bottom bar so the address bar is
+      * the only strip of controls. Read once when the process starts, so a change applies after a
+@@ -1322,6 +1328,7 @@ public final class ChromePreferenceKeys {
+                 BARE_USER_AGENT_CUSTOM,
+                 BARE_USER_AGENT_PRESET,
+                 BARE_ADDRESS_BAR_SWIPE_TABS,
++                BARE_EXTENSION_PRESENTATION,
+                 BARE_MINIMAL_LAYOUT,
+                 BARE_AMOLED_WHEN_SYSTEM_DARK,
+                 WEBSTORE_DESKTOP_SITE_CLEARED,
+diff --git a/chrome/browser/ui/android/extensions/BUILD.gn b/chrome/browser/ui/android/extensions/BUILD.gn
+index 9df3612a0ba..a983eec6472 100644
+--- a/chrome/browser/ui/android/extensions/BUILD.gn
++++ b/chrome/browser/ui/android/extensions/BUILD.gn
+@@ -107,6 +107,7 @@ android_library("java") {
+     deps += [
+       ":java_resources",
+       "//chrome/browser/flags:java",
++      "//chrome/browser/preferences:java",
+       "//components/browser_ui/modaldialog/android:java",
+       "//components/browser_ui/settings/android:java",
+       "//components/browser_ui/site_settings/android:java",
+@@ -119,6 +120,7 @@ android_library("java") {
+       "//ui/android:ui_utils_java",
+     ]
+     sources += [
++      "java/src/org/chromium/chrome/browser/ui/extensions/BareExtensionPresentation.java",
+       "java/src/org/chromium/chrome/browser/ui/extensions/ExtensionAction.java",
+       "java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionContextMenuBridge.java",
+       "java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java",
+diff --git a/chrome/browser/ui/android/extensions/extension_action_popup_contents.cc b/chrome/browser/ui/android/extensions/extension_action_popup_contents.cc
+index f04766838b3..b3ebe7747c5 100644
+--- a/chrome/browser/ui/android/extensions/extension_action_popup_contents.cc
++++ b/chrome/browser/ui/android/extensions/extension_action_popup_contents.cc
+@@ -142,6 +142,10 @@ void ExtensionActionPopupContents::LoadInitialPage(JNIEnv* env) {
+ 
+ void ExtensionActionPopupContents::SetUpNewMainFrame(
+     RenderFrameHost* render_frame_host) {
++  // A popup that fills the screen is sized by its view, not by its page.
++  if (Java_ExtensionActionPopupContents_usesFullScreen(AttachCurrentThread())) {
++    return;
++  }
+   render_frame_host->GetView()->EnableAutoResize(kMinSize, kMaxSize);
+ }
+ 
+diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/BareExtensionPresentation.java b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/BareExtensionPresentation.java
+new file mode 100644
+index 00000000000..98b7ff9f652
+--- /dev/null
++++ b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/BareExtensionPresentation.java
+@@ -0,0 +1,48 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.ui.extensions;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++/**
++ * How an extension's own interface opens: the popup under its button, or a view that fills the
++ * screen with a close button.
++ *
++ * <p>The popup is what Chromium does and what every install had, so it is what nothing stored
++ * means.
++ */
++@NullMarked
++public final class BareExtensionPresentation {
++    /** The popup under the extension's button. */
++    public static final int POPUP = 0;
++
++    /** A clean view over the page, with a close button. */
++    public static final int FULL_SCREEN = 1;
++
++    private BareExtensionPresentation() {}
++
++    public static int get() {
++        int stored =
++                ChromeSharedPreferences.getInstance()
++                        .readInt(ChromePreferenceKeys.BARE_EXTENSION_PRESENTATION, POPUP);
++        return stored == FULL_SCREEN ? FULL_SCREEN : POPUP;
++    }
++
++    public static void set(int presentation) {
++        if (presentation == FULL_SCREEN) {
++            ChromeSharedPreferences.getInstance()
++                    .writeInt(ChromePreferenceKeys.BARE_EXTENSION_PRESENTATION, FULL_SCREEN);
++        } else {
++            ChromeSharedPreferences.getInstance()
++                    .removeKey(ChromePreferenceKeys.BARE_EXTENSION_PRESENTATION);
++        }
++    }
++
++    public static boolean isFullScreen() {
++        return get() == FULL_SCREEN;
++    }
++}
+diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java
+index 2fa4a211434..acffb7ce4c9 100644
+--- a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java
++++ b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java
+@@ -36,6 +36,15 @@ public class ExtensionActionPopupContents implements Destroyable {
+      */
+     private long mNativeExtensionActionPopupContents;
+ 
++    /**
++     * Whether popups fill the screen. When they do, the page takes the size of its view instead
++     * of sizing the view to itself.
++     */
++    @CalledByNative
++    private static boolean usesFullScreen() {
++        return BareExtensionPresentation.isFullScreen();
++    }
++
+     /** The WebContents hosting the extension popup's UI. */
+     private final WebContents mWebContents;
+ 
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index aa7510ddbae..24e34e52851 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4378,6 +4378,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_EXTENSIONS_SETTINGS_TITLE" desc="Title of the settings screen for extensions. [CHAR_LIMIT=32]">
+         Extensions
+       </message>
++      <message name="IDS_BARE_EXTENSIONS_OPEN_TITLE" desc="Setting for how an extension's own interface opens. [CHAR_LIMIT=40]">
++        Open extensions
++      </message>
++      <message name="IDS_BARE_EXTENSIONS_OPEN_POPUP" desc="Option: an extension opens as a popup under its button. [CHAR_LIMIT=40]">
++        As a popup
++      </message>
++      <message name="IDS_BARE_EXTENSIONS_OPEN_FULL_SCREEN" desc="Option: an extension opens in a full-screen view with a close button. [CHAR_LIMIT=40]">
++        Full screen
++      </message>
++      <message name="IDS_BARE_EXTENSION_CLOSE" desc="Content description of the button that closes a full-screen extension view. [CHAR_LIMIT=40]">
++        Close extension
++      </message>
+       <message name="IDS_BARE_KEEP_EXTENSIONS_TITLE" desc="Setting that keeps extensions running while the browser is in the background. [CHAR_LIMIT=48]">
+         Keep extensions running
+       </message>
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionPopup.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionPopup.java
+index 157f6a21a91..854083cdaa5 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionPopup.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionPopup.java
+@@ -5,14 +5,25 @@
+ package org.chromium.chrome.browser.toolbar.extensions;
+ 
+ import android.app.Activity;
++import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.graphics.Color;
+ import android.graphics.drawable.ColorDrawable;
+ import android.os.Build;
++import android.text.TextUtils;
++import android.view.Gravity;
+ import android.view.KeyEvent;
+ import android.view.View;
++import android.view.ViewGroup;
++import android.view.WindowInsets;
+ import android.view.WindowManager;
++import android.widget.ImageButton;
++import android.widget.LinearLayout;
++import android.widget.PopupWindow;
+ import android.widget.PopupWindow.OnDismissListener;
++import android.widget.TextView;
++
++import static org.chromium.build.NullUtil.assumeNonNull;
+ 
+ import org.chromium.base.Callback;
+ import org.chromium.base.lifetime.Destroyable;
+@@ -22,7 +33,9 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
++import org.chromium.chrome.browser.ui.extensions.BareExtensionPresentation;
+ import org.chromium.chrome.browser.ui.extensions.ExtensionActionPopupContents;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.components.embedder_support.contextmenu.ContextMenuPopulatorFactory;
+ import org.chromium.components.embedder_support.view.ContentView;
+ import org.chromium.components.thinwebview.ThinWebView;
+@@ -67,8 +80,11 @@ class ExtensionActionPopup implements Destroyable {
+     /** The ThinWebView component that renders the extension's HTML content. */
+     private final ThinWebView mThinWebView;
+ 
+-    /** The PopupWindow that is displayed on the screen, anchored to a view. */
+-    private final AnchoredPopupWindow mPopupWindow;
++    /** The PopupWindow that is displayed on the screen, anchored to a view. Null full screen. */
++    private final @Nullable AnchoredPopupWindow mPopupWindow;
++
++    /** The full-screen window, with its close button. Null when the popup is anchored. */
++    private final @Nullable PopupWindow mFullScreenWindow;
+ 
+     /** The window of the popup. */
+     private final ActivityWindowAndroid mPopupWindowAndroid;
+@@ -150,9 +166,36 @@ class ExtensionActionPopup implements Destroyable {
+                         .setSelectionDropdownMenuDelegate(selectionDropdownMenuDelegate)
+                         .build());
+ 
+-        Resources resources = mActivity.getResources();
+-        mPopupWindow =
+-                new AnchoredPopupWindow.Builder(
++        // Inspecting with DevTools opens a window of its own over this one, so it keeps the
++        // popup whatever the setting says.
++        boolean fullScreen = BareExtensionPresentation.isFullScreen() && !inspectWithDevTools;
++        if (fullScreen) {
++            mPopupWindow = null;
++            mFullScreenWindow = createFullScreenWindow(activity);
++        } else {
++            mFullScreenWindow = null;
++            mPopupWindow = createAnchoredWindow(activity, anchorView, inspectWithDevTools);
++        }
++
++        mTabModelSelector = tabModelSelector;
++        mCurrentTabObserver =
++                tab -> {
++                    if (isShowing()) {
++                        // Due to inherent differences between platforms on focus handling, we
++                        // explicitly observe tab changes and dismiss, matching Desktop's
++                        // OnTabStripModelChanged behavior.
++                        dismissWindow();
++                    }
++                };
++        mTabModelSelector.getCurrentTabSupplier().addSyncObserver(mCurrentTabObserver);
++
++        contents.setDelegate(new ContentsDelegate());
++    }
++
++    private AnchoredPopupWindow createAnchoredWindow(
++            Activity activity, View anchorView, boolean inspectWithDevTools) {
++        Resources resources = activity.getResources();
++        return new AnchoredPopupWindow.Builder(
+                                 activity,
+                                 activity.getWindow().getDecorView(),
+                                 new ColorDrawable(Color.WHITE),
+@@ -176,27 +219,112 @@ class ExtensionActionPopup implements Destroyable {
+                                         R.dimen.extension_action_popup_min_height))
+                         .setFocusable(!inspectWithDevTools)
+                         .build();
++    }
+ 
+-        mTabModelSelector = tabModelSelector;
+-        mCurrentTabObserver =
+-                tab -> {
+-                    if (mPopupWindow.isShowing()) {
+-                        // Due to inherent differences between platforms on focus handling, we
+-                        // explicitly observe tab changes and dismiss, matching Desktop's
+-                        // OnTabStripModelChanged behavior.
+-                        mPopupWindow.dismiss();
+-                    }
+-                };
+-        mTabModelSelector.getCurrentTabSupplier().addSyncObserver(mCurrentTabObserver);
++    /**
++     * Builds the full-screen view: a bar with a close button and the page's title above the page.
++     *
++     * <p>A PopupWindow rather than a view added to the activity, because the popup's page is
++     * composited through the same surface machinery either way and this is the window kind the
++     * anchored popup already uses, so the page, its keyboard and its focus behave the same. Back
++     * closes it, as it closes any popup.
++     */
++    private PopupWindow createFullScreenWindow(Activity activity) {
++        float density = activity.getResources().getDisplayMetrics().density;
++        LinearLayout container = new LinearLayout(activity);
++        container.setOrientation(LinearLayout.VERTICAL);
++        container.setBackgroundColor(SemanticColorUtils.getDefaultBgColor(activity));
++
++        LinearLayout bar = new LinearLayout(activity);
++        bar.setOrientation(LinearLayout.HORIZONTAL);
++        bar.setGravity(Gravity.CENTER_VERTICAL);
++
++        ImageButton close = new ImageButton(activity);
++        close.setImageResource(R.drawable.btn_close);
++        close.setImageTintList(
++                ColorStateList.valueOf(SemanticColorUtils.getDefaultIconColor(activity)));
++        close.setBackground(null);
++        close.setContentDescription(activity.getString(R.string.bare_extension_close));
++        close.setOnClickListener(v -> dismissWindow());
++        int barHeight = Math.round(56 * density);
++        bar.addView(close, new LinearLayout.LayoutParams(barHeight, barHeight));
++
++        TextView title = new TextView(activity);
++        title.setTextColor(SemanticColorUtils.getDefaultTextColor(activity));
++        title.setTextSize(18);
++        title.setSingleLine(true);
++        title.setEllipsize(TextUtils.TruncateAt.END);
++        mFullScreenTitle = title;
++        bar.addView(
++                title,
++                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
++
++        container.addView(
++                bar,
++                new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, barHeight));
++        container.addView(
++                mThinWebView.getView(),
++                new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
++
++        PopupWindow window =
++                new PopupWindow(
++                        container,
++                        ViewGroup.LayoutParams.MATCH_PARENT,
++                        ViewGroup.LayoutParams.MATCH_PARENT,
++                        /* focusable= */ true);
++        window.setBackgroundDrawable(
++                new ColorDrawable(SemanticColorUtils.getDefaultBgColor(activity)));
++        window.setClippingEnabled(false);
++        window.setInputMethodMode(PopupWindow.INPUT_METHOD_NEEDED);
++        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
++        return window;
++    }
+ 
+-        contents.setDelegate(new ContentsDelegate());
++    private @Nullable TextView mFullScreenTitle;
++
++    private boolean isShowing() {
++        if (mFullScreenWindow != null) return mFullScreenWindow.isShowing();
++        return assumeNonNull(mPopupWindow).isShowing();
++    }
++
++    private void showWindow() {
++        if (mFullScreenWindow == null) {
++            assumeNonNull(mPopupWindow).show();
++            return;
++        }
++        View decor = mActivity.getWindow().getDecorView();
++        // The browser draws under the status bar, so the window is placed below it rather than
++        // letting the bar and its close button sit behind the clock.
++        WindowInsets insets = decor.getRootWindowInsets();
++        int top = insets == null ? 0 : insets.getInsets(WindowInsets.Type.systemBars()).top;
++        if (top == 0) {
++            // The browser consumes the insets before they reach a window added this late, so
++            // fall back on the status bar's own height.
++            Resources resources = mActivity.getResources();
++            int id = resources.getIdentifier("status_bar_height", "dimen", "android");
++            if (id > 0) top = resources.getDimensionPixelSize(id);
++        }
++        if (mFullScreenTitle != null) {
++            String pageTitle = mContents.getWebContents().getTitle();
++            // A page without a title is named by its address, which says nothing to the user.
++            boolean useful = pageTitle != null && !pageTitle.startsWith("chrome-extension:");
++            mFullScreenTitle.setText(useful ? pageTitle : "");
++        }
++        mFullScreenWindow.showAtLocation(decor, Gravity.TOP | Gravity.START, 0, top);
++    }
++
++    private void dismissWindow() {
++        if (mFullScreenWindow != null) mFullScreenWindow.dismiss();
++        if (mPopupWindow != null) mPopupWindow.dismiss();
+     }
+ 
+     /** Cleans up resources used by this popup. */
+     @Override
+     public void destroy() {
+         mTabModelSelector.getCurrentTabSupplier().removeObserver(mCurrentTabObserver);
+-        mPopupWindow.dismiss();
++        dismissWindow();
+         mThinWebView.destroy();
+         mPopupWindowAndroid.destroy();
+         mContents.destroy();
+@@ -214,7 +342,11 @@ class ExtensionActionPopup implements Destroyable {
+ 
+     /** Adds a listener that will be notified when the popup window is dismissed. */
+     public void addOnDismissListener(OnDismissListener listener) {
+-        mPopupWindow.addOnDismissListener(listener);
++        if (mFullScreenWindow != null) {
++            mFullScreenWindow.setOnDismissListener(listener);
++        } else {
++            assumeNonNull(mPopupWindow).addOnDismissListener(listener);
++        }
+     }
+ 
+     private class ContentsDelegate implements ExtensionActionPopupContents.Delegate {
+@@ -244,7 +376,10 @@ class ExtensionActionPopup implements Destroyable {
+                 targetHeightPx = Math.min(targetHeightPx, maxAvailableHeightPx);
+             }
+ 
+-            mPopupWindow.setDesiredContentSize(targetWidthPx, targetHeightPx);
++            // A full-screen page is sized by the screen, not by what it asks for.
++            if (mPopupWindow != null) {
++                mPopupWindow.setDesiredContentSize(targetWidthPx, targetHeightPx);
++            }
+         }
+ 
+         @Override
+@@ -254,13 +389,13 @@ class ExtensionActionPopup implements Destroyable {
+ 
+         @Override
+         public void onLoaded() {
+-            mPopupWindow.show();
++            showWindow();
+             mContentView.requestFocus();
+         }
+ 
+         @Override
+         public void onClose() {
+-            mPopupWindow.dismiss();
++            dismissWindow();
+         }
+     }
+ 
+-- 
+2.34.1
+

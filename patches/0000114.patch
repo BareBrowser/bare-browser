@@ -1,0 +1,98 @@
+From 858c836300baee6492e83ab4699b0150663fa4ba Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Tue, 8 Sep 2026 03:34:39 +0000
+Subject: [PATCH] Patch 0000114
+
+---
+ .../chrome/browser/settings/MainSettings.java | 46 +++++++++----------
+ 1 file changed, 23 insertions(+), 23 deletions(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+index de7bfcd0b83..ed7a3bee538 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+@@ -49,10 +49,8 @@ import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ import org.chromium.chrome.browser.glic.GlicEnabling;
+ import org.chromium.chrome.browser.homepage.HomepageManager;
+-import org.chromium.chrome.browser.password_manager.ManagePasswordsReferrer;
+ import org.chromium.chrome.browser.password_manager.PasswordExportLauncher;
+ import org.chromium.chrome.browser.password_manager.PasswordManagerHelper;
+-import org.chromium.chrome.browser.password_manager.PasswordManagerLauncher;
+ import org.chromium.chrome.browser.password_manager.settings.PasswordsPreference;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+@@ -843,17 +841,23 @@ public class MainSettings extends ChromeBaseSettingsFragment
+                             return SettingsNavigationHelper.showAutofillProfileSettings(
+                                     getActivity());
+                         });
++        // De-Googled build: hide the Google Password Manager row here too.
++        //
++        // Patch 0009 hides it on AutofillAndPasswordsFragment, which is the page this
++        // screen shows while YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID is on. The flag is
++        // disabled by default and only the field trial testing config turned it on, so
++        // a release build with disable_fieldtrial_testing_config takes this older path
++        // instead and the row came back, permanently reading "Stopped working on this
++        // device" because IsPasswordManagerAvailable() is false without the internal
++        // backend.
++        //
++        // The row is hidden rather than removed from main_preferences.xml: findPreference
++        // and setManagedPreferenceDelegateForPreference both look it up by key and would
++        // return null if it were gone. No click listener is attached, so the entry point
++        // is gone as well as the row.
+         PasswordsPreference passwordsPreference = findPreference(PREF_PASSWORDS);
+         passwordsPreference.setProfile(getProfile());
+-        passwordsPreference.setOnPreferenceClickListener(
+-                preference -> {
+-                    onPreferenceSelected(preference);
+-                    showPasswordSettings(
+-                            getActivity(),
+-                            getProfile(),
+-                            mModalDialogManagerSupplier.asNonNull().get());
+-                    return true;
+-                });
++        passwordsPreference.setVisible(false);
+     }
+ 
+     private static void openAutofillOptions(Context context) {
+@@ -899,8 +903,9 @@ public class MainSettings extends ChromeBaseSettingsFragment
+             ModalDialogManager modalDialogManager,
+             boolean shownInTab) {
+         if (key.equals(PREF_PASSWORDS)) {
+-            MainSettings.showPasswordSettings(context, profile, modalDialogManager);
+-            // Open an external activity. Keep the state as is.
++            // De-Googled build: nothing opens the Google Password Manager. The row is
++            // hidden and unindexed; this guards the by-key route a deep link could still
++            // take.
+             return false;
+         } else if (key.equals(PREF_NOTIFICATIONS)) {
+             Intent intent = new Intent();
+@@ -919,16 +924,6 @@ public class MainSettings extends ChromeBaseSettingsFragment
+         return false;
+     }
+ 
+-    private static void showPasswordSettings(
+-            Context context, Profile profile, ModalDialogManager modalDialogManager) {
+-        PasswordManagerLauncher.showPasswordSettings(
+-                context,
+-                profile,
+-                ManagePasswordsReferrer.CHROME_SETTINGS,
+-                modalDialogManager,
+-                /* managePasskeys= */ false);
+-    }
+-
+     private static boolean shouldShowGlicPreference(Profile profile) {
+         return GlicEnabling.shouldShowSettingsPage(profile);
+     }
+@@ -1113,6 +1108,11 @@ public class MainSettings extends ChromeBaseSettingsFragment
+                 public void updateDynamicPreferences(
+                         Context context, SettingsIndexData indexData, Profile profile) {
+                     indexData.removeEntry(getUniqueId(PREF_SETTINGS_PROMO_CARD));
++                    // De-Googled build: the Google Password Manager row is hidden on both
++                    // paths, so drop it from the index as well. Search reaches a preference
++                    // by key through onPreferenceSelected below, which does not care whether
++                    // the row is visible.
++                    indexData.removeEntry(getUniqueId(PREF_PASSWORDS));
+                     if (!shouldShowAddressBarPref(context)) {
+                         indexData.removeEntry(getUniqueId(PREF_ADDRESS_BAR));
+                     }

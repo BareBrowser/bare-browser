@@ -1,0 +1,278 @@
+From 39d3b69d4cf24230d338ccbcb0b705534f49179e Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Tue, 18 Aug 2026 05:00:03 +0000
+Subject: [PATCH] Patch 0000028
+
+---
+ .../browser/download/DownloadController.java  | 41 ++++++--
+ .../java/res/xml/download_preferences.xml     |  4 +
+ .../download/settings/DownloadSettings.java   | 99 +++++++++++++++++++
+ .../preferences/ChromePreferenceKeys.java     |  8 ++
+ .../strings/android_chrome_strings.grd        |  9 ++
+ 5 files changed, 154 insertions(+), 7 deletions(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
+index 5c36258aa11..268a7b6a44b 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
+@@ -77,22 +77,49 @@ public class DownloadController {
+ 
+         PackageManager pm = context.getPackageManager();
+         String self = context.getPackageName();
+-        Intent chooserTarget = null;
++
++        // Collect the installed handlers, excluding this browser.
++        //
++        // Tracked as components rather than packages. An app may register more than one activity
++        // for the same intent - 1DM offers both its downloader and its own browser - and naming
++        // only the package leaves Android to ask which of them should handle it, defeating the
++        // point of choosing one in settings.
++        java.util.List<String> handlers = new java.util.ArrayList<>();
+         for (ResolveInfo info : pm.queryIntentActivities(intent, 0)) {
+             if (info.activityInfo == null) continue;
+             if (self.equals(info.activityInfo.packageName)) continue;
+-
+-            Intent candidate = new Intent(intent);
+-            candidate.setPackage(info.activityInfo.packageName);
+-            chooserTarget = candidate;
+-            break;
++            String component =
++                    new android.content.ComponentName(
++                                    info.activityInfo.packageName, info.activityInfo.name)
++                            .flattenToString();
++            if (!handlers.contains(component)) handlers.add(component);
+         }
+ 
+-        if (chooserTarget == null) {
++        if (handlers.isEmpty()) {
+             Log.i(TAG, "No external download handler installed, downloading in browser.");
+             return false;
+         }
+ 
++        // A specific app may have been chosen in settings. If it is no longer installed the
++        // choice is ignored and the chooser is shown instead, rather than failing silently with
++        // a download that never arrives anywhere.
++        String preferred =
++                ChromeSharedPreferences.getInstance()
++                        .readString(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_MANAGER_PACKAGE, "");
++        if (!preferred.isEmpty() && handlers.contains(preferred)) {
++            Intent direct = new Intent(intent);
++            direct.setComponent(android.content.ComponentName.unflattenFromString(preferred));
++            direct.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++            try {
++                context.startActivity(direct);
++                return true;
++            } catch (android.content.ActivityNotFoundException e) {
++                Log.w(TAG, "Chosen download manager would not start, falling back to chooser.");
++            }
++        } else if (!preferred.isEmpty()) {
++            Log.i(TAG, "Chosen download manager is no longer installed, asking instead.");
++        }
++
+         Intent chooser = Intent.createChooser(intent, null);
+         chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+         try {
+diff --git a/chrome/browser/download/android/java/res/xml/download_preferences.xml b/chrome/browser/download/android/java/res/xml/download_preferences.xml
+index 7d8adae60d6..a052a01dfbd 100644
+--- a/chrome/browser/download/android/java/res/xml/download_preferences.xml
++++ b/chrome/browser/download/android/java/res/xml/download_preferences.xml
+@@ -24,6 +24,10 @@ found in the LICENSE file.
+         android:summaryOn="@string/external_download_manager_summary_on"
+         android:summaryOff="@string/external_download_manager_summary_off" />
+ 
++    <ListPreference
++        android:key="external_download_manager_app"
++        android:title="@string/external_download_manager_app_title" />
++
+     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+         android:key="auto_open_pdf_enabled"
+         android:title="@string/auto_open_pdf_enabled_title"
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java
+index b5b7c80b61a..b452d01e85f 100644
+--- a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java
+@@ -4,6 +4,7 @@
+ 
+ package org.chromium.chrome.browser.download.settings;
+ 
++import android.content.ComponentName;
+ import android.content.Context;
+ import android.os.Bundle;
+ 
+@@ -25,6 +26,13 @@ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
+ import org.chromium.chrome.browser.settings.ChromeManagedPreferenceDelegate;
+ import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
++import android.content.Intent;
++import android.content.pm.PackageManager;
++import android.content.pm.ResolveInfo;
++import android.net.Uri;
++import androidx.preference.ListPreference;
++import java.util.ArrayList;
++import java.util.List;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+@@ -44,6 +52,9 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+     /** De-Googled build: hand downloads to an installed download manager app. */
+     public static final String PREF_EXTERNAL_DOWNLOAD_MANAGER = "external_download_manager_enabled";
+ 
++    /** De-Googled build: which installed download manager app to use. */
++    public static final String PREF_EXTERNAL_DOWNLOAD_MANAGER_APP = "external_download_manager_app";
++
+     private DownloadLocationPreference mLocationChangePref;
+     private ChromeSwitchPreference mLocationPromptEnabledPref;
+     private ManagedPreferenceDelegate mLocationPromptEnabledPrefDelegate;
+@@ -68,6 +79,8 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+             externalDownloadManagerPref.setOnPreferenceChangeListener(this);
+         }
+ 
++        populateDownloadManagerAppList();
++
+         mLocationPromptEnabledPref =
+                 (ChromeSwitchPreference) findPreference(PREF_LOCATION_PROMPT_ENABLED);
+         mLocationPromptEnabledPrefDelegate =
+@@ -162,6 +175,15 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+     // Preference.OnPreferenceChangeListener implementation.
+     @Override
+     public boolean onPreferenceChange(Preference preference, Object newValue) {
++        if (PREF_EXTERNAL_DOWNLOAD_MANAGER_APP.equals(preference.getKey())) {
++            ChromeSharedPreferences.getInstance()
++                    .writeString(
++                            ChromePreferenceKeys.DOWNLOAD_EXTERNAL_MANAGER_PACKAGE,
++                            (String) newValue);
++            populateDownloadManagerAppList();
++            return true;
++        }
++
+         if (PREF_EXTERNAL_DOWNLOAD_MANAGER.equals(preference.getKey())) {
+             ChromeSharedPreferences.getInstance()
+                     .writeBoolean(
+@@ -217,4 +239,81 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+                     }
+                 }
+             };
++
++    /**
++     * De-Googled build: list the download manager apps actually installed on this device.
++     *
++     * <p>Built at display time from PackageManager rather than declared in XML, so it reflects
++     * what is installed now. The first entry always asks each time, which is also the fallback
++     * when the previously chosen app has since been uninstalled.
++     */
++    private void populateDownloadManagerAppList() {
++        ListPreference pref = (ListPreference) findPreference(PREF_EXTERNAL_DOWNLOAD_MANAGER_APP);
++        if (pref == null) return;
++
++        // Without this the selection is never reported, so the write below never happens and the
++        // list snaps back to asking every time.
++        pref.setOnPreferenceChangeListener(this);
++
++        Context context = getContext();
++        if (context == null) return;
++        PackageManager pm = context.getPackageManager();
++
++        Intent probe = new Intent(Intent.ACTION_VIEW);
++        probe.setDataAndType(Uri.parse("https://example.com/file.bin"), "application/octet-stream");
++
++        List<CharSequence> labels = new ArrayList<>();
++        List<CharSequence> values = new ArrayList<>();
++        labels.add(context.getString(R.string.external_download_manager_ask));
++        values.add("");
++
++        // Listed per activity rather than per package. An app can register several activities
++        // for the same intent, and they are genuinely different destinations: 1DM offers both its
++        // downloader and its own browser. Collapsing them by package would leave Android asking
++        // which one to use even after a choice was made here.
++        String self = context.getPackageName();
++        for (ResolveInfo info : pm.queryIntentActivities(probe, 0)) {
++            if (info.activityInfo == null) continue;
++            String pkg = info.activityInfo.packageName;
++            if (self.equals(pkg)) continue;
++
++            String component =
++                    new ComponentName(pkg, info.activityInfo.name).flattenToString();
++            if (values.contains(component)) continue;
++
++            CharSequence label = info.loadLabel(pm);
++            if (label == null || label.length() == 0) label = pkg;
++            // Two activities in one app often share a label. Distinguish them so the list is not
++            // two identical-looking rows.
++            if (labels.contains(label)) {
++                CharSequence appLabel = info.activityInfo.applicationInfo.loadLabel(pm);
++                label = appLabel + " (" + info.activityInfo.name.substring(
++                        info.activityInfo.name.lastIndexOf('.') + 1) + ")";
++            }
++            labels.add(label);
++            values.add(component);
++        }
++
++        pref.setEntries(labels.toArray(new CharSequence[0]));
++        pref.setEntryValues(values.toArray(new CharSequence[0]));
++
++        String stored =
++                ChromeSharedPreferences.getInstance()
++                        .readString(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_MANAGER_PACKAGE, "");
++        // An app that has since been uninstalled must not leave the setting pointing at it.
++        if (!stored.isEmpty() && !values.contains(stored)) {
++            stored = "";
++            ChromeSharedPreferences.getInstance()
++                    .writeString(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_MANAGER_PACKAGE, "");
++        }
++        pref.setValue(stored);
++
++        if (values.size() == 1) {
++            pref.setEnabled(false);
++            pref.setSummary(R.string.external_download_manager_none_installed);
++        } else {
++            pref.setEnabled(true);
++            pref.setSummary(labels.get(values.indexOf(stored)));
++        }
++    }
+ }
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index ff35d71833b..884f80ae31f 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -371,6 +371,13 @@ public final class ChromePreferenceKeys {
+     public static final String WEBSTORE_DESKTOP_SITE_SEEDED =
+             "Chrome.Extensions.WebstoreDesktopSiteSeeded";
+ 
++    /**
++     * De-Googled build: package name of the chosen external download manager, or empty to ask
++     * every time. A package that is no longer installed falls back to asking.
++     */
++    public static final String DOWNLOAD_EXTERNAL_MANAGER_PACKAGE =
++            "Chrome.Download.ExternalManagerPackage";
++
+     /**
+      * De-Googled build: whether downloads are offered to an installed download manager instead of
+      * being fetched by the browser. Off by default, so the browser behaves as usual until asked.
+@@ -1185,6 +1192,7 @@ public final class ChromePreferenceKeys {
+                 AI_ASSISTANT_AVAILABILITY_CHECK_TIMESTAMP_MS,
+                 AI_ASSISTANT_WEB_SUMMARIZATION_AVAILABILITY,
+                 AUTOFILL_ASSISTANT_FIRST_TIME_LITE_SCRIPT_USER,
++                DOWNLOAD_EXTERNAL_MANAGER_PACKAGE,
+                 DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,
+                 WEBSTORE_DESKTOP_SITE_SEEDED,
+                 AUTOFILL_ASSISTANT_PROACTIVE_HELP_ENABLED,
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 060e6d6144e..a7358cb26bb 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -2126,6 +2126,15 @@ Your Google account may have other forms of browsing history like searches and a
+       <message name="IDS_OPEN_DOWNLOAD_DIALOG_AUTO_OPEN_TEXT" desc="Text label for the check box on the open download dialog that allows user to auto-open downloaded PDF files in future.">
+         Always open downloaded PDFs
+       </message>
++      <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_APP_TITLE" desc="Title for a preference that chooses which installed download manager app receives downloads.">
++        Download manager app
++      </message>
++      <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_ASK" desc="Option meaning the user is asked which download manager to use each time.">
++        Ask every time
++      </message>
++      <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_NONE_INSTALLED" desc="Summary shown when no download manager app is installed on the device.">
++        No download manager app installed
++      </message>
+       <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_TITLE" desc="Title for a preference that lets the user hand downloads to a separate download manager app instead of downloading in the browser.">
+         Use an external download manager
+       </message>

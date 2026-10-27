@@ -1,0 +1,41 @@
+From 7c8caba91161fbbc2a0518b85d9eb1074b3cef21 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 26 Aug 2026 17:02:08 +0000
+Subject: [PATCH] Patch 0000094
+
+---
+ extensions/browser/process_manager.cc | 21 ++++++++++++++++++---
+ 1 file changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/extensions/browser/process_manager.cc b/extensions/browser/process_manager.cc
+index d097a45600c..1bccd8e56ef 100644
+--- a/extensions/browser/process_manager.cc
++++ b/extensions/browser/process_manager.cc
+@@ -210,9 +210,24 @@ ProcessManager::ProcessManager(BrowserContext* context,
+       last_background_close_sequence_id_(0) {
+   extension_registry_->AddObserver(this);
+ 
+-  // Only the original profile needs to listen for ready to create background
+-  // pages for all spanning extensions.
+-  if (!context->IsOffTheRecord()) {
++  // The original profile listens for ready so that spanning extensions get
++  // their background pages.
++  //
++  // An incognito profile normally does not, because on desktop the embedder
++  // tells it when to start: ChromeProcessManagerDelegate::OnBrowserCreated
++  // calls MaybeCreateStartupBackgroundHosts once an incognito window exists.
++  // Android has no such delegate at all, GetProcessManagerDelegate returns
++  // nullptr there, so nothing ever made that call and a split-mode extension
++  // allowed in incognito never got a background page: the preference was on,
++  // IncognitoProcessManager::CreateBackgroundHost would have agreed, and it
++  // was simply never reached. Listening here too covers the embedder that has
++  // nobody to ask. Where a delegate does exist the behaviour is unchanged.
++  //
++  // This does not give spanning extensions a second background page. The
++  // incognito manager overrides CreateBackgroundHost and creates one only for
++  // split-mode extensions that are enabled in incognito.
++  if (!context->IsOffTheRecord() ||
++      !ExtensionsBrowserClient::Get()->GetProcessManagerDelegate()) {
+     ExtensionSystem::Get(context)->ready().Post(
+         FROM_HERE,
+         base::BindOnce(&ProcessManager::MaybeCreateStartupBackgroundHosts,

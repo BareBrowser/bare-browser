@@ -1,0 +1,963 @@
+From b56e6362fa8c49dd659a28b8fa1d965b60b703e4 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sat, 5 Sep 2026 17:21:49 +0000
+Subject: [PATCH] Patch 0000104
+
+---
+ chrome/android/chrome_java_sources.gni        |   1 +
+ .../android/java/res/xml/main_preferences.xml |   4 +
+ .../browser/bare/BareOpenInAppsMode.java      |  91 ++++++++
+ .../ExternalNavigationDelegateImpl.java       |  32 ++-
+ .../chrome/browser/settings/MainSettings.java |  54 +++++
+ .../tabbed_mode/TabbedRootUiCoordinator.java  |  23 +-
+ chrome/android/junit/BUILD.gn                 |   1 +
+ .../bare/BareOpenInAppsModeUnitTest.java      | 162 ++++++++++++++
+ chrome/browser/open_in_app/android/BUILD.gn   |   1 +
+ .../MenuOnlyOpenInAppEntryPoint.java          |  26 +++
+ .../browser/open_in_app/OpenInAppUtils.java   |  13 +-
+ .../preferences/ChromePreferenceKeys.java     |   8 +
+ .../strings/android_chrome_strings.grd        |  12 +
+ .../strings/android/browser_ui_strings.grd    |  21 ++
+ .../ExternalNavigationDelegate.java           |  15 ++
+ .../ExternalNavigationHandler.java            | 206 +++++++++++++++++-
+ 16 files changed, 638 insertions(+), 32 deletions(-)
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java
+ create mode 100644 chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/MenuOnlyOpenInAppEntryPoint.java
+
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index d4d396d322f..10b93614467 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -243,6 +243,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java",
++  "java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java",
+   "java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java",
+   "java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java",
+   "java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java",
+diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/java/res/xml/main_preferences.xml
+index 45fd637734f..7f8b9781d2f 100644
+--- a/chrome/android/java/res/xml/main_preferences.xml
++++ b/chrome/android/java/res/xml/main_preferences.xml
+@@ -83,6 +83,10 @@ found in the LICENSE file.
+         android:key="homepage"
+         android:order="20"
+         android:title="@string/options_homepage_title"/>
++    <ListPreference
++        android:key="bare_open_links_in_apps"
++        android:order="21"
++        android:title="@string/bare_open_links_in_apps_title"/>
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
+         android:key="notifications"
+         android:order="22"
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java
+new file mode 100644
+index 00000000000..194736086bd
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java
+@@ -0,0 +1,91 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import androidx.annotation.IntDef;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++import java.lang.annotation.Retention;
++import java.lang.annotation.RetentionPolicy;
++
++/**
++ * How a link that an installed app could handle is treated.
++ *
++ * <p>The values are written into a preference and so have to stay stable. They are stored as
++ * strings because the setting is a list preference, which writes the value it was given.
++ */
++@NullMarked
++public final class BareOpenInAppsMode {
++    @IntDef({Mode.NEVER, Mode.ASK, Mode.ALWAYS})
++    @Retention(RetentionPolicy.SOURCE)
++    public @interface Mode {
++        int NEVER = 0;
++        int ASK = 1;
++        int ALWAYS = 2;
++    }
++
++    public static final String VALUE_NEVER = "never";
++    public static final String VALUE_ASK = "ask";
++    public static final String VALUE_ALWAYS = "always";
++
++    /**
++     * The mode the user has chosen.
++     *
++     * <p>Never is the answer for a preference that was never written, so an install that predates
++     * the setting keeps the behaviour it already had. It is also the answer for a value this build
++     * does not recognise, which covers a preference written by a later build and read back by this
++     * one.
++     */
++    public static @Mode int get() {
++        String value =
++                ChromeSharedPreferences.getInstance()
++                        .readString(ChromePreferenceKeys.BARE_OPEN_LINKS_IN_APPS, VALUE_NEVER);
++        return fromValue(value);
++    }
++
++    /** The mode a stored preference string names, or Never if it names nothing this build knows. */
++    public static @Mode int fromValue(String value) {
++        if (VALUE_ALWAYS.equals(value)) return Mode.ALWAYS;
++        if (VALUE_ASK.equals(value)) return Mode.ASK;
++        return Mode.NEVER;
++    }
++
++    /** The preference string for a mode. */
++    public static String toValue(@Mode int mode) {
++        switch (mode) {
++            case Mode.ALWAYS:
++                return VALUE_ALWAYS;
++            case Mode.ASK:
++                return VALUE_ASK;
++            default:
++                return VALUE_NEVER;
++        }
++    }
++
++    /**
++     * Whether a link an app could handle may leave the browser at all.
++     *
++     * <p>False is a decision to keep the page here. True is not a decision to launch anything: it
++     * only stops the suppression, and every check the browser already makes still runs afterwards.
++     */
++    public static boolean allowsHandoff(@Mode int mode) {
++        return mode != Mode.NEVER;
++    }
++
++    /**
++     * Whether the user is asked before a link leaves the browser.
++     *
++     * <p>Only reached for a navigation that was otherwise going to leave, so this turns a launch
++     * into a question rather than adding a way out.
++     */
++    public static boolean asksFirst(@Mode int mode) {
++        return mode == Mode.ASK;
++    }
++
++    private BareOpenInAppsMode() {}
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java
+index f29b0825640..5671664d424 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java
+@@ -28,6 +28,7 @@ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.ChromeTabbedActivity2;
+ import org.chromium.chrome.browser.IntentHandler;
+ import org.chromium.chrome.browser.actor.ActorKeyedServiceFactory;
++import org.chromium.chrome.browser.bare.BareOpenInAppsMode;
+ import org.chromium.chrome.browser.browserservices.intents.WebappConstants;
+ import org.chromium.chrome.browser.document.ChromeLauncherActivity;
+ import org.chromium.chrome.browser.glic.GlicEnabling;
+@@ -343,7 +344,36 @@ public class ExternalNavigationDelegateImpl implements ExternalNavigationDelegat
+ 
+     @Override
+     public boolean allowExternalNavigationForHttpProtocols(GURL url) {
+-        return !OpenInAppUtils.isOpenInAppAvailable() || !UrlUtilities.isHttpOrHttps(url);
++        // Where Open in App is unavailable, or the navigation is not one it covers, the answer is
++        // the one this build has always given.
++        if (!OpenInAppUtils.isOpenInAppAvailable() || !UrlUtilities.isHttpOrHttps(url)) return true;
++
++        // A page opened in incognito is never handed to another app on its own, whatever the
++        // setting says. Sending the address out of the browser is the one thing incognito is for
++        // not doing quietly, and a setting chosen once, for ordinary browsing, is not consent to
++        // do it here. The app menu still offers Open in app, and that route goes through the
++        // leaving-incognito confirmation, so the way out exists but the user has to take it.
++        //
++        // Upstream declines this case too in the arrangement seen so far, but by a route that
++        // depends on how the URL happens to resolve, so it is stated here rather than relied on.
++        if (mTab.isOffTheRecord()) return false;
++
++        // Otherwise the setting decides. Never keeps the page here and leaves the app menu item as
++        // the way to reach the app, which is what upstream does unconditionally for this case.
++        // Ask and Always hand the navigation back to the ordinary checks; neither is a decision to
++        // launch, only a decision to stop suppressing.
++        return BareOpenInAppsMode.allowsHandoff(BareOpenInAppsMode.get());
++    }
++
++    @Override
++    public boolean shouldAskBeforeLeavingForApp(GURL url) {
++        if (!OpenInAppUtils.isOpenInAppAvailable() || !UrlUtilities.isHttpOrHttps(url)) return false;
++
++        // Incognito never reaches the question: the navigation was already kept here above, and
++        // asking would offer something that is not on offer.
++        if (mTab.isOffTheRecord()) return false;
++
++        return BareOpenInAppsMode.asksFirst(BareOpenInAppsMode.get());
+     }
+ 
+     /**
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+index 1dd96d23a11..de7bfcd0b83 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+@@ -19,6 +19,7 @@ import android.provider.Settings;
+ import android.view.View;
+ 
+ import androidx.lifecycle.Lifecycle;
++import androidx.preference.ListPreference;
+ import androidx.preference.Preference;
+ import androidx.recyclerview.widget.RecyclerView.LayoutManager;
+ 
+@@ -41,6 +42,7 @@ import org.chromium.chrome.browser.autofill.settings.SettingsNavigationHelper;
+ import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsFragment;
+ import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsMediator;
+ import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsReferrer;
++import org.chromium.chrome.browser.bare.BareOpenInAppsMode;
+ import org.chromium.chrome.browser.bare.BareUpdateCheck;
+ import org.chromium.chrome.browser.device_lock.DeviceLockActivityLauncherImpl;
+ import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+@@ -53,6 +55,7 @@ import org.chromium.chrome.browser.password_manager.PasswordManagerHelper;
+ import org.chromium.chrome.browser.password_manager.PasswordManagerLauncher;
+ import org.chromium.chrome.browser.password_manager.settings.PasswordsPreference;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.preferences.Pref;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.safety_hub.SafetyHubMetricUtils;
+@@ -116,6 +119,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
+     public static final String PREF_SIGN_IN = "sign_in";
+     public static final String PREF_GOOGLE_SERVICES = "google_services";
+     public static final String PREF_BARE_UPDATES = "bare_check_for_updates";
++    public static final String PREF_BARE_OPEN_LINKS_IN_APPS = "bare_open_links_in_apps";
+     public static final String PREF_BASICS_SECTION = "basics_section";
+     public static final String PREF_SEARCH_ENGINE = "search_engine";
+     public static final String PREF_PASSWORDS = "passwords";
+@@ -424,6 +428,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
+         }
+ 
+         setUpUpdateRow();
++        setUpOpenLinksInAppsRow();
+ 
+         cachePreferences();
+         updateAutofillPreferences();
+@@ -659,6 +664,55 @@ public class MainSettings extends ChromeBaseSettingsFragment
+         return preferenceInAllPreferences;
+     }
+ 
++    /**
++     * The row for whether a link an installed app could handle opens in that app. Never is the
++     * default, so a browser that has always kept links to itself carries on doing that until the
++     * user says otherwise.
++     */
++    private void setUpOpenLinksInAppsRow() {
++        ListPreference row = (ListPreference) findPreference(PREF_BARE_OPEN_LINKS_IN_APPS);
++        if (row == null) return;
++
++        String[] values = {
++            BareOpenInAppsMode.VALUE_ALWAYS,
++            BareOpenInAppsMode.VALUE_ASK,
++            BareOpenInAppsMode.VALUE_NEVER,
++        };
++        CharSequence[] labels = new CharSequence[values.length];
++        for (int i = 0; i < values.length; i++) {
++            labels[i] = getString(openLinksInAppsLabel(values[i]));
++        }
++
++        row.setPersistent(false);
++        row.setEntries(labels);
++        row.setEntryValues(values);
++
++        String current = BareOpenInAppsMode.toValue(BareOpenInAppsMode.get());
++        row.setValue(current);
++        row.setSummary(getString(openLinksInAppsLabel(current)));
++
++        row.setOnPreferenceChangeListener(
++                (pref, newValue) -> {
++                    String chosen = BareOpenInAppsMode.toValue(
++                            BareOpenInAppsMode.fromValue((String) newValue));
++                    ChromeSharedPreferences.getInstance()
++                            .writeString(ChromePreferenceKeys.BARE_OPEN_LINKS_IN_APPS, chosen);
++                    pref.setSummary(getString(openLinksInAppsLabel(chosen)));
++                    return true;
++                });
++    }
++
++    private static int openLinksInAppsLabel(String value) {
++        switch (BareOpenInAppsMode.fromValue(value)) {
++            case BareOpenInAppsMode.Mode.ALWAYS:
++                return R.string.bare_open_links_in_apps_always;
++            case BareOpenInAppsMode.Mode.ASK:
++                return R.string.bare_open_links_in_apps_ask;
++            default:
++                return R.string.bare_open_links_in_apps_never;
++        }
++    }
++
+     /**
+      * The update row. Its summary is the only place a manual-mode user learns anything, so it
+      * says what is known rather than staying blank: the newest release seen, or that nothing has
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
+index c86a6f13be0..a9c1113ece6 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
+@@ -171,8 +171,8 @@ import org.chromium.chrome.browser.omnibox.LocationBarEmbedder;
+ import org.chromium.chrome.browser.omnibox.OmniboxChipManager;
+ import org.chromium.chrome.browser.omnibox.OmniboxStub;
+ import org.chromium.chrome.browser.omnibox.UrlFocusChangeListener;
++import org.chromium.chrome.browser.open_in_app.MenuOnlyOpenInAppEntryPoint;
+ import org.chromium.chrome.browser.open_in_app.OpenInAppUtils;
+-import org.chromium.chrome.browser.open_in_app.TabbedOpenInAppEntryPoint;
+ import org.chromium.chrome.browser.pdf.PdfPageIphController;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+@@ -901,10 +901,6 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+             mOpenInAppEntryPoint = null;
+         }
+ 
+-        if (mOmniboxChipManager != null) {
+-            mOmniboxChipManager = null;
+-        }
+-
+         if (mSystemUiCoordinator != null) mSystemUiCoordinator.destroy();
+ 
+         if (mOfflineIndicatorController != null) {
+@@ -1134,14 +1130,6 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+     @EnsuresNonNull("mToolbarManager")
+     protected void initializeToolbar() {
+         mControlContainer = mActivity.findViewById(R.id.control_container);
+-        if (OpenInAppUtils.isOpenInAppAvailable()) {
+-            assert mControlContainer != null;
+-
+-            ViewGroup omniboxChipContainer =
+-                    mControlContainer.findViewById(R.id.omnibox_chip_container);
+-            LocationBarEmbedder locationBarEmbedder = mActivity.findViewById(R.id.toolbar);
+-            mOmniboxChipManager = new OmniboxChipManager(omniboxChipContainer, locationBarEmbedder);
+-        }
+ 
+         super.initializeToolbar();
+         if (mControlContainer != null) {
+@@ -1294,11 +1282,12 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+         }
+ 
+         if (OpenInAppUtils.isOpenInAppAvailable()) {
+-            var omniboxChipManager = mOmniboxChipManager;
+-            assert omniboxChipManager != null;
++            // Open in App is offered in the app menu only. The entry point that also places an
++            // omnibox chip is deliberately not used: the address bar is narrow on a phone, and
++            // the menu is where this build keeps actions of this kind.
+             mOpenInAppEntryPoint =
+-                    new TabbedOpenInAppEntryPoint(
+-                            mActivityTabProvider.asObservable(), omniboxChipManager, mActivity);
++                    new MenuOnlyOpenInAppEntryPoint(
++                            mActivityTabProvider.asObservable(), mActivity);
+         }
+ 
+         if (AndroidSidePanelEnabledFn.isEnabled()
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index 066f2bbcdde..495ab7b48c7 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -433,6 +433,7 @@ if (is_android) {
+       "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarAppMenuUpdateBadgeControllerUnitTest.java",
+       "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinatorUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapterUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java",
+       "src/org/chromium/chrome/browser/BrowserExitReasonTrackerUnitTest.java",
+       "src/org/chromium/chrome/browser/ChromeActionModeHandlerUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java
+new file mode 100644
+index 00000000000..eddb16d397d
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java
+@@ -0,0 +1,162 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.After;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++/** Unit tests for how the Open links in apps setting is stored and read back. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareOpenInAppsModeUnitTest {
++
++    @After
++    public void tearDown() {
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.BARE_OPEN_LINKS_IN_APPS);
++    }
++
++    private static void store(String value) {
++        ChromeSharedPreferences.getInstance()
++                .writeString(ChromePreferenceKeys.BARE_OPEN_LINKS_IN_APPS, value);
++    }
++
++    @Test
++    public void testDefaultIsNever() {
++        assertEquals(BareOpenInAppsMode.Mode.NEVER, BareOpenInAppsMode.get());
++    }
++
++    @Test
++    public void testEachModePersists() {
++        store(BareOpenInAppsMode.VALUE_ALWAYS);
++        assertEquals(BareOpenInAppsMode.Mode.ALWAYS, BareOpenInAppsMode.get());
++
++        store(BareOpenInAppsMode.VALUE_ASK);
++        assertEquals(BareOpenInAppsMode.Mode.ASK, BareOpenInAppsMode.get());
++
++        store(BareOpenInAppsMode.VALUE_NEVER);
++        assertEquals(BareOpenInAppsMode.Mode.NEVER, BareOpenInAppsMode.get());
++    }
++
++    @Test
++    public void testUnrecognisedValueFallsBackToNever() {
++        // A preference written by a later build, or corrupted, must not enable anything.
++        store("open-everything-immediately");
++        assertEquals(BareOpenInAppsMode.Mode.NEVER, BareOpenInAppsMode.get());
++
++        store("");
++        assertEquals(BareOpenInAppsMode.Mode.NEVER, BareOpenInAppsMode.get());
++    }
++
++    @Test
++    public void testValueIsCaseSensitiveAndNotGuessed() {
++        // "Always" is not "always". Anything not matched exactly is Never, which is the safe end.
++        store("ALWAYS");
++        assertEquals(BareOpenInAppsMode.Mode.NEVER, BareOpenInAppsMode.get());
++    }
++
++    @Test
++    public void testRoundTrip() {
++        int[] modes = {
++            BareOpenInAppsMode.Mode.NEVER, BareOpenInAppsMode.Mode.ASK,
++            BareOpenInAppsMode.Mode.ALWAYS,
++        };
++        for (int mode : modes) {
++            assertEquals(mode, BareOpenInAppsMode.fromValue(BareOpenInAppsMode.toValue(mode)));
++        }
++    }
++
++    @Test
++    public void testNeverKeepsEverythingHere() {
++        // The behaviour the browser had before the setting existed, and its default.
++        assertFalse(BareOpenInAppsMode.allowsHandoff(BareOpenInAppsMode.Mode.NEVER));
++        assertFalse(BareOpenInAppsMode.asksFirst(BareOpenInAppsMode.Mode.NEVER));
++    }
++
++    @Test
++    public void testAskAllowsHandoffAndAsksFirst() {
++        assertTrue(BareOpenInAppsMode.allowsHandoff(BareOpenInAppsMode.Mode.ASK));
++        assertTrue(BareOpenInAppsMode.asksFirst(BareOpenInAppsMode.Mode.ASK));
++    }
++
++    @Test
++    public void testAlwaysAllowsHandoffWithoutAsking() {
++        assertTrue(BareOpenInAppsMode.allowsHandoff(BareOpenInAppsMode.Mode.ALWAYS));
++        assertFalse(BareOpenInAppsMode.asksFirst(BareOpenInAppsMode.Mode.ALWAYS));
++    }
++
++    @Test
++    public void testAskIsTheOnlyModeThatPrompts() {
++        int prompting = 0;
++        int[] modes = {
++            BareOpenInAppsMode.Mode.NEVER, BareOpenInAppsMode.Mode.ASK,
++            BareOpenInAppsMode.Mode.ALWAYS,
++        };
++        for (int mode : modes) {
++            if (BareOpenInAppsMode.asksFirst(mode)) prompting++;
++        }
++        assertEquals(1, prompting);
++    }
++
++    @Test
++    public void testAskingImpliesHandoffIsAllowed() {
++        // A mode that asks but does not allow would put a question to the user that could only
++        // ever be answered one way.
++        int[] modes = {
++            BareOpenInAppsMode.Mode.NEVER, BareOpenInAppsMode.Mode.ASK,
++            BareOpenInAppsMode.Mode.ALWAYS,
++        };
++        for (int mode : modes) {
++            if (BareOpenInAppsMode.asksFirst(mode)) {
++                assertTrue(BareOpenInAppsMode.allowsHandoff(mode));
++            }
++        }
++    }
++
++    @Test
++    public void testUnrecognisedValueNeitherAllowsNorAsks() {
++        store("something-else");
++        int mode = BareOpenInAppsMode.get();
++        assertFalse(BareOpenInAppsMode.allowsHandoff(mode));
++        assertFalse(BareOpenInAppsMode.asksFirst(mode));
++    }
++
++    @Test
++    public void testModeAloneDecidesNothingAboutIncognito() {
++        // The setting is about ordinary browsing. Incognito is settled separately, in the
++        // delegate, where the tab is known: a page opened in incognito is never handed to another
++        // app on its own, whichever mode is stored. Nothing here should ever grow an incognito
++        // argument, because a mode is not enough information to answer that question.
++        for (String value :
++                new String[] {
++                    BareOpenInAppsMode.VALUE_NEVER,
++                    BareOpenInAppsMode.VALUE_ASK,
++                    BareOpenInAppsMode.VALUE_ALWAYS,
++                }) {
++            store(value);
++            int mode = BareOpenInAppsMode.get();
++            assertEquals(mode, BareOpenInAppsMode.fromValue(value));
++            assertEquals(
++                    BareOpenInAppsMode.allowsHandoff(mode),
++                    BareOpenInAppsMode.allowsHandoff(BareOpenInAppsMode.fromValue(value)));
++        }
++    }
++
++    @Test
++    public void testStoredValueStringsAreStable() {
++        // These strings are written into a preference and read back by later builds.
++        assertEquals("never", BareOpenInAppsMode.VALUE_NEVER);
++        assertEquals("ask", BareOpenInAppsMode.VALUE_ASK);
++        assertEquals("always", BareOpenInAppsMode.VALUE_ALWAYS);
++    }
++}
+diff --git a/chrome/browser/open_in_app/android/BUILD.gn b/chrome/browser/open_in_app/android/BUILD.gn
+index e4e66a563cc..fa6277f142d 100644
+--- a/chrome/browser/open_in_app/android/BUILD.gn
++++ b/chrome/browser/open_in_app/android/BUILD.gn
+@@ -7,6 +7,7 @@ import("//build/config/android/rules.gni")
+ android_library("java") {
+   sources = [
+     "java/src/org/chromium/chrome/browser/open_in_app/CustomTabOpenInAppEntryPoint.java",
++    "java/src/org/chromium/chrome/browser/open_in_app/MenuOnlyOpenInAppEntryPoint.java",
+     "java/src/org/chromium/chrome/browser/open_in_app/OpenInAppDelegate.java",
+     "java/src/org/chromium/chrome/browser/open_in_app/OpenInAppEntryPoint.java",
+     "java/src/org/chromium/chrome/browser/open_in_app/OpenInAppMenuItemProvider.java",
+diff --git a/chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/MenuOnlyOpenInAppEntryPoint.java b/chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/MenuOnlyOpenInAppEntryPoint.java
+new file mode 100644
+index 00000000000..b501154f0e9
+--- /dev/null
++++ b/chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/MenuOnlyOpenInAppEntryPoint.java
+@@ -0,0 +1,26 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.open_in_app;
++
++import android.content.Context;
++
++import org.chromium.base.supplier.NullableObservableSupplier;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.tab.Tab;
++
++/**
++ * Entry point for Open in App that offers the app menu item and nothing else.
++ *
++ * <p>The base class already resolves the handler and answers {@link OpenInAppMenuItemProvider};
++ * placing the omnibox chip is the subclass's job, and this one has no chip to place. Used where
++ * the menu item is the whole of the feature.
++ */
++@NullMarked
++public class MenuOnlyOpenInAppEntryPoint extends OpenInAppEntryPoint {
++    public MenuOnlyOpenInAppEntryPoint(
++            NullableObservableSupplier<Tab> tabSupplier, Context context) {
++        super(tabSupplier, context);
++    }
++}
+diff --git a/chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/OpenInAppUtils.java b/chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/OpenInAppUtils.java
+index 7bffc96c135..c51e4323265 100644
+--- a/chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/OpenInAppUtils.java
++++ b/chrome/browser/open_in_app/android/java/src/org/chromium/chrome/browser/open_in_app/OpenInAppUtils.java
+@@ -4,7 +4,7 @@
+ 
+ package org.chromium.chrome.browser.open_in_app;
+ 
+-import org.chromium.base.DeviceInfo;
++import org.chromium.build.BuildConfig;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ 
+@@ -14,7 +14,16 @@ public class OpenInAppUtils {
+ 
+     /** Returns whether Open in App is available. */
+     public static boolean isOpenInAppAvailable() {
+-        return ChromeFeatureList.sDesktopAndroidLinkCapturing.isEnabled() && DeviceInfo.isDesktop();
++        // The check here used to be DeviceInfo.isDesktop(), which additionally requires the
++        // running device to report FEATURE_PC. A phone never does, so on a build of the desktop
++        // Android target shipped to phones the answer was always no and the feature was
++        // unreachable on every device it runs on.
++        //
++        // What Open in App needs is the target, not desktop hardware: the menu item and the
++        // handler lookup behind it work the same on a phone. Device classification itself is
++        // left alone.
++        return ChromeFeatureList.sDesktopAndroidLinkCapturing.isEnabled()
++                && BuildConfig.IS_DESKTOP_ANDROID;
+     }
+ 
+     private OpenInAppUtils() {}
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 9f8cf1b3120..20f76c629ab 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -441,6 +441,13 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_UPDATE_ACKED_TAG = "Chrome.Bare.UpdateAckedTag";
+ 
++    /**
++     * Whether a link an installed app could handle is opened in that app, and whether the user is
++     * asked first. Holds one of the values in BareOpenInAppsMode. Absent means Never, which is how
++     * the browser behaved before the setting existed.
++     */
++    public static final String BARE_OPEN_LINKS_IN_APPS = "Chrome.Bare.OpenLinksInApps";
++
+     public static final String DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER =
+             "Chrome.Download.UseExternalDownloadManager";
+ 
+@@ -1253,6 +1260,7 @@ public final class ChromePreferenceKeys {
+                 AUTOFILL_ASSISTANT_FIRST_TIME_LITE_SCRIPT_USER,
+                 BARE_BUNDLED_AD_BLOCKER_ENABLED,
+                 BARE_UPDATE_BADGE,
++                BARE_OPEN_LINKS_IN_APPS,
+                 BARE_UPDATE_LAST_CHECK_MS,
+                 BARE_UPDATE_LATEST_TAG,
+                 BARE_UPDATE_ACKED_TAG,
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 0013c318561..65b513c7df4 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4225,6 +4225,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_TOOLBAR_SHORTCUT" desc="Title for toolbar shortcut toggle button in adaptive toolbar button preference page.">
+         Toolbar shortcut
+       </message>
++      <message name="IDS_BARE_OPEN_LINKS_IN_APPS_TITLE" desc="Title of the setting for whether a link that an installed app can handle opens in that app.">
++        Open links in apps
++      </message>
++      <message name="IDS_BARE_OPEN_LINKS_IN_APPS_ALWAYS" desc="Setting value: links open in the installed app without asking.">
++        Always
++      </message>
++      <message name="IDS_BARE_OPEN_LINKS_IN_APPS_ASK" desc="Setting value: the user is asked each time a link could open in an installed app.">
++        Ask every time
++      </message>
++      <message name="IDS_BARE_OPEN_LINKS_IN_APPS_NEVER" desc="Setting value: links stay in the browser.">
++        Never
++      </message>
+       <message name="IDS_BARE_TOOLBAR_SETTINGS_TITLE" desc="Title of the settings screen for choosing which buttons appear on the browser toolbar.">
+         Toolbar
+       </message>
+diff --git a/components/browser_ui/strings/android/browser_ui_strings.grd b/components/browser_ui/strings/android/browser_ui_strings.grd
+index 1917bfc291f..75e337c307a 100644
+--- a/components/browser_ui/strings/android/browser_ui_strings.grd
++++ b/components/browser_ui/strings/android/browser_ui_strings.grd
+@@ -787,6 +787,27 @@
+       <message name="IDS_EXTERNAL_APP_LEAVE_INCOGNITO_WARNING_TITLE" desc="Title for dialog asking if the user wants to leave Incognito mode. [CHAR_LIMIT=32]" formatter_data="android_java">
+         Leave Incognito mode?
+       </message>
++      <message name="IDS_OPEN_IN_APP_PROMPT_TITLE_GENERIC" desc="Title of the dialog asking whether to open the current link in an installed app, used when more than one app could handle it and the one that will open is not known yet." formatter_data="android_java">
++        Open in app?
++      </message>
++      <message name="IDS_OPEN_IN_APP_PROMPT_MESSAGE_GENERIC" desc="Body of the dialog asking whether to open the current link in an installed app, used when more than one app could handle it." formatter_data="android_java">
++        An installed app can open this link.
++      </message>
++      <message name="IDS_OPEN_IN_APP_PROMPT_OPEN_GENERIC" desc="Label for the dialog button that opens the link in an installed app, used when the app that will open is not known yet. [CHAR_LIMIT=20]" formatter_data="android_java">
++        Open
++      </message>
++      <message name="IDS_OPEN_IN_APP_PROMPT_TITLE" desc="Title of the dialog asking whether to open the current link in an installed app. The placeholder is the app name." formatter_data="android_java">
++        Open in <ph name="APP_NAME">%1$s<ex>Gmail</ex></ph>?
++      </message>
++      <message name="IDS_OPEN_IN_APP_PROMPT_MESSAGE" desc="Body of the dialog asking whether to open the current link in an installed app. The placeholder is the app name." formatter_data="android_java">
++        <ph name="APP_NAME">%1$s<ex>Gmail</ex></ph> can open this link.
++      </message>
++      <message name="IDS_OPEN_IN_APP_PROMPT_OPEN" desc="Label for the dialog button that opens the link in the installed app. The placeholder is the app name. [CHAR_LIMIT=20]" formatter_data="android_java">
++        Open <ph name="APP_NAME">%1$s<ex>Gmail</ex></ph>
++      </message>
++      <message name="IDS_OPEN_IN_APP_PROMPT_STAY" desc="Label for the dialog button that keeps the link in the browser. [CHAR_LIMIT=20]" formatter_data="android_java">
++        Stay here
++      </message>
+       <message name="IDS_EXTERNAL_APP_LEAVE_INCOGNITO_STAY" desc="Label for the dialog button to stay in Incognito mode. [CHAR_LIMIT=20]" formatter_data="android_java">
+         Stay
+       </message>
+diff --git a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java
+index f1d222cf62d..c1de756ee9e 100644
+--- a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java
++++ b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java
+@@ -225,4 +225,19 @@ public interface ExternalNavigationDelegate {
+ 
+     /** Reparents the tab associated with this delegate to a new instance of the same PWA. */
+     default void reparentTabToSamePwa() {}
++
++    /**
++     * Returns whether the user should be asked before this navigation leaves for an installed app.
++     *
++     * <p>Only consulted once the navigation has already passed every other check and would
++     * otherwise launch the app, so answering true turns a launch into a question rather than
++     * creating a new way to leave. An embedder that keeps some navigations in the browser
++     * regardless of the user's answer should say so in {@link
++     * #allowExternalNavigationForHttpProtocols}, which is asked first, rather than here.
++     *
++     * @param url The {@link GURL} being navigated to.
++     */
++    default boolean shouldAskBeforeLeavingForApp(GURL url) {
++        return false;
++    }
+ }
+diff --git a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
+index 639ba19eb42..f747106bf30 100644
+--- a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
++++ b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
+@@ -702,6 +702,9 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+     private final ModalDialogManager mModalDialogManager;
+     @VisibleForTesting protected @Nullable IncognitoDialogDelegate mIncognitoDialogDelegate;
+ 
++    @VisibleForTesting
++    protected @Nullable OpenInAppDialogDelegate mOpenInAppDialogDelegate;
++
+     @VisibleForTesting
+     protected @Nullable DigitalCredentialsWarningDialogDelegate
+             mDigitalCredentialsWarningDialogDelegate;
+@@ -736,18 +739,6 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+     public OverrideUrlLoadingResult shouldOverrideUrlLoading(ExternalNavigationParams params) {
+         if (debug()) Log.i(TAG, "shouldOverrideUrlLoading called on " + params.getUrl().getSpec());
+ 
+-        // De-Googled build: keep web navigations in the browser. Android app-link
+-        // handling otherwise sends http(s) URLs to whichever app has claimed the
+-        // domain, with no prompt and no in-browser setting to prevent it.
+-        //
+-        // Only http(s) is diverted back to the browser. Explicit external schemes
+-        // (intent://, tel:, mailto:, sms:, WTAI, and app-specific schemes) fall
+-        // through unchanged, so those links still open their apps as expected.
+-        if (UrlUtilities.isHttpOrHttps(params.getUrl())) {
+-            if (debug()) Log.i(TAG, "Keeping http(s) navigation in the browser.");
+-            return OverrideUrlLoadingResult.forNoOverride();
+-        }
+-
+         Intent targetIntent;
+         boolean isIntentUrl = UrlUtilities.hasIntentScheme(params.getUrl());
+         // Perform generic parsing of the URI to turn it into an Intent.
+@@ -2113,6 +2104,24 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+             }
+         }
+ 
++        // Everything above has decided this navigation may leave for an app. The embedder gets
++        // the last word on whether to ask first.
++        //
++        // Incognito has already been dealt with further up and does not arrive here, so there is
++        // no arrangement in which this dialog and the leaving-incognito one both appear.
++        if (!isExternalProtocol && mDelegate.shouldAskBeforeLeavingForApp(params.getUrl())) {
++            OverrideUrlLoadingResult asked =
++                    askBeforeLeavingForApp(
++                            targetIntent,
++                            params,
++                            requiresIntentChooser,
++                            resolvingInfos,
++                            resolveActivity,
++                            browserFallbackUrl,
++                            intentTargetUrl);
++            if (asked != null) return asked;
++        }
++
+         return startActivity(
+                 targetIntent,
+                 params,
+@@ -2123,6 +2132,176 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+                 intentTargetUrl);
+     }
+ 
++    /**
++     * Asks whether this navigation should leave for an installed app.
++     *
++     * <p>Every navigation that reaches here is asked about, including the one where several apps
++     * match and Android would put up its own chooser. The dialog names the app when one app is
++     * going to open and asks in general terms when it is not yet known which will, but either way
++     * the question is put. Answering yes hands the navigation back to the ordinary launch path,
++     * so Android still shows its chooser afterwards where it would have.
++     *
++     * <p>Returns null only when there is no Activity to host a dialog, in which case the caller
++     * carries on and launches as it would have.
++     */
++    private @Nullable OverrideUrlLoadingResult askBeforeLeavingForApp(
++            Intent targetIntent,
++            ExternalNavigationParams params,
++            boolean requiresIntentChooser,
++            QueryIntentActivitiesSupplier resolvingInfos,
++            ResolveActivitySupplier resolveActivity,
++            GURL browserFallbackUrl,
++            GURL intentTargetUrl) {
++        Context context = mDelegate.getContext();
++        if (ContextUtils.activityFromContext(context) == null) return null;
++        assumeNonNull(context);
++
++        // The app label is only used to name the app in the dialog. It stays null when several
++        // apps match and Android will choose between them, or when the label cannot be read, and
++        // the dialog then asks about opening in an app without naming one.
++        CharSequence appLabel = null;
++        ResolveInfo intentResolveInfo = resolveActivity.get();
++        if (intentResolveInfo != null
++                && intentResolveInfo.activityInfo != null
++                && !resolvesToChooser(intentResolveInfo, resolvingInfos.get())) {
++            var iconAndLabel =
++                    getApplicationIconAndLabel(
++                            context.getPackageManager(),
++                            intentResolveInfo.activityInfo.packageName);
++            if (iconAndLabel != null) appLabel = iconAndLabel.second;
++        }
++
++        mOpenInAppDialogDelegate =
++                new OpenInAppDialogDelegate(
++                        context,
++                        params,
++                        targetIntent,
++                        appLabel,
++                        requiresIntentChooser,
++                        resolvingInfos,
++                        resolveActivity,
++                        browserFallbackUrl,
++                        intentTargetUrl);
++        mOpenInAppDialogDelegate.showDialog();
++        return OverrideUrlLoadingResult.forAsyncAction();
++    }
++
++    /**
++     * Called once the user has answered the dialog. Either the app is launched, or the navigation
++     * the dialog interrupted is allowed to continue in the browser.
++     */
++    private void onUserDecidedWhetherToLeaveForApp(
++            boolean shouldLaunch,
++            ExternalNavigationParams params,
++            Intent targetIntent,
++            boolean requiresIntentChooser,
++            QueryIntentActivitiesSupplier resolvingInfos,
++            ResolveActivitySupplier resolveActivity,
++            GURL browserFallbackUrl,
++            GURL intentTargetUrl) {
++        mOpenInAppDialogDelegate = null;
++        var callback = params.getRequiredAsyncActionTakenCallback();
++        if (callback == null) return;
++
++        if (shouldLaunch) {
++            OverrideUrlLoadingResult result =
++                    startActivity(
++                            targetIntent,
++                            params,
++                            requiresIntentChooser,
++                            resolvingInfos,
++                            resolveActivity,
++                            browserFallbackUrl,
++                            intentTargetUrl);
++            if (result.getResultType() != OverrideUrlLoadingResultType.NO_OVERRIDE) {
++                callback.onResult(
++                        AsyncActionTakenParams.forExternalIntentLaunched(
++                                mDelegate.canCloseTabOnIntentLaunch(), params));
++                return;
++            }
++        }
++
++        // Staying in the browser, or the launch failed. Either way the page the user was going to
++        // is the right thing to show, so the interrupted navigation is resumed rather than
++        // dropped.
++        callback.onResult(AsyncActionTakenParams.forNavigate(params.getUrl(), params));
++    }
++
++    /** The dialog asking whether to open a link in the app that handles it. */
++    @VisibleForTesting
++    class OpenInAppDialogDelegate extends InterstitialDialogDelegate {
++        private final ExternalNavigationParams mParams;
++        private final @Nullable CharSequence mAppLabel;
++        private final boolean mRequiresIntentChooser;
++        private final QueryIntentActivitiesSupplier mResolvingInfos;
++        private final ResolveActivitySupplier mResolveActivity;
++        private final GURL mBrowserFallbackUrl;
++        private final GURL mIntentTargetUrl;
++
++        OpenInAppDialogDelegate(
++                Context context,
++                ExternalNavigationParams params,
++                Intent intent,
++                @Nullable CharSequence appLabel,
++                boolean requiresIntentChooser,
++                QueryIntentActivitiesSupplier resolvingInfos,
++                ResolveActivitySupplier resolveActivity,
++                GURL browserFallbackUrl,
++                GURL intentTargetUrl) {
++            super(context, params.getNavigationId(), intent);
++            mParams = params;
++            mAppLabel = appLabel;
++            mRequiresIntentChooser = requiresIntentChooser;
++            mResolvingInfos = resolvingInfos;
++            mResolveActivity = resolveActivity;
++            mBrowserFallbackUrl = browserFallbackUrl;
++            mIntentTargetUrl = intentTargetUrl;
++        }
++
++        @Override
++        protected void onConfirmed() {
++            onUserDecidedWhetherToLeaveForApp(
++                    true,
++                    mParams,
++                    mIntent,
++                    mRequiresIntentChooser,
++                    mResolvingInfos,
++                    mResolveActivity,
++                    mBrowserFallbackUrl,
++                    mIntentTargetUrl);
++        }
++
++        @Override
++        protected void onCancelled() {
++            onUserDecidedWhetherToLeaveForApp(
++                    false,
++                    mParams,
++                    mIntent,
++                    mRequiresIntentChooser,
++                    mResolvingInfos,
++                    mResolveActivity,
++                    mBrowserFallbackUrl,
++                    mIntentTargetUrl);
++        }
++
++        @Override
++        protected PropertyModel buildPropertyModel() {
++            Resources res = assumeNonNull(mDelegate.getContext()).getResources();
++            if (mAppLabel == null) {
++                return buildPropertyModelBase(
++                        res.getString(R.string.open_in_app_prompt_title_generic),
++                        res.getString(R.string.open_in_app_prompt_message_generic),
++                        res.getString(R.string.open_in_app_prompt_open_generic),
++                        res.getString(R.string.open_in_app_prompt_stay));
++            }
++            return buildPropertyModelBase(
++                    res.getString(R.string.open_in_app_prompt_title, mAppLabel),
++                    res.getString(R.string.open_in_app_prompt_message, mAppLabel),
++                    res.getString(R.string.open_in_app_prompt_open, mAppLabel),
++                    res.getString(R.string.open_in_app_prompt_stay));
++        }
++    }
++
+     private boolean shouldBlockExternalNavigationForHttpProtocols(
+             boolean allowExternalNavigation,
+             boolean shouldReturnAsResult,
+@@ -2252,6 +2431,9 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+                 && mDigitalCredentialsWarningDialogDelegate.isShowing()) {
+             mDigitalCredentialsWarningDialogDelegate.cancelDialog();
+         }
++        if (mOpenInAppDialogDelegate != null && mOpenInAppDialogDelegate.isShowing()) {
++            mOpenInAppDialogDelegate.cancelDialog();
++        }
+     }
+ 
+     /**

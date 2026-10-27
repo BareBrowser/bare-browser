@@ -1,0 +1,120 @@
+From f8c62414ec307fbd962b3e52ebef6668dc992f24 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Tue, 25 Aug 2026 16:45:09 +0000
+Subject: [PATCH] Patch 0000091
+
+---
+ .../java/res/xml/safety_hub_preferences.xml   | 10 ----
+ .../browser/safety_hub/SafetyHubFragment.java | 49 ++++++-------------
+ 2 files changed, 16 insertions(+), 43 deletions(-)
+
+diff --git a/chrome/browser/safety_hub/android/java/res/xml/safety_hub_preferences.xml b/chrome/browser/safety_hub/android/java/res/xml/safety_hub_preferences.xml
+index 863da4355ec..a42db30e8cd 100644
+--- a/chrome/browser/safety_hub/android/java/res/xml/safety_hub_preferences.xml
++++ b/chrome/browser/safety_hub/android/java/res/xml/safety_hub_preferences.xml
+@@ -29,21 +29,11 @@ found in the LICENSE file.
+     <org.chromium.chrome.browser.safety_hub.SafetyHubExpandablePreference
+         android:key="update_check"
+         android:title="@string/safety_check_updates_title"/>
+-    <!-- Account-level passwords -->
+-    <org.chromium.chrome.browser.safety_hub.SafetyHubExpandablePreference
+-        android:key="passwords_account"
+-        android:title="@string/safety_check_passwords_safe"
+-        app:isPreferenceVisible="false"/>
+     <!-- Local-level passwords -->
+     <org.chromium.chrome.browser.safety_hub.SafetyHubExpandablePreference
+         android:key="passwords_local"
+         android:title="@string/safety_hub_local_passwords_checking_title"
+         app:isPreferenceVisible="false" />
+-    <!-- Unified passwords -->
+-    <org.chromium.chrome.browser.safety_hub.SafetyHubExpandablePreference
+-        android:key="passwords_unified"
+-        android:title="@string/safety_hub_local_passwords_checking_title"
+-        app:isPreferenceVisible="false" />
+     <!-- Unused permissions -->
+     <org.chromium.chrome.browser.safety_hub.SafetyHubExpandablePreference
+         android:key="permissions"
+diff --git a/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/browser/safety_hub/SafetyHubFragment.java b/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/browser/safety_hub/SafetyHubFragment.java
+index 2eb1917a309..38e3e243878 100644
+--- a/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/browser/safety_hub/SafetyHubFragment.java
++++ b/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/browser/safety_hub/SafetyHubFragment.java
+@@ -32,7 +32,6 @@ import org.chromium.chrome.browser.safety_hub.SafetyHubMetricUtils.LifecycleEven
+ import org.chromium.chrome.browser.safety_hub.SafetyHubModuleMediator.ModuleOption;
+ import org.chromium.chrome.browser.safety_hub.SafetyHubModuleMediator.ModuleState;
+ import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
+-import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
+ import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+ import org.chromium.components.browser_ui.settings.SettingsUtils;
+ import org.chromium.components.browser_ui.site_settings.SiteSettingsCategory;
+@@ -47,8 +46,6 @@ import java.util.List;
+ @NullMarked
+ public class SafetyHubFragment extends SafetyHubBaseFragment
+         implements SafetyHubModuleMediatorDelegate {
+-    private static final String PREF_UNIFIED_PASSWORDS = "passwords_unified";
+-    private static final String PREF_ACCOUNT_PASSWORDS = "passwords_account";
+     private static final String PREF_LOCAL_PASSWORDS = "passwords_local";
+     private static final String PREF_UPDATE = "update_check";
+     private static final String PREF_UNUSED_PERMISSIONS = "permissions";
+@@ -123,13 +120,17 @@ public class SafetyHubFragment extends SafetyHubBaseFragment
+             mModuleMediators.add(notificationsModuleMediator);
+         }
+ 
+-        SafetyHubAccountPasswordsDataSource accountPasswordsDataSource =
+-                new SafetyHubAccountPasswordsDataSource(
+-                        mDelegate,
+-                        UserPrefs.get(getProfile()),
+-                        safetyHubFetchService,
+-                        IdentityServicesProvider.get().getSigninManager(getProfile()),
+-                        getProfile());
++        // De-Googled build: no account-level password module.
++        //
++        // Checking saved passwords against Google's breach list needs a Chrome account, which
++        // this build does not offer. All the module could report was that it had been unable to
++        // check, under a "Sign in to Chrome" button leading somewhere that does not exist here.
++        // A page whose job is to say whether the browser is in good shape should not be occupied
++        // by a check that can never run.
++        //
++        // The unified module goes with it, being the same account check with the local list
++        // folded in. Passwords saved on the device keep their own module, and the password
++        // settings elsewhere in Settings are untouched: this removes a report, not a feature.
+         SafetyHubLocalPasswordsDataSource localPasswordsDataSource =
+                 new SafetyHubLocalPasswordsDataSource(
+                         mDelegate,
+@@ -137,32 +138,14 @@ public class SafetyHubFragment extends SafetyHubBaseFragment
+                         safetyHubFetchService,
+                         new PasswordStoreBridge(getProfile()));
+ 
+-        if (shouldShowUnifiedPasswords()) {
+-            SafetyHubPasswordsModuleMediator passwordsModuleMediator =
+-                    new SafetyHubPasswordsModuleMediator(
+-                            findPreference(PREF_UNIFIED_PASSWORDS),
+-                            accountPasswordsDataSource,
++        if (shouldShowLocalPasswords()) {
++            SafetyHubLocalPasswordsModuleMediator localPasswordsModuleMediator =
++                    new SafetyHubLocalPasswordsModuleMediator(
++                            findPreference(PREF_LOCAL_PASSWORDS),
+                             localPasswordsDataSource,
+                             /* mediatorDelegate= */ this,
+                             mDelegate);
+-            mModuleMediators.add(passwordsModuleMediator);
+-        } else {
+-            SafetyHubAccountPasswordsModuleMediator accountPasswordsModuleMediator =
+-                    new SafetyHubAccountPasswordsModuleMediator(
+-                            findPreference(PREF_ACCOUNT_PASSWORDS),
+-                            accountPasswordsDataSource,
+-                            /* mediatorDelegate= */ this,
+-                            mDelegate);
+-            mModuleMediators.add(accountPasswordsModuleMediator);
+-            if (shouldShowLocalPasswords()) {
+-                SafetyHubLocalPasswordsModuleMediator localPasswordsModuleMediator =
+-                        new SafetyHubLocalPasswordsModuleMediator(
+-                                findPreference(PREF_LOCAL_PASSWORDS),
+-                                localPasswordsDataSource,
+-                                /* mediatorDelegate= */ this,
+-                                mDelegate);
+-                mModuleMediators.add(localPasswordsModuleMediator);
+-            }
++            mModuleMediators.add(localPasswordsModuleMediator);
+         }
+ 
+         mBrowserStateModuleMediator =

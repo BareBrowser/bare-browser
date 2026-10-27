@@ -1,0 +1,796 @@
+From 77617480ef8abc85b746eda157247685e54734db Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 21 Oct 2026 22:59:17 +0000
+Subject: [PATCH] Patch 0000171
+
+---
+ .../values/channel_constants.xml              |   2 +-
+ .../browser/download/DownloadController.java  | 180 ++++++++++++------
+ chrome/android/junit/BUILD.gn                 |   1 +
+ .../DownloadControllerHandoffUnitTest.java    |  71 +++++++
+ .../download/android/download_controller.cc   |  25 ++-
+ .../download/android/download_controller.h    |  21 +-
+ .../java/res/xml/download_preferences.xml     |   6 +
+ .../download/settings/DownloadSettings.java   |  18 ++
+ .../chrome_download_manager_delegate.cc       | 128 +++++++++++--
+ .../chrome_download_manager_delegate.h        |   6 +
+ .../preferences/ChromePreferenceKeys.java     |   8 +
+ .../strings/android_chrome_strings.grd        |  11 +-
+ .../browser/download/download_manager_impl.cc |   7 +
+ .../browser/download_manager_delegate.cc      |  10 +
+ .../browser/download_manager_delegate.h       |  10 +
+ 15 files changed, 421 insertions(+), 83 deletions(-)
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/download/DownloadControllerHandoffUnitTest.java
+
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index cdd26028121..58c66989eae 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -46,7 +46,7 @@ found in the LICENSE file.
+     <string name="bare_welcome_hint_address_bar" translatable="false">At the top, or at the bottom within reach of your thumb</string>
+     <string name="bare_welcome_opt_downloads" translatable="false">External download manager</string>
+     <string name="bare_welcome_hint_downloads" translatable="false">Hand downloads to another app instead of saving them in Bare</string>
+-    <string name="bare_welcome_downloads_note" translatable="false">A download handed to another app does not take your sign-in to the website with it, so a file that needs you to be signed in may fail there.</string>
++    <string name="bare_welcome_downloads_note" translatable="false">The app gets the page address and the browser name. Your sign-in cookies are only sent if you allow it in Settings, Downloads, so a file that needs you to be signed in may fail until then.</string>
+     <string name="bare_welcome_opt_background_media" translatable="false">Background media playback</string>
+     <string name="bare_welcome_hint_background_media" translatable="false">Keep audio playing when you switch apps or lock the screen</string>
+     <string name="bare_welcome_opt_notifications" translatable="false">Allow notifications</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
+index 8cdbc819aab..c9e0fb869c9 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
+@@ -10,16 +10,22 @@ import org.jni_zero.CalledByNative;
+ import org.jni_zero.JniType;
+ import org.jni_zero.NativeMethods;
+ 
++import android.content.ActivityNotFoundException;
++import android.content.ComponentName;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.pm.PackageManager;
+ import android.content.pm.ResolveInfo;
+ import android.net.Uri;
++import android.os.Bundle;
++import android.provider.Browser;
++import android.widget.Toast;
+ 
+ import org.chromium.base.ContextUtils;
+ import org.chromium.base.Log;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.pdf.PdfPage;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+@@ -35,90 +41,145 @@ import org.chromium.ui.base.MimeTypeUtils;
+ import org.chromium.url.GURL;
+ import org.chromium.url.Origin;
+ 
++import java.util.ArrayList;
++import java.util.List;
++
+ /** Java counterpart of android DownloadController. Owned by native. */
+ @NullMarked
+ public class DownloadController {
+     private static final String TAG = "DownloadController";
+ 
++    /** The apps that can take a download, and Bare's own entries for the same intent. */
++    private static final class Handlers {
++        final List<String> components = new ArrayList<>();
++        final List<ComponentName> own = new ArrayList<>();
++    }
++
+     /**
+-     * De-Googled build: offer the download to an installed download manager.
++     * Collects the installed handlers for a download, excluding this browser.
+      *
+-     * <p>Builds an ACTION_VIEW intent for the download and shows a chooser, so an app such as 1DM
+-     * can take it. Returns true only if a chooser was actually shown, so that Chromium falls back
+-     * to downloading the file itself when no suitable app is installed.
++     * <p>Tracked as components rather than packages. An app may register more than one activity
++     * for the same intent - 1DM offers both its downloader and its own browser - and naming only
++     * the package leaves Android to ask which of them should handle it, defeating the point of
++     * choosing one in settings.
+      *
+-     * <p>Chromium registers as a handler for http(s) ACTION_VIEW itself, so it is left out of the
+-     * candidate list and named in EXTRA_EXCLUDE_COMPONENTS. Without both the chooser would offer
+-     * this browser as a place to send its own download, which at best is confusing and at worst
+-     * loops.
++     * <p>Chromium registers as a handler for http(s) ACTION_VIEW itself, so it goes in {@code own}
++     * and is named in EXTRA_EXCLUDE_COMPONENTS later. Without both the chooser would offer this
++     * browser as a place to send its own download, which at best is confusing and at worst loops.
++     */
++    private static Handlers findHandlers(Context context, Intent probe) {
++        PackageManager pm = context.getPackageManager();
++        String self = context.getPackageName();
++        Handlers handlers = new Handlers();
++        for (ResolveInfo info : pm.queryIntentActivities(probe, 0)) {
++            if (info.activityInfo == null) continue;
++            ComponentName name =
++                    new ComponentName(info.activityInfo.packageName, info.activityInfo.name);
++            if (self.equals(info.activityInfo.packageName)) {
++                handlers.own.add(name);
++                continue;
++            }
++            String component = name.flattenToString();
++            if (!handlers.components.contains(component)) handlers.components.add(component);
++        }
++        return handlers;
++    }
++
++    /**
++     * The intent a download is handed over in.
+      *
+-     * <p>Known limitation: the interception point in ChromeDownloadManagerDelegate does not carry
+-     * the request cookie, so a download that depends on being signed in will fail in the external
+-     * app. Passing credentials needs a different interception layer.
++     * <p>The address and type are what every download manager reads. What else the page knew
++     * travels in the standard headers bundle that browsers have always put on a VIEW intent, and
++     * the referrer is also set the way Android names it. Nothing is app-specific: a manager that
++     * reads those keys benefits, and one that does not is no worse off than before.
++     *
++     * <p>Cookies and the referrer are a user's, so this does not log, print or keep any of it.
++     */
++    @VisibleForTesting
++    static Intent buildHandoffIntent(
++            String url, String mimeType, String referrer, String userAgent, String cookie) {
++        Intent intent = new Intent(Intent.ACTION_VIEW);
++        Uri uri = Uri.parse(url);
++        if (mimeType != null && !mimeType.isEmpty()) {
++            intent.setDataAndType(uri, mimeType);
++        } else {
++            intent.setData(uri);
++        }
++        Bundle headers = new Bundle();
++        if (!referrer.isEmpty()) {
++            headers.putString("Referer", referrer);
++            intent.putExtra(Intent.EXTRA_REFERRER, Uri.parse(referrer));
++        }
++        if (!userAgent.isEmpty()) headers.putString("User-Agent", userAgent);
++        if (!cookie.isEmpty()) headers.putString("Cookie", cookie);
++        if (!headers.isEmpty()) intent.putExtra(Browser.EXTRA_HEADERS, headers);
++        return intent;
++    }
++
++    /**
++     * De-Googled build: whether a download can go to an external download manager.
++     *
++     * <p>True only if the setting is on and an installed app other than this browser can take a
++     * download of this kind. Otherwise the download carries on in the browser.
+      */
+     @CalledByNative
+-    private static boolean maybeSendToExternalDownloadManager(
++    private static boolean canSendToExternalDownloadManager(
+             GURL url, @JniType("std::string") String mimeType) {
+         if (!ChromeSharedPreferences.getInstance()
+                 .readBoolean(
+                         ChromePreferenceKeys.DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER, false)) {
+             return false;
+         }
+-
+         Context context = ContextUtils.getApplicationContext();
+         if (context == null) return false;
+ 
+-        Intent intent = new Intent(Intent.ACTION_VIEW);
+-        Uri uri = Uri.parse(url.getSpec());
+-        if (mimeType != null && !mimeType.isEmpty()) {
+-            intent.setDataAndType(uri, mimeType);
+-        } else {
+-            intent.setData(uri);
++        Intent probe = buildHandoffIntent(url.getSpec(), mimeType, "", "", "");
++        if (findHandlers(context, probe).components.isEmpty()) {
++            Log.i(TAG, "No external download handler installed, downloading in browser.");
++            return false;
+         }
++        return true;
++    }
+ 
+-        PackageManager pm = context.getPackageManager();
+-        String self = context.getPackageName();
++    /** Whether the user allowed their cookies to go with a download handed to another app. */
++    @CalledByNative
++    private static boolean shouldSendSignInToExternalDownloadManager() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_SEND_SIGN_IN, false);
++    }
+ 
+-        // Collect the installed handlers, excluding this browser.
+-        //
+-        // Tracked as components rather than packages. An app may register more than one activity
+-        // for the same intent - 1DM offers both its downloader and its own browser - and naming
+-        // only the package leaves Android to ask which of them should handle it, defeating the
+-        // point of choosing one in settings.
+-        java.util.List<String> handlers = new java.util.ArrayList<>();
+-        java.util.List<android.content.ComponentName> own = new java.util.ArrayList<>();
+-        for (ResolveInfo info : pm.queryIntentActivities(intent, 0)) {
+-            if (info.activityInfo == null) continue;
+-            android.content.ComponentName name =
+-                    new android.content.ComponentName(
+-                            info.activityInfo.packageName, info.activityInfo.name);
+-            if (self.equals(info.activityInfo.packageName)) {
+-                own.add(name);
+-                continue;
+-            }
+-            String component = name.flattenToString();
+-            if (!handlers.contains(component)) handlers.add(component);
+-        }
++    /**
++     * Hands a download to an external download manager.
++     *
++     * <p>A specific app may have been chosen in settings. If it is no longer installed the choice
++     * is ignored and the chooser is shown instead, rather than failing silently with a download
++     * that never arrives anywhere.
++     */
++    @CalledByNative
++    private static void sendToExternalDownloadManager(
++            GURL url,
++            @JniType("std::string") String mimeType,
++            @JniType("std::string") String referrer,
++            @JniType("std::string") String userAgent,
++            @JniType("std::string") String cookie) {
++        Context context = ContextUtils.getApplicationContext();
++        if (context == null) return;
+ 
+-        if (handlers.isEmpty()) {
+-            Log.i(TAG, "No external download handler installed, downloading in browser.");
+-            return false;
+-        }
++        Intent intent = buildHandoffIntent(url.getSpec(), mimeType, referrer, userAgent, cookie);
++        Handlers handlers =
++                findHandlers(context, buildHandoffIntent(url.getSpec(), mimeType, "", "", ""));
+ 
+-        // A specific app may have been chosen in settings. If it is no longer installed the
+-        // choice is ignored and the chooser is shown instead, rather than failing silently with
+-        // a download that never arrives anywhere.
+         String preferred =
+                 ChromeSharedPreferences.getInstance()
+                         .readString(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_MANAGER_PACKAGE, "");
+-        if (!preferred.isEmpty() && handlers.contains(preferred)) {
++        if (!preferred.isEmpty() && handlers.components.contains(preferred)) {
+             Intent direct = new Intent(intent);
+-            direct.setComponent(android.content.ComponentName.unflattenFromString(preferred));
++            direct.setComponent(ComponentName.unflattenFromString(preferred));
+             direct.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+             try {
+                 context.startActivity(direct);
+-                return true;
+-            } catch (android.content.ActivityNotFoundException e) {
++                return;
++            } catch (ActivityNotFoundException e) {
+                 Log.w(TAG, "Chosen download manager would not start, falling back to chooser.");
+             }
+         } else if (!preferred.isEmpty()) {
+@@ -130,17 +191,20 @@ public class DownloadController {
+         // Naming them here is what actually leaves them out. The list above is built without
+         // this browser, but the chooser resolves the intent again for itself, so filtering the
+         // list never reached it and Bare was offered its own download after all.
+-        if (!own.isEmpty()) {
++        if (!handlers.own.isEmpty()) {
+             chooser.putExtra(
+                     Intent.EXTRA_EXCLUDE_COMPONENTS,
+-                    own.toArray(new android.content.ComponentName[0]));
++                    handlers.own.toArray(new ComponentName[0]));
+         }
+         try {
+             context.startActivity(chooser);
+-            return true;
+-        } catch (android.content.ActivityNotFoundException e) {
+-            Log.w(TAG, "Failed to launch external download handler, downloading in browser.");
+-            return false;
++        } catch (ActivityNotFoundException e) {
++            Log.w(TAG, "Failed to launch external download handler.");
++            Toast.makeText(
++                            context,
++                            R.string.external_download_manager_failed,
++                            Toast.LENGTH_LONG)
++                    .show();
+         }
+     }
+ 
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index b996decc641..771d0b398c7 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -846,6 +846,7 @@ if (is_android) {
+   robolectric_library(
+       "chrome_junit_tests_org.chromium.chrome.browser.download") {
+     sources = [
++      "src/org/chromium/chrome/browser/download/DownloadControllerHandoffUnitTest.java",
+       "src/org/chromium/chrome/browser/download/DownloadControllerUnitTest.java",
+       "src/org/chromium/chrome/browser/download/DownloadOpenRequestTest.java",
+       "src/org/chromium/chrome/browser/download/DownloadSharedPreferenceEntryTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/download/DownloadControllerHandoffUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/download/DownloadControllerHandoffUnitTest.java
+new file mode 100644
+index 00000000000..fa1323d35dd
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/download/DownloadControllerHandoffUnitTest.java
+@@ -0,0 +1,71 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.download;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertTrue;
++
++import android.content.Intent;
++import android.net.Uri;
++import android.os.Bundle;
++import android.provider.Browser;
++
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++
++/** Unit tests for the intent a download is handed to another app in. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class DownloadControllerHandoffUnitTest {
++    private static final String URL = "https://files.example/get/report.zip";
++    private static final String PAGE = "https://files.example/account/";
++    private static final String AGENT = "Mozilla/5.0 (Linux; Android 12) TestBrowser";
++    private static final String COOKIE = "session=abc; theme=dark";
++
++    @Test
++    public void testTheAddressAndTypeAreAlwaysThere() {
++        Intent intent = DownloadController.buildHandoffIntent(URL, "application/zip", "", "", "");
++        assertEquals(Intent.ACTION_VIEW, intent.getAction());
++        assertEquals(Uri.parse(URL), intent.getData());
++        assertEquals("application/zip", intent.getType());
++    }
++
++    @Test
++    public void testNothingToSendMeansNoHeadersBundle() {
++        Intent intent = DownloadController.buildHandoffIntent(URL, "", "", "", "");
++        assertNull(intent.getBundleExtra(Browser.EXTRA_HEADERS));
++        assertNull(intent.getType());
++    }
++
++    @Test
++    public void testTheReferrerGoesInBothPlacesReadersLook() {
++        Intent intent = DownloadController.buildHandoffIntent(URL, "", PAGE, AGENT, "");
++        Bundle headers = intent.getBundleExtra(Browser.EXTRA_HEADERS);
++        assertEquals(PAGE, headers.getString("Referer"));
++        assertEquals(AGENT, headers.getString("User-Agent"));
++        assertEquals(Uri.parse(PAGE), intent.getParcelableExtra(Intent.EXTRA_REFERRER));
++    }
++
++    @Test
++    public void testNoCookieIsSentUnlessGiven() {
++        Intent intent = DownloadController.buildHandoffIntent(URL, "", PAGE, AGENT, "");
++        assertFalse(intent.getBundleExtra(Browser.EXTRA_HEADERS).containsKey("Cookie"));
++    }
++
++    @Test
++    public void testACookieTravelsInTheHeadersBundleOnly() {
++        Intent intent = DownloadController.buildHandoffIntent(URL, "", PAGE, AGENT, COOKIE);
++        Bundle headers = intent.getBundleExtra(Browser.EXTRA_HEADERS);
++        assertEquals(COOKIE, headers.getString("Cookie"));
++        // Not a top-level extra, and not in the address: either would show up in places a header
++        // does not.
++        assertFalse(intent.hasExtra("cookie"));
++        assertFalse(intent.getDataString().contains("session"));
++        assertTrue(intent.getExtras().keySet().contains(Browser.EXTRA_HEADERS));
++    }
++}
+diff --git a/chrome/browser/download/android/download_controller.cc b/chrome/browser/download/android/download_controller.cc
+index 8665d0e9f4a..bd3cf31d01f 100644
+--- a/chrome/browser/download/android/download_controller.cc
++++ b/chrome/browser/download/android/download_controller.cc
+@@ -331,14 +331,33 @@ DownloadController::DownloadController() = default;
+ 
+ DownloadController::~DownloadController() = default;
+ 
+-bool DownloadController::MaybeSendToExternalDownloadManager(
++bool DownloadController::CanSendToExternalDownloadManager(
+     const GURL& url,
+     const std::string& mime_type) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   JNIEnv* env = base::android::AttachCurrentThread();
+   ScopedJavaLocalRef<jobject> jurl = url::GURLAndroid::FromNativeGURL(env, url);
+-  return Java_DownloadController_maybeSendToExternalDownloadManager(env, jurl,
+-                                                                    mime_type);
++  return Java_DownloadController_canSendToExternalDownloadManager(env, jurl,
++                                                                  mime_type);
++}
++
++bool DownloadController::ShouldSendSignInToExternalDownloadManager() {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  return Java_DownloadController_shouldSendSignInToExternalDownloadManager(
++      base::android::AttachCurrentThread());
++}
++
++void DownloadController::SendToExternalDownloadManager(
++    const GURL& url,
++    const std::string& mime_type,
++    const std::string& referrer,
++    const std::string& user_agent,
++    const std::string& cookie) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  JNIEnv* env = base::android::AttachCurrentThread();
++  ScopedJavaLocalRef<jobject> jurl = url::GURLAndroid::FromNativeGURL(env, url);
++  Java_DownloadController_sendToExternalDownloadManager(
++      env, jurl, mime_type, referrer, user_agent, cookie);
+ }
+ 
+ void DownloadController::CreateAndroidDownload(
+diff --git a/chrome/browser/download/android/download_controller.h b/chrome/browser/download/android/download_controller.h
+index 5d4567b9aa3..b996bddd51f 100644
+--- a/chrome/browser/download/android/download_controller.h
++++ b/chrome/browser/download/android/download_controller.h
+@@ -46,11 +46,22 @@ class DownloadController : public DownloadControllerBase {
+   void CreateAndroidDownload(const content::WebContents::Getter& wc_getter,
+                              const DownloadInfo& info) override;
+ 
+-  // De-Googled build: offers the download to an installed download manager and
+-  // returns true if one took it. Returns false when no suitable app is
+-  // installed, so the caller downloads the file in the browser as usual.
+-  static bool MaybeSendToExternalDownloadManager(const GURL& url,
+-                                                 const std::string& mime_type);
++  // De-Googled build: whether the user has an external download manager turned
++  // on and an installed app can take this download.
++  static bool CanSendToExternalDownloadManager(const GURL& url,
++                                               const std::string& mime_type);
++
++  // Whether the user has allowed their cookies to go with a download handed to
++  // another app.
++  static bool ShouldSendSignInToExternalDownloadManager();
++
++  // Hands the download to another app. `referrer`, `user_agent` and `cookie`
++  // are empty when there is nothing to send.
++  static void SendToExternalDownloadManager(const GURL& url,
++                                            const std::string& mime_type,
++                                            const std::string& referrer,
++                                            const std::string& user_agent,
++                                            const std::string& cookie);
+ 
+   // UMA histogram enum for download storage permission requests. Keep this
+   // in sync with MobileDownloadStoragePermission in histograms.xml. This should
+diff --git a/chrome/browser/download/android/java/res/xml/download_preferences.xml b/chrome/browser/download/android/java/res/xml/download_preferences.xml
+index a052a01dfbd..57c30f5d7df 100644
+--- a/chrome/browser/download/android/java/res/xml/download_preferences.xml
++++ b/chrome/browser/download/android/java/res/xml/download_preferences.xml
+@@ -28,6 +28,12 @@ found in the LICENSE file.
+         android:key="external_download_manager_app"
+         android:title="@string/external_download_manager_app_title" />
+ 
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="external_download_manager_sign_in"
++        android:persistent="false"
++        android:title="@string/external_download_manager_sign_in_title"
++        android:summary="@string/external_download_manager_sign_in_summary" />
++
+     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+         android:key="auto_open_pdf_enabled"
+         android:title="@string/auto_open_pdf_enabled_title"
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java
+index b452d01e85f..5fe2c66d03c 100644
+--- a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java
+@@ -54,6 +54,7 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+ 
+     /** De-Googled build: which installed download manager app to use. */
+     public static final String PREF_EXTERNAL_DOWNLOAD_MANAGER_APP = "external_download_manager_app";
++    public static final String PREF_EXTERNAL_DOWNLOAD_SIGN_IN = "external_download_manager_sign_in";
+ 
+     private DownloadLocationPreference mLocationChangePref;
+     private ChromeSwitchPreference mLocationPromptEnabledPref;
+@@ -79,6 +80,15 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+             externalDownloadManagerPref.setOnPreferenceChangeListener(this);
+         }
+ 
++        ChromeSwitchPreference signInPref =
++                (ChromeSwitchPreference) findPreference(PREF_EXTERNAL_DOWNLOAD_SIGN_IN);
++        if (signInPref != null) {
++            signInPref.setChecked(
++                    ChromeSharedPreferences.getInstance()
++                            .readBoolean(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_SEND_SIGN_IN, false));
++            signInPref.setOnPreferenceChangeListener(this);
++        }
++
+         populateDownloadManagerAppList();
+ 
+         mLocationPromptEnabledPref =
+@@ -184,6 +194,14 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+             return true;
+         }
+ 
++        if (PREF_EXTERNAL_DOWNLOAD_SIGN_IN.equals(preference.getKey())) {
++            ChromeSharedPreferences.getInstance()
++                    .writeBoolean(
++                            ChromePreferenceKeys.DOWNLOAD_EXTERNAL_SEND_SIGN_IN,
++                            (boolean) newValue);
++            return true;
++        }
++
+         if (PREF_EXTERNAL_DOWNLOAD_MANAGER.equals(preference.getKey())) {
+             ChromeSharedPreferences.getInstance()
+                     .writeBoolean(
+diff --git a/chrome/browser/download/chrome_download_manager_delegate.cc b/chrome/browser/download/chrome_download_manager_delegate.cc
+index 6022d7c02fc..7fa9608340a 100644
+--- a/chrome/browser/download/chrome_download_manager_delegate.cc
++++ b/chrome/browser/download/chrome_download_manager_delegate.cc
+@@ -4,6 +4,14 @@
+ 
+ #include "chrome/browser/download/chrome_download_manager_delegate.h"
+ 
++#include "components/embedder_support/user_agent_utils.h"
++#include "net/cookies/cookie_options.h"
++#include "net/cookies/cookie_partition_key_collection.h"
++#include "net/cookies/cookie_util.h"
++#include "net/http/http_request_headers.h"
++#include "services/network/public/mojom/cookie_manager.mojom.h"
++#include "content/public/browser/storage_partition.h"
++
+ #include <algorithm>
+ #include <memory>
+ #include <optional>
+@@ -1228,6 +1236,111 @@ bool ChromeDownloadManagerDelegate::ShouldObfuscateDownload(
+   return false;
+ }
+ 
++#if BUILDFLAG(IS_ANDROID)
++namespace {
++
++// Joins the cookies the browser would send to `url` into one Cookie header
++// value. Not logged anywhere: it is the user's sign-in.
++std::string JoinCookies(const net::CookieAccessResultList& cookies) {
++  std::string header;
++  for (const net::CookieWithAccessResult& entry : cookies) {
++    if (!entry.access_result.status.IsInclude()) {
++      continue;
++    }
++    if (!header.empty()) {
++      header += "; ";
++    }
++    header += entry.cookie.Name();
++    header += "=";
++    header += entry.cookie.Value();
++  }
++  return header;
++}
++
++void SendWithCookies(GURL url,
++                     std::string mime_type,
++                     std::string referrer,
++                     std::string user_agent,
++                     const net::CookieAccessResultList& cookies,
++                     const net::CookieAccessResultList& excluded_cookies) {
++  DownloadController::SendToExternalDownloadManager(
++      url, mime_type, referrer, user_agent, JoinCookies(cookies));
++}
++
++}  // namespace
++#endif  // BUILDFLAG(IS_ANDROID)
++
++// De-Googled build: give an installed download manager first refusal.
++//
++// Only a plain GET of a web address qualifies. Another app can fetch that
++// again; it cannot repeat a POST, and it cannot open a blob: or data: URL that
++// only exists inside this browser. The blocklist is checked here as well, so a
++// URL an administrator has blocked is refused by the normal path rather than
++// carried out of reach of the policy that blocked it.
++//
++// Returns false when no suitable app is installed, and the download carries on
++// in the browser. What the app receives is the page address and the browser's
++// user agent, so a site that checks them is satisfied. The user's cookies for
++// the file's site are added only when they have said so in Settings, and never
++// from an Incognito profile. Neither is logged.
++bool ChromeDownloadManagerDelegate::InterceptDownloadForExternalApp(
++    const GURL& url,
++    const GURL& referrer,
++    const std::string& method,
++    const std::string& user_agent,
++    const std::string& mime_type,
++    content::WebContents* web_contents) {
++#if BUILDFLAG(IS_ANDROID)
++  if (method != net::HttpRequestHeaders::kGetMethod ||
++      !url.SchemeIsHTTPOrHTTPS()) {
++    return false;
++  }
++  if (ChromePolicyBlocklistServiceFactory::GetForProfile(profile_)
++          ->GetURLBlocklistState(url) ==
++      policy::URLBlocklist::URLBlocklistState::URL_IN_BLOCKLIST) {
++    return false;
++  }
++  if (!DownloadController::CanSendToExternalDownloadManager(url, mime_type)) {
++    return false;
++  }
++
++  std::string agent = user_agent;
++  if (agent.empty() && web_contents &&
++      !web_contents->GetUserAgentOverride().ua_string_override.empty()) {
++    agent = web_contents->GetUserAgentOverride().ua_string_override;
++  }
++  if (agent.empty()) {
++    agent = embedder_support::GetUserAgent();
++  }
++
++  GURL page = referrer;
++  if (!page.is_valid() && web_contents) {
++    page = web_contents->GetLastCommittedURL();
++  }
++  const std::string page_spec =
++      page.is_valid() && page.SchemeIsHTTPOrHTTPS()
++          ? page.GetAsReferrer().spec()
++          : std::string();
++
++  if (profile_->IsOffTheRecord() ||
++      !DownloadController::ShouldSendSignInToExternalDownloadManager()) {
++    DownloadController::SendToExternalDownloadManager(url, mime_type, page_spec,
++                                                      agent, std::string());
++    return true;
++  }
++
++  profile_->GetDefaultStoragePartition()
++      ->GetCookieManagerForBrowserProcess()
++      ->GetCookieList(url, net::CookieOptions::MakeAllInclusive(),
++                      net::CookiePartitionKeyCollection::ContainsAll(),
++                      base::BindOnce(&SendWithCookies, url, mime_type,
++                                     page_spec, agent));
++  return true;
++#else
++  return false;
++#endif  // BUILDFLAG(IS_ANDROID)
++}
++
+ bool ChromeDownloadManagerDelegate::InterceptDownloadIfApplicable(
+     const GURL& url,
+     const std::string& user_agent,
+@@ -1248,21 +1361,6 @@ bool ChromeDownloadManagerDelegate::InterceptDownloadIfApplicable(
+     return true;
+   }
+ 
+-#if BUILDFLAG(IS_ANDROID)
+-  // De-Googled build: give an installed download manager first refusal.
+-  //
+-  // Below the blocklist check, so a URL an administrator has blocked is refused
+-  // here rather than handed to another app, which would have carried it out of
+-  // reach of the policy that blocked it.
+-  //
+-  // Returns false when no suitable app is installed, in which case the download
+-  // proceeds in the browser as usual. Note this hook carries no cookie, so a
+-  // download that depends on being signed in will fail in the external app.
+-  if (DownloadController::MaybeSendToExternalDownloadManager(url, mime_type)) {
+-    return true;
+-  }
+-#endif  // BUILDFLAG(IS_ANDROID)
+-
+ #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   // For background service downloads we don't want offline pages backend to
+diff --git a/chrome/browser/download/chrome_download_manager_delegate.h b/chrome/browser/download/chrome_download_manager_delegate.h
+index 3f21fa06d58..c41dd010bab 100644
+--- a/chrome/browser/download/chrome_download_manager_delegate.h
++++ b/chrome/browser/download/chrome_download_manager_delegate.h
+@@ -132,6 +132,12 @@ class ChromeDownloadManagerDelegate
+       download::DownloadItem* item,
+       content::DownloadOpenDelayedCallback callback) override;
+   bool ShouldObfuscateDownload(download::DownloadItem* item) override;
++  bool InterceptDownloadForExternalApp(const GURL& url,
++                                       const GURL& referrer,
++                                       const std::string& method,
++                                       const std::string& user_agent,
++                                       const std::string& mime_type,
++                                       content::WebContents* web_contents) override;
+   bool InterceptDownloadIfApplicable(
+       const GURL& url,
+       const std::string& user_agent,
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 5485f4ebcf9..8c610c885cb 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -492,6 +492,13 @@ public final class ChromePreferenceKeys {
+     public static final String DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER =
+             "Chrome.Download.UseExternalDownloadManager";
+ 
++    /**
++     * De-Googled build: whether the cookies for a file's site go to the external download manager
++     * with the download, so a file that needs the user signed in can be fetched. Off unless the
++     * user turns it on.
++     */
++    public static final String DOWNLOAD_EXTERNAL_SEND_SIGN_IN = "Bare.Downloads.ExternalSignIn";
++
+     public static final String DOWNLOAD_AUTO_RESUMPTION_ATTEMPT_LEFT = "ResumptionAttemptLeft";
+     public static final String DOWNLOAD_FOREGROUND_SERVICE_OBSERVERS = "ForegroundServiceObservers";
+     public static final String DOWNLOAD_IS_DOWNLOAD_HOME_ENABLED =
+@@ -1311,6 +1318,7 @@ public final class ChromePreferenceKeys {
+                 BARE_UPDATE_REMINDER,
+                 DOWNLOAD_EXTERNAL_MANAGER_PACKAGE,
+                 DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,
++                DOWNLOAD_EXTERNAL_SEND_SIGN_IN,
+                 BARE_USER_AGENT_CUSTOM,
+                 BARE_USER_AGENT_PRESET,
+                 BARE_ADDRESS_BAR_SWIPE_TABS,
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 116ce0fae97..aa7510ddbae 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -2222,11 +2222,20 @@ Your Google account may have other forms of browsing history like searches and a
+       <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_NONE_INSTALLED" desc="Summary shown when no download manager app is installed on the device.">
+         No download manager app installed
+       </message>
++      <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_SIGN_IN_TITLE" desc="Title of the setting that sends the user's cookies for a file's site to the external download manager. [CHAR_LIMIT=48]">
++        Share sign-in with the app
++      </message>
++      <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_SIGN_IN_SUMMARY" desc="Summary of the setting that sends cookies to the external download manager. Says what is always sent, what this adds, and that Incognito is excluded.">
++        The app always gets the page address and this browser’s name. This also sends your cookies for the file’s site, so a file that needs you signed in can download. Never used in Incognito.
++      </message>
++      <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_FAILED" desc="Toast shown when no app could be opened to take a download.">
++        Could not open the download manager
++      </message>
+       <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_TITLE" desc="Title for a preference that lets the user hand downloads to a separate download manager app instead of downloading in the browser.">
+         Use an external download manager
+       </message>
+       <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_SUMMARY_ON" desc="Summary shown when the external download manager preference is on.">
+-        Downloads are offered to a download manager app. Files that need you to be signed in may fail, because sign-in details are not passed on.
++        Downloads are offered to a download manager app, with the page address. Files that need you to be signed in may fail unless you share your sign-in below.
+       </message>
+       <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_SUMMARY_OFF" desc="Summary shown when the external download manager preference is off.">
+         Downloads are handled by the browser
+diff --git a/content/browser/download/download_manager_impl.cc b/content/browser/download/download_manager_impl.cc
+index 26a84ddd624..eb10efaa90d 100644
+--- a/content/browser/download/download_manager_impl.cc
++++ b/content/browser/download/download_manager_impl.cc
+@@ -812,6 +812,13 @@ bool DownloadManagerImpl::InterceptDownload(
+     }
+   }
+ 
++  if (delegate_ && delegate_->InterceptDownloadForExternalApp(
++                       info.url(), info.referrer_url, info.method, user_agent,
++                       info.mime_type, web_contents)) {
++    DropDownload();
++    return true;
++  }
++
+   if (delegate_ &&
+       delegate_->InterceptDownloadIfApplicable(
+           info.url(), user_agent, info.content_disposition, info.mime_type,
+diff --git a/content/public/browser/download_manager_delegate.cc b/content/public/browser/download_manager_delegate.cc
+index 5f16563fc2b..1c79a01fb6a 100644
+--- a/content/public/browser/download_manager_delegate.cc
++++ b/content/public/browser/download_manager_delegate.cc
+@@ -64,6 +64,16 @@ bool DownloadManagerDelegate::ShouldObfuscateDownload(
+   return false;
+ }
+ 
++bool DownloadManagerDelegate::InterceptDownloadForExternalApp(
++    const GURL& url,
++    const GURL& referrer,
++    const std::string& method,
++    const std::string& user_agent,
++    const std::string& mime_type,
++    WebContents* web_contents) {
++  return false;
++}
++
+ bool DownloadManagerDelegate::InterceptDownloadIfApplicable(
+     const GURL& url,
+     const std::string& user_agent,
+diff --git a/content/public/browser/download_manager_delegate.h b/content/public/browser/download_manager_delegate.h
+index a50246a04fd..7f766d74eb2 100644
+--- a/content/public/browser/download_manager_delegate.h
++++ b/content/public/browser/download_manager_delegate.h
+@@ -144,6 +144,16 @@ class CONTENT_EXPORT DownloadManagerDelegate {
+   // access prevention.
+   virtual bool ShouldObfuscateDownload(download::DownloadItem* item);
+ 
++  // Bare: lets the embedder hand a download to another app. Called before
++  // InterceptDownloadIfApplicable, with what that one is not given: the method
++  // and the referrer of the request. Returns true if the download was taken.
++  virtual bool InterceptDownloadForExternalApp(const GURL& url,
++                                               const GURL& referrer,
++                                               const std::string& method,
++                                               const std::string& user_agent,
++                                               const std::string& mime_type,
++                                               WebContents* web_contents);
++
+   // Checks and hands off the downloading to be handled by another system based
+   // on mime type. Returns true if the download was intercepted.
+   virtual bool InterceptDownloadIfApplicable(
+-- 
+2.34.1
+

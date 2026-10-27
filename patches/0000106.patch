@@ -1,0 +1,46 @@
+From 6061b69b0cae90a863b3d639f24db79da58d35a8 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 6 Sep 2026 05:54:10 +0000
+Subject: [PATCH] Patch 0000106
+
+---
+ ...rome_web_contents_view_delegate_android.cc | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/chrome/browser/ui/android/tab_contents/chrome_web_contents_view_delegate_android.cc b/chrome/browser/ui/android/tab_contents/chrome_web_contents_view_delegate_android.cc
+index 20ec4b13b46..5de13699ece 100644
+--- a/chrome/browser/ui/android/tab_contents/chrome_web_contents_view_delegate_android.cc
++++ b/chrome/browser/ui/android/tab_contents/chrome_web_contents_view_delegate_android.cc
+@@ -26,6 +26,11 @@
+ 
+ namespace {
+ 
++// Bare: the navigation blur transition stays off. See
++// ShouldShowBlurTransitionAnimation below.
++constexpr bool kBareShowsNavigationBlurTransition = false;
++
++
+ bool IsSrpNavigation(TemplateURLService* template_url_service,
+                      const GURL& url,
+                      const GURL& last_committed_url) {
+@@ -62,6 +67,20 @@ ChromeWebContentsViewDelegateAndroid::GetDragDestDelegate() {
+ 
+ bool ChromeWebContentsViewDelegateAndroid::ShouldShowBlurTransitionAnimation(
+     content::NavigationHandle* navigation_handle) {
++  // Bare: never show it.
++  //
++  // Upstream keeps kAndroidNavigationBlurTransitionAnimation off by default
++  // and runs it as an experiment, and the field trial testing config that a
++  // non-branded build compiles in turns that experiment on. On a cross-site
++  // link tap it lays a blurred copy of the outgoing page over the content, and
++  // when the new page has not painted within 350 ms it fades that to a solid
++  // colour which is white unless the page declares a theme-color. On a dark
++  // theme that read as the page going soft and dissolving into a white flash
++  // on every slow cross-site navigation. Declining here leaves the manager
++  // untouched and keeps the answer the same if upstream flips the default.
++  if (!kBareShowsNavigationBlurTransition) {
++    return false;
++  }
+   if (gfx::Animation::PrefersReducedMotion()) {
+     return false;
+   }

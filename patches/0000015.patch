@@ -1,0 +1,47 @@
+From 9f75c4277530a04cab6773ecf36f4308d0ee460b Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 16 Aug 2026 05:31:52 +0000
+Subject: [PATCH] Patch 0000015
+
+---
+ .../browser/firstrun/FirstRunActivity.java    | 20 ++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunActivity.java
+index 07e6b2b76ba..8b9374ca016 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunActivity.java
+@@ -303,7 +303,17 @@ public class FirstRunActivity extends FirstRunActivityBase
+ 
+     /** Creates first page and sets up adapter. Should result UI being shown on the screen. */
+     private void createFirstPage() {
+-        BooleanSupplier showWelcomePage = () -> !FirstRunStatus.shouldSkipWelcomePage();
++        // De-Googled build: never show the sign-in welcome page.
++        //
++        // The page exists to promote signing into a Google account, which this
++        // build deliberately cannot do, and its footer states that usage and
++        // crash data are sent to Google - untrue here, since a public Chromium
++        // build has no metrics endpoint to send them to.
++        //
++        // This page is also where the Terms of Service are accepted, so that is
++        // done from onInternalStateChanged() once native is up instead. Without
++        // that the run never completes and the flow reopens on every launch.
++        BooleanSupplier showWelcomePage = () -> false;
+         mPages.add(new FirstRunPage<>(SigninFirstRunFragment.class, showWelcomePage));
+         mFreProgressStates.add(MobileFreProgress.WELCOME_SHOWN);
+         mPagerAdapter = new FirstRunPagerAdapter(FirstRunActivity.this, mPages);
+@@ -599,6 +609,14 @@ public class FirstRunActivity extends FirstRunActivityBase
+         if (mTemplateUrlServiceLoaded && mNativeInitializationPromise.isPending()) {
+             // `mNativeInitializationPromise` should only be set after flow is known.
+             mNativeInitializationPromise.fulfill(null);
++
++            // The sign-in welcome page normally accepts the Terms of Service, and
++            // it is not shown in this build. Accept them here instead, with
++            // metrics and crash uploading off. acceptTermsOfService() asserts the
++            // promise is fulfilled, so this has to run after the fulfil above.
++            if (!FirstRunUtils.isFirstRunEulaAccepted()) {
++                acceptTermsOfService(/* allowMetricsAndCrashUploading= */ false);
++            }
+         }
+ 
+         if (mPagerAdapter == null) {

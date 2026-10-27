@@ -1,0 +1,336 @@
+From 3303deb22483c43a33c82ed8887cb01765cef9d5 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 21 Oct 2026 20:47:37 +0000
+Subject: [PATCH] Patch 0000165
+
+---
+ .../browser/ChromeBaseAppCompatActivity.java  |  6 ++--
+ .../GlobalNightModeStateControllerTest.java   | 23 ++++++++++++
+ .../night_mode/NightModeUtilsTest.java        | 36 +++++++++++++++++++
+ .../preferences/ChromePreferenceKeys.java     |  7 ++++
+ .../java/res/xml/theme_preferences.xml        |  5 +++
+ .../GlobalNightModeStateController.java       |  8 +++--
+ .../browser/night_mode/NightModeUtils.java    | 18 +++++++++-
+ .../settings/ThemeSettingsFragment.java       | 18 ++++++++++
+ .../strings/android_chrome_strings.grd        |  6 ++++
+ 9 files changed, 121 insertions(+), 6 deletions(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java
+index 96dea4ac12d..d1ebe2e244a 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java
+@@ -59,7 +59,6 @@ import org.chromium.chrome.browser.night_mode.GlobalNightModeStateProviderHolder
+ import org.chromium.chrome.browser.night_mode.NightModeStateProvider;
+ import org.chromium.chrome.browser.night_mode.NightModeUtils;
+ import org.chromium.chrome.browser.night_mode.ThemeSwitchOverlay;
+-import org.chromium.chrome.browser.night_mode.ThemeType;
+ import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
+ import org.chromium.chrome.browser.ntp_customization.theme.NtpThemeStateProvider;
+ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
+@@ -613,9 +612,10 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
+         }
+ 
+         // Bare: "Dark AMOLED" is the dark theme with its flat surfaces taken to
+-        // true black. Night mode is already on for this setting (see
++        // true black, as is System default when the user has asked for black there
++        // and the system is dark. Night mode is already on in both cases (see
+         // GlobalNightModeStateController), so this only restates the colours.
+-        if (NightModeUtils.getThemeSetting() == ThemeType.DARK_AMOLED) {
++        if (NightModeUtils.isAmoledActive(mNightModeStateProvider.isInNightMode())) {
+             applySingleThemeOverlay(R.style.ThemeOverlay_BrowserUI_Amoled);
+         }
+ 
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateControllerTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateControllerTest.java
+index 467e8c6d759..01966adad4d 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateControllerTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateControllerTest.java
+@@ -15,6 +15,7 @@ import static org.mockito.Mockito.when;
+ 
+ import static org.chromium.base.ApplicationState.HAS_RUNNING_ACTIVITIES;
+ import static org.chromium.base.ApplicationState.HAS_STOPPED_ACTIVITIES;
++import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.BARE_AMOLED_WHEN_SYSTEM_DARK;
+ import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.UI_THEME_SETTING;
+ 
+ import androidx.appcompat.app.AppCompatDelegate;
+@@ -92,6 +93,7 @@ public class GlobalNightModeStateControllerTest {
+     @After
+     public void tearDown() {
+         ChromeSharedPreferences.getInstance().removeKey(UI_THEME_SETTING);
++        ChromeSharedPreferences.getInstance().removeKey(BARE_AMOLED_WHEN_SYSTEM_DARK);
+     }
+ 
+     @Test
+@@ -173,6 +175,27 @@ public class GlobalNightModeStateControllerTest {
+         verify(mObserver, times(2)).onNightModeStateChanged();
+     }
+ 
++    @Test
++    public void testObserver_AmoledWhenSystemDark() {
++        ChromeSharedPreferences.getInstance().writeInt(UI_THEME_SETTING, ThemeType.SYSTEM_DEFAULT);
++        setSystemNightMode(true);
++        mGlobalNightModeStateController.addObserver(mObserver);
++
++        // Night mode stays on, but the surfaces change, so observers still have to re-theme.
++        ChromeSharedPreferences.getInstance().writeBoolean(BARE_AMOLED_WHEN_SYSTEM_DARK, true);
++        assertTrue(mGlobalNightModeStateController.isInNightMode());
++        verify(mObserver, times(1)).onNightModeStateChanged();
++
++        // With the system light the setting has nothing to apply to, and night mode goes off.
++        setSystemNightMode(false);
++        assertFalse(mGlobalNightModeStateController.isInNightMode());
++        verify(mObserver, times(2)).onNightModeStateChanged();
++
++        // Flipping it while the system is light changes nothing anyone can see.
++        ChromeSharedPreferences.getInstance().writeBoolean(BARE_AMOLED_WHEN_SYSTEM_DARK, false);
++        verify(mObserver, times(2)).onNightModeStateChanged();
++    }
++
+     /**
+      * Simulates setting system night mode, and notifies the change.
+      *
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/night_mode/NightModeUtilsTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/night_mode/NightModeUtilsTest.java
+index 9511a720bae..147062a310e 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/night_mode/NightModeUtilsTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/night_mode/NightModeUtilsTest.java
+@@ -4,20 +4,56 @@
+ 
+ package org.chromium.chrome.browser.night_mode;
+ 
++import static org.junit.Assert.assertFalse;
+ import static org.junit.Assert.assertTrue;
+ 
++import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.BARE_AMOLED_WHEN_SYSTEM_DARK;
++import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.UI_THEME_SETTING;
++
+ import androidx.test.core.app.ApplicationProvider;
+ 
++import org.junit.After;
+ import org.junit.Test;
+ import org.junit.runner.RunWith;
+ 
+ import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ 
+ import java.util.HashSet;
+ 
+ /** Unit tests for {@link NightModeUtils}. */
+ @RunWith(BaseRobolectricTestRunner.class)
+ public class NightModeUtilsTest {
++    @After
++    public void tearDown() {
++        ChromeSharedPreferences.getInstance().removeKey(UI_THEME_SETTING);
++        ChromeSharedPreferences.getInstance().removeKey(BARE_AMOLED_WHEN_SYSTEM_DARK);
++    }
++
++    @Test
++    public void testAmoledActive_DarkAmoledThemeAlways() {
++        ChromeSharedPreferences.getInstance().writeInt(UI_THEME_SETTING, ThemeType.DARK_AMOLED);
++        assertTrue(NightModeUtils.isAmoledActive(true));
++    }
++
++    @Test
++    public void testAmoledActive_SystemDefaultNeedsSwitchAndDarkSystem() {
++        ChromeSharedPreferences.getInstance().writeInt(UI_THEME_SETTING, ThemeType.SYSTEM_DEFAULT);
++        assertFalse(NightModeUtils.isAmoledActive(true));
++
++        ChromeSharedPreferences.getInstance().writeBoolean(BARE_AMOLED_WHEN_SYSTEM_DARK, true);
++        assertTrue(NightModeUtils.isAmoledActive(true));
++        assertFalse(NightModeUtils.isAmoledActive(false));
++    }
++
++    @Test
++    public void testAmoledActive_SwitchDoesNotAffectOtherThemes() {
++        ChromeSharedPreferences.getInstance().writeBoolean(BARE_AMOLED_WHEN_SYSTEM_DARK, true);
++        ChromeSharedPreferences.getInstance().writeInt(UI_THEME_SETTING, ThemeType.DARK);
++        assertFalse(NightModeUtils.isAmoledActive(true));
++        ChromeSharedPreferences.getInstance().writeInt(UI_THEME_SETTING, ThemeType.LIGHT);
++        assertFalse(NightModeUtils.isAmoledActive(false));
++    }
+ 
+     @Test
+     public void testThemeSettingTitles() {
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index b98fc4948a5..a90179d1426 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -399,6 +399,12 @@ public final class ChromePreferenceKeys {
+     public static final String WEBSTORE_DESKTOP_SITE_CLEARED =
+             "Chrome.Extensions.WebstoreDesktopSiteCleared";
+ 
++    /**
++     * De-Googled build: use true black surfaces while the System theme is following a dark system.
++     * Dark AMOLED does this on its own; this lets System default do it too.
++     */
++    public static final String BARE_AMOLED_WHEN_SYSTEM_DARK = "Bare.Theme.AmoledWhenSystemDark";
++
+     /**
+      * De-Googled build: the user agent picked in Developer options, as a preset id, or empty for
+      * the default. "custom" takes its string from {@link #BARE_USER_AGENT_CUSTOM}.
+@@ -1294,6 +1300,7 @@ public final class ChromePreferenceKeys {
+                 DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,
+                 BARE_USER_AGENT_CUSTOM,
+                 BARE_USER_AGENT_PRESET,
++                BARE_AMOLED_WHEN_SYSTEM_DARK,
+                 WEBSTORE_DESKTOP_SITE_CLEARED,
+                 WEBSTORE_DESKTOP_SITE_SEEDED,
+                 AUTOFILL_ASSISTANT_PROACTIVE_HELP_ENABLED,
+diff --git a/chrome/browser/ui/android/night_mode/java/res/xml/theme_preferences.xml b/chrome/browser/ui/android/night_mode/java/res/xml/theme_preferences.xml
+index 425778770bc..8b7c89ae77c 100644
+--- a/chrome/browser/ui/android/night_mode/java/res/xml/theme_preferences.xml
++++ b/chrome/browser/ui/android/night_mode/java/res/xml/theme_preferences.xml
+@@ -8,6 +8,11 @@ found in the LICENSE file.
+ <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+     <org.chromium.chrome.browser.night_mode.settings.RadioButtonGroupThemePreference
+         android:key="ui_theme_pref" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_amoled_when_system_dark"
++        android:persistent="false"
++        android:title="@string/bare_amoled_when_system_dark_title"
++        android:summary="@string/bare_amoled_when_system_dark_summary" />
+     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+         android:key="bare_amoled_dark_backgrounds"
+         android:persistent="false"
+diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateController.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateController.java
+index 214f3db83db..d9e4a60e129 100644
+--- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateController.java
++++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateController.java
+@@ -4,6 +4,7 @@
+ 
+ package org.chromium.chrome.browser.night_mode;
+ 
++import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.BARE_AMOLED_WHEN_SYSTEM_DARK;
+ import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.UI_THEME_SETTING;
+ 
+ import android.content.SharedPreferences;
+@@ -46,7 +47,10 @@ class GlobalNightModeStateController
+     GlobalNightModeStateController() {
+         mPreferenceListener =
+                 (prefs, key) -> {
+-                    if (TextUtils.equals(key, UI_THEME_SETTING)) updateNightMode();
++                    if (TextUtils.equals(key, UI_THEME_SETTING)
++                            || TextUtils.equals(key, BARE_AMOLED_WHEN_SYSTEM_DARK)) {
++                        updateNightMode();
++                    }
+                 };
+ 
+         updateNightMode();
+@@ -127,7 +131,7 @@ class GlobalNightModeStateController
+                                 && SystemNightModeMonitor.getInstance().isSystemNightModeOn())
+                         || theme == ThemeType.DARK
+                         || theme == ThemeType.DARK_AMOLED;
+-        final boolean newAmoledOn = theme == ThemeType.DARK_AMOLED;
++        final boolean newAmoledOn = NightModeUtils.isAmoledActive(newNightModeOn);
+         if (mNightModeOn != null
+                 && newNightModeOn == mNightModeOn
+                 && mAmoledOn != null
+diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/NightModeUtils.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/NightModeUtils.java
+index b9d43447f4b..dff835d2c8b 100644
+--- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/NightModeUtils.java
++++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/NightModeUtils.java
+@@ -4,6 +4,7 @@
+ 
+ package org.chromium.chrome.browser.night_mode;
+ 
++import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.BARE_AMOLED_WHEN_SYSTEM_DARK;
+ import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.UI_THEME_SETTING;
+ 
+ import android.app.Activity;
+@@ -98,12 +99,27 @@ public class NightModeUtils {
+         wrapper.applyOverrideConfiguration(config);
+         // After applyOverrideConfiguration: touching getTheme() earlier creates the
+         // resources, and applyOverrideConfiguration throws once they exist.
+-        if (getThemeSetting() == ThemeType.DARK_AMOLED) {
++        if (isAmoledActive(nightMode)) {
+             wrapper.getTheme().applyStyle(R.style.ThemeOverlay_BrowserUI_Amoled, true);
+         }
+         return wrapper;
+     }
+ 
++    /**
++     * Whether the flat dark surfaces should be true black. That is the Dark AMOLED theme, or the
++     * System default theme while the system is dark and the user has asked for black there.
++     *
++     * @param nightMode Whether the app is in night mode.
++     */
++    public static boolean isAmoledActive(boolean nightMode) {
++        int theme = getThemeSetting();
++        if (theme == ThemeType.DARK_AMOLED) return true;
++        return theme == ThemeType.SYSTEM_DEFAULT
++                && nightMode
++                && ChromeSharedPreferences.getInstance()
++                        .readBoolean(BARE_AMOLED_WHEN_SYSTEM_DARK, false);
++    }
++
+     /**
+      * The current theme setting, reflecting either the user setting or the default if the user has
+      * not explicitly set a preference.
+diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
+index 4c83e4f7285..b983d1ec491 100644
+--- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
++++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
+@@ -4,6 +4,7 @@
+ 
+ package org.chromium.chrome.browser.night_mode.settings;
+ 
++import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.BARE_AMOLED_WHEN_SYSTEM_DARK;
+ import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.UI_THEME_SETTING;
+ 
+ import android.content.Context;
+@@ -37,6 +38,7 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
+         implements CustomDividerFragment {
+     static final String PREF_UI_THEME_PREF = "ui_theme_pref";
+     static final String PREF_AMOLED_DARK_BACKGROUNDS = "bare_amoled_dark_backgrounds";
++    static final String PREF_AMOLED_WHEN_SYSTEM_DARK = "bare_amoled_when_system_dark";
+     private static final String PREF_UI_THEME_PREF_LIGHT = "ui_theme_pref_light";
+     private static final String PREF_UI_THEME_PREF_DARK = "ui_theme_pref_dark";
+     private static final String PREF_UI_THEME_PREF_DARK_AMOLED = "ui_theme_pref_dark_amoled";
+@@ -77,6 +79,21 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
+                     return true;
+                 });
+ 
++        // Bare Browser: black instead of dark grey while System default is following a dark
++        // system. The other dark themes make their own choice, so the switch only shows
++        // for System default.
++        ChromeSwitchPreference amoledWhenSystemDark = findPreference(PREF_AMOLED_WHEN_SYSTEM_DARK);
++        assert amoledWhenSystemDark != null;
++        amoledWhenSystemDark.setChecked(
++                sharedPreferencesManager.readBoolean(BARE_AMOLED_WHEN_SYSTEM_DARK, false));
++        amoledWhenSystemDark.setVisible(NightModeUtils.getThemeSetting() == ThemeType.SYSTEM_DEFAULT);
++        amoledWhenSystemDark.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    sharedPreferencesManager.writeBoolean(
++                            BARE_AMOLED_WHEN_SYSTEM_DARK, (boolean) newValue);
++                    return true;
++                });
++
+         radioButtonGroupThemePreference.setOnPreferenceChangeListener(
+                 (preference, newValue) -> {
+                     if (ChromeFeatureList.isEnabled(
+@@ -91,6 +108,7 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
+                         }
+                     }
+                     int theme = (int) newValue;
++                    amoledWhenSystemDark.setVisible(theme == ThemeType.SYSTEM_DEFAULT);
+                     sharedPreferencesManager.writeInt(UI_THEME_SETTING, theme);
+                     return true;
+                 });
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index f49b8fc5f0a..c476d6522dc 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -1015,6 +1015,12 @@ For more settings that use data to improve your Chrome experience, go to <ph nam
+       <message name="IDS_DARKEN_WEBSITES" desc="Title for the option to apply auto-darken to websites. If a website has opt-out from auto-darken, the content will stay the same.">
+         Apply dark theme to sites, when possible
+       </message>
++      <message name="IDS_BARE_AMOLED_WHEN_SYSTEM_DARK_TITLE" desc="Title for the option that uses true black surfaces when the System default theme is following a dark system theme. [CHAR_LIMIT=48]">
++        Use black when the system is dark
++      </message>
++      <message name="IDS_BARE_AMOLED_WHEN_SYSTEM_DARK_SUMMARY" desc="Summary for the option that uses true black surfaces when the System default theme is following a dark system theme.">
++        Black instead of dark grey while your device is in dark theme. Saves battery on AMOLED screens.
++      </message>
+       <message name="IDS_BARE_AMOLED_DARK_BACKGROUNDS_TITLE" desc="Title for the option that makes the browser-generated dark background black rather than dark grey. Only applies to sites the browser darkens itself. [CHAR_LIMIT=48]">
+         Use black backgrounds on darkened sites
+       </message>
+-- 
+2.34.1
+

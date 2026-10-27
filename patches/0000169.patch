@@ -1,0 +1,650 @@
+From 2d1a14c14b6dfecaa740541db5cca5f7a8c1d336 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 21 Oct 2026 21:57:59 +0000
+Subject: [PATCH] Patch 0000169
+
+---
+ chrome/android/chrome_java_resources.gni      |   1 +
+ .../res/layout/bare_welcome_page_toolbar.xml  |  80 ++++++
+ .../values/channel_constants.xml              |  12 +
+ .../browser/bare/BareWelcomeOverlay.java      | 263 +++++++++++++++++-
+ chrome/android/junit/BUILD.gn                 |   1 +
+ .../BareWelcomeToolbarChoicesUnitTest.java    | 105 +++++++
+ 6 files changed, 451 insertions(+), 11 deletions(-)
+ create mode 100644 chrome/android/java/res/layout/bare_welcome_page_toolbar.xml
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/BareWelcomeToolbarChoicesUnitTest.java
+
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 4ee86c53824..6cadc3d341b 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -476,6 +476,7 @@ chrome_java_resources = [
+   "java/res/layout/bare_welcome_page_finish.xml",
+   "java/res/layout/bare_welcome_page_ready.xml",
+   "java/res/layout/bare_welcome_page_welcome.xml",
++  "java/res/layout/bare_welcome_page_toolbar.xml",
+   "java/res/layout/bare_welcome_page_yours.xml",
+   "java/res/layout/bookmark_activity.xml",
+   "java/res/layout/bookmark_add_new_folder_input_layout.xml",
+diff --git a/chrome/android/java/res/layout/bare_welcome_page_toolbar.xml b/chrome/android/java/res/layout/bare_welcome_page_toolbar.xml
+new file mode 100644
+index 00000000000..0d6a081b8bf
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_welcome_page_toolbar.xml
+@@ -0,0 +1,80 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="match_parent"
++    android:fillViewport="true"
++    android:scrollbarStyle="outsideOverlay">
++
++    <LinearLayout
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:orientation="vertical"
++        android:paddingStart="20dp"
++        android:paddingTop="28dp"
++        android:paddingEnd="20dp"
++        android:paddingBottom="16dp">
++
++        <TextView
++            android:id="@+id/bare_page_title"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:paddingStart="4dp"
++            android:paddingEnd="4dp"
++            android:accessibilityHeading="true"
++            android:text="@string/bare_welcome_toolbar_title"
++            android:textColor="@color/bare_welcome_title"
++            android:textSize="28sp"
++            android:fontFamily="sans-serif-medium" />
++
++        <TextView
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="10dp"
++            android:layout_marginBottom="24dp"
++            android:paddingStart="4dp"
++            android:paddingEnd="4dp"
++            android:text="@string/bare_welcome_toolbar_intro"
++            android:textColor="@color/bare_welcome_body"
++            android:textSize="14sp"
++            android:lineSpacingMultiplier="1.2" />
++
++        <LinearLayout
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:orientation="vertical"
++            android:background="@drawable/bare_welcome_group_bg">
++
++            <include android:id="@+id/bare_row_minimal" layout="@layout/bare_welcome_option_row" />
++            <View
++                android:layout_width="match_parent"
++                android:layout_height="1dp"
++                android:layout_marginStart="56dp"
++                android:background="@color/bare_welcome_divider" />
++            <include android:id="@+id/bare_row_first_button" layout="@layout/bare_welcome_option_row" />
++            <View
++                android:layout_width="match_parent"
++                android:layout_height="1dp"
++                android:layout_marginStart="56dp"
++                android:background="@color/bare_welcome_divider" />
++            <include android:id="@+id/bare_row_second_button" layout="@layout/bare_welcome_option_row" />
++            <View
++                android:layout_width="match_parent"
++                android:layout_height="1dp"
++                android:layout_marginStart="56dp"
++                android:background="@color/bare_welcome_divider" />
++            <include android:id="@+id/bare_row_address_swipe" layout="@layout/bare_welcome_option_row" />
++            <View
++                android:layout_width="match_parent"
++                android:layout_height="1dp"
++                android:layout_marginStart="56dp"
++                android:background="@color/bare_welcome_divider" />
++            <include android:id="@+id/bare_row_bar_swipe" layout="@layout/bare_welcome_option_row" />
++        </LinearLayout>
++    </LinearLayout>
++</ScrollView>
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 84f151a1539..cdd26028121 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -22,6 +22,18 @@ found in the LICENSE file.
+     <string name="bare_welcome_step" translatable="false">Step %1$d of %2$d</string>
+     <string name="bare_welcome_yours_title" translatable="false">Make Bare yours</string>
+     <string name="bare_welcome_yours_intro" translatable="false">Set up the essentials. You can change any of these later in Settings.</string>
++    <string name="bare_welcome_toolbar_title" translatable="false">Your toolbar</string>
++    <string name="bare_welcome_toolbar_intro" translatable="false">Choose the layout, the buttons and what a swipe does.</string>
++    <string name="bare_welcome_opt_minimal" translatable="false">Minimal address bar</string>
++    <string name="bare_welcome_hint_minimal" translatable="false">One row: the address bar with New tab, Tabs and Menu. Applies after a restart</string>
++    <string name="bare_welcome_opt_first_button" translatable="false">First toolbar button</string>
++    <string name="bare_welcome_hint_first_button" translatable="false">The button at the left end of the bottom bar</string>
++    <string name="bare_welcome_opt_second_button" translatable="false">Second toolbar button</string>
++    <string name="bare_welcome_hint_second_button" translatable="false">The button next to it</string>
++    <string name="bare_welcome_opt_address_swipe" translatable="false">Swipe the address bar</string>
++    <string name="bare_welcome_hint_address_swipe" translatable="false">Slide it left or right to switch tabs</string>
++    <string name="bare_welcome_opt_bar_swipe" translatable="false">Swipe the bottom bar</string>
++    <string name="bare_welcome_hint_bar_swipe" translatable="false">What a sideways drag along the bar does</string>
+     <string name="bare_welcome_browsing_title" translatable="false">Your browsing, your way</string>
+     <string name="bare_welcome_browsing_intro" translatable="false">Choose how downloads, audio and notifications behave.</string>
+     <string name="bare_welcome_ready_title" translatable="false">Ready for everyday browsing</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+index c1e7929dd35..288c616c793 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+@@ -54,6 +54,7 @@ import android.widget.TextView;
+ import androidx.activity.ComponentActivity;
+ import androidx.activity.OnBackPressedCallback;
+ import androidx.annotation.RequiresApi;
++import androidx.annotation.VisibleForTesting;
+ import androidx.appcompat.app.AlertDialog;
+ import androidx.core.app.NotificationManagerCompat;
+ import androidx.core.graphics.Insets;
+@@ -68,12 +69,20 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.app.ChromeActivity;
++import org.chromium.chrome.browser.bare.settings.BareToolbarActionUi;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.preferences.Pref;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.profiles.ProfileManager;
+ import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
++import org.chromium.chrome.browser.ui.actions.ActionId;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarDefaults;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarLayout;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarPrefs;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarSwipeAction;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarSwipePrefs;
+ import org.chromium.components.prefs.PrefService;
+ import org.chromium.components.search_engines.TemplateUrl;
+ import org.chromium.components.search_engines.TemplateUrlService;
+@@ -124,10 +133,19 @@ public class BareWelcomeOverlay {
+     private static final String KEY_DRAFT_BACKGROUND_MEDIA = "draft_background_media";
+     private static final String KEY_DRAFT_BACKGROUND_MEDIA_KNOWN = "draft_background_media_known";
+     private static final String KEY_DRAFT_UPDATES = "draft_updates";
++    private static final String KEY_DRAFT_MINIMAL = "draft_minimal_layout";
++    private static final String KEY_DRAFT_FIRST_BUTTON = "draft_first_button";
++    private static final String KEY_DRAFT_SECOND_BUTTON = "draft_second_button";
++    private static final String KEY_DRAFT_BUTTONS_TOUCHED = "draft_buttons_touched";
++    private static final String KEY_DRAFT_ADDRESS_SWIPE = "draft_address_swipe";
++    private static final String KEY_DRAFT_BAR_SWIPE = "draft_bar_swipe";
+ 
+     private static final int PAGE_WELCOME = 0;
+-    private static final int PAGE_FINISH = 4;
+-    private static final int PAGE_COUNT = 5;
++    private static final int PAGE_TOOLBAR = 2;
++    private static final int PAGE_BROWSING = 3;
++    private static final int PAGE_READY = 4;
++    private static final int PAGE_FINISH = 5;
++    private static final int PAGE_COUNT = 6;
+ 
+     private static final long SLIDE_MS = 380;
+     private static final long LOGO_IN_MS = 650;
+@@ -181,7 +199,8 @@ public class BareWelcomeOverlay {
+     }
+ 
+     /** The choices offered, with the defaults they start on. */
+-    private static class Choices {
++    @VisibleForTesting
++    static class Choices {
+         String engineKeyword = NOAI_KEYWORD;
+         boolean adBlocker = true;
+         boolean addressBarOnTop = true;
+@@ -193,6 +212,16 @@ public class BareWelcomeOverlay {
+         // not a request, so it belongs with the mode rather than being a separate network choice.
+         int updateChoice;
+ 
++        // The toolbar page. The two buttons are the ones the bottom bar leaves open, and are only
++        // written on Start if the user changed one, so an untouched choice stays the absence of a
++        // preference rather than becoming a stored copy of today's default.
++        boolean minimalLayout;
++        @ActionId int firstButton = ActionId.HOME_BUTTON;
++        @ActionId int secondButton = ActionId.INCOGNITO;
++        boolean buttonsTouched;
++        boolean addressBarSwipe = true;
++        @BareToolbarSwipeAction int barSwipe = BareToolbarSwipeAction.OFF;
++
+         // True when the welcome has been completed before, so this showing exists to ask about
+         // what a new release added rather than to set the browser up. A review starts from what
+         // the profile already holds; a first showing starts from Bare's own defaults.
+@@ -279,6 +308,7 @@ public class BareWelcomeOverlay {
+             int[] layouts = {
+                 R.layout.bare_welcome_page_welcome,
+                 R.layout.bare_welcome_page_yours,
++                R.layout.bare_welcome_page_toolbar,
+                 R.layout.bare_welcome_page_browsing,
+                 R.layout.bare_welcome_page_ready,
+                 R.layout.bare_welcome_page_finish,
+@@ -317,9 +347,10 @@ public class BareWelcomeOverlay {
+         void show(int page) {
+             buildProgress();
+             buildYoursPage(mPages[1]);
+-            buildBrowsingPage(mPages[2]);
+-            buildReadyPage(mPages[3]);
+-            buildFinishPage(mPages[4]);
++            buildToolbarPage(mPages[PAGE_TOOLBAR]);
++            buildBrowsingPage(mPages[PAGE_BROWSING]);
++            buildReadyPage(mPages[PAGE_READY]);
++            buildFinishPage(mPages[PAGE_FINISH]);
+ 
+             mBack.setOnClickListener(view -> goTo(mPage - 1));
+             mNext.setOnClickListener(
+@@ -574,8 +605,8 @@ public class BareWelcomeOverlay {
+                         AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null);
+             }
+             if (mPage == PAGE_FINISH) startBridge();
+-            if (mPage == 2) refreshNotifications();
+-            if (mPage == 3) refreshDefaultBrowser();
++            if (mPage == PAGE_BROWSING) refreshNotifications();
++            if (mPage == PAGE_READY) refreshDefaultBrowser();
+         }
+ 
+         private void buildProgress() {
+@@ -681,7 +712,177 @@ public class BareWelcomeOverlay {
+         }
+ 
+         // ---------------------------------------------------------------------------------------
+-        // Page 3: external downloads, background media, notifications.
++        // Page 3: the toolbar and what a swipe does.
++
++        private @Nullable View mFirstButtonRow;
++        private @Nullable View mSecondButtonRow;
++        private @Nullable View mBarSwipeRow;
++        private @Nullable TextView mFirstButtonValue;
++        private @Nullable TextView mSecondButtonValue;
++
++        private void buildToolbarPage(View page) {
++            View minimal = page.findViewById(R.id.bare_row_minimal);
++            setUpRow(
++                    minimal,
++                    R.drawable.ic_toolbar_24dp,
++                    R.string.bare_welcome_opt_minimal,
++                    R.string.bare_welcome_hint_minimal);
++            switchRow(
++                    minimal,
++                    mChoices.minimalLayout,
++                    on -> {
++                        mChoices.minimalLayout = on;
++                        updateToolbarRows();
++                        saveDraft();
++                    });
++
++            View first = page.findViewById(R.id.bare_row_first_button);
++            setUpRow(
++                    first,
++                    R.drawable.ic_toolbar_24dp,
++                    R.string.bare_welcome_opt_first_button,
++                    R.string.bare_welcome_hint_first_button);
++            mFirstButtonValue =
++                    valueRow(
++                            first,
++                            buttonLabel(mChoices.firstButton),
++                            value -> chooseButton(BareToolbarSlot.HOME));
++            mFirstButtonRow = first;
++
++            View second = page.findViewById(R.id.bare_row_second_button);
++            setUpRow(
++                    second,
++                    R.drawable.ic_toolbar_24dp,
++                    R.string.bare_welcome_opt_second_button,
++                    R.string.bare_welcome_hint_second_button);
++            mSecondButtonValue =
++                    valueRow(
++                            second,
++                            buttonLabel(mChoices.secondButton),
++                            value -> chooseButton(BareToolbarSlot.EXTRA));
++            mSecondButtonRow = second;
++
++            View addressSwipe = page.findViewById(R.id.bare_row_address_swipe);
++            setUpRow(
++                    addressSwipe,
++                    R.drawable.btn_tabswitcher_modern,
++                    R.string.bare_welcome_opt_address_swipe,
++                    R.string.bare_welcome_hint_address_swipe);
++            switchRow(
++                    addressSwipe,
++                    mChoices.addressBarSwipe,
++                    on -> {
++                        mChoices.addressBarSwipe = on;
++                        saveDraft();
++                    });
++
++            View barSwipe = page.findViewById(R.id.bare_row_bar_swipe);
++            setUpRow(
++                    barSwipe,
++                    R.drawable.btn_tabswitcher_modern,
++                    R.string.bare_welcome_opt_bar_swipe,
++                    R.string.bare_welcome_hint_bar_swipe);
++            valueRow(barSwipe, barSwipeLabel(mChoices.barSwipe), this::chooseBarSwipe);
++            mBarSwipeRow = barSwipe;
++            updateToolbarRows();
++        }
++
++        /** The bottom bar's own choices mean nothing in the layout that has no bottom bar. */
++        private void updateToolbarRows() {
++            int visibility = mChoices.minimalLayout ? View.GONE : View.VISIBLE;
++            for (@Nullable View row : new View[] {mFirstButtonRow, mSecondButtonRow, mBarSwipeRow}) {
++                if (row != null) row.setVisibility(visibility);
++            }
++        }
++
++        private String buttonLabel(@ActionId int action) {
++            return mActivity.getString(BareToolbarActionUi.labelFor(action));
++        }
++
++        private String barSwipeLabel(@BareToolbarSwipeAction int action) {
++            switch (action) {
++                case BareToolbarSwipeAction.BRIGHTNESS:
++                    return mActivity.getString(R.string.bare_toolbar_swipe_brightness);
++                case BareToolbarSwipeAction.VOLUME:
++                    return mActivity.getString(R.string.bare_toolbar_swipe_volume);
++                case BareToolbarSwipeAction.SWITCH_TABS:
++                    return mActivity.getString(R.string.bare_toolbar_swipe_switch_tabs);
++                default:
++                    return mActivity.getString(R.string.bare_toolbar_swipe_off);
++            }
++        }
++
++        /**
++         * Offers what a bottom bar button can be, and keeps the two buttons different.
++         *
++         * <p>Choosing the action the other button already has swaps them, the same as the toolbar
++         * settings do, so the bar never shows one action twice.
++         */
++        private void chooseButton(@BareToolbarSlot int slot) {
++            @ActionId int[] catalogue = BareToolbarDefaults.CATALOGUE;
++            List<CharSequence> labels = new ArrayList<>();
++            @ActionId int current = slot == BareToolbarSlot.HOME ? mChoices.firstButton : mChoices.secondButton;
++            int selected = 0;
++            for (int i = 0; i < catalogue.length; i++) {
++                labels.add(buttonLabel(catalogue[i]));
++                if (catalogue[i] == current) selected = i;
++            }
++            showChooser(
++                    slot == BareToolbarSlot.HOME
++                            ? R.string.bare_welcome_opt_first_button
++                            : R.string.bare_welcome_opt_second_button,
++                    labels,
++                    selected,
++                    index -> {
++                        @ActionId int chosen = catalogue[index];
++                        if (slot == BareToolbarSlot.HOME) {
++                            if (chosen == mChoices.secondButton) {
++                                mChoices.secondButton = mChoices.firstButton;
++                            }
++                            mChoices.firstButton = chosen;
++                        } else {
++                            if (chosen == mChoices.firstButton) {
++                                mChoices.firstButton = mChoices.secondButton;
++                            }
++                            mChoices.secondButton = chosen;
++                        }
++                        mChoices.buttonsTouched = true;
++                        if (mFirstButtonValue != null) {
++                            mFirstButtonValue.setText(buttonLabel(mChoices.firstButton));
++                        }
++                        if (mSecondButtonValue != null) {
++                            mSecondButtonValue.setText(buttonLabel(mChoices.secondButton));
++                        }
++                        saveDraft();
++                    });
++        }
++
++        private void chooseBarSwipe(TextView value) {
++            @BareToolbarSwipeAction int[] actions = {
++                BareToolbarSwipeAction.OFF,
++                BareToolbarSwipeAction.BRIGHTNESS,
++                BareToolbarSwipeAction.VOLUME,
++                BareToolbarSwipeAction.SWITCH_TABS,
++            };
++            List<CharSequence> labels = new ArrayList<>();
++            int selected = 0;
++            for (int i = 0; i < actions.length; i++) {
++                labels.add(barSwipeLabel(actions[i]));
++                if (actions[i] == mChoices.barSwipe) selected = i;
++            }
++            showChooser(
++                    R.string.bare_welcome_opt_bar_swipe,
++                    labels,
++                    selected,
++                    index -> {
++                        mChoices.barSwipe = actions[index];
++                        value.setText(barSwipeLabel(mChoices.barSwipe));
++                        saveDraft();
++                    });
++        }
++
++        // ---------------------------------------------------------------------------------------
++        // Page 4: external downloads, background media, notifications.
+ 
+         private void buildBrowsingPage(View page) {
+             View downloads = page.findViewById(R.id.bare_row_downloads);
+@@ -1444,6 +1645,12 @@ public class BareWelcomeOverlay {
+                     .putBoolean(KEY_DRAFT_BACKGROUND_MEDIA, mChoices.backgroundMedia)
+                     .putBoolean(KEY_DRAFT_BACKGROUND_MEDIA_KNOWN, mChoices.backgroundMediaKnown)
+                     .putInt(KEY_DRAFT_UPDATES, mChoices.updateChoice)
++                    .putBoolean(KEY_DRAFT_MINIMAL, mChoices.minimalLayout)
++                    .putInt(KEY_DRAFT_FIRST_BUTTON, mChoices.firstButton)
++                    .putInt(KEY_DRAFT_SECOND_BUTTON, mChoices.secondButton)
++                    .putBoolean(KEY_DRAFT_BUTTONS_TOUCHED, mChoices.buttonsTouched)
++                    .putBoolean(KEY_DRAFT_ADDRESS_SWIPE, mChoices.addressBarSwipe)
++                    .putInt(KEY_DRAFT_BAR_SWIPE, mChoices.barSwipe)
+                     .apply();
+         }
+ 
+@@ -1468,6 +1675,14 @@ public class BareWelcomeOverlay {
+         choices.backgroundMediaKnown =
+                 prefs.getBoolean(KEY_DRAFT_BACKGROUND_MEDIA_KNOWN, choices.backgroundMediaKnown);
+         choices.updateChoice = prefs.getInt(KEY_DRAFT_UPDATES, choices.updateChoice);
++        choices.minimalLayout = prefs.getBoolean(KEY_DRAFT_MINIMAL, choices.minimalLayout);
++        choices.firstButton = prefs.getInt(KEY_DRAFT_FIRST_BUTTON, choices.firstButton);
++        choices.secondButton = prefs.getInt(KEY_DRAFT_SECOND_BUTTON, choices.secondButton);
++        choices.buttonsTouched =
++                prefs.getBoolean(KEY_DRAFT_BUTTONS_TOUCHED, choices.buttonsTouched);
++        choices.addressBarSwipe =
++                prefs.getBoolean(KEY_DRAFT_ADDRESS_SWIPE, choices.addressBarSwipe);
++        choices.barSwipe = prefs.getInt(KEY_DRAFT_BAR_SWIPE, choices.barSwipe);
+         int page = prefs.getInt(KEY_DRAFT_PAGE, PAGE_WELCOME);
+         return Math.max(PAGE_WELCOME, Math.min(page, PAGE_FINISH));
+     }
+@@ -1485,6 +1700,12 @@ public class BareWelcomeOverlay {
+                 .remove(KEY_DRAFT_BACKGROUND_MEDIA)
+                 .remove(KEY_DRAFT_BACKGROUND_MEDIA_KNOWN)
+                 .remove(KEY_DRAFT_UPDATES)
++                .remove(KEY_DRAFT_MINIMAL)
++                .remove(KEY_DRAFT_FIRST_BUTTON)
++                .remove(KEY_DRAFT_SECOND_BUTTON)
++                .remove(KEY_DRAFT_BUTTONS_TOUCHED)
++                .remove(KEY_DRAFT_ADDRESS_SWIPE)
++                .remove(KEY_DRAFT_BAR_SWIPE)
+                 .apply();
+     }
+ 
+@@ -1531,7 +1752,8 @@ public class BareWelcomeOverlay {
+      * the search engine, are not available this early in startup, so those rows keep their
+      * defaults, which are also what a first run gets.
+      */
+-    private static Choices currentChoices(boolean reviewing) {
++    @VisibleForTesting
++    static Choices currentChoices(boolean reviewing) {
+         Choices choices = new Choices();
+         choices.reviewing = reviewing;
+         SharedPreferencesManager prefs = ChromeSharedPreferences.getInstance();
+@@ -1550,6 +1772,13 @@ public class BareWelcomeOverlay {
+         if (BareUpdateCheck.getMode() == BareUpdateCheck.UpdateMode.MANUAL) {
+             choices.updateChoice = BareUpdateCheck.isReminderEnabled() ? 2 : 1;
+         }
++        // What the toolbar is now, so a review shows the user's own arrangement.
++        choices.minimalLayout =
++                prefs.readBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, false);
++        choices.firstButton = BareToolbarLayout.actionForSlot(BareToolbarSlot.HOME);
++        choices.secondButton = BareToolbarLayout.actionForSlot(BareToolbarSlot.EXTRA);
++        choices.addressBarSwipe = BareToolbarSwipePrefs.isAddressBarSwipeEnabled();
++        choices.barSwipe = BareToolbarSwipePrefs.getAction();
+         return choices;
+     }
+ 
+@@ -1560,7 +1789,8 @@ public class BareWelcomeOverlay {
+      * profile's prefs, which do not exist this early in startup, so they wait for the profile
+      * rather than being dropped.
+      */
+-    private static void applyChoices(Choices choices) {
++    @VisibleForTesting
++    static void applyChoices(Choices choices) {
+         ChromeSharedPreferences.getInstance()
+                 .writeInt(
+                         ChromePreferenceKeys.TOOLBAR_TOP_ANCHORED,
+@@ -1576,6 +1806,17 @@ public class BareWelcomeOverlay {
+         ChromeSharedPreferences.getInstance()
+                 .writeBoolean(
+                         ChromePreferenceKeys.BARE_BUNDLED_AD_BLOCKER_ENABLED, choices.adBlocker);
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, choices.minimalLayout);
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(
++                        ChromePreferenceKeys.BARE_ADDRESS_BAR_SWIPE_TABS,
++                        choices.addressBarSwipe);
++        BareToolbarSwipePrefs.setAction(choices.barSwipe);
++        if (choices.buttonsTouched) {
++            BareToolbarPrefs.setPrimaryAction(BareToolbarSlot.HOME, choices.firstButton);
++            BareToolbarPrefs.setPrimaryAction(BareToolbarSlot.EXTRA, choices.secondButton);
++        }
+         BareUpdateCheck.setMode(
+                 choices.updateChoice == 0
+                         ? BareUpdateCheck.UpdateMode.AUTOMATIC
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index a33c6eaf0b1..b996decc641 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -437,6 +437,7 @@ if (is_android) {
+       "src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/BareWelcomeToolbarChoicesUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java",
+       "src/org/chromium/chrome/browser/BrowserExitReasonTrackerUnitTest.java",
+       "src/org/chromium/chrome/browser/ChromeActionModeHandlerUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareWelcomeToolbarChoicesUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareWelcomeToolbarChoicesUnitTest.java
+new file mode 100644
+index 00000000000..84f4ae3d054
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareWelcomeToolbarChoicesUnitTest.java
+@@ -0,0 +1,105 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.After;
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.ui.actions.ActionId;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarLayout;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarPrefs;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarSwipeAction;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarSwipePrefs;
++
++/** Unit tests for the toolbar choices on the welcome's toolbar page. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareWelcomeToolbarChoicesUnitTest {
++    @Before
++    public void setUp() {
++        reset();
++    }
++
++    @After
++    public void tearDown() {
++        reset();
++    }
++
++    private static void reset() {
++        BareToolbarPrefs.resetAll();
++        BareToolbarSwipePrefs.setAction(BareToolbarSwipeAction.OFF);
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT);
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.BARE_ADDRESS_BAR_SWIPE_TABS);
++    }
++
++    @Test
++    public void testAFreshProfileStartsOnTheShippedArrangement() {
++        BareWelcomeOverlay.Choices choices = BareWelcomeOverlay.currentChoices(false);
++        assertFalse(choices.minimalLayout);
++        assertEquals(ActionId.HOME_BUTTON, choices.firstButton);
++        assertEquals(ActionId.INCOGNITO, choices.secondButton);
++        assertTrue(choices.addressBarSwipe);
++        assertEquals(BareToolbarSwipeAction.OFF, choices.barSwipe);
++    }
++
++    @Test
++    public void testAReviewShowsWhatTheUserAlreadyHas() {
++        BareToolbarPrefs.setPrimaryAction(BareToolbarSlot.HOME, ActionId.FIND_IN_PAGE);
++        BareToolbarPrefs.setPrimaryAction(BareToolbarSlot.EXTRA, ActionId.SEARCH);
++        BareToolbarSwipePrefs.setAction(BareToolbarSwipeAction.SWITCH_TABS);
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_ADDRESS_BAR_SWIPE_TABS, false);
++
++        BareWelcomeOverlay.Choices choices = BareWelcomeOverlay.currentChoices(true);
++        assertEquals(ActionId.FIND_IN_PAGE, choices.firstButton);
++        assertEquals(ActionId.SEARCH, choices.secondButton);
++        assertEquals(BareToolbarSwipeAction.SWITCH_TABS, choices.barSwipe);
++        assertFalse(choices.addressBarSwipe);
++    }
++
++    @Test
++    public void testStartWritesTheSwipeAndLayoutChoices() {
++        BareWelcomeOverlay.Choices choices = BareWelcomeOverlay.currentChoices(false);
++        choices.minimalLayout = true;
++        choices.addressBarSwipe = false;
++        choices.barSwipe = BareToolbarSwipeAction.SWITCH_TABS;
++        BareWelcomeOverlay.applyChoices(choices);
++
++        assertTrue(
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, false));
++        assertFalse(BareToolbarSwipePrefs.isAddressBarSwipeEnabled());
++        assertEquals(BareToolbarSwipeAction.SWITCH_TABS, BareToolbarSwipePrefs.getAction());
++    }
++
++    @Test
++    public void testUntouchedButtonsStayTheAbsenceOfAPreference() {
++        BareWelcomeOverlay.Choices choices = BareWelcomeOverlay.currentChoices(false);
++        BareWelcomeOverlay.applyChoices(choices);
++        assertFalse(BareToolbarPrefs.hasPrimaryAction(BareToolbarSlot.HOME));
++        assertFalse(BareToolbarPrefs.hasPrimaryAction(BareToolbarSlot.EXTRA));
++    }
++
++    @Test
++    public void testChosenButtonsAreStored() {
++        BareWelcomeOverlay.Choices choices = BareWelcomeOverlay.currentChoices(false);
++        choices.firstButton = ActionId.SEARCH;
++        choices.secondButton = ActionId.HOME_BUTTON;
++        choices.buttonsTouched = true;
++        BareWelcomeOverlay.applyChoices(choices);
++        assertEquals(ActionId.SEARCH, BareToolbarLayout.actionForSlot(BareToolbarSlot.HOME));
++        assertEquals(ActionId.HOME_BUTTON, BareToolbarLayout.actionForSlot(BareToolbarSlot.EXTRA));
++    }
++}
+-- 
+2.34.1
+

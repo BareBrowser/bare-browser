@@ -1,0 +1,477 @@
+From fa905448eda955ab7f99e128626d00399572e1c1 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 04:51:31 +0000
+Subject: [PATCH] Patch 0000178
+
+---
+ .../java/res/xml/appearance_preferences.xml   |  7 ---
+ .../settings/AppearanceSettingsFragment.java  | 40 +------------
+ .../init/ProcessInitializationHandler.java    |  2 +
+ .../ui/bottombar/BottomBarConfigUtils.java    | 19 +++++-
+ .../strings/android_chrome_strings.grd        |  6 ++
+ chrome/browser/ui/android/toolbar/BUILD.gn    |  1 +
+ .../java/res/xml/address_bar_settings.xml     |  6 ++
+ .../toolbar/BareMinimalLayoutToggle.java      | 60 +++++++++++++++++++
+ .../toolbar/ToolbarLongPressMenuHandler.java  | 24 +++++++-
+ .../ToolbarLongPressMenuHandlerUnitTest.java  | 29 ++++++++-
+ .../settings/AddressBarSettingsFragment.java  | 32 ++++++++++
+ 11 files changed, 172 insertions(+), 54 deletions(-)
+ create mode 100644 chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/BareMinimalLayoutToggle.java
+
+diff --git a/chrome/android/java/res/xml/appearance_preferences.xml b/chrome/android/java/res/xml/appearance_preferences.xml
+index 437a48c4e6c..df2c0d940a8 100644
+--- a/chrome/android/java/res/xml/appearance_preferences.xml
++++ b/chrome/android/java/res/xml/appearance_preferences.xml
+@@ -46,11 +46,4 @@ exclusive options. -->
+         android:order="4"
+         android:title="@string/tab_position_settings_title" />
+ 
+-    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+-        android:key="bare_minimal_layout"
+-        android:order="5"
+-        android:persistent="false"
+-        android:title="@string/bare_minimal_layout_title"
+-        android:summary="@string/bare_minimal_layout_summary" />
+-
+ </PreferenceScreen>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/appearance/settings/AppearanceSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/appearance/settings/AppearanceSettingsFragment.java
+index d6b337f3063..e11b37adc1d 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/appearance/settings/AppearanceSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/appearance/settings/AppearanceSettingsFragment.java
+@@ -9,7 +9,6 @@ import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
+ import android.os.Bundle;
+ 
+ import androidx.annotation.StringRes;
+-import androidx.appcompat.app.AlertDialog;
+ import androidx.preference.Preference;
+ 
+ import org.chromium.base.Callback;
+@@ -24,7 +23,6 @@ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarConstants;
+ import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarUtils;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+-import org.chromium.chrome.browser.lifetime.ApplicationLifetime;
+ import org.chromium.chrome.browser.night_mode.NightModeUtils;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.Pref;
+@@ -56,7 +54,6 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
+     public static final String PREF_TOOLBAR_SHORTCUT = "toolbar_shortcut";
+     public static final String PREF_UI_THEME = "ui_theme";
+     public static final String PREF_TAB_POSITION = "tab_position";
+-    public static final String PREF_MINIMAL_LAYOUT = "bare_minimal_layout";
+     private static final String PREF_BARE_TOOLBAR = "bare_toolbar";
+ 
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+@@ -284,44 +281,9 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
+                 });
+     }
+ 
+-    /**
+-     * The switch for the minimal layout, which leaves out the bottom bar.
+-     *
+-     * <p>Phones only, since tablets never had the bar. The layout is read when the process starts,
+-     * so a change asks for a restart rather than rebuilding the toolbar under the user.
+-     */
++    /** The bottom bar's own shortcuts mean nothing in the layout that has no bar. */
+     private void initMinimalLayoutPref() {
+-        ChromeSwitchPreference minimal = findPreference(PREF_MINIMAL_LAYOUT);
+-        if (minimal == null) return;
+-        if (DeviceFormFactor.isNonMultiDisplayContextOnTablet(getContext())) {
+-            removePreference(PREF_MINIMAL_LAYOUT);
+-            return;
+-        }
+-        // The bar's own shortcuts mean nothing in the layout that has no bar.
+         if (BottomBarConfigUtils.isMinimalLayout()) removePreference(PREF_BARE_TOOLBAR);
+-
+-        minimal.setChecked(
+-                ChromeSharedPreferences.getInstance()
+-                        .readBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, false));
+-        minimal.setOnPreferenceChangeListener(
+-                (preference, newValue) -> {
+-                    ChromeSharedPreferences.getInstance()
+-                            .writeBoolean(
+-                                    ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, (boolean) newValue);
+-                    if (BottomBarConfigUtils.isMinimalLayoutChangePending()) {
+-                        new AlertDialog.Builder(
+-                                        requireContext(),
+-                                        R.style.ThemeOverlay_BrowserUI_AlertDialog)
+-                                .setMessage(R.string.bare_minimal_layout_restart_message)
+-                                .setPositiveButton(
+-                                        R.string.bare_minimal_layout_restart,
+-                                        (dialog, which) ->
+-                                                ApplicationLifetime.terminate(/* restart= */ true))
+-                                .setNegativeButton(R.string.bare_minimal_layout_later, null)
+-                                .show();
+-                    }
+-                    return true;
+-                });
+     }
+ 
+     private void removePreference(String prefKey) {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
+index 5041c69d5e2..4384d42c31c 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
+@@ -72,6 +72,7 @@ import org.chromium.chrome.browser.homepage.HomepageManager;
+ import org.chromium.chrome.browser.incognito.IncognitoTabLauncher;
+ import org.chromium.chrome.browser.language.GlobalAppLocaleController;
+ import org.chromium.chrome.browser.lifetime.ApplicationLifetime;
++import org.chromium.chrome.browser.toolbar.BareMinimalLayoutToggle;
+ import org.chromium.chrome.browser.locale.LocaleManager;
+ import org.chromium.chrome.browser.media.MediaCaptureNotificationServiceImpl;
+ import org.chromium.chrome.browser.media.MediaViewerUtils;
+@@ -285,6 +286,7 @@ public class ProcessInitializationHandler {
+         // Web push subscriptions go through the distributor app the user chose, or through
+         // Google Play services if there is none.
+         InstanceIDWithSubtype.setTokenBroker(new BarePushSubscriber());
++        BareMinimalLayoutToggle.setRestartAction(() -> ApplicationLifetime.terminate(/* restart= */ true));
+         // ChromeLifetimeController is pure Java and safe to initialize pre-native. It is
+         // initialized early so that ApplicationLifetime.terminate() can restart the process
+         // if a locale change occurs before post-native initialization.
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
+index f9edca7ddd3..29ea722a4fe 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
+@@ -47,11 +47,24 @@ public class BottomBarConfigUtils {
+         return sMinimalLayout;
+     }
+ 
++    /**
++     * What the user has chosen, which is what the next start will use. Unlike {@link
++     * #isMinimalLayout} this follows a change at once. The long press menu and the Address bar
++     * settings both read and write it here.
++     */
++    public static boolean isMinimalLayoutChosen() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, false);
++    }
++
++    public static void setMinimalLayoutChosen(boolean minimal) {
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, minimal);
++    }
++
+     /** Whether the stored choice is different from the layout this process started with. */
+     public static boolean isMinimalLayoutChangePending() {
+-        return ChromeSharedPreferences.getInstance()
+-                        .readBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, false)
+-                != isMinimalLayout();
++        return isMinimalLayoutChosen() != isMinimalLayout();
+     }
+ 
+     public static void setMinimalLayoutForTesting(@Nullable Boolean minimal) {
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 9ba1064ca8a..a4ee2791ab4 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4489,6 +4489,12 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_MINIMAL_LAYOUT_SUMMARY" desc="Summary of the setting that removes the bottom button bar. Applies after a restart.">
+         One row only: the address bar with New tab, Tabs and Menu. Applies after a restart.
+       </message>
++      <message name="IDS_BARE_MINIMAL_LAYOUT_USE_MINIMAL" desc="Address bar long press menu item that switches to the minimal toolbar. [CHAR_LIMIT=40]">
++        Use minimal toolbar
++      </message>
++      <message name="IDS_BARE_MINIMAL_LAYOUT_USE_FULL" desc="Address bar long press menu item that switches back to the full toolbar. [CHAR_LIMIT=40]">
++        Use full toolbar
++      </message>
+       <message name="IDS_BARE_MINIMAL_LAYOUT_RESTART_MESSAGE" desc="Dialog text asking to restart the browser to apply the layout change.">
+         Restart Bare to change the layout.
+       </message>
+diff --git a/chrome/browser/ui/android/toolbar/BUILD.gn b/chrome/browser/ui/android/toolbar/BUILD.gn
+index 674c8e7a57b..6165d3cd80e 100644
+--- a/chrome/browser/ui/android/toolbar/BUILD.gn
++++ b/chrome/browser/ui/android/toolbar/BUILD.gn
+@@ -142,6 +142,7 @@ android_library("core_java") {
+     "java/src/org/chromium/chrome/browser/toolbar/ToolbarFeatures.java",
+     "java/src/org/chromium/chrome/browser/toolbar/ToolbarHairlineView.java",
+     "java/src/org/chromium/chrome/browser/toolbar/ToolbarIntentMetadata.java",
++    "java/src/org/chromium/chrome/browser/toolbar/BareMinimalLayoutToggle.java",
+     "java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java",
+     "java/src/org/chromium/chrome/browser/toolbar/ToolbarPositionController.java",
+     "java/src/org/chromium/chrome/browser/toolbar/ToolbarProgressBar.java",
+diff --git a/chrome/browser/ui/android/toolbar/java/res/xml/address_bar_settings.xml b/chrome/browser/ui/android/toolbar/java/res/xml/address_bar_settings.xml
+index 6781f28cbad..ccce2c7ed7c 100644
+--- a/chrome/browser/ui/android/toolbar/java/res/xml/address_bar_settings.xml
++++ b/chrome/browser/ui/android/toolbar/java/res/xml/address_bar_settings.xml
+@@ -26,4 +26,10 @@ found in the LICENSE file.
+         app:allowDividerAbove="false"
+         app:allowDividerBelow="false" />
+ 
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_minimal_layout"
++        android:persistent="false"
++        android:title="@string/bare_minimal_layout_title"
++        android:summary="@string/bare_minimal_layout_summary" />
++
+ </PreferenceScreen>
+\ No newline at end of file
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/BareMinimalLayoutToggle.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/BareMinimalLayoutToggle.java
+new file mode 100644
+index 00000000000..f848e0d74bd
+--- /dev/null
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/BareMinimalLayoutToggle.java
+@@ -0,0 +1,60 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.toolbar;
++
++import android.content.Context;
++
++import androidx.appcompat.app.AlertDialog;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
++import org.chromium.ui.base.DeviceFormFactor;
++
++/**
++ * Switches between the full toolbar (address bar and bottom bar) and the minimal one (address bar
++ * only). The long press menu on the address bar and Settings, Address bar both go through here, so
++ * they always agree, because there is a single stored choice.
++ *
++ * <p>The layout is built when the browser starts, so a change takes effect after a restart and the
++ * user is asked whether to restart now.
++ */
++@NullMarked
++public final class BareMinimalLayoutToggle {
++    private static @Nullable Runnable sRestart;
++
++    private BareMinimalLayoutToggle() {}
++
++    /** Set at startup: restarts the browser. The toolbar code cannot reach it on its own. */
++    public static void setRestartAction(@Nullable Runnable restart) {
++        sRestart = restart;
++    }
++
++    /** Phones only, since tablets never had the bottom bar. */
++    public static boolean isAvailable(Context context) {
++        return !DeviceFormFactor.isNonMultiDisplayContextOnTablet(context);
++    }
++
++    /** Flips the stored choice and offers a restart. */
++    public static void toggle(Context context) {
++        set(context, !BottomBarConfigUtils.isMinimalLayoutChosen());
++    }
++
++    /** Stores the choice and, if it differs from what is running, offers a restart. */
++    public static void set(Context context, boolean minimal) {
++        BottomBarConfigUtils.setMinimalLayoutChosen(minimal);
++        if (!BottomBarConfigUtils.isMinimalLayoutChangePending()) return;
++        AlertDialog.Builder builder =
++                new AlertDialog.Builder(context, R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                        .setMessage(R.string.bare_minimal_layout_restart_message)
++                        .setNegativeButton(R.string.bare_minimal_layout_later, null);
++        Runnable restart = sRestart;
++        if (restart != null) {
++            builder.setPositiveButton(
++                    R.string.bare_minimal_layout_restart, (dialog, which) -> restart.run());
++        }
++        builder.show();
++    }
++}
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java
+index 6d1f58bd245..5bd90844ce9 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java
+@@ -32,6 +32,7 @@ import org.chromium.chrome.browser.lifecycle.ConfigurationChangedObserver;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.toolbar.ToolbarPositionController.ToolbarPositionAndSource;
+ import org.chromium.chrome.browser.toolbar.settings.AddressBarPreference;
++import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.components.browser_ui.widget.BrowserUiListMenuUtils;
+ import org.chromium.components.browser_ui.widget.ListItemBuilder;
+ import org.chromium.components.feature_engagement.EventConstants;
+@@ -59,12 +60,14 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+     @IntDef({
+         MenuItemType.MOVE_ADDRESS_BAR_TO,
+         MenuItemType.COPY_LINK,
+-        MenuItemType.SEND_TAB_TO_SELF
++        MenuItemType.SEND_TAB_TO_SELF,
++        MenuItemType.TOGGLE_MINIMAL_LAYOUT
+     })
+     public @interface MenuItemType {
+         int MOVE_ADDRESS_BAR_TO = 0;
+         int COPY_LINK = 1;
+         int SEND_TAB_TO_SELF = 2;
++        int TOGGLE_MINIMAL_LAYOUT = 3;
+     }
+ 
+     private @Nullable PopupWindow mPopupMenu;
+@@ -80,6 +83,7 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+     private final Supplier<@Nullable GURL> mUrlSupplier;
+     private final Supplier<ViewRectProvider> mUrlBarViewRectProviderSupplier;
+     private final boolean mIsBottomToolbarEnabled;
++    private final boolean mIsMinimalToggleAvailable;
+     private final @Nullable OnLongClickListener mOnLongClickListener;
+     private final WindowAndroid mWindowAndroid;
+     private final ActivityLifecycleDispatcher mLifecycleDispatcher;
+@@ -129,7 +133,9 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+                 ToolbarPositionController.isToolbarPositionCustomizationEnabled(
+                         context, isCustomTab);
+         boolean isSttsEnabled = ChromeFeatureList.sSendTabToSelfExtraEntryPoints.isEnabled();
+-        if (mIsBottomToolbarEnabled || isSttsEnabled) {
++        mIsMinimalToggleAvailable =
++                !isCustomTab && BareMinimalLayoutToggle.isAvailable(context);
++        if (mIsBottomToolbarEnabled || isSttsEnabled || mIsMinimalToggleAvailable) {
+             mOnLongClickListener =
+                     (view) -> {
+                         if (mSuppressLongPressSupplier.getAsBoolean()) {
+@@ -257,6 +263,17 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+                         .withMenuId(MenuItemType.COPY_LINK)
+                         .build());
+         maybeAddSendTabToSelf(itemList);
++        // Bare: last, so the entries upstream has keep their positions.
++        if (mIsMinimalToggleAvailable) {
++            itemList.add(
++                    new ListItemBuilder()
++                            .withTitleRes(
++                                    BottomBarConfigUtils.isMinimalLayoutChosen()
++                                            ? R.string.bare_minimal_layout_use_full
++                                            : R.string.bare_minimal_layout_use_minimal)
++                            .withMenuId(MenuItemType.TOGGLE_MINIMAL_LAYOUT)
++                            .build());
++        }
+         return itemList;
+     }
+ 
+@@ -286,6 +303,9 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+         } else if (id == MenuItemType.SEND_TAB_TO_SELF) {
+             handleSendTabToSelf();
+             return;
++        } else if (id == MenuItemType.TOGGLE_MINIMAL_LAYOUT) {
++            BareMinimalLayoutToggle.toggle(mContext);
++            return;
+         }
+     }
+ 
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandlerUnitTest.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandlerUnitTest.java
+index 8f6a5cbeb21..1436f357beb 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandlerUnitTest.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandlerUnitTest.java
+@@ -79,6 +79,8 @@ import org.chromium.ui.base.WindowAndroid;
+ import org.chromium.ui.display.DisplayAndroid;
+ import org.chromium.ui.listmenu.BasicListMenu;
+ import org.chromium.ui.listmenu.ListMenuItemProperties;
++import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
++import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
+ import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
+ import org.chromium.ui.widget.ChromePopupWindow;
+ import org.chromium.ui.widget.UiWidgetFactory;
+@@ -265,6 +267,27 @@ public final class ToolbarLongPressMenuHandlerUnitTest {
+                 list.get(1).model.get(ListMenuItemProperties.MENU_ITEM_ID));
+     }
+ 
++    @Test
++    @Restriction({DeviceFormFactor.PHONE})
++    public void testBareMinimalToggleIsListedLastAndNamesTheOtherLayout() {
++        BottomBarConfigUtils.setMinimalLayoutChosen(false);
++        ModelList list = mToolbarLongPressMenuHandler.buildMenuItems(true);
++        ListItem last = list.get(list.size() - 1);
++        assertEquals(
++                ToolbarLongPressMenuHandler.MenuItemType.TOGGLE_MINIMAL_LAYOUT,
++                last.model.get(ListMenuItemProperties.MENU_ITEM_ID));
++        assertEquals(
++                R.string.bare_minimal_layout_use_minimal,
++                last.model.get(ListMenuItemProperties.TITLE_ID));
++
++        BottomBarConfigUtils.setMinimalLayoutChosen(true);
++        list = mToolbarLongPressMenuHandler.buildMenuItems(true);
++        assertEquals(
++                R.string.bare_minimal_layout_use_full,
++                list.get(list.size() - 1).model.get(ListMenuItemProperties.TITLE_ID));
++        BottomBarConfigUtils.setMinimalLayoutChosen(false);
++    }
++
+     @Test
+     @Restriction({DeviceFormFactor.PHONE})
+     public void testbuildMenuItemsWhenToolbarOnBottom() {
+@@ -561,7 +584,7 @@ public final class ToolbarLongPressMenuHandlerUnitTest {
+         mUrl = JUnitTestGURLs.URL_1;
+         ModelList list = mToolbarLongPressMenuHandler.buildMenuItems(true);
+ 
+-        assertEquals(3, list.size());
++        assertEquals(4, list.size());
+         assertEquals(
+                 R.string.toolbar_move_to_the_bottom,
+                 list.get(0).model.get(ListMenuItemProperties.TITLE_ID));
+@@ -589,7 +612,7 @@ public final class ToolbarLongPressMenuHandlerUnitTest {
+         mUrl = null;
+         ModelList list = mToolbarLongPressMenuHandler.buildMenuItems(true);
+ 
+-        assertEquals(2, list.size());
++        assertEquals(3, list.size());
+         assertEquals(
+                 R.string.toolbar_move_to_the_bottom,
+                 list.get(0).model.get(ListMenuItemProperties.TITLE_ID));
+@@ -617,7 +640,7 @@ public final class ToolbarLongPressMenuHandlerUnitTest {
+         ModelList list = handler.buildMenuItems(true);
+ 
+         // Since the predicate returns false, the STTS entry should not be listed.
+-        assertEquals(2, list.size());
++        assertEquals(3, list.size());
+         assertEquals(
+                 R.string.toolbar_move_to_the_bottom,
+                 list.get(0).model.get(ListMenuItemProperties.TITLE_ID));
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/settings/AddressBarSettingsFragment.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/settings/AddressBarSettingsFragment.java
+index 3c12eab28ec..d4b1f3921ab 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/settings/AddressBarSettingsFragment.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/settings/AddressBarSettingsFragment.java
+@@ -19,7 +19,10 @@ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.chrome.browser.toolbar.BareMinimalLayoutToggle;
+ import org.chromium.chrome.browser.toolbar.R;
++import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+ import org.chromium.components.browser_ui.settings.SettingsUtils;
+ import org.chromium.ui.base.DeviceFormFactor;
+ 
+@@ -39,6 +42,7 @@ public class AddressBarSettingsFragment extends ChromeBaseSettingsFragment {
+     @VisibleForTesting static final String PREF_ADDRESS_BAR_HEADER = "address_bar_header";
+     @VisibleForTesting static final String PREF_ADDRESS_BAR_PREFERENCE = "address_bar_preference";
+     @VisibleForTesting static final String PREF_ADDRESS_BAR_TITLE = "address_bar_title";
++    static final String PREF_MINIMAL_LAYOUT = "bare_minimal_layout";
+     public static final String HIGHLIGHTED_OPTION = "AddressBarSettingsFragment.HighlightedOption";
+ 
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+@@ -57,6 +61,34 @@ public class AddressBarSettingsFragment extends ChromeBaseSettingsFragment {
+                 .init(highlightedOption);
+ 
+         overrideDescriptionIfFoldable();
++        initMinimalLayoutPref();
++    }
++
++    /**
++     * The switch between the full toolbar and the minimal one. It reads and writes the same stored
++     * choice as the address bar's long press menu.
++     */
++    private void initMinimalLayoutPref() {
++        ChromeSwitchPreference minimal = findPreference(PREF_MINIMAL_LAYOUT);
++        if (minimal == null) return;
++        if (!BareMinimalLayoutToggle.isAvailable(requireContext())) {
++            getPreferenceScreen().removePreference(minimal);
++            return;
++        }
++        minimal.setChecked(BottomBarConfigUtils.isMinimalLayoutChosen());
++        minimal.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    BareMinimalLayoutToggle.set(requireContext(), (boolean) newValue);
++                    return true;
++                });
++    }
++
++    @Override
++    public void onResume() {
++        super.onResume();
++        // The long press menu may have changed it while this screen was behind another.
++        ChromeSwitchPreference minimal = findPreference(PREF_MINIMAL_LAYOUT);
++        if (minimal != null) minimal.setChecked(BottomBarConfigUtils.isMinimalLayoutChosen());
+     }
+ 
+     @Override
+-- 
+2.34.1
+

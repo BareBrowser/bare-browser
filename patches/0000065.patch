@@ -1,0 +1,63 @@
+From f046338d45a0d7b2d26744152b9ec5591eed2eed Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 20 Aug 2026 15:31:19 +0000
+Subject: [PATCH] Patch 0000065
+
+---
+ .../contextmenu/ContextMenuMediator.java      | 36 ++++++++++++++++---
+ 1 file changed, 32 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ContextMenuMediator.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ContextMenuMediator.java
+index aebe01b9b20..761316ce042 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ContextMenuMediator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ContextMenuMediator.java
+@@ -11,6 +11,7 @@ import static org.chromium.ui.listmenu.ListMenuItemProperties.ENABLED;
+ import static org.chromium.ui.listmenu.ListMenuItemProperties.MENU_ITEM_ID;
+ 
+ import android.app.Activity;
++import android.view.View;
+ import android.widget.ListView;
+ 
+ import androidx.annotation.IdRes;
+@@ -127,10 +128,37 @@ public class ContextMenuMediator {
+             if (item.type == ListItemType.MENU_ITEM
+                     || item.type == ContextMenuItemType.CONTEXT_MENU_ITEM_WITH_ICON_BUTTON) {
+                 // Note: this does NOT handle items inside submenus.
+-                item.model.set(
+-                        CLICK_LISTENER,
+-                        // Note: clickItem already includes dismissDialog.
+-                        (v) -> clickItem(item.model.get(MENU_ITEM_ID), item.model.get(ENABLED)));
++                //
++                // An item that arrived with a listener of its own already knows how to run
++                // itself, and overwriting it broke the only items that do. Extension items are
++                // the case: MenuModelBridge gives them a listener that calls back into the C++
++                // menu model, and their MENU_ITEM_ID is a command id from that model rather
++                // than an R.id. Replacing the listener sent that command id to
++                // ChromeContextMenuPopulator, which recognised none of it, fell through to the
++                // catch-all, and hit the assertion there. With asserts compiled out the tap
++                // just did nothing instead, which is how it looked in the field: uBlock
++                // Origin's "Block element" appeared in the menu and killed the browser.
++                //
++                // The one thing those listeners lack is the dismissal clickItem does, so that
++                // is all that gets added around them.
++                View.OnClickListener ownListener = item.model.get(CLICK_LISTENER);
++                if (ownListener != null) {
++                    item.model.set(
++                            CLICK_LISTENER,
++                            (v) -> {
++                                if (mActivity.isFinishing() || mActivity.isDestroyed()) return;
++                                ownListener.onClick(v);
++                                if (item.model.get(ENABLED)) mDismissDialog.run();
++                            });
++                } else {
++                    item.model.set(
++                            CLICK_LISTENER,
++                            // Note: clickItem already includes dismissDialog.
++                            (v) ->
++                                    clickItem(
++                                            item.model.get(MENU_ITEM_ID),
++                                            item.model.get(ENABLED)));
++                }
+             }
+             if (item.type == ContextMenuItemType.CONTEXT_MENU_ITEM_WITH_ICON_BUTTON) {
+                 PropertyModel model = item.model;

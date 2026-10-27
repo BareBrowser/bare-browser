@@ -1,0 +1,1404 @@
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index cf93ef9689b..de2ad8177dc 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -479,6 +479,7 @@ chrome_java_resources = [
+   "java/res/layout/bare_welcome_page_ready.xml",
+   "java/res/layout/bare_welcome_page_welcome.xml",
+   "java/res/layout/bare_welcome_page_security.xml",
++  "java/res/layout/bare_welcome_page_translate.xml",
+   "java/res/layout/bare_welcome_page_toolbar.xml",
+   "java/res/layout/bare_welcome_page_yours.xml",
+   "java/res/layout/bookmark_activity.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 06db7ca4c7a..7ac9abf06a3 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -258,6 +258,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java",
++  "java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java",
+   "java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java",
+   "java/src/org/chromium/chrome/browser/bare/BareTabSwitcher.java",
+   "java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java",
+diff --git a/chrome/android/java/res/layout/bare_welcome_page_translate.xml b/chrome/android/java/res/layout/bare_welcome_page_translate.xml
+new file mode 100644
+index 00000000000..d93b37039a1
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_welcome_page_translate.xml
+@@ -0,0 +1,80 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="match_parent"
++    android:fillViewport="true"
++    android:scrollbarStyle="outsideOverlay">
++
++    <LinearLayout
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:orientation="vertical"
++        android:paddingStart="20dp"
++        android:paddingTop="28dp"
++        android:paddingEnd="20dp"
++        android:paddingBottom="16dp">
++
++        <TextView
++            android:id="@+id/bare_page_title"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:paddingStart="4dp"
++            android:paddingEnd="4dp"
++            android:accessibilityHeading="true"
++            android:text="@string/bare_welcome_translate_title"
++            android:textColor="@color/bare_welcome_title"
++            android:textSize="28sp"
++            android:fontFamily="sans-serif-medium" />
++
++        <TextView
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="10dp"
++            android:layout_marginBottom="24dp"
++            android:paddingStart="4dp"
++            android:paddingEnd="4dp"
++            android:text="@string/bare_welcome_translate_intro"
++            android:textColor="@color/bare_welcome_body"
++            android:textSize="14sp"
++            android:lineSpacingMultiplier="1.2" />
++
++        <LinearLayout
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:orientation="vertical"
++            android:background="@drawable/bare_welcome_group_bg">
++
++            <include android:id="@+id/bare_row_translate" layout="@layout/bare_welcome_option_row" />
++        </LinearLayout>
++
++        <TextView
++            android:id="@+id/bare_translate_where"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="16dp"
++            android:paddingStart="8dp"
++            android:paddingEnd="8dp"
++            android:text="@string/bare_welcome_translate_where"
++            android:textColor="@color/bare_welcome_body"
++            android:textSize="12sp"
++            android:lineSpacingMultiplier="1.2" />
++
++        <TextView
++            android:id="@+id/bare_translate_note"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="12dp"
++            android:paddingStart="8dp"
++            android:paddingEnd="8dp"
++            android:text="@string/bare_welcome_translate_note"
++            android:textColor="@color/bare_welcome_body"
++            android:textSize="12sp"
++            android:lineSpacingMultiplier="1.2" />
++    </LinearLayout>
++</ScrollView>
+diff --git a/chrome/android/java/res/xml/bare_translate_preferences.xml b/chrome/android/java/res/xml/bare_translate_preferences.xml
+index 5bd02d906ea..9e84de1b0ca 100644
+--- a/chrome/android/java/res/xml/bare_translate_preferences.xml
++++ b/chrome/android/java/res/xml/bare_translate_preferences.xml
+@@ -10,21 +10,13 @@ found in the LICENSE file.
+     <org.chromium.components.browser_ui.settings.TextMessagePreference
+         android:key="bare_translate_about"
+         android:order="0"
+-        android:summary="@string/bare_translate_about" />
++        android:summary="@string/bare_page_translation_about" />
+ 
+-    <Preference
+-        android:key="bare_translate_server"
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_translate_enabled"
+         android:order="1"
+-        android:title="@string/bare_translate_server_title" />
+-
+-    <Preference
+-        android:key="bare_translate_key"
+-        android:order="2"
+-        android:title="@string/bare_translate_key_title" />
+-
+-    <ListPreference
+-        android:key="bare_translate_target"
+-        android:order="3"
+-        android:title="@string/bare_translate_target_title" />
++        android:persistent="false"
++        android:title="@string/bare_page_translation_title"
++        android:summary="@string/bare_page_translation_summary" />
+ 
+ </PreferenceScreen>
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 3ddf71710d2..5daddb7c60e 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -45,6 +45,15 @@ found in the LICENSE file.
+     <string name="bare_welcome_opt_hardened">Hardened JavaScript</string>
+     <string name="bare_welcome_hint_hardened">Safer against browser exploits, slower on heavy sites</string>
+     <string name="bare_welcome_security_note">Websites can still use the information they receive, and characteristics of your browser, to recognize or track a visitor.</string>
++    <string name="bare_page_translation_title" translatable="false">Translate pages with Google</string>
++    <string name="bare_page_translation_summary" translatable="false">Adds Translate to the menu and to the choices under Appearance, Address bar shortcut. Your shortcut is not changed. Off by default.</string>
++    <string name="bare_page_translation_about" translatable="false">Translation only happens when you tap Translate. The text of that page is sent to Google, and Google can see it. Other tabs are not sent. Google also gets your IP address, as with any request, and may get other details about the page. Bare does not control Google’s service, and it may stop working.</string>
++    <string name="bare_welcome_translate_title" translatable="false">Page translation</string>
++    <string name="bare_welcome_translate_intro" translatable="false">Bare can translate a page with Google Translate. It only happens when you tap Translate.</string>
++    <string name="bare_welcome_opt_translate" translatable="false">Translate pages with Google</string>
++    <string name="bare_welcome_hint_translate" translatable="false">Off unless you turn it on</string>
++    <string name="bare_welcome_translate_where" translatable="false">Turning this on adds Translate to the menu and to the choices under Settings, Appearance, Address bar shortcut. It does not change the shortcut you already chose.</string>
++    <string name="bare_welcome_translate_note" translatable="false">When you tap Translate, the text of that page is sent to Google, and Google can see it. Other tabs are not sent. Google also gets your IP address, as with any request, and may get other details about the page. Bare does not control Google’s service, and it may stop working. You can change this later in Settings, Translate pages.</string>
+     <string name="bare_welcome_browsing_title" translatable="false">Downloads, media and notifications</string>
+     <string name="bare_welcome_browsing_intro" translatable="false">Choose how downloads, audio and notifications behave.</string>
+     <string name="bare_welcome_ready_title" translatable="false">Defaults and updates</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index 90401e128aa..83abb094f88 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -104,7 +104,6 @@ import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
+ import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
+ import org.chromium.chrome.browser.back_press.BackPressManager;
+ import org.chromium.chrome.browser.bare.BareClearOnExit;
+-import org.chromium.chrome.browser.bare.translate.BarePageTranslator;
+ import org.chromium.chrome.browser.back_press.CloseListenerManager;
+ import org.chromium.chrome.browser.base.ColdStartTracker;
+ import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpener;
+@@ -3324,7 +3323,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+             RecordUserAction.record("MobileMenuTranslate");
+             Tracker tracker = TrackerFactory.getTrackerForProfile(currentTab.getProfile());
+             tracker.notifyEvent(EventConstants.TRANSLATE_MENU_BUTTON_CLICKED);
+-            BarePageTranslator.onMenuItemClicked(this, currentTab);
++            TranslateBridge.translateTabWhenReady(currentTab);
+             return true;
+         }
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
+index c0fb2497501..5a3fabf1d79 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
+@@ -42,7 +42,6 @@ import org.chromium.build.annotations.RequiresNonNull;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.ActivityTabProvider;
+ import org.chromium.chrome.browser.accessibility.PageZoomMenuItemViewBinder;
+-import org.chromium.chrome.browser.bare.translate.BarePageTranslator;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+ import org.chromium.chrome.browser.bookmarks.PowerBookmarkUtils;
+ import org.chromium.chrome.browser.commerce.ShoppingServiceFactory;
+@@ -408,9 +407,7 @@ public abstract class AppMenuPropertiesDelegateImpl implements AppMenuProperties
+                         mContext,
+                         mAppMenuItemTheme,
+                         R.id.translate_id,
+-                        BarePageTranslator.isTranslated(currentTab)
+-                                ? R.string.bare_translate_show_original
+-                                : R.string.menu_translate,
++                        R.string.menu_translate,
+                         showIcon ? R.drawable.ic_translate : 0,
+                         isMenuIconAtStart()));
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java
+new file mode 100644
+index 00000000000..5a9f934b475
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java
+@@ -0,0 +1,28 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++/**
++ * Whether page translation is on. It is off until the user turns it on, in the welcome or in
++ * Settings, because translating a page sends its text to Google.
++ */
++@NullMarked
++public final class BarePageTranslation {
++    private BarePageTranslation() {}
++
++    public static boolean isEnabled() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, false);
++    }
++
++    public static void setEnabled(boolean enabled) {
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, enabled);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+index 2a87277bf57..e2cbd874935 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+@@ -143,14 +143,17 @@ public class BareWelcomeOverlay {
+     private static final String KEY_DRAFT_BAR_SWIPE = "draft_bar_swipe";
+     private static final String KEY_DRAFT_SECURITY = "draft_security";
+     private static final String KEY_DRAFT_SECURITY_TOUCHED = "draft_security_touched";
++    private static final String KEY_DRAFT_TRANSLATE = "draft_page_translation";
++    private static final String KEY_DRAFT_TRANSLATE_TOUCHED = "draft_page_translation_touched";
+ 
+     private static final int PAGE_WELCOME = 0;
+     private static final int PAGE_TOOLBAR = 2;
+     private static final int PAGE_BROWSING = 3;
+     private static final int PAGE_SECURITY = 4;
+-    private static final int PAGE_READY = 5;
+-    private static final int PAGE_FINISH = 6;
+-    private static final int PAGE_COUNT = 7;
++    private static final int PAGE_TRANSLATE = 5;
++    private static final int PAGE_READY = 6;
++    private static final int PAGE_FINISH = 7;
++    private static final int PAGE_COUNT = 8;
+ 
+     private static final long SLIDE_MS = 380;
+     private static final long LOGO_IN_MS = 650;
+@@ -248,6 +251,11 @@ public class BareWelcomeOverlay {
+         boolean hideLocalAddress = true;
+         boolean hardenedJavaScript;
+         int securityTouched;
++
++        // Page translation, off unless the user turns it on. It is written on Start on a first
++        // showing, and on a review only once the user has touched the switch.
++        boolean pageTranslation;
++        boolean pageTranslationTouched;
+     }
+ 
+     /** Reports which entry of a chooser was picked. */
+@@ -288,6 +296,7 @@ public class BareWelcomeOverlay {
+         private @Nullable TextView mEngineValue;
+         private @Nullable MaterialSwitch mBackgroundSwitch;
+         private final MaterialSwitch[] mSecuritySwitches = new MaterialSwitch[4];
++        private @Nullable MaterialSwitch mTranslateSwitch;
+         private @Nullable View mDefaultRow;
+         private @Nullable View mNotificationsRow;
+         private @Nullable OnBackPressedCallback mBackCallback;
+@@ -327,6 +336,7 @@ public class BareWelcomeOverlay {
+                 R.layout.bare_welcome_page_toolbar,
+                 R.layout.bare_welcome_page_browsing,
+                 R.layout.bare_welcome_page_security,
++                R.layout.bare_welcome_page_translate,
+                 R.layout.bare_welcome_page_ready,
+                 R.layout.bare_welcome_page_finish,
+             };
+@@ -367,6 +377,7 @@ public class BareWelcomeOverlay {
+             buildToolbarPage(mPages[PAGE_TOOLBAR]);
+             buildBrowsingPage(mPages[PAGE_BROWSING]);
+             buildSecurityPage(mPages[PAGE_SECURITY]);
++            buildTranslatePage(mPages[PAGE_TRANSLATE]);
+             buildReadyPage(mPages[PAGE_READY]);
+             buildFinishPage(mPages[PAGE_FINISH]);
+ 
+@@ -984,6 +995,27 @@ public class BareWelcomeOverlay {
+             }
+         }
+ 
++        // ---------------------------------------------------------------------------------------
++        // The translate page: one switch, off unless chosen.
++
++        private void buildTranslatePage(View page) {
++            View row = page.findViewById(R.id.bare_row_translate);
++            setUpRow(
++                    row,
++                    R.drawable.ic_translate,
++                    R.string.bare_welcome_opt_translate,
++                    R.string.bare_welcome_hint_translate);
++            mTranslateSwitch =
++                    switchRow(
++                            row,
++                            mChoices.pageTranslation,
++                            on -> {
++                                mChoices.pageTranslation = on;
++                                mChoices.pageTranslationTouched = true;
++                                saveDraft();
++                            });
++        }
++
+         private void securityRow(
+                 int index,
+                 View row,
+@@ -1815,6 +1847,8 @@ public class BareWelcomeOverlay {
+                                     | (mChoices.hideLocalAddress ? 4 : 0)
+                                     | (mChoices.hardenedJavaScript ? 8 : 0))
+                     .putInt(KEY_DRAFT_SECURITY_TOUCHED, mChoices.securityTouched)
++                    .putBoolean(KEY_DRAFT_TRANSLATE, mChoices.pageTranslation)
++                    .putBoolean(KEY_DRAFT_TRANSLATE_TOUCHED, mChoices.pageTranslationTouched)
+                     .apply();
+         }
+ 
+@@ -1858,6 +1892,9 @@ public class BareWelcomeOverlay {
+             choices.hardenedJavaScript = (security & 8) != 0;
+             choices.securityTouched = prefs.getInt(KEY_DRAFT_SECURITY_TOUCHED, 0);
+         }
++        choices.pageTranslation = prefs.getBoolean(KEY_DRAFT_TRANSLATE, choices.pageTranslation);
++        choices.pageTranslationTouched =
++                prefs.getBoolean(KEY_DRAFT_TRANSLATE_TOUCHED, choices.pageTranslationTouched);
+         int page = prefs.getInt(KEY_DRAFT_PAGE, PAGE_WELCOME);
+         return Math.max(PAGE_WELCOME, Math.min(page, PAGE_FINISH));
+     }
+@@ -1870,6 +1907,8 @@ public class BareWelcomeOverlay {
+                 .remove(KEY_DRAFT_ENGINE_KNOWN)
+                 .remove(KEY_DRAFT_SECURITY)
+                 .remove(KEY_DRAFT_SECURITY_TOUCHED)
++                .remove(KEY_DRAFT_TRANSLATE)
++                .remove(KEY_DRAFT_TRANSLATE_TOUCHED)
+                 .remove(KEY_DRAFT_AD_BLOCKER)
+                 .remove(KEY_DRAFT_ADDRESS_BAR_TOP)
+                 .remove(KEY_DRAFT_EXTERNAL_DOWNLOADS)
+@@ -1934,6 +1973,7 @@ public class BareWelcomeOverlay {
+     static Choices currentChoices(boolean reviewing) {
+         Choices choices = new Choices();
+         choices.reviewing = reviewing;
++        choices.pageTranslation = BarePageTranslation.isEnabled();
+         SharedPreferencesManager prefs = ChromeSharedPreferences.getInstance();
+         choices.addressBarOnTop = readAddressBarOnTop(prefs, choices.addressBarOnTop);
+         choices.adBlocker =
+@@ -1973,6 +2013,11 @@ public class BareWelcomeOverlay {
+      */
+     @VisibleForTesting
+     static void applyChoices(Choices choices) {
++        // Off is the default, so a first showing writes what was chosen; a review writes only a
++        // switch the user touched.
++        if (!choices.reviewing || choices.pageTranslationTouched) {
++            BarePageTranslation.setEnabled(choices.pageTranslation);
++        }
+         ChromeSharedPreferences.getInstance()
+                 .writeInt(
+                         ChromePreferenceKeys.TOOLBAR_TOP_ANCHORED,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java
+index 6301fe0894b..32ddf59e32c 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java
+@@ -4,15 +4,8 @@
+ 
+ package org.chromium.chrome.browser.bare.translate;
+ 
+-import android.app.AlertDialog;
+ import android.content.Context;
+ import android.os.Bundle;
+-import android.text.InputType;
+-import android.widget.EditText;
+-import android.widget.FrameLayout;
+-
+-import androidx.preference.ListPreference;
+-import androidx.preference.Preference;
+ 
+ import org.chromium.base.supplier.MonotonicObservableSupplier;
+ import org.chromium.base.supplier.ObservableSuppliers;
+@@ -20,17 +13,15 @@ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.BarePageTranslation;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+ import org.chromium.components.browser_ui.settings.SettingsUtils;
+ 
+-import java.util.Locale;
+-
+-/** Settings for translating pages through a server the user chooses. */
++/** Settings for translating pages with Google. */
+ @NullMarked
+ public class BareTranslateSettingsFragment extends ChromeBaseSettingsFragment {
+-    static final String PREF_SERVER = "bare_translate_server";
+-    static final String PREF_KEY = "bare_translate_key";
+-    static final String PREF_TARGET = "bare_translate_target";
++    static final String PREF_ENABLED = "bare_translate_enabled";
+ 
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+             ObservableSuppliers.createMonotonic();
+@@ -39,105 +30,23 @@ public class BareTranslateSettingsFragment extends ChromeBaseSettingsFragment {
+     public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
+         mPageTitle.set(getTitle(getContext()));
+         SettingsUtils.addPreferencesFromResource(this, R.xml.bare_translate_preferences);
++        ChromeSwitchPreference enabled = findPreference(PREF_ENABLED);
++        assert enabled != null;
++        bindSwitch(enabled);
++    }
+ 
+-        Preference server = findPreference(PREF_SERVER);
+-        assert server != null;
+-        server.setOnPreferenceClickListener(
+-                preference -> {
+-                    askForText(
+-                            R.string.bare_translate_server_title,
+-                            R.string.bare_translate_server_hint,
+-                            BareTranslateSettings.getEndpoint(),
+-                            InputType.TYPE_TEXT_VARIATION_URI,
+-                            value -> {
+-                                BareTranslateSettings.setEndpoint(value);
+-                                updateSummaries();
+-                            });
+-                    return true;
+-                });
+-        Preference key = findPreference(PREF_KEY);
+-        assert key != null;
+-        key.setOnPreferenceClickListener(
+-                preference -> {
+-                    askForText(
+-                            R.string.bare_translate_key_title,
+-                            R.string.bare_translate_key_hint,
+-                            BareTranslateSettings.getApiKey(),
+-                            InputType.TYPE_TEXT_VARIATION_PASSWORD,
+-                            value -> {
+-                                BareTranslateSettings.setApiKey(value.trim());
+-                                updateSummaries();
+-                            });
+-                    return true;
+-                });
+-
+-        ListPreference target = findPreference(PREF_TARGET);
+-        assert target != null;
+-        target.setPersistent(false);
+-        int count = BareTranslateSettings.TARGET_LANGUAGES.size();
+-        CharSequence[] names = new CharSequence[count];
+-        CharSequence[] codes = new CharSequence[count];
+-        for (int i = 0; i < count; i++) {
+-            String code = BareTranslateSettings.TARGET_LANGUAGES.get(i);
+-            Locale locale = Locale.forLanguageTag(code);
+-            names[i] = locale.getDisplayLanguage(locale) + " (" + code + ")";
+-            codes[i] = code;
+-        }
+-        target.setEntries(names);
+-        target.setEntryValues(codes);
+-        target.setValue(BareTranslateSettings.getTargetLanguage());
+-        target.setOnPreferenceChangeListener(
++    /**
++     * Shows the stored choice on the switch and stores a change. It writes only this choice: the
++     * address bar shortcut the user picked is theirs, and turning translation on only makes
++     * Translate one of the things they can pick.
++     */
++    public static void bindSwitch(ChromeSwitchPreference enabled) {
++        enabled.setChecked(BarePageTranslation.isEnabled());
++        enabled.setOnPreferenceChangeListener(
+                 (preference, newValue) -> {
+-                    BareTranslateSettings.setTargetLanguage((String) newValue);
+-                    updateSummaries();
++                    BarePageTranslation.setEnabled((boolean) newValue);
+                     return true;
+                 });
+-        updateSummaries();
+-    }
+-
+-    private void updateSummaries() {
+-        Preference server = findPreference(PREF_SERVER);
+-        Preference key = findPreference(PREF_KEY);
+-        ListPreference target = findPreference(PREF_TARGET);
+-        if (server == null || key == null || target == null) return;
+-        String endpoint = BareTranslateSettings.getEndpoint();
+-        if (endpoint.isEmpty()) {
+-            server.setSummary(R.string.bare_translate_server_unset);
+-        } else if (!BareTranslateSettings.isConfigured()) {
+-            server.setSummary(getString(R.string.bare_translate_server_refused, endpoint));
+-        } else {
+-            server.setSummary(endpoint);
+-        }
+-        key.setSummary(
+-                BareTranslateSettings.getApiKey().isEmpty()
+-                        ? R.string.bare_translate_key_unset
+-                        : R.string.bare_translate_key_set);
+-        target.setSummary(target.getEntry());
+-    }
+-
+-    private interface OnText {
+-        void onText(String value);
+-    }
+-
+-    private void askForText(int titleRes, int hintRes, String current, int inputType, OnText done) {
+-        Context context = requireContext();
+-        EditText input = new EditText(context);
+-        input.setInputType(InputType.TYPE_CLASS_TEXT | inputType);
+-        input.setHint(hintRes);
+-        input.setText(current);
+-        input.setSingleLine(true);
+-        FrameLayout frame = new FrameLayout(context);
+-        int pad = Math.round(20 * context.getResources().getDisplayMetrics().density);
+-        frame.setPadding(pad, pad / 2, pad, 0);
+-        frame.addView(input);
+-        new AlertDialog.Builder(context, R.style.ThemeOverlay_BrowserUI_AlertDialog)
+-                .setTitle(titleRes)
+-                .setView(frame)
+-                .setPositiveButton(
+-                        android.R.string.ok,
+-                        (dialog, which) -> done.onText(input.getText().toString()))
+-                .setNegativeButton(android.R.string.cancel, null)
+-                .show();
+     }
+ 
+     @Override
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java b/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
+index edaa32e3da5..3b79900c22a 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
+@@ -5,7 +5,9 @@
+ package org.chromium.chrome.browser.translate;
+ 
+ import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.bare.BarePageTranslation;
+ import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.components.embedder_support.util.UrlUtilities;
+ 
+ /** Utility classes related to the translate feature. */
+ @NullMarked
+@@ -27,8 +29,11 @@ public class TranslateUtils {
+      * @param menuLogging Whether logging should be performed in this check.
+      */
+     public static boolean canTranslateCurrentTab(Tab tab, boolean menuLogging) {
+-        // De-Googled build: the item always shows, so it can be found. Without a server it asks
+-        // for one. Google's own service needs an API key this build does not have.
+-        return !tab.isNativePage() && tab.getWebContents() != null;
++        // Page translation is the user's choice. Chromium's own key check is not asked, the same
++        // as for the address bar shortcut, which translates without it.
++        return BarePageTranslation.isEnabled()
++                && !tab.isNativePage()
++                && tab.getWebContents() != null
++                && UrlUtilities.isHttpOrHttps(tab.getUrl());
+     }
+ }
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index ce45a6f2852..7c4f5d6f510 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -435,6 +435,9 @@ if (is_android) {
+       "src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapterUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareExtensionPresentationUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/BarePageTranslationUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/BareWelcomeTranslatePageUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/settings/BareTranslateSettingsScreenUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcherUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateUnitTest.java
+index d4a37fde73f..9e3f97d0923 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateUnitTest.java
+@@ -59,6 +59,8 @@ import org.chromium.chrome.browser.multiwindow.MultiWindowModeStateDispatcher;
+ import org.chromium.chrome.browser.omaha.UpdateMenuItemHelper;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.readaloud.ReadAloudController;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tabmodel.TabModel;
+ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+@@ -227,6 +229,45 @@ public class AppMenuPropertiesDelegateUnitTest {
+         doReturn(enabled).when(mCommerceFeatureUtilsJniMock).isShoppingListEligible(anyLong());
+     }
+ 
++    @Test
++    public void translateItemFollowsTheUsersChoice() {
++        Mockito.when(mTab.isNativePage()).thenReturn(false);
++        Mockito.when(mTab.getWebContents()).thenReturn(Mockito.mock(WebContents.class));
++        Mockito.when(mTab.getUrl()).thenReturn(JUnitTestGURLs.EXAMPLE_URL);
++        try {
++            // Off: hidden, even where Chromium says the page can be translated.
++            ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_PAGE_TRANSLATION);
++            Mockito.when(mTranslateBridgeJniMock.canManuallyTranslate(any(), anyBoolean()))
++                    .thenReturn(true);
++            assertFalse(mAppMenuPropertiesDelegate.shouldShowTranslateMenuItem(mTab));
++
++            // On: shown, as the address bar shortcut is, without Chromium's own key check.
++            ChromeSharedPreferences.getInstance().writeBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, true);
++            Mockito.when(mTranslateBridgeJniMock.canManuallyTranslate(any(), anyBoolean()))
++                    .thenReturn(false);
++            assertTrue(mAppMenuPropertiesDelegate.shouldShowTranslateMenuItem(mTab));
++        } finally {
++            ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_PAGE_TRANSLATION);
++        }
++    }
++
++    @Test
++    public void translateItemIsHiddenOnNativePagesAndNonWebAddresses() {
++        Mockito.when(mTab.getWebContents()).thenReturn(Mockito.mock(WebContents.class));
++        ChromeSharedPreferences.getInstance().writeBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, true);
++        try {
++            Mockito.when(mTab.isNativePage()).thenReturn(true);
++            Mockito.when(mTab.getUrl()).thenReturn(JUnitTestGURLs.EXAMPLE_URL);
++            assertFalse(mAppMenuPropertiesDelegate.shouldShowTranslateMenuItem(mTab));
++
++            Mockito.when(mTab.isNativePage()).thenReturn(false);
++            Mockito.when(mTab.getUrl()).thenReturn(JUnitTestGURLs.CHROME_ABOUT);
++            assertFalse(mAppMenuPropertiesDelegate.shouldShowTranslateMenuItem(mTab));
++        } finally {
++            ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_PAGE_TRANSLATION);
++        }
++    }
++
+     @Test
+     @Config(qualifiers = "sw320dp")
+     public void testShouldShowPageMenu_Phone() {
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BarePageTranslationUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BarePageTranslationUnitTest.java
+new file mode 100644
+index 00000000000..57acd9c35f9
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BarePageTranslationUnitTest.java
+@@ -0,0 +1,99 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.After;
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++/** Tests for the page translation choice and the welcome page that sets it. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BarePageTranslationUnitTest {
++    @Before
++    public void setUp() {
++        reset();
++    }
++
++    @After
++    public void tearDown() {
++        reset();
++    }
++
++    private static void reset() {
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_PAGE_TRANSLATION);
++    }
++
++    private static boolean stored() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, false);
++    }
++
++    @Test
++    public void testItIsOffUntilTheUserTurnsItOn() {
++        assertFalse(BarePageTranslation.isEnabled());
++        assertFalse(stored());
++    }
++
++    @Test
++    public void testTheChoiceIsKept() {
++        BarePageTranslation.setEnabled(true);
++        assertTrue(BarePageTranslation.isEnabled());
++        assertTrue(stored());
++        BarePageTranslation.setEnabled(false);
++        assertFalse(BarePageTranslation.isEnabled());
++    }
++
++    @Test
++    public void testTheWelcomeOpensWithItOff() {
++        assertFalse(BareWelcomeOverlay.currentChoices(false).pageTranslation);
++        assertFalse(BareWelcomeOverlay.currentChoices(true).pageTranslation);
++    }
++
++    @Test
++    public void testAReviewShowsTheChoiceAlreadyMade() {
++        BarePageTranslation.setEnabled(true);
++        assertTrue(BareWelcomeOverlay.currentChoices(true).pageTranslation);
++    }
++
++    @Test
++    public void testAFirstShowingWritesWhatWasChosen() {
++        BareWelcomeOverlay.Choices choices = BareWelcomeOverlay.currentChoices(false);
++        BareWelcomeOverlay.applyChoices(choices);
++        assertFalse(stored());
++
++        choices.pageTranslation = true;
++        choices.pageTranslationTouched = true;
++        BareWelcomeOverlay.applyChoices(choices);
++        assertTrue(stored());
++    }
++
++    @Test
++    public void testAReviewLeavesAnUntouchedChoiceAlone() {
++        BarePageTranslation.setEnabled(true);
++        BareWelcomeOverlay.Choices choices = BareWelcomeOverlay.currentChoices(true);
++        choices.pageTranslation = false;
++        BareWelcomeOverlay.applyChoices(choices);
++        assertTrue(stored());
++    }
++
++    @Test
++    public void testAReviewCanTurnItOff() {
++        BarePageTranslation.setEnabled(true);
++        BareWelcomeOverlay.Choices choices = BareWelcomeOverlay.currentChoices(true);
++        choices.pageTranslation = false;
++        choices.pageTranslationTouched = true;
++        BareWelcomeOverlay.applyChoices(choices);
++        assertEquals(false, stored());
++    }
++}
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareWelcomeTranslatePageUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareWelcomeTranslatePageUnitTest.java
+new file mode 100644
+index 00000000000..80ee1ffdb87
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareWelcomeTranslatePageUnitTest.java
+@@ -0,0 +1,117 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertTrue;
++
++import android.content.Context;
++import android.view.ContextThemeWrapper;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.TextView;
++
++import androidx.test.core.app.ApplicationProvider;
++
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.robolectric.annotation.Config;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.R;
++
++/** Tests for what the welcome's Page translation page shows. */
++@RunWith(BaseRobolectricTestRunner.class)
++@Config(qualifiers = "w360dp-h640dp")
++public class BareWelcomeTranslatePageUnitTest {
++    private final Context mContext =
++            new ContextThemeWrapper(
++                    ApplicationProvider.getApplicationContext(), R.style.Theme_BrowserUI_DayNight);
++
++    private View inflate() {
++        View page =
++                LayoutInflater.from(mContext)
++                        .inflate(R.layout.bare_welcome_page_translate, new android.widget.FrameLayout(mContext), false);
++        int width = View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY);
++        int height = View.MeasureSpec.makeMeasureSpec(1920, View.MeasureSpec.EXACTLY);
++        page.measure(width, height);
++        page.layout(0, 0, 1080, 1920);
++        return page;
++    }
++
++    private static String text(View page, int id) {
++        TextView view = page.findViewById(id);
++        assertNotNull(view);
++        return view.getText().toString();
++    }
++
++    @Test
++    public void testThePageShowsTheTitleIntroAndTheOneRow() {
++        View page = inflate();
++        assertEquals("Page translation", text(page, R.id.bare_page_title));
++        View row = page.findViewById(R.id.bare_row_translate);
++        assertNotNull("the page has no switch row", row);
++        assertNotNull(row.findViewById(R.id.bare_option_label));
++        assertNotNull(row.findViewById(R.id.bare_option_hint));
++        assertNotNull(row.findViewById(R.id.bare_option_switch));
++        assertNotNull(row.findViewById(R.id.bare_option_icon));
++    }
++
++    @Test
++    public void testTheRowIsNamedAndSaysItIsOffUnlessTurnedOn() {
++        assertEquals("Translate pages with Google", mContext.getString(R.string.bare_welcome_opt_translate));
++        assertEquals("Off unless you turn it on", mContext.getString(R.string.bare_welcome_hint_translate));
++    }
++
++    @Test
++    public void testThePageSaysWhereTranslateAppearsAndThatTheShortcutIsKept() {
++        View page = inflate();
++        String where = text(page, R.id.bare_translate_where);
++        assertTrue(where.contains("adds Translate to the menu"));
++        assertTrue(where.contains("Settings, Appearance, Address bar shortcut"));
++        assertTrue(where.contains("does not change the shortcut you already chose"));
++    }
++
++    @Test
++    public void testThePrivacyWordingIsAccurate() {
++        View page = inflate();
++        String intro = mContext.getString(R.string.bare_welcome_translate_intro);
++        assertTrue(intro.contains("only happens when you tap Translate"));
++        String note = text(page, R.id.bare_translate_note);
++        assertTrue(note.contains("sent to Google, and Google can see it"));
++        assertTrue(note.contains("Other tabs are not sent"));
++        assertTrue(note.contains("IP address"));
++        assertTrue(note.contains("may get other details about the page"));
++        assertTrue(note.contains("may stop working"));
++        assertTrue(note.contains("Settings, Translate pages"));
++        // Nothing here claims the page is hidden from Google or that nothing else is sent.
++        String all = intro + where(page) + note;
++        for (String claim : new String[] {"private", "hidden", "sandbox", "anonymous", "nothing else"}) {
++            assertFalse("claims " + claim, all.toLowerCase(java.util.Locale.ROOT).contains(claim));
++        }
++    }
++
++    private static String where(View page) {
++        return text(page, R.id.bare_translate_where);
++    }
++
++    @Test
++    public void testThePageIsLaidOutTopToBottomWithinTheWidth() {
++        View page = inflate();
++        // The page scrolls, so its content is one column: title, intro, the row, then the two notes.
++        ViewGroup column = (ViewGroup) ((ViewGroup) page).getChildAt(0);
++        int previousBottom = -1;
++        for (int i = 0; i < column.getChildCount(); i++) {
++            View child = column.getChildAt(i);
++            assertTrue("child " + i + " is outside the width", child.getRight() <= 1080);
++            assertTrue("child " + i + " overlaps the one above it", child.getTop() >= previousBottom);
++            previousBottom = child.getBottom();
++        }
++        assertEquals(5, column.getChildCount());
++    }
++}
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java
+index 4fb20e35134..5bf904056bb 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java
+@@ -100,7 +100,7 @@ public class BareToolbarSettingsUnitTest {
+                     ActionId.APP_MENU,
+                     action);
+         }
+-        assertEquals(6, BareToolbarDefaults.CATALOGUE.length);
++        assertEquals(7, BareToolbarDefaults.CATALOGUE.length);
+     }
+ 
+     @Test
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareTranslateSettingsScreenUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareTranslateSettingsScreenUnitTest.java
+new file mode 100644
+index 00000000000..b691a6ad811
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareTranslateSettingsScreenUnitTest.java
+@@ -0,0 +1,160 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.settings;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertTrue;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.content.res.XmlResourceParser;
++import android.view.ContextThemeWrapper;
++
++import androidx.preference.PreferenceManager;
++import androidx.preference.PreferenceScreen;
++import androidx.test.core.app.ApplicationProvider;
++
++import org.junit.After;
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.xmlpull.v1.XmlPullParser;
++
++import org.chromium.base.ContextUtils;
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.BarePageTranslation;
++import org.chromium.chrome.browser.bare.translate.BareTranslateSettingsFragment;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
++
++import java.util.HashMap;
++import java.util.Map;
++
++/** Tests for the Translate pages screen in Settings. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareTranslateSettingsScreenUnitTest {
++    private final Context mContext =
++            new ContextThemeWrapper(
++                    ApplicationProvider.getApplicationContext(), R.style.Theme_BrowserUI_DayNight);
++
++    @Before
++    public void setUp() {
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_PAGE_TRANSLATION);
++    }
++
++    @After
++    public void tearDown() {
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_PAGE_TRANSLATION);
++    }
++
++    private ChromeSwitchPreference inflateSwitch() {
++        PreferenceScreen screen =
++                new PreferenceManager(mContext)
++                        .inflateFromResource(mContext, R.xml.bare_translate_preferences, null);
++        ChromeSwitchPreference preference = screen.findPreference("bare_translate_enabled");
++        assertNotNull("the screen has no Page translation switch", preference);
++        return preference;
++    }
++
++    @Test
++    public void testTheScreenHasOneSwitchAndThePrivacyText() {
++        PreferenceScreen screen =
++                new PreferenceManager(mContext)
++                        .inflateFromResource(mContext, R.xml.bare_translate_preferences, null);
++        assertEquals(2, screen.getPreferenceCount());
++        String about = screen.findPreference("bare_translate_about").getSummary().toString();
++        assertTrue(about.contains("only happens when you tap Translate"));
++        assertTrue(about.contains("sent to Google"));
++        assertTrue(about.contains("Other tabs are not sent"));
++        assertTrue(about.contains("may stop working"));
++        // No custom server fields: that route is not offered.
++        assertEquals(null, screen.findPreference("bare_translate_server"));
++        assertEquals(null, screen.findPreference("bare_translate_key"));
++    }
++
++    @Test
++    public void testTheSwitchSaysWhereTranslateAppearsAndThatTheShortcutIsKept() {
++        ChromeSwitchPreference preference = inflateSwitch();
++        assertEquals("Translate pages with Google", preference.getTitle().toString());
++        String summary = preference.getSummary().toString();
++        assertTrue(summary.contains("menu"));
++        assertTrue(summary.contains("Appearance, Address bar shortcut"));
++        assertTrue(summary.contains("Your shortcut is not changed"));
++        assertTrue(summary.contains("Off by default"));
++        assertFalse(preference.isPersistent());
++    }
++
++    @Test
++    public void testTheSwitchStartsOffAndShowsAStoredChoice() {
++        ChromeSwitchPreference preference = inflateSwitch();
++        BareTranslateSettingsFragment.bindSwitch(preference);
++        assertFalse(preference.isChecked());
++
++        BarePageTranslation.setEnabled(true);
++        ChromeSwitchPreference second = inflateSwitch();
++        BareTranslateSettingsFragment.bindSwitch(second);
++        assertTrue(second.isChecked());
++    }
++
++    @Test
++    public void testChangingTheSwitchStoresTheChoice() {
++        ChromeSwitchPreference preference = inflateSwitch();
++        BareTranslateSettingsFragment.bindSwitch(preference);
++
++        assertTrue(preference.getOnPreferenceChangeListener().onPreferenceChange(preference, true));
++        assertTrue(BarePageTranslation.isEnabled());
++        assertTrue(preference.getOnPreferenceChangeListener().onPreferenceChange(preference, false));
++        assertFalse(BarePageTranslation.isEnabled());
++    }
++
++    @Test
++    public void testTurningItOnChangesNothingButItself() {
++        SharedPreferences prefs = ContextUtils.getAppSharedPreferences();
++        Map<String, ?> before = new HashMap<>(prefs.getAll());
++        ChromeSwitchPreference preference = inflateSwitch();
++        BareTranslateSettingsFragment.bindSwitch(preference);
++        preference.getOnPreferenceChangeListener().onPreferenceChange(preference, true);
++
++        Map<String, Object> after = new HashMap<>(prefs.getAll());
++        for (String key : before.keySet()) {
++            assertEquals("changed " + key, before.get(key), after.get(key));
++        }
++        after.keySet().removeAll(before.keySet());
++        // Only the choice itself was added; the address bar shortcut was not touched.
++        assertEquals(1, after.size());
++        assertTrue(after.containsKey(ChromePreferenceKeys.BARE_PAGE_TRANSLATION));
++    }
++
++    @Test
++    public void testSettingsListsTheScreen() {
++        assertTrue(mainSettingsContains("bare_translate", BareTranslateSettingsFragment.class.getName()));
++    }
++
++    private boolean mainSettingsContains(String key, String fragment) {
++        try (XmlResourceParser parser = mContext.getResources().getXml(R.xml.main_preferences)) {
++            int event = parser.getEventType();
++            while (event != XmlPullParser.END_DOCUMENT) {
++                if (event == XmlPullParser.START_TAG) {
++                    String foundKey = null;
++                    String foundFragment = null;
++                    for (int i = 0; i < parser.getAttributeCount(); i++) {
++                        String name = parser.getAttributeName(i);
++                        if ("key".equals(name)) foundKey = parser.getAttributeValue(i);
++                        if ("fragment".equals(name)) foundFragment = parser.getAttributeValue(i);
++                    }
++                    if (key.equals(foundKey) && fragment.equals(foundFragment)) return true;
++                }
++                event = parser.next();
++            }
++        } catch (Exception e) {
++            throw new AssertionError("could not read the main settings screen", e);
++        }
++        return false;
++    }
++}
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegateUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegateUnitTest.java
+index ed1e1c41210..d0c8a7e30e6 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegateUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegateUnitTest.java
+@@ -486,6 +486,7 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
+ 
+     @After
+     public void tearDown() {
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_PAGE_TRANSLATION);
+         AccessibilityStateTestHelper.setIsKnownScreenReaderEnabledForTesting(false);
+         BookmarkUtils.setReadingListSupportedForTesting(null);
+         WebappsUtils.setAddToHomeIntentSupportedForTesting(null);
+@@ -2359,6 +2360,9 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
+     @Config(qualifiers = "sw320dp")
+     @DisableFeatures(ChromeFeatureList.ANDROID_OPEN_INCOGNITO_AS_WINDOW)
+     public void testPageMenuItems_Phone_RegularPage_managed_users() {
++        // Translate is in the menu once the user has turned page translation on.
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, true);
+         setUpMocksForPageMenu();
+         when(mTab.getUrl()).thenReturn(JUnitTestGURLs.SEARCH_URL);
+         doReturn(true)
+@@ -2413,7 +2417,7 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
+                                 item(R.id.divider_line_id),
+                                 item(R.id.universal_install)),
+                         item(R.id.find_in_page_id),
+-                        // Bare always offers Translate, whatever the page.
++                        // Translate, with page translation on.
+                         item(R.id.translate_id),
+                         item(
+                                 R.id.more_tools_menu_id,
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 13ee1cabf64..c77365a46db 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -441,6 +441,9 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_MINIMAL_LAYOUT = "Bare.Appearance.MinimalLayout";
+ 
++    /** Whether page translation through Google is on. Off until the user turns it on. */
++    public static final String BARE_PAGE_TRANSLATION = "Bare.Translate.PageTranslation";
++
+     /**
+      * De-Googled build: the user agent picked in Developer options, as a preset id, or empty for
+      * the default. "custom" takes its string from {@link #BARE_USER_AGENT_CUSTOM}.
+@@ -1395,6 +1398,7 @@ public final class ChromePreferenceKeys {
+                 BARE_TRANSLATE_CONSENT_HOST,
+                 BARE_TRANSLATE_ENDPOINT,
+                 BARE_TRANSLATE_TARGET,
++                BARE_PAGE_TRANSLATION,
+                 BARE_MINIMAL_LAYOUT,
+                 BARE_AMOLED_WHEN_SYSTEM_DARK,
+                 WEBSTORE_DESKTOP_SITE_CLEARED,
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
+index a10c0fb702f..fe947f24839 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
+@@ -96,15 +96,12 @@ public final class BareToolbarDefaults {
+      * <p>GLIC and AI Mode are absent for their own reason. They still exist as actions, because
+      * the shared slot they came from is upstream code this build keeps in step with, but they are
+      * Google surfaces that do nothing here and offering them as choices would be offering nothing.
+-     *
+-     * <p>Translate is absent too. It needs a Google API key, which this build does not
+-     * have, so the button could be pressed but never translate anything. A slot that
+-     * was given Translate by an earlier release falls back to its default.
+      */
+     public static final @ActionId int[] CATALOGUE = {
+         ActionId.HOME_BUTTON,
+         ActionId.INCOGNITO,
+         ActionId.SHARE,
++        ActionId.TRANSLATE,
+         ActionId.BOOKMARK,
+         ActionId.FIND_IN_PAGE,
+         ActionId.SEARCH,
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java
+index d5c36206470..522e3ca30e5 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java
+@@ -159,9 +159,9 @@ public class BareToolbarLayoutUnitTest {
+     }
+ 
+     @Test
+-    public void testConfigurationB_incognitoShare() {
+-        store(ActionId.INCOGNITO, ActionId.SHARE);
+-        assertBar(ActionId.INCOGNITO, ActionId.SHARE);
++    public void testConfigurationB_translateShare() {
++        store(ActionId.TRANSLATE, ActionId.SHARE);
++        assertBar(ActionId.TRANSLATE, ActionId.SHARE);
+     }
+ 
+     @Test
+@@ -171,21 +171,9 @@ public class BareToolbarLayoutUnitTest {
+     }
+ 
+     @Test
+-    public void testConfigurationD_shareBookmark() {
+-        store(ActionId.SHARE, ActionId.BOOKMARK);
+-        assertBar(ActionId.SHARE, ActionId.BOOKMARK);
+-    }
+-
+-    @Test
+-    public void testATranslateLeftByAnEarlierReleaseFallsBackToTheDefault() {
+-        store(ActionId.TRANSLATE, ActionId.TRANSLATE);
+-        mPrefs.writeInt(holdKey(BareToolbarSlot.HOME), ActionId.TRANSLATE);
+-        BareToolbarLayout.invalidate();
+-
+-        assertBar(ActionId.HOME_BUTTON, ActionId.INCOGNITO);
+-        assertEquals(
+-                BareToolbarDefaults.NO_ACTION,
+-                BareToolbarPrefs.getSecondaryAction(BareToolbarSlot.HOME));
++    public void testConfigurationD_shareTranslate() {
++        store(ActionId.SHARE, ActionId.TRANSLATE);
++        assertBar(ActionId.SHARE, ActionId.TRANSLATE);
+     }
+ 
+     @Test
+@@ -202,8 +190,8 @@ public class BareToolbarLayoutUnitTest {
+ 
+     @Test
+     public void testOnlyHomeStored() {
+-        store(ActionId.BOOKMARK, UNSET);
+-        assertBar(ActionId.BOOKMARK, ActionId.INCOGNITO);
++        store(ActionId.TRANSLATE, UNSET);
++        assertBar(ActionId.TRANSLATE, ActionId.INCOGNITO);
+     }
+ 
+     @Test
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java
+index 0ff62c0ae2c..fe4ff8cfadf 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java
+@@ -156,14 +156,14 @@ public class BareToolbarPrefsUnitTest {
+     @Test
+     public void testResetForgetsEveryChoice() {
+         BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.HOME, ActionId.BOOKMARK);
+-        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.EXTRA, ActionId.INCOGNITO);
++        BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.EXTRA, ActionId.TRANSLATE);
+         BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.HOME, ActionId.SHARE);
+         // A key only a build that allowed three configurable positions could have written.
+         mPrefs.writeInt(
+                 ChromePreferenceKeys.BOTTOM_BAR_SLOT_PRIMARY_ACTION.createKey(
+                         BareToolbarSlot.APP_MENU),
+                 ActionId.SHARE);
+-        assertBar(ActionId.BOOKMARK, ActionId.INCOGNITO);
++        assertBar(ActionId.BOOKMARK, ActionId.TRANSLATE);
+ 
+         BareToolbarPrefs.resetAll();
+ 
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSecondaryActionsUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSecondaryActionsUnitTest.java
+index b2ae0d734f3..de2d3658a53 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSecondaryActionsUnitTest.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSecondaryActionsUnitTest.java
+@@ -127,7 +127,7 @@ public class BareToolbarSecondaryActionsUnitTest {
+     public void testResetClearsHoldsAsWellAsTaps() {
+         BareToolbarPrefs.assignPrimaryAction(BareToolbarSlot.HOME, ActionId.BOOKMARK);
+         BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.HOME, ActionId.SHARE);
+-        BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.EXTRA, ActionId.BOOKMARK);
++        BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.EXTRA, ActionId.TRANSLATE);
+ 
+         BareToolbarPrefs.resetAll();
+ 
+@@ -205,11 +205,11 @@ public class BareToolbarSecondaryActionsUnitTest {
+ 
+     @Test
+     public void testAnActionThatCannotRunRightNowDoesNothing() {
+-        // Share on a new tab page: the action exists and is registered, but has nothing to press,
+-        // so holding does nothing rather than something invented.
++        // Translate on a new tab page: the action exists and is registered, but has nothing to
++        // press, so holding does nothing rather than something invented.
+         PropertyModel home = register(ActionId.HOME_BUTTON, true);
+-        register(ActionId.SHARE, /* pressable= */ false);
+-        BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.HOME, ActionId.SHARE);
++        register(ActionId.TRANSLATE, /* pressable= */ false);
++        BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.HOME, ActionId.TRANSLATE);
+ 
+         BareToolbarSecondaryActions actions = attach();
+         hold(home);
+@@ -221,15 +221,15 @@ public class BareToolbarSecondaryActionsUnitTest {
+     @Test
+     public void testTheActionIsLookedUpWhenHeldRatherThanWhenChosen() {
+         PropertyModel home = register(ActionId.HOME_BUTTON, true);
+-        PropertyModel share = register(ActionId.SHARE, /* pressable= */ false);
+-        BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.HOME, ActionId.SHARE);
++        PropertyModel translate = register(ActionId.TRANSLATE, /* pressable= */ false);
++        BareToolbarPrefs.setSecondaryAction(BareToolbarSlot.HOME, ActionId.TRANSLATE);
+         BareToolbarSecondaryActions actions = attach();
+ 
+         hold(home);
+         assertEquals("unavailable at first", 0, mInvokedCount);
+ 
+         // The page changes and the action becomes available.
+-        share.set(ActionProperties.ON_PRESS_CALLBACK, (Callback<View>) v -> mInvokedCount++);
++        translate.set(ActionProperties.ON_PRESS_CALLBACK, (Callback<View>) v -> mInvokedCount++);
+         hold(home);
+         assertEquals("available now, without anything being reconfigured", 1, mInvokedCount);
+ 
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java
+index 05f060f0424..d2a42ecbf50 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java
+@@ -14,9 +14,14 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ import org.chromium.chrome.browser.glic.GlicEnabling;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.preferences.Pref;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.readaloud.ReadAloudFeatures;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
++import org.chromium.components.prefs.PrefService;
++import org.chromium.components.user_prefs.UserPrefs;
+ import org.chromium.ui.base.DeviceFormFactor;
+ 
+ import java.util.HashMap;
+@@ -157,9 +162,17 @@ public class AdaptiveToolbarFeatures {
+      * @return Whether the translate button is enabled by policy/preference.
+      */
+     public static boolean isTranslateEnabled(Profile profile) {
+-        // Bare: translation needs a Google API key this build does not have, so the shortcut
+-        // settings stop offering Translate and a stored choice of it falls back to the default.
+-        return false;
++        // Bare: translating sends the page to Google, so the shortcut is offered only when the user
++        // has turned page translation on.
++        if (!ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, false)) {
++            return false;
++        }
++        PrefService prefService = UserPrefs.get(profile);
++        if (prefService.isManagedPreference(Pref.OFFER_TRANSLATE_ENABLED)) {
++            return prefService.getBoolean(Pref.OFFER_TRANSLATE_ENABLED);
++        }
++        return true;
+     }
+ 
+     public static boolean isTabGroupingPageActionEnabled() {
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeaturesUnitTest.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeaturesUnitTest.java
+index 87c39c2f0be..2ccb99ec6e4 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeaturesUnitTest.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeaturesUnitTest.java
+@@ -61,6 +61,7 @@ public class AdaptiveToolbarFeaturesUnitTest {
+     @After
+     public void tearDown() {
+         ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.GLIC_PROMO_ACCEPTED);
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_PAGE_TRANSLATION);
+     }
+ 
+     @Test
+@@ -86,17 +87,26 @@ public class AdaptiveToolbarFeaturesUnitTest {
+ 
+     @Test
+     public void testIsTranslateEnabled_ManagedAndDisabled() {
++        ChromeSharedPreferences.getInstance().writeBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, true);
+         when(mPrefService.isManagedPreference(Pref.OFFER_TRANSLATE_ENABLED)).thenReturn(true);
+         when(mPrefService.getBoolean(Pref.OFFER_TRANSLATE_ENABLED)).thenReturn(false);
+         assertFalse(AdaptiveToolbarFeatures.isTranslateEnabled(mProfile));
+     }
+ 
++    @Test
++    public void testIsTranslateEnabled_OffUntilTheUserTurnsPageTranslationOn() {
++        when(mPrefService.isManagedPreference(Pref.OFFER_TRANSLATE_ENABLED)).thenReturn(false);
++        assertFalse(AdaptiveToolbarFeatures.isTranslateEnabled(mProfile));
++        ChromeSharedPreferences.getInstance().writeBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, true);
++        assertTrue(AdaptiveToolbarFeatures.isTranslateEnabled(mProfile));
++    }
++
+     @Test
+     public void testIsTranslateEnabled_UserModifiedAndDisabled() {
++        ChromeSharedPreferences.getInstance().writeBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, true);
+         when(mPrefService.isManagedPreference(Pref.OFFER_TRANSLATE_ENABLED)).thenReturn(false);
+         when(mPrefService.getBoolean(Pref.OFFER_TRANSLATE_ENABLED)).thenReturn(false);
+-        // Bare: translation needs a Google API key, so the shortcut is never offered.
+-        assertFalse(AdaptiveToolbarFeatures.isTranslateEnabled(mProfile));
++        assertTrue(AdaptiveToolbarFeatures.isTranslateEnabled(mProfile));
+     }
+ 
+     @Test
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictorTest.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictorTest.java
+index 338dbfde2cf..61334ae921b 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictorTest.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictorTest.java
+@@ -143,13 +143,13 @@ public class AdaptiveToolbarStatePredictorTest {
+                         List.of(
+                                 AdaptiveToolbarButtonVariant.VOICE,
+                                 AdaptiveToolbarButtonVariant.TRANSLATE));
+-        // Bare: Translate is filtered out; translation needs a Google API key.
+         UiState expected =
+                 new UiState(
+                         true,
+                         new ArrayList<Integer>(
+                                 List.of(
+                                         AdaptiveToolbarButtonVariant.VOICE,
++                                        AdaptiveToolbarButtonVariant.TRANSLATE,
+                                         AdaptiveToolbarButtonVariant.SHARE)),
+                         AdaptiveToolbarButtonVariant.AUTO,
+                         AdaptiveToolbarButtonVariant.VOICE);
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/TranslateToolbarButtonControllerUnitTest.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/TranslateToolbarButtonControllerUnitTest.java
+index 9c9704af445..84ecad9b7ec 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/TranslateToolbarButtonControllerUnitTest.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/TranslateToolbarButtonControllerUnitTest.java
+@@ -25,6 +25,8 @@ import org.mockito.junit.MockitoRule;
+ import org.chromium.base.ContextUtils;
+ import org.chromium.base.test.BaseRobolectricTestRunner;
+ import org.chromium.base.test.util.UserActionTester;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.preferences.Pref;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.tab.Tab;
+@@ -61,6 +63,7 @@ public class TranslateToolbarButtonControllerUnitTest {
+         mActionTester = new UserActionTester();
+ 
+         UserPrefs.setPrefServiceForTesting(mPrefService);
++        ChromeSharedPreferences.getInstance().writeBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, true);
+         when(mPrefService.getBoolean(Pref.OFFER_TRANSLATE_ENABLED)).thenReturn(true);
+         when(mTab.getProfile()).thenReturn(mProfile);
+         when(mTab.getWebContents()).thenReturn(mWebContents);
+@@ -71,6 +74,7 @@ public class TranslateToolbarButtonControllerUnitTest {
+     @After
+     public void tearDown() throws Exception {
+         mActionTester.tearDown();
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_PAGE_TRANSLATION);
+     }
+ 
+     @Test
+@@ -80,12 +84,20 @@ public class TranslateToolbarButtonControllerUnitTest {
+                         () -> mTab, mDrawable, "Translate button description", () -> mTracker);
+         ButtonData buttonData = translateToolbarButtonController.get(mTab);
+ 
+-        // Bare: never shown; translation needs a Google API key.
+-        assertFalse(buttonData.canShow());
++        assertTrue(buttonData.canShow());
+         assertTrue(buttonData.isEnabled());
+         assertNotNull(buttonData.getButtonSpec());
+     }
+ 
++    @Test
++    public void testShouldNotShowUpUntilPageTranslationIsOn() {
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_PAGE_TRANSLATION);
++        TranslateToolbarButtonController translateToolbarButtonController =
++                new TranslateToolbarButtonController(
++                        () -> mTab, mDrawable, "Translate button description", () -> mTracker);
++        assertFalse(translateToolbarButtonController.get(mTab).canShow());
++    }
++
+     @Test
+     public void testOnClick() {
+         TranslateToolbarButtonController translateToolbarButtonController =
+@@ -149,7 +161,6 @@ public class TranslateToolbarButtonControllerUnitTest {
+                         () -> mTab, mDrawable, "Translate button description", () -> mTracker);
+         ButtonData buttonData = translateToolbarButtonController.get(mTab);
+ 
+-        // Bare: never shown; translation needs a Google API key.
+-        assertFalse(buttonData.canShow());
++        assertTrue(buttonData.canShow());
+     }
+ }

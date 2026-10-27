@@ -1,0 +1,718 @@
+From 1205af2cba442d40b02d52da1f16aa613d7e1125 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Wed, 21 Oct 2026 20:51:33 +0000
+Subject: [PATCH] Patch 0000166
+
+---
+ chrome/android/chrome_java_sources.gni        |   1 +
+ .../java/res/xml/bare_toolbar_preferences.xml |   9 +-
+ .../chrome/browser/bare/BareTabSwitcher.java  |  42 +++++++
+ .../settings/BareToolbarSettingsFragment.java |  19 ++++
+ .../BottomBarContainerCoordinator.java        |   6 +
+ .../layouts/LayoutManagerChrome.java          |   4 +-
+ .../browser/toolbar/ToolbarManager.java       |   6 +
+ chrome/android/junit/BUILD.gn                 |   1 +
+ .../browser/bare/BareTabSwitcherUnitTest.java |  76 +++++++++++++
+ .../preferences/ChromePreferenceKeys.java     |   7 ++
+ .../ui/bottombar/BareTabSwitchDelegate.java   |  24 ++++
+ .../ui/bottombar/BareToolbarSwipeAction.java  |   4 +
+ .../bottombar/BareToolbarSwipeAdjuster.java   |   3 +
+ .../BareToolbarSwipeGestureUnitTest.java      | 103 ++++++++++++++++++
+ .../ui/bottombar/BareToolbarSwipePrefs.java   |  12 ++
+ .../ui/bottombar/BottomBarCoordinator.java    |   5 +
+ .../browser/ui/bottombar/BottomBarView.java   |  46 +++++++-
+ .../strings/android_chrome_strings.grd        |   9 ++
+ 18 files changed, 371 insertions(+), 6 deletions(-)
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/BareTabSwitcher.java
+ create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java
+ create mode 100644 chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareTabSwitchDelegate.java
+
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 04df5560802..2181a915c49 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -246,6 +246,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java",
+   "java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java",
++  "java/src/org/chromium/chrome/browser/bare/BareTabSwitcher.java",
+   "java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java",
+   "java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java",
+   "java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java",
+diff --git a/chrome/android/java/res/xml/bare_toolbar_preferences.xml b/chrome/android/java/res/xml/bare_toolbar_preferences.xml
+index d87f99c1c00..d2825ca1889 100644
+--- a/chrome/android/java/res/xml/bare_toolbar_preferences.xml
++++ b/chrome/android/java/res/xml/bare_toolbar_preferences.xml
+@@ -17,9 +17,16 @@ found in the LICENSE file.
+         android:order="1"
+         android:title="@string/bare_toolbar_swipe_title" />
+ 
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_address_bar_swipe_tabs"
++        android:order="2"
++        android:persistent="false"
++        android:title="@string/bare_address_bar_swipe_title"
++        android:summary="@string/bare_address_bar_swipe_summary" />
++
+     <Preference
+         android:key="bare_toolbar_reset"
+-        android:order="2"
++        android:order="3"
+         android:title="@string/bare_toolbar_settings_reset" />
+ 
+ </PreferenceScreen>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareTabSwitcher.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareTabSwitcher.java
+new file mode 100644
+index 00000000000..00001562ff4
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareTabSwitcher.java
+@@ -0,0 +1,42 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.tabmodel.TabModel;
++import org.chromium.chrome.browser.tabmodel.TabModelSelector;
++import org.chromium.chrome.browser.tabmodel.TabModelUtils;
++
++/**
++ * Moves one tab along in the list the user is looking at.
++ *
++ * <p>Stays inside the current tab model, so a swipe in a normal window never lands in an Incognito
++ * tab. It does not wrap around: the ends of the list are ends, and swiping past one does nothing,
++ * as the address bar's own swipe behaves.
++ */
++@NullMarked
++public final class BareTabSwitcher {
++    private BareTabSwitcher() {}
++
++    /**
++     * Selects the tab after or before the current one.
++     *
++     * @param selector The tab model selector, which may not exist yet.
++     * @param next True for the following tab, false for the previous one.
++     * @return Whether a different tab was selected.
++     */
++    public static boolean switchTab(@Nullable TabModelSelector selector, boolean next) {
++        if (selector == null) return false;
++        TabModel model = selector.getCurrentModel();
++        int count = model.getCount();
++        int current = model.index();
++        if (count < 2 || current < 0 || current >= count) return false;
++        int target = current + (next ? 1 : -1);
++        if (target < 0 || target >= count) return false;
++        TabModelUtils.setIndex(model, target);
++        return true;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+index 592282bb70b..e0866e0e127 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+@@ -17,6 +17,8 @@ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
+ import org.chromium.chrome.browser.ui.actions.ActionId;
+ import org.chromium.chrome.browser.ui.bottombar.BareToolbarDefaults;
+@@ -25,6 +27,7 @@ import org.chromium.chrome.browser.ui.bottombar.BareToolbarPrefs;
+ import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
+ import org.chromium.chrome.browser.ui.bottombar.BareToolbarSwipeAction;
+ import org.chromium.chrome.browser.ui.bottombar.BareToolbarSwipePrefs;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+ import org.chromium.components.browser_ui.settings.SettingsUtils;
+ 
+ /**
+@@ -43,6 +46,7 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+     static final String PREF_PREVIEW = "bare_toolbar_preview";
+     static final String PREF_RESET = "bare_toolbar_reset";
+     static final String PREF_SWIPE = "bare_toolbar_swipe_action";
++    static final String PREF_ADDRESS_BAR_SWIPE = "bare_address_bar_swipe_tabs";
+ 
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+             ObservableSuppliers.createMonotonic();
+@@ -60,6 +64,18 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+ 
+         initSwipeActionPref();
+ 
++        ChromeSwitchPreference addressBarSwipe = findPreference(PREF_ADDRESS_BAR_SWIPE);
++        assert addressBarSwipe != null;
++        addressBarSwipe.setChecked(BareToolbarSwipePrefs.isAddressBarSwipeEnabled());
++        addressBarSwipe.setOnPreferenceChangeListener(
++                (pref, newValue) -> {
++                    ChromeSharedPreferences.getInstance()
++                            .writeBoolean(
++                                    ChromePreferenceKeys.BARE_ADDRESS_BAR_SWIPE_TABS,
++                                    (boolean) newValue);
++                    return true;
++                });
++
+         Preference reset = findPreference(PREF_RESET);
+         assert reset != null;
+         reset.setOnPreferenceClickListener(
+@@ -86,6 +102,7 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+             BareToolbarSwipeAction.OFF,
+             BareToolbarSwipeAction.BRIGHTNESS,
+             BareToolbarSwipeAction.VOLUME,
++            BareToolbarSwipeAction.SWITCH_TABS,
+         };
+         CharSequence[] labels = new CharSequence[values.length];
+         CharSequence[] stored = new CharSequence[values.length];
+@@ -115,6 +132,8 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+                 return R.string.bare_toolbar_swipe_brightness;
+             case BareToolbarSwipeAction.VOLUME:
+                 return R.string.bare_toolbar_swipe_volume;
++            case BareToolbarSwipeAction.SWITCH_TABS:
++                return R.string.bare_toolbar_swipe_switch_tabs;
+             default:
+                 return R.string.bare_toolbar_swipe_off;
+         }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinator.java
+index dd382410a0f..51cc1c64a24 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinator.java
+@@ -29,6 +29,7 @@ import org.chromium.chrome.browser.toolbar.bottom.BottomControlsContentDelegate;
+ import org.chromium.chrome.browser.toolbar.bottom.BottomControlsCoordinator.BottomControlsVisibilityController;
+ import org.chromium.chrome.browser.ui.actions.ActionRegistry;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuCoordinator;
++import org.chromium.chrome.browser.ui.bottombar.BareTabSwitchDelegate;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBar;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarCoordinator;
+@@ -185,6 +186,11 @@ public class BottomBarContainerCoordinator
+         return mBottomBarCoordinator.getBackgroundColor();
+     }
+ 
++    /** Lets a sideways swipe along the bar switch tabs, when that is what the user chose. */
++    public void setTabSwitchDelegate(@Nullable BareTabSwitchDelegate delegate) {
++        mBottomBarCoordinator.setTabSwitchDelegate(delegate);
++    }
++
+     /** Returns the bottom bar. */
+     public BottomBar getBottomBar() {
+         return mBottomBarCoordinator;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChrome.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChrome.java
+index b63976a4080..fdb13a73376 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChrome.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChrome.java
+@@ -33,6 +33,7 @@ import org.chromium.chrome.browser.hub.HubLayoutDependencyHolder;
+ import org.chromium.chrome.browser.layouts.LayoutType;
+ import org.chromium.chrome.browser.layouts.components.VirtualView;
+ import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarSwipePrefs;
+ import org.chromium.chrome.browser.tab_ui.TabContentManager;
+ import org.chromium.chrome.browser.tab_ui.TabContentManager.ThumbnailChangeListener;
+ import org.chromium.chrome.browser.tab_ui.TabSwitcher;
+@@ -553,7 +554,8 @@ public class LayoutManagerChrome extends LayoutManagerImpl implements Accessibil
+             }
+ 
+             if (direction == ScrollDirection.LEFT || direction == ScrollDirection.RIGHT) {
+-                return true;
++                // Bare: the address bar's sideways swipe can be switched off.
++                return BareToolbarSwipePrefs.isAddressBarSwipeEnabled();
+             }
+ 
+             if (!mSupportsSwipeToShowTabSwitcher) {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index 1ab44a4260e..d68f243c5d4 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -73,6 +73,7 @@ import org.chromium.chrome.browser.back_press.BackPressManager;
+ import org.chromium.chrome.browser.back_press.BackPressMetrics;
+ import org.chromium.chrome.browser.back_press.BackPressMetrics.NavigationDirection;
+ import org.chromium.chrome.browser.back_press.BackPressMetrics.PredictiveGestureNavPhase;
++import org.chromium.chrome.browser.bare.BareTabSwitcher;
+ import org.chromium.chrome.browser.bare.BareUpdateCheck;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModelObserver;
+@@ -2629,6 +2630,11 @@ public class ToolbarManager
+                         mLayoutManager);
+         bottomBarContainerOneshotSupplier.set(bottomBarContainerCoordinator);
+ 
++        // Bare: a sideways swipe along the bar can move between tabs. The selector is read when
++        // the swipe happens, since it does not exist yet while the bar is being built.
++        bottomBarContainerCoordinator.setTabSwitchDelegate(
++                next -> BareTabSwitcher.switchTab(mTabModelSelectorSupplier.get(), next));
++
+         if (mBottomBarHostManager != null) {
+             mBottomBarHostManager.registerBottomBar(
+                     bottomBarContainerCoordinator.getBottomBar(),
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index dd5a663dae5..7de8fdd28f7 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -434,6 +434,7 @@ if (is_android) {
+       "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinatorUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapterUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsUnitTest.java",
+       "src/org/chromium/chrome/browser/BrowserExitReasonTrackerUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java
+new file mode 100644
+index 00000000000..19a0ed687ed
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java
+@@ -0,0 +1,76 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
++import static org.mockito.ArgumentMatchers.anyInt;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++import org.junit.Rule;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.mockito.Mock;
++import org.mockito.junit.MockitoJUnit;
++import org.mockito.junit.MockitoRule;
++
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.tab.TabSelectionType;
++import org.chromium.chrome.browser.tabmodel.TabModel;
++import org.chromium.chrome.browser.tabmodel.TabModelSelector;
++
++/** Unit tests for {@link BareTabSwitcher}. */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareTabSwitcherUnitTest {
++    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
++
++    @Mock private TabModelSelector mSelector;
++    @Mock private TabModel mModel;
++
++    private void model(int count, int index) {
++        when(mSelector.getCurrentModel()).thenReturn(mModel);
++        when(mModel.getCount()).thenReturn(count);
++        when(mModel.index()).thenReturn(index);
++    }
++
++    @Test
++    public void testNextMovesOneTabAlong() {
++        model(5, 2);
++        assertTrue(BareTabSwitcher.switchTab(mSelector, true));
++        verify(mModel).setIndex(eq(3), eq(TabSelectionType.FROM_USER));
++    }
++
++    @Test
++    public void testPreviousMovesOneTabBack() {
++        model(5, 2);
++        assertTrue(BareTabSwitcher.switchTab(mSelector, false));
++        verify(mModel).setIndex(eq(1), eq(TabSelectionType.FROM_USER));
++    }
++
++    @Test
++    public void testTheEndsOfTheListAreEnds() {
++        model(3, 2);
++        assertFalse(BareTabSwitcher.switchTab(mSelector, true));
++        model(3, 0);
++        assertFalse(BareTabSwitcher.switchTab(mSelector, false));
++        verify(mModel, never()).setIndex(anyInt(), anyInt());
++    }
++
++    @Test
++    public void testOneTabHasNowhereToGo() {
++        model(1, 0);
++        assertFalse(BareTabSwitcher.switchTab(mSelector, true));
++        assertFalse(BareTabSwitcher.switchTab(mSelector, false));
++        verify(mModel, never()).setIndex(anyInt(), anyInt());
++    }
++
++    @Test
++    public void testNoSelectorYetIsNotAnError() {
++        assertFalse(BareTabSwitcher.switchTab(null, true));
++    }
++}
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index a90179d1426..d7975d0e6ce 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -405,6 +405,12 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_AMOLED_WHEN_SYSTEM_DARK = "Bare.Theme.AmoledWhenSystemDark";
+ 
++    /**
++     * De-Googled build: whether a sideways swipe on the address bar moves to the next or previous
++     * tab. On unless the user turns it off.
++     */
++    public static final String BARE_ADDRESS_BAR_SWIPE_TABS = "Bare.Toolbar.AddressBarSwipeTabs";
++
+     /**
+      * De-Googled build: the user agent picked in Developer options, as a preset id, or empty for
+      * the default. "custom" takes its string from {@link #BARE_USER_AGENT_CUSTOM}.
+@@ -1300,6 +1306,7 @@ public final class ChromePreferenceKeys {
+                 DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,
+                 BARE_USER_AGENT_CUSTOM,
+                 BARE_USER_AGENT_PRESET,
++                BARE_ADDRESS_BAR_SWIPE_TABS,
+                 BARE_AMOLED_WHEN_SYSTEM_DARK,
+                 WEBSTORE_DESKTOP_SITE_CLEARED,
+                 WEBSTORE_DESKTOP_SITE_SEEDED,
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareTabSwitchDelegate.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareTabSwitchDelegate.java
+new file mode 100644
+index 00000000000..66bb772ab89
+--- /dev/null
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareTabSwitchDelegate.java
+@@ -0,0 +1,24 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.ui.bottombar;
++
++import org.chromium.build.annotations.NullMarked;
++
++/**
++ * Moves to a neighbouring tab for a sideways swipe along the bottom bar.
++ *
++ * <p>Lives beside the bar because the bar's module cannot see the tab model. Whatever builds the
++ * bar hands it an implementation.
++ */
++@NullMarked
++public interface BareTabSwitchDelegate {
++    /**
++     * Selects the tab after or before the current one.
++     *
++     * @param next True for the following tab, false for the previous one.
++     * @return Whether a tab was selected. False at either end of the list.
++     */
++    boolean switchTab(boolean next);
++}
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAction.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAction.java
+index 2f801a116da..8f5c16a98aa 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAction.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAction.java
+@@ -23,6 +23,7 @@ import java.lang.annotation.Target;
+     BareToolbarSwipeAction.OFF,
+     BareToolbarSwipeAction.BRIGHTNESS,
+     BareToolbarSwipeAction.VOLUME,
++    BareToolbarSwipeAction.SWITCH_TABS,
+ })
+ @Retention(RetentionPolicy.SOURCE)
+ @Target(ElementType.TYPE_USE)
+@@ -36,4 +37,7 @@ public @interface BareToolbarSwipeAction {
+ 
+     /** The device's media volume. */
+     int VOLUME = 2;
++
++    /** Moves to the next or previous tab, once, when the finger lifts. */
++    int SWITCH_TABS = 3;
+ }
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAdjuster.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAdjuster.java
+index 817779a68df..2100a8ccc91 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAdjuster.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeAdjuster.java
+@@ -55,6 +55,9 @@ public class BareToolbarSwipeAdjuster {
+                 return window() != null;
+             case BareToolbarSwipeAction.VOLUME:
+                 return mAudioManager != null;
++            case BareToolbarSwipeAction.SWITCH_TABS:
++                // Nothing here to adjust; the view carries the swipe out itself.
++                return true;
+             default:
+                 return false;
+         }
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeGestureUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeGestureUnitTest.java
+index b52c9693c64..32cab2b6545 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeGestureUnitTest.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipeGestureUnitTest.java
+@@ -178,6 +178,109 @@ public class BareToolbarSwipeGestureUnitTest {
+         assertEquals(View.GONE, slider.getVisibility());
+     }
+ 
++    // Switching tabs.
++
++    private static class RecordingTabSwitcher implements BareTabSwitchDelegate {
++        int calls;
++        boolean lastNext;
++
++        @Override
++        public boolean switchTab(boolean next) {
++            calls++;
++            lastNext = next;
++            return true;
++        }
++    }
++
++    private void lift(float x, int action) {
++        MotionEvent event =
++                MotionEvent.obtain(mDownTime, mDownTime + 120, action, x, 80, 0);
++        mView.onTouchEvent(event);
++        event.recycle();
++    }
++
++    @Test
++    public void testSwipingLeftAsksForTheNextTab() {
++        RecordingTabSwitcher switcher = new RecordingTabSwitcher();
++        mView.setTabSwitchDelegate(switcher);
++        setAction(BareToolbarSwipeAction.SWITCH_TABS);
++        down(800, 80);
++        assertTrue(move(800 - mSlop - 10, 80));
++        lift(300, MotionEvent.ACTION_UP);
++        assertEquals(1, switcher.calls);
++        assertTrue(switcher.lastNext);
++    }
++
++    @Test
++    public void testSwipingRightAsksForThePreviousTab() {
++        RecordingTabSwitcher switcher = new RecordingTabSwitcher();
++        mView.setTabSwitchDelegate(switcher);
++        setAction(BareToolbarSwipeAction.SWITCH_TABS);
++        down(200, 80);
++        assertTrue(move(200 + mSlop + 10, 80));
++        lift(800, MotionEvent.ACTION_UP);
++        assertEquals(1, switcher.calls);
++        assertFalse(switcher.lastNext);
++    }
++
++    @Test
++    public void testASwipeThatDoesNotGoFarEnoughSwitchesNothing() {
++        RecordingTabSwitcher switcher = new RecordingTabSwitcher();
++        mView.setTabSwitchDelegate(switcher);
++        setAction(BareToolbarSwipeAction.SWITCH_TABS);
++        down(500, 80);
++        assertTrue(move(500 - mSlop - 5, 80));
++        lift(500 - mSlop - 5, MotionEvent.ACTION_UP);
++        assertEquals(0, switcher.calls);
++    }
++
++    @Test
++    public void testACancelledSwipeSwitchesNothing() {
++        RecordingTabSwitcher switcher = new RecordingTabSwitcher();
++        mView.setTabSwitchDelegate(switcher);
++        setAction(BareToolbarSwipeAction.SWITCH_TABS);
++        down(800, 80);
++        move(800 - mSlop - 10, 80);
++        lift(200, MotionEvent.ACTION_CANCEL);
++        assertEquals(0, switcher.calls);
++        assertFalse(mView.isSwipeActiveForTesting());
++    }
++
++    @Test
++    public void testSwitchingTabsLeavesTheButtonsWhereTheyAre() {
++        mView.setTabSwitchDelegate(new RecordingTabSwitcher());
++        setAction(BareToolbarSwipeAction.SWITCH_TABS);
++        View slider = mView.findViewById(R.id.bottom_bar_swipe_slider);
++        down(800, 80);
++        move(800 - mSlop - 10, 80);
++        assertEquals(View.GONE, slider.getVisibility());
++    }
++
++    @Test
++    public void testWithoutADelegateTheBarLeavesTheTouchAlone() {
++        setAction(BareToolbarSwipeAction.SWITCH_TABS);
++        down(800, 80);
++        assertFalse(move(800 - mSlop - 10, 80));
++    }
++
++    @Test
++    public void testSwitchTabsIsRemembered() {
++        BareToolbarSwipePrefs.setAction(BareToolbarSwipeAction.SWITCH_TABS);
++        assertEquals(BareToolbarSwipeAction.SWITCH_TABS, BareToolbarSwipePrefs.getAction());
++    }
++
++    @Test
++    public void testTheAddressBarSwipeIsOnUntilTurnedOff() {
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.BARE_ADDRESS_BAR_SWIPE_TABS);
++        assertTrue(BareToolbarSwipePrefs.isAddressBarSwipeEnabled());
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_ADDRESS_BAR_SWIPE_TABS, false);
++        assertFalse(BareToolbarSwipePrefs.isAddressBarSwipeEnabled());
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.BARE_ADDRESS_BAR_SWIPE_TABS);
++    }
++
+     // The stored setting.
+ 
+     @Test
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipePrefs.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipePrefs.java
+index 3f4eab32d51..6521a55e11c 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipePrefs.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarSwipePrefs.java
+@@ -28,6 +28,7 @@ public final class BareToolbarSwipePrefs {
+         switch (stored) {
+             case BareToolbarSwipeAction.BRIGHTNESS:
+             case BareToolbarSwipeAction.VOLUME:
++            case BareToolbarSwipeAction.SWITCH_TABS:
+                 return stored;
+             default:
+                 // Includes a value written by a build that offered something this one does not.
+@@ -35,6 +36,17 @@ public final class BareToolbarSwipePrefs {
+         }
+     }
+ 
++    /**
++     * Whether a sideways swipe on the address bar switches tabs.
++     *
++     * <p>Chromium has always done this, so it is on until someone turns it off. It is the address
++     * bar's own gesture and is separate from what a drag along the bottom bar does.
++     */
++    public static boolean isAddressBarSwipeEnabled() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_ADDRESS_BAR_SWIPE_TABS, true);
++    }
++
+     /** Records what the gesture should do. */
+     public static void setAction(@BareToolbarSwipeAction int action) {
+         if (action == BareToolbarSwipeAction.OFF) {
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
+index 85d3fc94ba5..e22ac96a4f7 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
+@@ -144,6 +144,11 @@ public class BottomBarCoordinator
+         ContextUtils.getAppSharedPreferences().registerOnSharedPreferenceChangeListener(this);
+     }
+ 
++    /** Lets a sideways swipe along the bar switch tabs, when that is what the user chose. */
++    public void setTabSwitchDelegate(@Nullable BareTabSwitchDelegate delegate) {
++        mView.setTabSwitchDelegate(delegate);
++    }
++
+     /**
+      * Describes each position on the bar: what it holds, what that thing needs, and how it is
+      * shown.
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java
+index 7432e61c186..b144011e282 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java
+@@ -64,6 +64,9 @@ public class BottomBarView extends LinearLayout {
+     /** Set once the bar is built. Null means a sideways drag does nothing. */
+     private @Nullable BareToolbarSwipeAdjuster mSwipeAdjuster;
+ 
++    /** Set once the bar is built. Null means a sideways drag cannot switch tabs. */
++    private @Nullable BareTabSwitchDelegate mTabSwitchDelegate;
++
+     private float mDownX;
+     private float mDownY;
+     private boolean mSwipeActive;
+@@ -251,6 +254,11 @@ public class BottomBarView extends LinearLayout {
+         return mNewTabRippleNoBackground;
+     }
+ 
++    /** Lets a sideways drag switch tabs. Null leaves that choice doing nothing. */
++    void setTabSwitchDelegate(@Nullable BareTabSwitchDelegate delegate) {
++        mTabSwitchDelegate = delegate;
++    }
++
+     /** Lets a sideways drag change something. Null turns the gesture off. */
+     void setSwipeAdjuster(@Nullable BareToolbarSwipeAdjuster adjuster) {
+         mSwipeAdjuster = adjuster;
+@@ -301,7 +309,9 @@ public class BottomBarView extends LinearLayout {
+                 break;
+             case MotionEvent.ACTION_UP:
+             case MotionEvent.ACTION_CANCEL:
+-                if (mSwipeActive) endSwipe();
++                if (mSwipeActive) {
++                    endSwipe(event.getActionMasked() == MotionEvent.ACTION_UP ? event : null);
++                }
+                 break;
+             default:
+                 break;
+@@ -319,6 +329,9 @@ public class BottomBarView extends LinearLayout {
+         if (mSwipeAdjuster == null) return;
+         @BareToolbarSwipeAction int action = BareToolbarSwipePrefs.getAction();
+         if (action != BareToolbarSwipeAction.OFF && mSwipeAdjuster.canAdjust(action)) {
++            // Switching tabs needs somewhere to switch them, and a bar that was never given one
++            // would take the touch away from its buttons for nothing.
++            if (action == BareToolbarSwipeAction.SWITCH_TABS && mTabSwitchDelegate == null) return;
+             mSwipeAction = action;
+         }
+     }
+@@ -344,6 +357,9 @@ public class BottomBarView extends LinearLayout {
+     private void beginSwipe(MotionEvent event) {
+         if (mSwipeAdjuster == null) return;
+         mSwipeActive = true;
++        // A tab switch is one step taken when the finger lifts. The buttons stay where they
++        // are, since nothing is being dragged and there is no value to show.
++        if (mSwipeAction == BareToolbarSwipeAction.SWITCH_TABS) return;
+         mSwipeStartValue = mSwipeAdjuster.currentValue(mSwipeAction);
+ 
+         for (int slot = 0; slot < BareToolbarSlot.COUNT; slot++) {
+@@ -368,7 +384,7 @@ public class BottomBarView extends LinearLayout {
+      * finger moved, and the slider ends up under it.
+      */
+     private void updateSwipe(MotionEvent event) {
+-        if (mSwipeAdjuster == null) return;
++        if (mSwipeAdjuster == null || mSwipeAction == BareToolbarSwipeAction.SWITCH_TABS) return;
+         int travel = getWidth();
+         if (travel <= 0) return;
+         float value = mSwipeStartValue + (event.getX() - mDownX) / travel;
+@@ -377,15 +393,37 @@ public class BottomBarView extends LinearLayout {
+         mSwipeAdjuster.apply(mSwipeAction, value);
+     }
+ 
+-    /** Gives the buttons back exactly the visibility they had. */
+-    private void endSwipe() {
++    /**
++     * Gives the buttons back exactly the visibility they had.
++     *
++     * @param liftEvent The event that lifted the finger, or null if the touch was cancelled. A
++     *     cancelled touch never switches tabs.
++     */
++    private void endSwipe(@Nullable MotionEvent liftEvent) {
+         mSwipeActive = false;
++        if (mSwipeAction == BareToolbarSwipeAction.SWITCH_TABS) {
++            if (liftEvent != null && mTabSwitchDelegate != null) {
++                float dx = liftEvent.getX() - mDownX;
++                if (Math.abs(dx) >= getTabSwitchDistance()) {
++                    // The finger moving left brings in the tab on the right, the way the
++                    // address bar's own swipe does, and the other way round for right-to-left.
++                    boolean rtl = getLayoutDirection() == LAYOUT_DIRECTION_RTL;
++                    mTabSwitchDelegate.switchTab(rtl ? dx > 0 : dx < 0);
++                }
++            }
++            return;
++        }
+         mSwipeSlider.setVisibility(GONE);
+         for (int slot = 0; slot < BareToolbarSlot.COUNT; slot++) {
+             mSlotContainers[slot].setVisibility(mVisibilityBeforeSwipe[slot]);
+         }
+     }
+ 
++    /** How far a swipe has to go before it counts as asking for another tab. */
++    private float getTabSwitchDistance() {
++        return Math.max(mTouchSlop * 4f, getWidth() / 8f);
++    }
++
+     /** Told when a hold ran a second action, so the rest of that touch is left alone. */
+     void onSecondaryActionInvoked() {
+         mLongPressConsumed = true;
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index c476d6522dc..eea97773c12 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4366,6 +4366,15 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_TOOLBAR_SWIPE_VOLUME" desc="Option meaning dragging sideways along the toolbar changes media volume.">
+         Volume
+       </message>
++      <message name="IDS_BARE_TOOLBAR_SWIPE_SWITCH_TABS" desc="Option meaning dragging sideways along the toolbar moves to the next or previous tab.">
++        Switch tabs
++      </message>
++      <message name="IDS_BARE_ADDRESS_BAR_SWIPE_TITLE" desc="Setting that lets a sideways swipe on the address bar switch tabs.">
++        Swipe the address bar to switch tabs
++      </message>
++      <message name="IDS_BARE_ADDRESS_BAR_SWIPE_SUMMARY" desc="Summary for the setting that lets a sideways swipe on the address bar switch tabs.">
++        Slide the address bar left or right to move to the next or previous tab
++      </message>
+       <message name="IDS_BARE_TOOLBAR_ACTION_HOME" desc="Name of the toolbar button that opens the home page.">
+         Home
+       </message>
+-- 
+2.34.1
+

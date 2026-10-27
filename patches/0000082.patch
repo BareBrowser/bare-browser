@@ -1,0 +1,143 @@
+From fe2cdeb0ea256724bb80df20544601a33828fb6b Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sun, 23 Aug 2026 17:30:36 +0000
+Subject: [PATCH] Patch 0000082
+
+---
+ .../browser/component_updater/registration.cc | 58 +++++++++++--------
+ 1 file changed, 34 insertions(+), 24 deletions(-)
+
+diff --git a/chrome/browser/component_updater/registration.cc b/chrome/browser/component_updater/registration.cc
+index 9cf5a226c7f..985b66baa6d 100644
+--- a/chrome/browser/component_updater/registration.cc
++++ b/chrome/browser/component_updater/registration.cc
+@@ -18,20 +18,15 @@
+ #include "chrome/browser/component_updater/ai_embeddings_component_installer.h"
+ #include "chrome/browser/component_updater/captcha_provider_component_installer.h"
+ #include "chrome/browser/component_updater/chrome_origin_trials_component_installer.h"
+-#include "chrome/browser/component_updater/commerce_heuristics_component_installer.h"
+ #include "chrome/browser/component_updater/crl_set_component_installer.h"
+ #include "chrome/browser/component_updater/crowd_deny_component_installer.h"
+-#include "chrome/browser/component_updater/first_party_sets_component_installer.h"
+ #include "chrome/browser/component_updater/hyphenation_component_installer.h"
+ #include "chrome/browser/component_updater/indigo_component_installer.h"
+ #include "chrome/browser/component_updater/mei_preload_component_installer.h"
+ #include "chrome/browser/component_updater/pki_metadata_component_installer.h"
+ #include "chrome/browser/component_updater/platform_runtime_component_installer.h"
+-#include "chrome/browser/component_updater/privacy_sandbox_attestations_component_installer.h"
+ #include "chrome/browser/component_updater/private_verification_tokens_installer.h"
+ #include "chrome/browser/component_updater/ssl_error_assistant_component_installer.h"
+-#include "chrome/browser/component_updater/subresource_filter_component_installer.h"
+-#include "chrome/browser/component_updater/trust_token_key_commitments_component_installer.h"
+ #include "chrome/browser/history_embeddings/history_embeddings_utils.h"
+ #include "chrome/common/buildflags.h"
+ #include "chrome/common/chrome_features.h"
+@@ -41,8 +36,6 @@
+ #include "components/component_updater/component_updater_service.h"
+ #include "components/component_updater/installer_policies/actor_safety_lists_component_installer.h"
+ #include "components/component_updater/installer_policies/history_search_strings_component_installer.h"
+-#include "components/component_updater/installer_policies/on_device_head_suggest_component_installer.h"
+-#include "components/component_updater/installer_policies/optimization_hints_component_installer.h"
+ #include "components/component_updater/installer_policies/safety_tips_component_installer.h"
+ #include "components/on_device_translation/buildflags/buildflags.h"
+ #include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
+@@ -63,7 +56,6 @@
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+ 
+ #if BUILDFLAG(IS_ANDROID)
+-#include "chrome/browser/component_updater/real_time_url_checks_allowlist_component_installer.h"
+ #else
+ #include "chrome/browser/component_updater/screen_ai_component_installer.h"
+ #endif  // BUILDFLAG(IS_ANDROID)
+@@ -93,7 +85,6 @@
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+     BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+-#include "components/component_updater/installer_policies/amount_extraction_heuristic_regexes_component_installer.h"
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+ 
+@@ -152,18 +143,31 @@ void RegisterComponentsForUpdate() {
+   RegisterWidevineCdmComponent(cus);
+ #endif  // BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)
+ 
+-  RegisterSubresourceFilterComponent(cus);
+-  RegisterOnDeviceHeadSuggestComponent(
+-      cus, g_browser_process->GetApplicationLocale());
+-  RegisterOptimizationHintsComponent(cus);
+-  RegisterTrustTokenKeyCommitmentsComponentIfTrustTokensEnabled(cus);
+-  RegisterPrivateVerificationTokensComponentIfEnabled(cus);
+-  RegisterFirstPartySetsComponent(cus);
+-  RegisterPrivacySandboxAttestationsComponent(cus);
++  // De-Googled build: several components below are not registered.
++  //
++  // Each registration tells update.googleapis.com that this install exists and
++  // asks it for data, carrying a component id, a version, an install date, a
++  // freshness value and a cohort. That is worth paying for a component the
++  // browser uses and not for one it does not. Registrations that carry security
++  // or web compatibility are kept and listed further down.
++  //
++  // SubresourceFilter enforces the Better Ads standard, and Safe Browsing is what
++  // designates a site as abusive. This build has no Safe Browsing handler, so
++  // nothing can ever trigger the filter, and uBlock Origin ships here anyway.
++  //
++  // OnDeviceHeadSuggest is a Google-built omnibox suggestion model. Suggestions
++  // come from the chosen engine instead.
++  //
++  // OptimizationHints is a per-page hint feed from Google, and the chattiest of
++  // the set.
++  //
++  // Trust tokens, private verification tokens, First-Party Sets and the Privacy
++  // Sandbox attestations are all Privacy Sandbox plumbing. Without attestations
++  // the Sandbox APIs stay off, which is the wanted answer here.
++  //
++  // HistorySearchStrings feeds HistoryEmbeddingsService, the on-device AI history
++  // search, which this build does not offer.
+   RegisterActorSafetyListsComponent(cus, base::OnceClosure());
+-  if (history_embeddings::IsHistoryEmbeddingsFeatureEnabled()) {
+-    RegisterHistorySearchStringsComponent(cus);
+-  }
+   RegisterSSLErrorAssistantComponent(cus);
+ 
+   RegisterIndigoComponent(cus);
+@@ -180,7 +184,9 @@ void RegisterComponentsForUpdate() {
+ #endif  // !BUILDFLAG(IS_CHROMEOS)
+ 
+   RegisterOriginTrialsComponent(cus);
+-  RegisterMediaEngagementPreloadComponent(cus, base::OnceClosure());
++  // De-Googled build: not registered. It seeds autoplay behaviour from
++  // aggregated engagement data collected by Google. Local engagement still
++  // accrues normally from the user's own browsing.
+ 
+   MaybeRegisterPKIMetadataComponent(cus);
+ 
+@@ -203,14 +209,17 @@ void RegisterComponentsForUpdate() {
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
+ #if BUILDFLAG(IS_ANDROID)
+-  RegisterRealTimeUrlChecksAllowlistComponent(cus);
++  // De-Googled build: not registered. This is the allowlist for Safe Browsing
++  // real-time URL checks, and no Safe Browsing handler exists in this build, so
++  // there are no checks for it to exempt anything from.
+ #endif  // BUIDLFLAG(IS_ANDROID)
+ 
+ #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+   ManageScreenAIComponentRegistration(cus, g_browser_process->local_state());
+ #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+ 
+-  RegisterCommerceHeuristicsComponent(cus);
++  // De-Googled build: not registered. It carries shopping and price-tracking
++  // heuristics for features this build does not present.
+ 
+ #if BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
+   // TODO(crbug.com/364795294): Support other platforms.
+@@ -226,7 +235,8 @@ void RegisterComponentsForUpdate() {
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+     BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+-  RegisterAmountExtractionHeuristicRegexesComponent(cus);
++  // De-Googled build: not registered. It supplies regexes for reading checkout
++  // amounts, which belongs to the Google-backed autofill this build removes.
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+ 

@@ -1,0 +1,92 @@
+From 4a2ea987db0c9f487445ad41cbdd6925e62c0c74 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 22 Oct 2026 05:47:44 +0000
+Subject: [PATCH] Patch 0000180
+
+---
+ .../regional_capabilities_utils.cc            | 38 +++++++++++++++++++
+ .../template_url_prepopulate_data.cc          |  5 ++-
+ 2 files changed, 41 insertions(+), 2 deletions(-)
+
+diff --git a/components/regional_capabilities/regional_capabilities_utils.cc b/components/regional_capabilities/regional_capabilities_utils.cc
+index 0b300664c99..f1e6542186c 100644
+--- a/components/regional_capabilities/regional_capabilities_utils.cc
++++ b/components/regional_capabilities/regional_capabilities_utils.cc
+@@ -214,6 +214,42 @@ const TemplateURLPrepopulateData::PrepopulatedEngine kBareNoAiDuckDuckGo = {
+     {},       // regulatory_extensions
+ };
+ 
++// Google's Web results: the same results page with the Web filter on, which leaves out the AI
++// Overview. Checked against the running page: the Web filter is selected and no AI Overview
++// section is shown, where the plain search has one. Google's AI Mode tab stays in its filter
++// bar. The type is OTHER on purpose, since SEARCH_ENGINE_GOOGLE switches on Google-specific
++// behaviour elsewhere. No suggestion address, so nothing is sent to Google while typing.
++const TemplateURLPrepopulateData::PrepopulatedEngine kBareNoAiGoogle = {
++    u"Google (No AI)",
++    u"noai.google.com",
++    "https://www.google.com/favicon.ico",
++    "SEARCH_ENGINE_OTHER",
++    "https://www.google.com/search?q={searchTerms}&udm=14",
++    "UTF-8",
++    nullptr,  // suggest_url
++    nullptr,  // image_url
++    nullptr,  // image_translate_url
++    nullptr,  // new_tab_url
++    nullptr,  // contextual_search_url
++    nullptr,  // logo_url
++    nullptr,  // doodle_url
++    nullptr,  // search_url_post_params
++    nullptr,  // suggest_url_post_params
++    nullptr,  // image_url_post_params
++    nullptr,  // image_translate_source_language_param_key
++    nullptr,  // image_translate_target_language_param_key
++    nullptr,  // image_search_branding_label
++    {},       // search_intent_params
++    {},       // alternate_urls
++    SEARCH_ENGINE_OTHER,
++    nullptr,  // preconnect_to_search_url
++    nullptr,  // prefetch_likely_navigations
++    1002,     // id
++    0,        // migrate_to_id
++    false,    // send_x_geo_header
++    {},       // regulatory_extensions
++};
++
+ std::vector<raw_ptr<const PrepopulatedEngine>> GetPrepopulatedEngines(
+     CountryId country_id,
+     PrefService& prefs,
+@@ -246,6 +282,7 @@ std::vector<raw_ptr<const PrepopulatedEngine>> GetPrepopulatedEngines(
+   // Bare: offer the no-AI engine in every region, appended so it never displaces an entry a
+   // region expects to see at the top.
+   engines.push_back(&kBareNoAiDuckDuckGo);
++  engines.push_back(&kBareNoAiGoogle);
+ 
+   return engines;
+ }
+@@ -298,6 +335,7 @@ GetAllPrepopulatedEngines() {
+             TemplateURLPrepopulateData::kAllEngines.begin(),
+             TemplateURLPrepopulateData::kAllEngines.end());
+         all.push_back(&kBareNoAiDuckDuckGo);
++        all.push_back(&kBareNoAiGoogle);
+         return all;
+       }());
+   return base::span(*kAllEnginesWithNoAi);
+diff --git a/components/search_engines/template_url_prepopulate_data.cc b/components/search_engines/template_url_prepopulate_data.cc
+index bcfb76d3fce..e940742fd0a 100644
+--- a/components/search_engines/template_url_prepopulate_data.cc
++++ b/components/search_engines/template_url_prepopulate_data.cc
+@@ -181,8 +181,9 @@ int GetDataVersion(PrefService* prefs) {
+   // only re-reads that list when this version is higher than the one its keyword database was
+   // last built from. kCurrentDataVersion comes from the third_party/search_engines_data checkout
+   // and cannot be changed from this repository, so offset it here instead. A fixed offset means
+-  // exactly one refresh on upgrade, and upstream bumps still come through normally afterwards.
+-  return kCurrentDataVersion + 1;
++  // exactly one refresh per added engine, and upstream bumps still come through normally
++  // afterwards. The offset went from 1 to 2 when Google (No AI) joined DuckDuckGo (No AI).
++  return kCurrentDataVersion + 2;
+ }
+ 
+ std::vector<std::unique_ptr<TemplateURLData>> GetPrepopulatedEngines(
+-- 
+2.34.1
+

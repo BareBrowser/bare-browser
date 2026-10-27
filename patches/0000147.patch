@@ -1,0 +1,104 @@
+From 58a5bc2691a8b7e05955bf5fc3717faa2c002225 Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Mon, 12 Oct 2026 21:58:20 +0000
+Subject: [PATCH] Patch 0000147
+
+---
+ chrome/browser/android/tab_android.cc | 70 ++++++++++++++++++++++-----
+ 1 file changed, 57 insertions(+), 13 deletions(-)
+
+diff --git a/chrome/browser/android/tab_android.cc b/chrome/browser/android/tab_android.cc
+index 3eaeba43d02..ec97ad3f929 100644
+--- a/chrome/browser/android/tab_android.cc
++++ b/chrome/browser/android/tab_android.cc
+@@ -78,6 +78,7 @@
+ #include "content/public/browser/devtools_agent_host.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/navigation_handle.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_process_host.h"
+ #include "content/public/browser/render_view_host.h"
+@@ -117,6 +118,56 @@ BrowserWindowInterface* FindBrowserWindowInterface(SessionID window_id) {
+   return nullptr;
+ }
+ 
++// Bare: keeps the canvas dark between a navigation and the page's first paint
++// on a dark theme, and only then. The page base colour is not just what shows
++// before a page paints: Blink also uses it as the canvas of every page that
++// leaves its own background transparent, for as long as the page is shown.
++// Held black, it put such a light page's dark text on black even with "Apply
++// dark theme to sites" off. So each committed navigation starts black on a dark
++// theme, and the first non-empty paint hands the canvas back to the page.
++class PrePaintBackground
++    : public content::WebContentsObserver,
++      public content::WebContentsUserData<PrePaintBackground> {
++ public:
++  PrePaintBackground(const PrePaintBackground&) = delete;
++  PrePaintBackground& operator=(const PrePaintBackground&) = delete;
++  ~PrePaintBackground() override = default;
++
++  // Black on a dark theme, the default otherwise. Re-read at every navigation,
++  // so a theme change applies from the next page on.
++  void Apply() {
++    auto* theme =
++        night_mode::WebContentsThemeClient::FromWebContents(web_contents());
++    if (theme && theme->IsNightModeEnabled()) {
++      web_contents()->SetPageBaseBackgroundColor(SK_ColorBLACK);
++    } else {
++      web_contents()->SetPageBaseBackgroundColor(std::nullopt);
++    }
++  }
++
++ private:
++  explicit PrePaintBackground(content::WebContents* web_contents)
++      : content::WebContentsObserver(web_contents),
++        content::WebContentsUserData<PrePaintBackground>(*web_contents) {}
++  friend class content::WebContentsUserData<PrePaintBackground>;
++
++  // content::WebContentsObserver:
++  void DidFinishNavigation(content::NavigationHandle* handle) override {
++    if (handle->IsInPrimaryMainFrame() && handle->HasCommitted() &&
++        !handle->IsSameDocument()) {
++      Apply();
++    }
++  }
++
++  void DidFirstVisuallyNonEmptyPaint() override {
++    web_contents()->SetPageBaseBackgroundColor(std::nullopt);
++  }
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(PrePaintBackground);
++
+ }  // namespace
+ 
+ // static
+@@ -399,19 +450,12 @@ void TabAndroid::InitWebContents(
+ 
+   night_mode::WebContentsThemeClient::CreateForWebContents(web_contents_.get());
+ 
+-  // De-Googled build: paint the pre-paint background black in night mode.
+-  //
+-  // Before a page paints its own background the renderer fills with its base colour, which
+-  // defaults to white. On a dark theme that produces a white flash on every navigation, which
+-  // is glaring on an OLED screen at night.
+-  //
+-  // The theme client created just above already answers whether night mode is on, so the colour
+-  // follows the user theme rather than being forced. In light mode nothing is set and the
+-  // default white is kept.
+-  if (night_mode::WebContentsThemeClient::FromWebContents(web_contents_.get())
+-          ->IsNightModeEnabled()) {
+-    web_contents_->SetPageBaseBackgroundColor(SK_ColorBLACK);
+-  }
++  // De-Googled build: keep the canvas dark until a page first paints, on a dark
++  // theme. Without it every navigation flashed white before the page appeared,
++  // glaring on an OLED screen at night. PrePaintBackground hands the canvas back
++  // to the page at its first paint.
++  PrePaintBackground::CreateForWebContents(web_contents_.get());
++  PrePaintBackground::FromWebContents(web_contents_.get())->Apply();
+ 
+   renderer_preferences_util::UpdateFromSystemSettings(
+       web_contents_->GetMutableRendererPrefs(),

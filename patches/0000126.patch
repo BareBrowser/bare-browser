@@ -1,0 +1,74 @@
+From d982be88c1c145bf1b38758ade8f30d68992a10d Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Thu, 10 Sep 2026 17:51:35 +0000
+Subject: [PATCH] Patch 0000126
+
+---
+ .../chrome/browser/bare/BareUpdateCheck.java  | 13 ++++++-----
+ .../browser/bare/BareUpdateCheckUnitTest.java | 22 +++++++++++++++++++
+ 2 files changed, 29 insertions(+), 6 deletions(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
+index 5d0eaee26b3..90bcd96f74c 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java
+@@ -32,9 +32,9 @@ import java.util.regex.Pattern;
+  *
+  * <p>Bare ships outside any store. Nothing else tells a user that a fix exists, so this asks.
+  * It is also the only thing in the browser that contacts a server the user did not navigate to,
+- * which is why it stays small: one plain request to a public release feed, no identifier, no
+- * version number in the request, nothing scheduled in the background. A check happens while the
+- * browser is already open and already using the network, or when the user asks for one.
++ * so it stays small: one plain request to a public release feed, carrying the product and its
++ * version and no other identifier, with nothing scheduled in the background. A check happens
++ * while the browser is already open and already using the network, or when the user asks.
+  *
+  * <p>Manual mode means manual. Nothing leaves the device until the user taps, and the weekly
+  * reminder is a local timer, not a request.
+@@ -239,9 +239,10 @@ public class BareUpdateCheck {
+     /**
+      * Reads the first release tag out of the feed.
+      *
+-     * <p>Deliberately plain: no cookies, no cache, no identifying header, and no version of its own
+-     * in the request. The server learns an address asked for a public file, which is the least this
+-     * can cost while still working.
++     * <p>Plain: no cookies, no cache, and no identifying header. The one thing the request does
++     * say about this install is the Bare version, in the User-Agent, so a release can be matched
++     * to the builds asking for it. The server learns an address asked for a public file and the
++     * version it is running, and nothing about the device it runs on.
+      */
+     private static @Nullable String fetchLatestTag() {
+         HttpURLConnection connection = null;
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java
+index 06b52dab57e..dbdc4a36a91 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java
+@@ -72,6 +72,28 @@ public class BareUpdateCheckUnitTest {
+         assertEquals(BareUpdateCheck.RELEASES_PAGE, BareUpdateCheck.releasePageFor(""));
+     }
+ 
++    /**
++     * The alpha.2 to alpha.3 respin, which is the reason that version exists.
++     *
++     * <p>An installed alpha.2 has to read the alpha.3 tag as newer, and an installed alpha.3 has
++     * to read it as the one it is already running. Publishing the same bytes under a higher tag
++     * instead would have left the new build offering itself an update forever.
++     */
++    @Test
++    public void testAlphaThreeIsNewerThanAlphaTwoAndEqualToItself() {
++        assertTrue(BareUpdateCheck.compare("v1.0.0-alpha.3", "1.0.0-alpha.2") > 0);
++        assertEquals(0, BareUpdateCheck.compare("v1.0.0-alpha.3", "1.0.0-alpha.3"));
++        assertTrue(BareUpdateCheck.compare("v1.0.0-alpha.2", "1.0.0-alpha.3") < 0);
++    }
++
++    /** The tag grammar has to accept the tag this release will actually carry. */
++    @Test
++    public void testProductionTagIsAccepted() {
++        assertEquals(
++                "https://github.com/BareBrowser/bare-browser/releases/tag/v1.0.0-alpha.3",
++                BareUpdateCheck.releasePageFor("v1.0.0-alpha.3"));
++    }
++
+     @Test
+     public void testReleaseUrlsPointAtTheCurrentAccount() {
+         assertTrue(BareUpdateCheck.RELEASES_PAGE.startsWith(

@@ -32,7 +32,7 @@ omnibox_edit_model.cc:1947       no member named 'GetVectorIcon' in 'Autocomplet
 Both declarations sit behind
 `#if (!BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_VR)) && !BUILDFLAG(IS_IOS)`, so
 an Android build wants `ENABLE_VR` for a reason that has nothing to do with VR.
-Patch 0008 guards those call sites so the flags can go off.
+Patch 0000008 guards those call sites so the flags can go off.
 
 Manifest entries for ARCore, Cardboard and Daydream still arrive from library
 manifests even with the code gone. They name components that are not there.
@@ -45,8 +45,8 @@ anything that needs them. Turning any of them off stops the build at the assert.
 
 ## Safe Browsing
 
-One un-gated call site in the Android JNI bridge holds it in. Patches 0080, 0087
-and 0090 remove the settings surfaces that advertise it, since a row that offers
+One un-gated call site in the Android JNI bridge holds it in. Patches 0000077, 0000084
+and 0000087 remove the settings surfaces that advertise it, since a row that offers
 a protection level nothing implements is worse than no row.
 
 ## What a fork already does not send
@@ -73,13 +73,19 @@ std::string CrashReporterClient::GetUploadUrl() {
 }
 ```
 
-**Translate** needs a Google API key and does not have one here.
+**Translate** needs a Google API key and does not have one here. Chrome's translation is Google's
+`element.js` and `translate.googleapis.com`, and it is the key that authorises that, so there is
+nothing to restore without a key of Bare's own and a standing arrangement with Google. 0000174 offers
+something else instead: Settings, Translate pages takes the address of a LibreTranslate-compatible
+server, and the menu's Translate sends the page text there. Bare ships no server and no default
+address. The server sees the text of every page you translate, and its quality and its terms are
+its own.
 
 This is also why the first-run screen had to go rather than be reworded. Its
 footer said the browser "sends usage and crash data to Google", which was untrue
 of the binary it shipped in. A build that claims to send data it cannot send is
-worse than one that says nothing, so patches 0015 and 0041 removed the screen
-and 0042 replaced it with one that describes what this build actually does.
+worse than one that says nothing, so patches 0000015 and 0000039 removed the screen
+and 0000040 replaced it with one that describes what this build actually does.
 
 ## Field trials
 
@@ -93,5 +99,5 @@ it.
 Four separate behaviours turned out to be coming from that file rather than from
 the code: the navigation blur transition, the new tab page identity disc, the
 Google Password Manager settings row, and the bottom bar disappearing on the new
-tab page. Patches 0109, 0116, 0117 and 0120 deal with each. A feature default
+tab page. Patches 0000106, 0000113, 0000114 and 0000117 deal with each. A feature default
 changed in code is inert until that setting is on, so check the config first.

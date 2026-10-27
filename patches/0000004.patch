@@ -1,0 +1,61 @@
+From 11827783b08003271611067c74078362770b5cbe Mon Sep 17 00:00:00 2001
+From: Bare <git@barebrowser.org>
+Date: Sat, 15 Aug 2026 21:20:40 +0000
+Subject: [PATCH] Patch 0000004
+
+---
+ .../network_time/network_time_tracker.cc      | 10 +++++++---
+ .../variations/service/variations_service.cc  | 19 ++++++++++++-------
+ 2 files changed, 19 insertions(+), 10 deletions(-)
+
+diff --git a/components/network_time/network_time_tracker.cc b/components/network_time/network_time_tracker.cc
+index 3bb0f023780..b3384356f26 100644
+--- a/components/network_time/network_time_tracker.cc
++++ b/components/network_time/network_time_tracker.cc
+@@ -69,9 +69,13 @@
+ 
+ namespace network_time {
+ 
+-// Network time queries are enabled on Android and all desktop platforms except
+-// Chrome OS, which uses tlsdated to set the system time.
+-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_IOS)
++// Network time queries are enabled on all desktop platforms except Chrome OS,
++// which uses tlsdated to set the system time.
++//
++// De-Googled build: also disabled on Android. The query is a periodic callback
++// to a Google host (clients2.google.com/time/1/current) whose only purpose is
++// to detect a skewed system clock; the device clock is authoritative here.
++#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
+ BASE_FEATURE(kNetworkTimeServiceQuerying, base::FEATURE_DISABLED_BY_DEFAULT);
+ #else
+ BASE_FEATURE(kNetworkTimeServiceQuerying, base::FEATURE_ENABLED_BY_DEFAULT);
+diff --git a/components/variations/service/variations_service.cc b/components/variations/service/variations_service.cc
+index cb4ef4fb867..95b37781b87 100644
+--- a/components/variations/service/variations_service.cc
++++ b/components/variations/service/variations_service.cc
+@@ -1068,13 +1068,18 @@ void VariationsService::StartRepeatedVariationsSeedFetch() {
+   insecure_variations_server_url_ = GetVariationsServerURL(USE_HTTP);
+ 
+   DCHECK(!request_scheduler_);
+-  request_scheduler_.reset(VariationsRequestScheduler::Create(
+-      base::BindRepeating(&VariationsService::FetchVariationsSeed,
+-                          weak_ptr_factory_.GetWeakPtr()),
+-      local_state_));
+-  // Note that the act of starting the scheduler will start the fetch, if the
+-  // scheduler deems appropriate.
+-  request_scheduler_->Start();
++
++  // De-Googled build: the request scheduler is deliberately not created, so no
++  // variations seed is ever fetched. The seed is downloaded periodically from a
++  // Google host and carries a client identifier, making it one of the browser's
++  // recurring callbacks.
++  //
++  // The server URLs above are still constructed so that nothing downstream sees
++  // an invalid GURL; GetVariationsServerURL() routes an invalid URL into
++  // base::debug::DumpWithoutCrashing(), so blanking the URL constants would
++  // trade the network call for a crash dump on every attempt.
++  //
++  // Field trials continue to work from the built-in configuration.
+ }
+ 
+ void VariationsService::FetchVariationsSeed() {
