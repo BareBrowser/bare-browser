@@ -1,0 +1,178 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java
+index 2874a9440f9..f3abeeb9460 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java
+@@ -37,6 +37,7 @@ import org.chromium.chrome.browser.bare.BareNtpAppearance;
+ import org.chromium.chrome.browser.hub.RoundedCornerAnimatorUtil;
+ import org.chromium.chrome.browser.hub.ShrinkExpandAnimator;
+ import org.chromium.chrome.browser.hub.ShrinkExpandImageView;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.components.browser_ui.widget.animation.CancelAwareAnimatorListener;
+ import org.chromium.ui.animation.RunOnNextLayout;
+ import org.chromium.ui.animation.RunOnNextLayoutDelegate;
+@@ -376,6 +377,17 @@ public class NewForegroundTabAnimationHostView extends FrameLayout implements Ru
+                                     ViewGroup.LayoutParams.MATCH_PARENT, belowBottom - belowTop);
+                     barsParams.topMargin = belowTop - getLocationOnWindowTop();
+                     addView(bars, barsParams);
++                    // Bare: the picture is of the old page, line included. The New tab page has
++                    // no line above the bars and is the colour of the bars, so a strip of that
++                    // colour takes the line out of the picture.
++                    View seal = new View(context);
++                    seal.setBackgroundColor(SemanticColorUtils.getColorSurfaceContainerHigh(context));
++                    FrameLayout.LayoutParams sealParams =
++                            new FrameLayout.LayoutParams(
++                                    ViewGroup.LayoutParams.MATCH_PARENT,
++                                    Math.round(2 * context.getResources().getDisplayMetrics().density));
++                    sealParams.topMargin = barsParams.topMargin;
++                    addView(seal, sealParams);
+                 },
+                 new Handler(Looper.getMainLooper()));
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPage.java b/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPage.java
+index 2bd53f0ba18..6d8d983595c 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPage.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPage.java
+@@ -848,7 +848,8 @@ public class NewTabPage
+      *     NTP.
+      */
+     public static boolean isInSingleUrlBarMode(boolean isLff) {
+-        return !isLff;
++        // Bare: the new tab page never carries its own search box. The toolbar bar stays.
++        return false;
+     }
+ 
+     /**
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageCoordinator.java
+index ca9d32df52d..2b17111adbf 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageCoordinator.java
+@@ -423,6 +423,7 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
+                         mProfile,
+                         mBackPressManager);
+         mModel.set(NewTabPageLayoutProperties.SEARCH_BOX_VIEW, mNtpSearchBox.getView());
++        mNtpSearchBox.getView().setVisibility(View.GONE);
+ 
+         updateSearchBoxTwoSideMargin();
+         initializeLogoCoordinator();
+diff --git a/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/theme/ThemeUtils.java b/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/theme/ThemeUtils.java
+index b13c4b38f92..5c34abce6d1 100644
+--- a/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/theme/ThemeUtils.java
++++ b/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/theme/ThemeUtils.java
+@@ -96,6 +96,12 @@ public class ThemeUtils {
+                     context.getColor(R.color.toolbar_text_box_background_incognito));
+         }
+ 
++        // Bare: the address bar is one colour on every page, the same one the live bar draws, so
++        // the picture of it that is shown while scrolling does not change shade.
++        if (!isCustomTab) {
++            return ContextCompat.getColor(context, R.color.toolbar_text_box_bg_color);
++        }
++
+         // Text box color on default toolbar background in standard mode is a pre-defined
+         // color instead of a calculated color.
+         if (ThemeUtils.isUsingDefaultToolbarColor(context, false, color)) {
+@@ -254,6 +260,10 @@ public class ThemeUtils {
+             return Color.TRANSPARENT;
+         }
+ 
++        // Bare: the strip the divider occupies is the colour of the toolbar, so there is no line
++        // between the toolbar and the page, and nothing black where the divider used to be.
++        if (true) return toolbarColor;
++
+         if (isUsingDefaultToolbarColor(context, isIncognito, toolbarColor)) {
+             return isIncognito
+                     ? ContextCompat.getColor(context, R.color.divider_color_light)
+diff --git a/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/ui/theme/ChromeSemanticColorUtils.java b/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/ui/theme/ChromeSemanticColorUtils.java
+index 256284aa363..5a9e828a353 100644
+--- a/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/ui/theme/ChromeSemanticColorUtils.java
++++ b/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/ui/theme/ChromeSemanticColorUtils.java
+@@ -12,7 +12,6 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.chrome.browser.theme.R;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+-import org.chromium.ui.util.ColorUtils;
+ 
+ /** Chrome specific version of {@link SemanticColorUtils}. */
+ @NullMarked
+@@ -54,10 +53,8 @@ public class ChromeSemanticColorUtils {
+      */
+     public static @ColorInt int getHomeSurfaceBackgroundColor(Context context) {
+         if (BottomBarConfigUtils.isBottomBarEnabled(context)) {
+-            if (ColorUtils.inNightMode(context)) {
+-                return SemanticColorUtils.getColorSurface(context);
+-            }
+-            return SemanticColorUtils.getColorSurfaceContainer(context);
++            // Bare: the page takes the color of the toolbar rows.
++            return SemanticColorUtils.getColorSurfaceContainerHigh(context);
+         }
+         return context.getColor(R.color.home_surface_background_color);
+     }
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+index 03f8792bdae..2e7c485c250 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+@@ -609,11 +609,9 @@ public class ToolbarPhone extends ToolbarLayout
+      * @return The location bar color.
+      */
+     private @ColorInt int getLocationBarColorForToolbarColor(@ColorInt int toolbarColor) {
+-        if (isLocationBarShownInGeneralNtp() || mIsInLoadingPhaseFromNtpToWebpage) {
+-            return mLocationBarBackgroundColorForNtp;
+-        }
+-        return ThemeUtils.getTextBoxColorForToolbarBackgroundInNonNativePage(
+-                getContext(), toolbarColor, isIncognitoBranded(), /* isCustomTab= */ false);
++        // Bare: the address bar keeps the color it has while typing, on every page.
++        return OmniboxResourceProvider.getStandardSuggestionBackgroundColor(
++                getContext(), mThemeColorProvider.getBrandedColorScheme());
+     }
+ 
+     /**
+@@ -3200,8 +3198,9 @@ public class ToolbarPhone extends ToolbarLayout
+     }
+ 
+     private boolean hideHairlineForIncognitoNtp() {
+-        return isIncognitoBranded()
+-                && UrlUtilities.isNtpUrl(getToolbarDataProvider().getCurrentGurl());
++        // Bare: the divider stays in place, painted the colour of the toolbar, so it is never
++        // hidden and never leaves a gap.
++        return false;
+     }
+ 
+     private boolean hideHairlineForInterstitial() {
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/TopToolbarOverlayMediator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/TopToolbarOverlayMediator.java
+index efb0d70c8c9..c898fd5eade 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/TopToolbarOverlayMediator.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/TopToolbarOverlayMediator.java
+@@ -449,7 +449,8 @@ public class TopToolbarOverlayMediator implements ThemeColorObserver {
+      * android view is not shown.
+      */
+     private void updateShadowState() {
+-        if (mToolbarHairlineSuppressed) {
++        // Bare: there is no line between the address bar and the page, at the top or the bottom.
++        if (true || mToolbarHairlineSuppressed) {
+             mModel.set(TopToolbarOverlayProperties.SHOW_SHADOW, false);
+             return;
+         }
+diff --git a/components/browser_ui/widget/android/java/res/color-night/toolbar_text_box_bg_color.xml b/components/browser_ui/widget/android/java/res/color-night/toolbar_text_box_bg_color.xml
+index 260b35e1bf2..0e6ddd557ef 100644
+--- a/components/browser_ui/widget/android/java/res/color-night/toolbar_text_box_bg_color.xml
++++ b/components/browser_ui/widget/android/java/res/color-night/toolbar_text_box_bg_color.xml
+@@ -6,5 +6,5 @@ found in the LICENSE file.
+ -->
+ 
+ <selector xmlns:android="http://schemas.android.com/apk/res/android">
+-  <item android:color="?attr/colorSurfaceContainerHighest"/>
++  <item android:color="?attr/colorSurfaceContainerLow"/>
+ </selector>
+\ No newline at end of file
+diff --git a/components/browser_ui/widget/android/java/res/color/toolbar_text_box_bg_color.xml b/components/browser_ui/widget/android/java/res/color/toolbar_text_box_bg_color.xml
+index e02017ae1d9..465a4199b3e 100644
+--- a/components/browser_ui/widget/android/java/res/color/toolbar_text_box_bg_color.xml
++++ b/components/browser_ui/widget/android/java/res/color/toolbar_text_box_bg_color.xml
+@@ -6,5 +6,5 @@ found in the LICENSE file.
+ -->
+ 
+ <selector xmlns:android="http://schemas.android.com/apk/res/android">
+-  <item android:color="?attr/colorSurfaceContainerHigh"/>
++  <item android:color="?attr/colorSurface"/>
+ </selector>
+\ No newline at end of file
