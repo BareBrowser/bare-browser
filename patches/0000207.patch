@@ -1,0 +1,102 @@
+diff --git a/components/omnibox/browser/local_history_zero_suggest_provider.cc b/components/omnibox/browser/local_history_zero_suggest_provider.cc
+index 5675035015d..b4119aecf6c 100644
+--- a/components/omnibox/browser/local_history_zero_suggest_provider.cc
++++ b/components/omnibox/browser/local_history_zero_suggest_provider.cc
+@@ -42,6 +42,7 @@
+ #include "components/omnibox/browser/zero_suggest_provider.h"
+ #include "components/omnibox/common/omnibox_feature_configs.h"
+ #include "components/omnibox/common/omnibox_features.h"
++#include "components/prefs/pref_service.h"
+ #include "components/search/search.h"
+ #include "components/search_engines/template_url_service.h"
+ #include "third_party/metrics_proto/omnibox_focus_type.pb.h"
+@@ -52,6 +53,11 @@ using metrics::OmniboxInputType;
+ 
+ namespace {
+ 
++// Bare: Settings, Search engine, Suggest URLs from history. Registered in
++// browser_prefs.cc; on unless the user turns it off.
++constexpr char kBareSuggestHistoryUrls[] = "bare.omnibox.suggest_history_urls";
++
++
+ // Extracts the search terms from |url|. Collapses whitespaces, converts them to
+ // lowercase and returns them. |template_url_service| must not be null.
+ std::u16string GetSearchTermsFromURL(const GURL& url,
+@@ -118,7 +124,8 @@ void LocalHistoryZeroSuggestProvider::Start(const AutocompleteInput& input,
+                                             bool minimal_changes) {
+   TRACE_EVENT0("omnibox", "LocalHistoryZeroSuggestProvider::Start");
+   Stop(AutocompleteStopReason::kClobbered);
+-  if (!AllowLocalHistoryZeroSuggestSuggestions(client_, input)) {
++  if (!AllowLocalHistoryZeroSuggestSuggestions(client_, input) ||
++      !client_->GetPrefs()->GetBoolean(kBareSuggestHistoryUrls)) {
+     return;
+   }
+ 
+diff --git a/components/omnibox/browser/most_visited_sites_provider.cc b/components/omnibox/browser/most_visited_sites_provider.cc
+index fbaef59d93d..28ce662e9a5 100644
+--- a/components/omnibox/browser/most_visited_sites_provider.cc
++++ b/components/omnibox/browser/most_visited_sites_provider.cc
+@@ -27,6 +27,7 @@
+ #include "components/omnibox/browser/zero_suggest_provider.h"
+ #include "components/omnibox/common/omnibox_feature_configs.h"
+ #include "components/omnibox/common/omnibox_features.h"
++#include "components/prefs/pref_service.h"
+ #include "components/search_engines/template_url_service.h"
+ #include "components/url_formatter/url_formatter.h"
+ #include "content/public/common/url_constants.h"
+@@ -38,6 +39,11 @@
+ 
+ namespace {
+ 
++// Bare: Settings, Search engine, Suggest URLs from history. Registered in
++// browser_prefs.cc; on unless the user turns it off.
++constexpr char kBareSuggestHistoryUrls[] = "bare.omnibox.suggest_history_urls";
++
++
+ constexpr const int kMaxRecordedTileIndex = 15;
+ constexpr const size_t kMaxDesktopMostVisitedSuggestions = 10;
+ 
+@@ -312,7 +318,8 @@ bool BuildTileSuggest(AutocompleteProvider* provider,
+ void MostVisitedSitesProvider::Start(const AutocompleteInput& input,
+                                      bool minimal_changes) {
+   Stop(AutocompleteStopReason::kClobbered);
+-  if (!AllowMostVisitedSitesSuggestions(client_, input)) {
++  if (!AllowMostVisitedSitesSuggestions(client_, input) ||
++      !client_->GetPrefs()->GetBoolean(kBareSuggestHistoryUrls)) {
+     return;
+   }
+ 
+diff --git a/components/omnibox/browser/search_provider.cc b/components/omnibox/browser/search_provider.cc
+index 4fad769790b..329c11f0079 100644
+--- a/components/omnibox/browser/search_provider.cc
++++ b/components/omnibox/browser/search_provider.cc
+@@ -50,6 +50,7 @@
+ #include "components/omnibox/browser/url_prefix.h"
+ #include "components/omnibox/common/omnibox_feature_configs.h"
+ #include "components/omnibox/common/omnibox_features.h"
++#include "components/prefs/pref_service.h"
+ #include "components/search/search.h"
+ #include "components/search_engines/template_url_service.h"
+ #include "components/search_engines/template_url_starter_pack_data.h"
+@@ -81,6 +82,11 @@ using metrics::OmniboxEventProto;
+ 
+ namespace {
+ 
++// Bare: Settings, Search engine, Suggest URLs from history. Registered in
++// browser_prefs.cc; on unless the user turns it off.
++constexpr char kBareSuggestHistoryUrls[] = "bare.omnibox.suggest_history_urls";
++
++
+ // Increments the appropriate event in the histogram by one.
+ void LogOmniboxSuggestRequest(RemoteRequestEvent request_event) {
+   base::UmaHistogramEnumeration("Omnibox.SearchSuggest.Requests",
+@@ -688,6 +694,9 @@ void SearchProvider::DoHistoryQuery(bool minimal_changes) {
+ 
+   raw_keyword_history_results_.clear();
+   raw_default_history_results_.clear();
++  if (!client()->GetPrefs()->GetBoolean(kBareSuggestHistoryUrls)) {
++    return;
++  }
+ 
+   history::URLDatabase* url_db = client()->GetInMemoryDatabase();
+   if (!url_db)
