@@ -4,30 +4,30 @@ Date: Fri, 28 Aug 2026 18:49:21 +0000
 Subject: [PATCH] Patch 0000098
 
 ---
- chrome/android/chrome_java_sources.gni        |   2 +
- .../bare/BareButtonDataActionAdapter.java     | 212 +++++++++++++
- .../bare/BareToolbarActionCatalogue.java      | 106 +++++++
- .../tabbed_mode/TabbedRootUiCoordinator.java  |  18 ++
- .../ui/AdaptiveToolbarUiCoordinator.java      |   8 +
- .../chrome/browser/ui/RootUiCoordinator.java  |  13 +
- chrome/android/junit/BUILD.gn                 |   1 +
- .../BareButtonDataActionAdapterUnitTest.java  | 266 +++++++++++++++++
- .../chrome/browser/ui/actions/ActionId.java   |   6 +
- chrome/browser/ui/android/bottombar/BUILD.gn  |   3 +
- .../bottombar/BareToolbarActionRendering.java | 122 ++++++++
- .../BareToolbarActionRenderingUnitTest.java   | 205 +++++++++++++
- .../ui/bottombar/BareToolbarDefaults.java     |  45 +--
- .../ui/bottombar/BareToolbarLayout.java       | 131 ++++++--
- .../bottombar/BareToolbarLayoutUnitTest.java  | 282 ++++++++++++++++++
- .../ui/bottombar/BareToolbarPrefs.java        |  13 +-
- .../ui/bottombar/BottomBarCoordinator.java    | 123 +++-----
- .../BottomBarCoordinatorUnitTest.java         |  61 ++--
- .../ui/bottombar/BottomBarMediator.java       |  19 +-
- .../ui/bottombar/BottomBarProperties.java     |  30 ++
- .../browser/ui/bottombar/BottomBarView.java   |  17 ++
- .../ui/bottombar/BottomBarViewBinder.java     |  31 +-
- .../BottomBarViewBinderUnitTest.java          |  68 +++--
- .../AdaptiveToolbarButtonController.java      |  12 +
+ chrome/android/chrome_java_sources.gni             |    2 
+ .../browser/bare/BareButtonDataActionAdapter.java  |  212 +++++++++++++++
+ .../browser/bare/BareToolbarActionCatalogue.java   |  106 ++++++++
+ .../tabbed_mode/TabbedRootUiCoordinator.java       |   18 +
+ .../browser/ui/AdaptiveToolbarUiCoordinator.java   |    8 +
+ .../chrome/browser/ui/RootUiCoordinator.java       |   13 +
+ chrome/android/junit/BUILD.gn                      |    1 
+ .../bare/BareButtonDataActionAdapterUnitTest.java  |  266 +++++++++++++++++++
+ .../chrome/browser/ui/actions/ActionId.java        |    6 
+ chrome/browser/ui/android/bottombar/BUILD.gn       |    3 
+ .../ui/bottombar/BareToolbarActionRendering.java   |  122 +++++++++
+ .../BareToolbarActionRenderingUnitTest.java        |  205 +++++++++++++++
+ .../browser/ui/bottombar/BareToolbarDefaults.java  |   45 ++-
+ .../browser/ui/bottombar/BareToolbarLayout.java    |  131 ++++++++-
+ .../ui/bottombar/BareToolbarLayoutUnitTest.java    |  282 ++++++++++++++++++++
+ .../browser/ui/bottombar/BareToolbarPrefs.java     |   13 +
+ .../browser/ui/bottombar/BottomBarCoordinator.java |  123 +++------
+ .../ui/bottombar/BottomBarCoordinatorUnitTest.java |   61 ++--
+ .../browser/ui/bottombar/BottomBarMediator.java    |   19 +
+ .../browser/ui/bottombar/BottomBarProperties.java  |   30 ++
+ .../chrome/browser/ui/bottombar/BottomBarView.java |   17 +
+ .../browser/ui/bottombar/BottomBarViewBinder.java  |   31 +-
+ .../ui/bottombar/BottomBarViewBinderUnitTest.java  |   68 +++--
+ .../adaptive/AdaptiveToolbarButtonController.java  |   12 +
  24 files changed, 1587 insertions(+), 207 deletions(-)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java
@@ -380,10 +380,10 @@ index 00000000000..813e1568366
 +    }
 +}
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
-index 3c2c9199cea..c86a6f13be0 100644
+index aaecf28c921..0a4f6c34620 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
-@@ -70,6 +70,7 @@ import org.chromium.chrome.browser.actor.ActorMetrics;
+@@ -71,6 +71,7 @@ import org.chromium.chrome.browser.actor.ActorMetrics;
  import org.chromium.chrome.browser.actor.ui.ActorOverlayCoordinator;
  import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
  import org.chromium.chrome.browser.back_press.BackPressManager;
@@ -391,7 +391,7 @@ index 3c2c9199cea..c86a6f13be0 100644
  import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpener;
  import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpenerImpl;
  import org.chromium.chrome.browser.bookmarks.BookmarkModel;
-@@ -346,6 +347,7 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+@@ -347,6 +348,7 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
      private @Nullable Callback<Boolean> mVerticalTabsActiveObserver;
      private @Nullable PauseResumeWithNativeObserver mPendingUnsuppressTabStripObserver;
      private @Nullable TabbedSystemUiCoordinator mSystemUiCoordinator;
@@ -399,7 +399,7 @@ index 3c2c9199cea..c86a6f13be0 100644
      private @Nullable TabGroupSyncController mTabGroupSyncController;
      private final OneshotSupplierImpl<TabGroupUiActionHandler> mTabGroupUiActionHandlerSupplier =
              new OneshotSupplierImpl<>();
-@@ -884,6 +886,10 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+@@ -885,6 +887,10 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
      @Override
      @SuppressWarnings({"NullAway", "UseSharedPreferencesManagerFromChromeCheck"})
      public void onDestroy() {
@@ -410,7 +410,7 @@ index 3c2c9199cea..c86a6f13be0 100644
          if (mVerticalTabsPreferenceListener != null) {
              ContextUtils.getAppSharedPreferences()
                      .unregisterOnSharedPreferenceChangeListener(mVerticalTabsPreferenceListener);
-@@ -1165,6 +1171,18 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+@@ -1166,6 +1172,18 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                                  omniboxStub.addUrlFocusChangeListener(mActorUrlFocusChangeListener);
                              }
                          });
@@ -480,10 +480,10 @@ index fa9453e77d9..de0225deea6 100644
          return mAdaptiveToolbarUiCoordinator;
      }
 diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
-index 5fdb206e240..2649cde3c26 100644
+index 21efb67ce47..4dfd1242a36 100644
 --- a/chrome/android/junit/BUILD.gn
 +++ b/chrome/android/junit/BUILD.gn
-@@ -432,6 +432,7 @@ if (is_android) {
+@@ -433,6 +433,7 @@ if (is_android) {
      sources = [
        "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarAppMenuUpdateBadgeControllerUnitTest.java",
        "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinatorUnitTest.java",

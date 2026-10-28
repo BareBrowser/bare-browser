@@ -4,22 +4,22 @@ Date: Sat, 5 Sep 2026 17:21:49 +0000
 Subject: [PATCH] Patch 0000104
 
 ---
- chrome/android/chrome_java_sources.gni        |   1 +
- .../android/java/res/xml/main_preferences.xml |   4 +
- .../browser/bare/BareOpenInAppsMode.java      |  91 ++++++++
- .../ExternalNavigationDelegateImpl.java       |  32 ++-
- .../chrome/browser/settings/MainSettings.java |  54 +++++
- .../tabbed_mode/TabbedRootUiCoordinator.java  |  23 +-
- chrome/android/junit/BUILD.gn                 |   1 +
- .../bare/BareOpenInAppsModeUnitTest.java      | 162 ++++++++++++++
- chrome/browser/open_in_app/android/BUILD.gn   |   1 +
- .../MenuOnlyOpenInAppEntryPoint.java          |  26 +++
- .../browser/open_in_app/OpenInAppUtils.java   |  13 +-
- .../preferences/ChromePreferenceKeys.java     |   8 +
- .../strings/android_chrome_strings.grd        |  12 +
- .../strings/android/browser_ui_strings.grd    |  21 ++
- .../ExternalNavigationDelegate.java           |  15 ++
- .../ExternalNavigationHandler.java            | 206 +++++++++++++++++-
+ chrome/android/chrome_java_sources.gni             |    1 
+ chrome/android/java/res/xml/main_preferences.xml   |    4 
+ .../chrome/browser/bare/BareOpenInAppsMode.java    |   91 +++++++++
+ .../ExternalNavigationDelegateImpl.java            |   32 +++
+ .../chrome/browser/settings/MainSettings.java      |   54 +++++
+ .../tabbed_mode/TabbedRootUiCoordinator.java       |   23 +-
+ chrome/android/junit/BUILD.gn                      |    1 
+ .../browser/bare/BareOpenInAppsModeUnitTest.java   |  162 ++++++++++++++++
+ chrome/browser/open_in_app/android/BUILD.gn        |    1 
+ .../open_in_app/MenuOnlyOpenInAppEntryPoint.java   |   26 +++
+ .../chrome/browser/open_in_app/OpenInAppUtils.java |   13 +
+ .../browser/preferences/ChromePreferenceKeys.java  |    8 +
+ .../ui/android/strings/android_chrome_strings.grd  |   12 +
+ .../strings/android/browser_ui_strings.grd         |   21 ++
+ .../ExternalNavigationDelegate.java                |   15 +
+ .../ExternalNavigationHandler.java                 |  206 +++++++++++++++++++-
  16 files changed, 638 insertions(+), 32 deletions(-)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java
  create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java
@@ -300,10 +300,10 @@ index 1dd96d23a11..de7bfcd0b83 100644
       * The update row. Its summary is the only place a manual-mode user learns anything, so it
       * says what is known rather than staying blank: the newest release seen, or that nothing has
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
-index c86a6f13be0..a9c1113ece6 100644
+index 0a4f6c34620..c6815a61fb8 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
-@@ -171,8 +171,8 @@ import org.chromium.chrome.browser.omnibox.LocationBarEmbedder;
+@@ -172,8 +172,8 @@ import org.chromium.chrome.browser.omnibox.LocationBarEmbedder;
  import org.chromium.chrome.browser.omnibox.OmniboxChipManager;
  import org.chromium.chrome.browser.omnibox.OmniboxStub;
  import org.chromium.chrome.browser.omnibox.UrlFocusChangeListener;
@@ -313,7 +313,7 @@ index c86a6f13be0..a9c1113ece6 100644
  import org.chromium.chrome.browser.pdf.PdfPageIphController;
  import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
  import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
-@@ -901,10 +901,6 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+@@ -902,10 +902,6 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
              mOpenInAppEntryPoint = null;
          }
  
@@ -324,7 +324,7 @@ index c86a6f13be0..a9c1113ece6 100644
          if (mSystemUiCoordinator != null) mSystemUiCoordinator.destroy();
  
          if (mOfflineIndicatorController != null) {
-@@ -1134,14 +1130,6 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+@@ -1135,14 +1131,6 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
      @EnsuresNonNull("mToolbarManager")
      protected void initializeToolbar() {
          mControlContainer = mActivity.findViewById(R.id.control_container);
@@ -339,7 +339,7 @@ index c86a6f13be0..a9c1113ece6 100644
  
          super.initializeToolbar();
          if (mControlContainer != null) {
-@@ -1294,11 +1282,12 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+@@ -1295,11 +1283,12 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
          }
  
          if (OpenInAppUtils.isOpenInAppAvailable()) {
@@ -357,10 +357,10 @@ index c86a6f13be0..a9c1113ece6 100644
  
          if (AndroidSidePanelEnabledFn.isEnabled()
 diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
-index 066f2bbcdde..495ab7b48c7 100644
+index bfe8e8d3a24..8629bbdb9cd 100644
 --- a/chrome/android/junit/BUILD.gn
 +++ b/chrome/android/junit/BUILD.gn
-@@ -433,6 +433,7 @@ if (is_android) {
+@@ -434,6 +434,7 @@ if (is_android) {
        "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarAppMenuUpdateBadgeControllerUnitTest.java",
        "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinatorUnitTest.java",
        "src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapterUnitTest.java",
