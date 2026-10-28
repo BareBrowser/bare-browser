@@ -1,0 +1,100 @@
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+index 5456f096334..6f6a86215b0 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+@@ -14,6 +14,7 @@ import android.graphics.PorterDuff;
+ import android.graphics.Rect;
+ import android.graphics.drawable.ColorDrawable;
+ import android.graphics.drawable.Drawable;
++import android.os.Build;
+ import android.os.SystemClock;
+ import android.view.Gravity;
+ import android.view.KeyEvent;
+@@ -35,6 +36,7 @@ import android.widget.RadioGroup;
+ import androidx.annotation.VisibleForTesting;
+ import androidx.appcompat.content.res.AppCompatResources;
+ 
++import org.chromium.base.ContextUtils;
+ import org.chromium.base.Callback;
+ import org.chromium.base.DeviceInfo;
+ import org.chromium.base.SysUtils;
+@@ -1064,6 +1066,30 @@ class AppMenu implements OnKeyListener {
+         sExceptionReporter = reporter;
+     }
+ 
++    /** Bare: with frosted glass on, the page behind the menu is blurred and a little dimmed. */
++    private static void blurPageBehind(PopupWindow popup) {
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return;
++        View content = popup.getContentView();
++        if (content == null) return;
++        Context context = content.getContext();
++        if (!ContextUtils.getAppSharedPreferences().getBoolean("Bare.Glass", true)) return;
++        WindowManager windowManager = context.getSystemService(WindowManager.class);
++        if (windowManager == null || !windowManager.isCrossWindowBlurEnabled()) return;
++        View decor = content.getRootView();
++        if (!(decor.getLayoutParams() instanceof WindowManager.LayoutParams params)) return;
++        params.flags |=
++                WindowManager.LayoutParams.FLAG_BLUR_BEHIND
++                        | WindowManager.LayoutParams.FLAG_DIM_BEHIND;
++        params.dimAmount = 0.14f;
++        params.setBlurBehindRadius(
++                Math.round(18 * context.getResources().getDisplayMetrics().density));
++        try {
++            windowManager.updateViewLayout(decor, params);
++        } catch (IllegalArgumentException e) {
++            // The window is already gone; nothing to blur.
++        }
++    }
++
+     private void showPopup(View anchorView, int[] popupPosition) {
+         PopupWindow mainPopup = getPopup();
+ 
+@@ -1074,6 +1100,7 @@ class AppMenu implements OnKeyListener {
+                     Gravity.NO_GRAVITY,
+                     popupPosition[0],
+                     popupPosition[1]);
++            blurPageBehind(mainPopup);
+         } catch (WindowManager.BadTokenException e) {
+             // Intentionally ignore BadTokenException. This can happen in a real
+             // edge case where parent.getWindowToken is not valid. See
+diff --git a/components/browser_ui/modaldialog/android/java/src/org/chromium/components/browser_ui/modaldialog/AppModalPresenter.java b/components/browser_ui/modaldialog/android/java/src/org/chromium/components/browser_ui/modaldialog/AppModalPresenter.java
+index 28b4301db41..fb67231568c 100644
+--- a/components/browser_ui/modaldialog/android/java/src/org/chromium/components/browser_ui/modaldialog/AppModalPresenter.java
++++ b/components/browser_ui/modaldialog/android/java/src/org/chromium/components/browser_ui/modaldialog/AppModalPresenter.java
+@@ -28,6 +28,7 @@ import androidx.core.view.ViewCompat;
+ import androidx.core.view.WindowCompat;
+ import androidx.core.view.WindowInsetsCompat;
+ 
++import org.chromium.base.ContextUtils;
+ import org.chromium.base.Callback;
+ import org.chromium.base.DeviceInfo;
+ import org.chromium.base.StrictModeContext;
+@@ -99,6 +100,20 @@ public class AppModalPresenter extends ModalDialogManager.Presenter {
+         mContext = context;
+     }
+ 
++    /** Bare: with frosted glass on, the page behind a dialog is blurred. */
++    private static void blurPageBehind(@Nullable Window window, Context context) {
++        if (window == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return;
++        if (!ContextUtils.getAppSharedPreferences().getBoolean("Bare.Glass", true)) return;
++        WindowManager windowManager = context.getSystemService(WindowManager.class);
++        if (windowManager == null || !windowManager.isCrossWindowBlurEnabled()) return;
++        window.addFlags(
++                WindowManager.LayoutParams.FLAG_BLUR_BEHIND
++                        | WindowManager.LayoutParams.FLAG_DIM_BEHIND);
++        window.getAttributes()
++                .setBlurBehindRadius(
++                        Math.round(18 * context.getResources().getDisplayMetrics().density));
++    }
++
+     private ModalDialogView loadDialogView() {
+         return (ModalDialogView)
+                 LayoutInflaterUtils.inflate(
+@@ -151,6 +166,7 @@ public class AppModalPresenter extends ModalDialogManager.Presenter {
+             buttonIndex = 2;
+         }
+         mDialog = new ComponentDialog(mContext, styles[buttonIndex][dialogIndex]);
++        blurPageBehind(mDialog.getWindow(), mContext);
+         if (mIsEdgeToEdgeEverywhereEnabled) {
+             drawDialogWindowEdgeToEdge();
+         }
