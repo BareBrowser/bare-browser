@@ -1,0 +1,355 @@
+diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/java/res/xml/main_preferences.xml
+index 938d8e033fd..edb65d693b2 100644
+--- a/chrome/android/java/res/xml/main_preferences.xml
++++ b/chrome/android/java/res/xml/main_preferences.xml
+@@ -181,6 +181,12 @@ found in the LICENSE file.
+         android:key="bare_app_icon"
+         android:order="33"
+         android:title="@string/bare_app_icon_title"/>
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_glass"
++        android:order="33"
++        android:persistent="false"
++        android:title="@string/bare_glass_title"
++        android:summary="@string/bare_glass_summary"/>
+     <org.chromium.chrome.browser.bare.settings.BareMadeWithLovePreference
+         android:key="bare_made_with_love"
+         android:order="34"/>
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 1c9ba0dc3f5..ddbbffb9871 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -116,6 +116,8 @@ found in the LICENSE file.
+     <string name="bare_settings_cat_browsing_summary" translatable="false">Search, tabs, downloads, media and haptics</string>
+     <string name="bare_media_haptics_title" translatable="false">Media &amp; Haptics</string>
+     <string name="bare_haptics_title" translatable="false">Haptic feedback</string>
++    <string name="bare_glass_title" translatable="false">Frosted glass</string>
++    <string name="bare_glass_summary" translatable="false">Translucent, blurred panels, starting with the tabs drawer</string>
+     <string name="bare_incognito_mode" translatable="false">Incognito mode</string>
+     <string name="bare_incognito_fact_cookies" translatable="false">Session cookies cleared when done</string>
+     <string name="bare_incognito_fact_downloads" translatable="false">Downloads and bookmarks stay</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+index 6a45bdac6d5..ac2b97f6e80 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+@@ -8,6 +8,7 @@ import android.animation.Animator;
+ import android.animation.AnimatorListenerAdapter;
+ import android.animation.ValueAnimator;
+ import android.app.Activity;
++import android.app.Dialog;
+ import android.content.Context;
+ import android.content.res.Configuration;
+ import android.graphics.Bitmap;
+@@ -16,6 +17,7 @@ import android.graphics.Typeface;
+ import android.graphics.drawable.ColorDrawable;
+ import android.graphics.drawable.GradientDrawable;
+ import android.graphics.drawable.RippleDrawable;
++import android.os.Build;
+ import android.text.SpannableString;
+ import android.text.Spanned;
+ import android.text.TextUtils;
+@@ -28,6 +30,8 @@ import android.view.View;
+ import android.view.ViewConfiguration;
+ import android.view.ViewGroup;
+ import android.view.ViewOutlineProvider;
++import android.view.Window;
++import android.view.WindowManager;
+ import android.view.WindowInsets;
+ import android.view.animation.PathInterpolator;
+ import android.widget.FrameLayout;
+@@ -88,6 +92,8 @@ public final class BareVerticalTabsDrawer {
+     private static final float WIDTH_FRACTION = 0.85f;
+     private static final float MAX_WIDTH_DP = 400f;
+     private static final float PAGE_SHIFT_DP = 30f;
++    private static final float GLASS_BLUR_DP = 22f;
++    private static final float GLASS_SCRIM = 0.45f;
+ 
+     private final Activity mActivity;
+     private final Supplier<@Nullable TabModelSelector> mSelectorSupplier;
+@@ -95,6 +101,9 @@ public final class BareVerticalTabsDrawer {
+     private final Supplier<@Nullable TabContentManager> mContentSupplier;
+ 
+     private @Nullable FrameLayout mRoot;
++    private @Nullable Dialog mGlassWindow;
++    private boolean mGlass;
++    private int mBlurRadius = -1;
+     private @Nullable View mScrim;
+     private @Nullable Panel mPanel;
+     private @Nullable RecyclerView mList;
+@@ -208,6 +217,7 @@ public final class BareVerticalTabsDrawer {
+         if (windowInsets != null) {
+             applyInsets(WindowInsetsCompat.toWindowInsetsCompat(windowInsets));
+         }
++        hostRoot(root, glassWanted());
+         root.setVisibility(View.VISIBLE);
+         root.requestApplyInsets();
+         if (mBackCallback != null) mBackCallback.setEnabled(true);
+@@ -228,6 +238,8 @@ public final class BareVerticalTabsDrawer {
+                 () -> {
+                     FrameLayout root = mRoot;
+                     if (root != null && !mOpen) root.setVisibility(View.GONE);
++                    Dialog glass = mGlassWindow;
++                    if (glass != null && !mOpen && glass.isShowing()) glass.dismiss();
+                     releaseObservers();
+                 });
+     }
+@@ -239,6 +251,11 @@ public final class BareVerticalTabsDrawer {
+         if (mBackCallback != null) mBackCallback.remove();
+         mBackCallback = null;
+         FrameLayout root = mRoot;
++        Dialog glass = mGlassWindow;
++        if (glass != null) {
++            glass.dismiss();
++            mGlassWindow = null;
++        }
+         if (root != null && root.getParent() instanceof ViewGroup parent) {
+             parent.removeView(root);
+         }
+@@ -374,8 +391,10 @@ public final class BareVerticalTabsDrawer {
+         divider.setBackgroundColor(color(0xFF343439, 0xFFD9D9DE));
+         panel.addView(divider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+         LinearLayout footer = new LinearLayout(mActivity);
+-        footer.setOrientation(LinearLayout.HORIZONTAL);
+-        footer.setPadding(dp(12), dp(12), dp(12), dp(20));
++        footer.setOrientation(LinearLayout.VERTICAL);
++        LinearLayout buttons = new LinearLayout(mActivity);
++        buttons.setOrientation(LinearLayout.HORIZONTAL);
++        buttons.setPadding(dp(12), dp(12), dp(12), dp(6));
+         TextView newTab = footerButton(R.string.bare_vtabs_new_tab);
+         newTab.setOnClickListener(
+                 v -> {
+@@ -390,11 +409,28 @@ public final class BareVerticalTabsDrawer {
+                 });
+         LinearLayout.LayoutParams half =
+                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+-        footer.addView(newTab, half);
++        buttons.addView(newTab, half);
+         LinearLayout.LayoutParams half2 =
+                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+         half2.setMarginStart(dp(8));
+-        footer.addView(closeAll, half2);
++        buttons.addView(closeAll, half2);
++        footer.addView(buttons);
++        // The sidebar icon stays where the bottom bar has it, so the same spot closes the drawer.
++        ImageButton toggle = new ImageButton(mActivity);
++        toggle.setImageResource(R.drawable.ic_bare_vertical_tabs);
++        toggle.setColorFilter(color(0xFFEEEEEE, 0xFF1B1B1F));
++        toggle.setBackground(null);
++        toggle.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
++        toggle.setPadding(dp(12), dp(18), dp(12), dp(18));
++        toggle.setContentDescription(mActivity.getString(R.string.bare_toolbar_action_vertical_tabs));
++        toggle.setOnClickListener(
++                v -> {
++                    ActionHaptics.tick(v);
++                    close();
++                });
++        LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(dp(48), dp(60));
++        toggleParams.setMarginStart(dp(20.8f));
++        footer.addView(toggle, toggleParams);
+         panel.addView(footer);
+ 
+         panel.setOnDismissListener(this::close);
+@@ -410,6 +446,7 @@ public final class BareVerticalTabsDrawer {
+                 root,
+                 new FrameLayout.LayoutParams(
+                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        mGlass = false;
+ 
+         if (mActivity instanceof ComponentActivity componentActivity) {
+             mBackCallback =
+@@ -447,7 +484,7 @@ public final class BareVerticalTabsDrawer {
+         LinearLayout header = mHeader;
+         LinearLayout footer = mFooter;
+         if (header != null) header.setPadding(dp(15), mTopInset + dp(12), dp(15), dp(6));
+-        if (footer != null) footer.setPadding(dp(12), dp(12), dp(12), dp(20) + mBottomInset);
++        if (footer != null) footer.setPadding(0, 0, 0, mBottomInset);
+     }
+ 
+     private int systemDimension(String name) {
+@@ -564,6 +601,98 @@ public final class BareVerticalTabsDrawer {
+         return button;
+     }
+ 
++    // Glass.
++
++    /**
++     * Whether the drawer is drawn as frosted glass: the user has not turned it off, this is
++     * Android 12 or newer, and the system allows blurring what is behind a window.
++     */
++    private boolean glassWanted() {
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false;
++        if (!ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_GLASS, true)) {
++            return false;
++        }
++        WindowManager windowManager = mActivity.getSystemService(WindowManager.class);
++        return windowManager != null && windowManager.isCrossWindowBlurEnabled();
++    }
++
++    /**
++     * Puts the drawer in the activity, or, for glass, in a transparent window of its own that
++     * the system blurs what is behind. Both keep the same views, so the motion is the same.
++     */
++    private void hostRoot(FrameLayout root, boolean glass) {
++        Panel panel = mPanel;
++        if (panel != null) {
++            panel.setBackgroundColor(
++                    glass ? color(0xA61B1B1E, 0xB8F4F4F7) : color(0xFF1B1B1E, 0xFFF4F4F7));
++        }
++        if (glass == mGlass && (glass ? mGlassWindow != null : root.getParent() != null)) {
++            if (glass && mGlassWindow != null && !mGlassWindow.isShowing()) mGlassWindow.show();
++            return;
++        }
++        if (root.getParent() instanceof ViewGroup parent) parent.removeView(root);
++        mGlass = glass;
++        if (!glass) {
++            ViewGroup content = mActivity.findViewById(android.R.id.content);
++            if (content != null) {
++                content.addView(
++                        root,
++                        new FrameLayout.LayoutParams(
++                                ViewGroup.LayoutParams.MATCH_PARENT,
++                                ViewGroup.LayoutParams.MATCH_PARENT));
++            }
++            Dialog old = mGlassWindow;
++            if (old != null && old.isShowing()) old.dismiss();
++            return;
++        }
++        Dialog window = mGlassWindow;
++        if (window == null) {
++            window = new Dialog(mActivity, android.R.style.Theme_Translucent_NoTitleBar);
++            window.setContentView(
++                    root,
++                    new ViewGroup.LayoutParams(
++                            ViewGroup.LayoutParams.MATCH_PARENT,
++                            ViewGroup.LayoutParams.MATCH_PARENT));
++            Window w = window.getWindow();
++            if (w != null) {
++                w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
++                w.setLayout(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
++                w.setWindowAnimations(0);
++                w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
++                // Not focusable, so the activity keeps the keys and Back works as it does today.
++                w.addFlags(
++                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
++                                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
++                w.getAttributes().layoutInDisplayCutoutMode =
++                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
++                w.setNavigationBarContrastEnforced(false);
++            }
++            mGlassWindow = window;
++        } else {
++            window.setContentView(
++                    root,
++                    new ViewGroup.LayoutParams(
++                            ViewGroup.LayoutParams.MATCH_PARENT,
++                            ViewGroup.LayoutParams.MATCH_PARENT));
++        }
++        setBlur(mProgress);
++        window.show();
++    }
++
++    /** How much of the blur is applied: 0 is none and 1 is full. */
++    private void setBlur(float progress) {
++        Dialog window = mGlassWindow;
++        if (!mGlass || window == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return;
++        Window w = window.getWindow();
++        if (w == null) return;
++        int radius = Math.round(dp(GLASS_BLUR_DP) * progress);
++        if (radius == mBlurRadius) return;
++        mBlurRadius = radius;
++        w.setBackgroundBlurRadius(radius);
++    }
++
+     // Motion.
+ 
+     private void animateTo(float target, @Nullable Runnable onEnd) {
+@@ -599,7 +728,8 @@ public final class BareVerticalTabsDrawer {
+         mProgress = Math.max(0f, Math.min(1f, progress));
+         View scrim = mScrim;
+         Panel panel = mPanel;
+-        if (scrim != null) scrim.setAlpha(mProgress);
++        if (scrim != null) scrim.setAlpha(mProgress * (mGlass ? GLASS_SCRIM : 1f));
++        setBlur(mProgress);
+         if (panel != null) panel.setTranslationX(-(1f - mProgress) * (mPanelWidth > 0 ? mPanelWidth : panel.getWidth()));
+         View page = mActivity.findViewById(R.id.compositor_view_holder);
+         if (page != null) page.setTranslationX(mProgress * dp(PAGE_SHIFT_DP));
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
+index 18d7641f488..bb224c9a49f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
+@@ -111,7 +111,8 @@ public final class BareSettingsLayout {
+                                             "homepage",
+                                             "bare_toolbar_shortcut",
+                                             "bare_toolbar",
+-                                            "bare_app_icon"),
++                                            "bare_app_icon",
++                                            "bare_glass"),
+                                     new Entry(
+                                             "privacy",
+                                             R.string.bare_settings_cat_privacy,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+index fed7f3d61f1..e155cc720c5 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+@@ -138,6 +138,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
+     public static final String PREF_BARE_UPDATES = "bare_check_for_updates";
+     public static final String PREF_BARE_OPEN_LINKS_IN_APPS = "bare_open_links_in_apps";
+     public static final String PREF_BARE_APP_ICON = "bare_app_icon";
++    private static final String PREF_BARE_GLASS = "bare_glass";
+     private static final String PREF_BARE_THEME = "bare_ui_theme";
+     private static final String PREF_BARE_SHORTCUT = "bare_toolbar_shortcut";
+     private static final String PREF_BARE_TOOLBAR = "bare_toolbar";
+@@ -489,6 +490,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
+         setUpUpdateRow();
+         setUpOpenLinksInAppsRow();
+         setUpAppIconRow();
++        setUpGlassRow();
+ 
+         cachePreferences();
+         updateAutofillPreferences();
+@@ -1064,6 +1066,21 @@ public class MainSettings extends ChromeBaseSettingsFragment
+                 });
+     }
+ 
++    /** The switch for frosted glass. On unless the user turned it off. */
++    private void setUpGlassRow() {
++        ChromeSwitchPreference row = (ChromeSwitchPreference) findPreference(PREF_BARE_GLASS);
++        if (row == null) return;
++        row.setChecked(
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_GLASS, true));
++        row.setOnPreferenceChangeListener(
++                (pref, newValue) -> {
++                    ChromeSharedPreferences.getInstance()
++                            .writeBoolean(ChromePreferenceKeys.BARE_GLASS, (boolean) newValue);
++                    return true;
++                });
++    }
++
+     /** The row for the app icon: it says which one is in use and opens the three to choose from. */
+     private void setUpAppIconRow() {
+         Preference row = findPreference(PREF_BARE_APP_ICON);
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index c2a977808e5..658d1291590 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -489,6 +489,9 @@ public final class ChromePreferenceKeys {
+     /** Whether pressing a toolbar button ticks. On unless the user turned it off. */
+     public static final String BARE_HAPTICS = "Bare.Haptics";
+ 
++    /** Whether panels are frosted glass where the system allows it. On unless turned off. */
++    public static final String BARE_GLASS = "Bare.Glass";
++
+     /** Whether screenshots are blocked in Incognito. Off unless the user turned it on. */
+     public static final String BARE_INCOGNITO_BLOCK_SCREENSHOTS = "Bare.Incognito.BlockScreenshots";
+ 
+@@ -1405,6 +1408,7 @@ public final class ChromePreferenceKeys {
+                 BARE_INCOGNITO_FAILED_ATTEMPTS,
+                 BARE_INCOGNITO_QUIET_ENTRY,
+                 BARE_HAPTICS,
++                BARE_GLASS,
+                 BARE_INCOGNITO_BLOCK_SCREENSHOTS,
+                 BARE_INCOGNITO_ENTRY_HAPTIC,
+                 BARE_APP_MENU_EDIT_TIP_COUNT,
