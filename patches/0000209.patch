@@ -1,0 +1,33 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java b/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
+index 06f0fa32a74..488f040d11f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
+@@ -230,6 +230,11 @@ public class StatusBarColorController
+                         updateStatusBarColor();
+                     }
+ 
++                    @Override
++                    public void onBackgroundColorChanged(Tab tab, int color) {
++                        updateStatusBarColor();
++                    }
++
+                     @Override
+                     public void onContentChanged(Tab tab) {
+                         final boolean newShouldUpdateStatusBarColorForNtp = isStandardNtp();
+@@ -597,8 +602,14 @@ public class StatusBarColorController
+         // Return status bar color to match the toolbar.
+         // If the flag is enabled, we will use the toolbar color.
+         if (mToolbarColorChanged && !isBottomBarEnabledAndBottomControls()) return mToolbarColor;
+-        return mTopUiThemeColor.getThemeColorOrFallback(
+-                mCurrentTab, calculateDefaultStatusBarColor());
++        @ColorInt int fallback = calculateDefaultStatusBarColor();
++        @ColorInt int themeColor = mTopUiThemeColor.getThemeColorOrFallback(mCurrentTab, fallback);
++        // Bare: a page without a theme color shows its own background behind the status icons.
++        if (themeColor == fallback && mCurrentTab != null && !mCurrentTab.isNativePage()) {
++            @ColorInt int pageColor = mCurrentTab.getBackgroundColor();
++            if (Color.alpha(pageColor) == 255) return pageColor;
++        }
++        return themeColor;
+     }
+ 
+     /** Calculates the default status bar color based on the incognito state. */
