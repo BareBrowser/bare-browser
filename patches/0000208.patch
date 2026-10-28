@@ -1,0 +1,143 @@
+diff --git a/chrome/browser/ui/android/toolbar/java/res/layout/toolbar_phone.xml b/chrome/browser/ui/android/toolbar/java/res/layout/toolbar_phone.xml
+index d6ed4755066..bb870697676 100644
+--- a/chrome/browser/ui/android/toolbar/java/res/layout/toolbar_phone.xml
++++ b/chrome/browser/ui/android/toolbar/java/res/layout/toolbar_phone.xml
+@@ -59,6 +59,19 @@ found in the LICENSE file.
+         android:focusable="false"
+         android:focusableInTouchMode="false">
+ 
++        <!-- Extensions toolbar. ToolbarManager only creates the
++             ExtensionsToolbarCoordinator when this stub is present in the control
++             container, so declaring it here enables the extensions menu (popups,
++             pinning, per-site permissions) on phone-sized layouts, which previously
++             had no way to reach it. Mirrors toolbar_tablet.xml. -->
++        <ViewStub
++            android:id="@+id/extensions_toolbar_container_stub"
++            android:inflatedId="@+id/extensions_toolbar_container"
++            android:layout_width="wrap_content"
++            android:layout_height="?attr/toolbarButtonHeight"
++            android:layout_gravity="top"
++            android:layout_marginVertical="?attr/toolbarButtonMarginVertical"/>
++
+         <ViewStub
+             android:id="@+id/optional_button_stub"
+             android:inflatedId="@+id/optional_toolbar_button_container"
+@@ -74,19 +87,6 @@ found in the LICENSE file.
+             android:layout_height="match_parent"
+             android:visibility="gone"/>
+ 
+-        <!-- Extensions toolbar. ToolbarManager only creates the
+-             ExtensionsToolbarCoordinator when this stub is present in the control
+-             container, so declaring it here enables the extensions menu (popups,
+-             pinning, per-site permissions) on phone-sized layouts, which previously
+-             had no way to reach it. Mirrors toolbar_tablet.xml. -->
+-        <ViewStub
+-            android:id="@+id/extensions_toolbar_container_stub"
+-            android:inflatedId="@+id/extensions_toolbar_container"
+-            android:layout_width="wrap_content"
+-            android:layout_height="?attr/toolbarButtonHeight"
+-            android:layout_gravity="top"
+-            android:layout_marginVertical="?attr/toolbarButtonMarginVertical"/>
+-
+         <org.chromium.chrome.browser.toolbar.top.ToggleTabStackButton
+             android:id="@+id/tab_switcher_button"
+             style="@style/ToolbarHoverableButton"
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+index 92aaa56f9bf..2b81ce92599 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+@@ -715,12 +715,67 @@ public class ToolbarPhone extends ToolbarLayout
+         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+     }
+ 
++    private int mBareLocationBarEndPadding = -1;
++    private int mBareUrlBarEndPadding = -1;
++
++    /**
++     * Lays out the address bar ends on the full toolbar as name, extensions icon, share icon, with
++     * the same inset on the right as the back button has on the left. On the minimal layout the
++     * extensions icon sits at the end of the address bar.
++     */
++    private void applyExtensionsInsideLocationBar() {
++        View locationBar = findViewById(R.id.location_bar);
++        if (locationBar == null) return;
++        View urlBar = locationBar.findViewById(R.id.url_bar);
++        if (mBareLocationBarEndPadding < 0) {
++            mBareLocationBarEndPadding = locationBar.getPaddingEnd();
++            mBareUrlBarEndPadding = urlBar != null ? urlBar.getPaddingEnd() : 0;
++        }
++        float density = getResources().getDisplayMetrics().density;
++        int extensions = getExtensionsWidthInsideLocationBar();
++        boolean minimal = BottomBarConfigUtils.isMinimalLayout();
++        // The share slot is kept even when no share icon shows, so the extensions icon stays put.
++        int share = Math.round(52 * density);
++        int margin = extensions > 0 && !minimal ? mToolbarSidePadding + share : 0;
++        ViewGroup.MarginLayoutParams params =
++                (ViewGroup.MarginLayoutParams) mToolbarButtonsContainer.getLayoutParams();
++        if (params.getMarginEnd() != margin) {
++            params.setMarginEnd(margin);
++            mToolbarButtonsContainer.setLayoutParams(params);
++        }
++        int end = mBareLocationBarEndPadding;
++        if (extensions > 0) {
++            end = minimal ? end + extensions : Math.round(2 * density);
++        }
++        if (locationBar.getPaddingEnd() != end) {
++            locationBar.setPaddingRelative(
++                    locationBar.getPaddingStart(),
++                    locationBar.getPaddingTop(),
++                    end,
++                    locationBar.getPaddingBottom());
++        }
++        if (urlBar != null) {
++            int urlEnd = mBareUrlBarEndPadding;
++            if (extensions > 0 && !minimal) {
++                urlEnd += Math.max(0, extensions - Math.round(12 * density));
++            }
++            if (urlBar.getPaddingEnd() != urlEnd) {
++                urlBar.setPaddingRelative(
++                        urlBar.getPaddingStart(),
++                        urlBar.getPaddingTop(),
++                        urlEnd,
++                        urlBar.getPaddingBottom());
++            }
++        }
++    }
++
+     /**
+      * @return True if layout bar's unfocused width has changed, potentially causing updates to
+      *     visual elements. If this happens during measurement pass, then toolbar's layout needs to
+      *     be remeasured.
+      */
+     private boolean updateUnfocusedLocationBarLayoutParams() {
++        applyExtensionsInsideLocationBar();
+         int leftViewBounds = getViewBoundsLeftOfLocationBar(mVisualState);
+         int rightViewBounds = getViewBoundsRightOfLocationBar(mVisualState);
+ 
+@@ -913,9 +968,26 @@ public class ToolbarPhone extends ToolbarLayout
+             toolbarButtonsContainerWidth = mToolbarButtonsContainer.getWidth();
+         }
+ 
++        toolbarButtonsContainerWidth -= getExtensionsWidthInsideLocationBar();
+         return Math.max(mToolbarSidePaddingForNtp, toolbarButtonsContainerWidth);
+     }
+ 
++    /**
++     * Bare: on the full toolbar the extensions icon sits inside the address bar, next to the share
++     * icon, instead of past its right edge.
++     *
++     * @return The width of the extensions container when it is drawn inside the address bar, else 0.
++     */
++    private int getExtensionsWidthInsideLocationBar() {
++        if (!BottomBarConfigUtils.isMinimalLayout()
++                && !BottomBarConfigUtils.isBottomBarEnabled(getContext())) {
++            return 0;
++        }
++        View extensions = mToolbarButtonsContainer.findViewById(R.id.extensions_toolbar_container);
++        if (extensions == null || extensions.getVisibility() != View.VISIBLE) return 0;
++        return extensions.getMeasuredWidth();
++    }
++
+     private void updateToolbarBackground(@ColorInt int color) {
+         int fill = color;
+         if (Color.alpha(color) == 255
