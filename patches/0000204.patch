@@ -1,0 +1,211 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java
+index f3abeeb9460..0121d1a8576 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java
+@@ -14,7 +14,13 @@ import android.animation.ValueAnimator;
+ import android.app.Activity;
+ import android.content.Context;
+ import android.graphics.Bitmap;
++import android.graphics.Canvas;
+ import android.graphics.Matrix;
++import android.graphics.drawable.GradientDrawable;
++import android.view.Gravity;
++import android.util.TypedValue;
++import android.widget.LinearLayout;
++import android.widget.TextView;
+ import android.os.Handler;
+ import android.os.Looper;
+ import android.view.PixelCopy;
+@@ -37,6 +43,11 @@ import org.chromium.chrome.browser.bare.BareNtpAppearance;
+ import org.chromium.chrome.browser.hub.RoundedCornerAnimatorUtil;
+ import org.chromium.chrome.browser.hub.ShrinkExpandAnimator;
+ import org.chromium.chrome.browser.hub.ShrinkExpandImageView;
++import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
++import org.chromium.chrome.browser.profiles.Profile;
++import org.chromium.chrome.browser.profiles.ProfileManager;
++import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
++import org.chromium.components.search_engines.TemplateUrl;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.components.browser_ui.widget.animation.CancelAwareAnimatorListener;
+ import org.chromium.ui.animation.RunOnNextLayout;
+@@ -388,10 +399,164 @@ public class NewForegroundTabAnimationHostView extends FrameLayout implements Ru
+                                     Math.round(2 * context.getResources().getDisplayMetrics().density));
+                     sealParams.topMargin = barsParams.topMargin;
+                     addView(seal, sealParams);
++                    showNewTabAddressRow(context);
+                 },
+                 new Handler(Looper.getMainLooper()));
+     }
+ 
++    /**
++     * Bare: the real toolbar only changes when the new tab is selected at the end of the glide, so
++     * the old address and the share button would stay for all of it. This lays the address row of
++     * a new tab over the real one, wherever the address bar is, top or bottom, from the first
++     * frame, and takes it away when the glide is over.
++     */
++    private void showNewTabAddressRow(Context context) {
++        View decor = getRootView();
++        View addressBar = decor.findViewById(R.id.control_container);
++        if (addressBar == null
++                || addressBar.getHeight() <= 0
++                || !addressBar.isShown()
++                || !(decor instanceof ViewGroup decorGroup)) {
++            return;
++        }
++        float density = context.getResources().getDisplayMetrics().density;
++        int rowWidth = addressBar.getWidth();
++        int rowHeight = addressBar.getHeight();
++        int pillHeight = Math.round(40 * density);
++
++        FrameLayout row = new FrameLayout(context);
++        row.setBackgroundColor(SemanticColorUtils.getColorSurfaceContainerHigh(context));
++
++        LinearLayout pill = new LinearLayout(context);
++        pill.setOrientation(LinearLayout.HORIZONTAL);
++        pill.setGravity(Gravity.CENTER_VERTICAL);
++        GradientDrawable shape = new GradientDrawable();
++        shape.setCornerRadius(pillHeight / 2f);
++        shape.setColor(ContextCompat.getColor(context, R.color.toolbar_text_box_bg_color));
++        pill.setBackground(shape);
++
++        ImageView icon = new ImageView(context);
++        icon.setImageResource(R.drawable.ic_search_24dp);
++        icon.setColorFilter(SemanticColorUtils.getDefaultIconColor(context));
++        LinearLayout.LayoutParams iconParams =
++                new LinearLayout.LayoutParams(Math.round(24 * density), Math.round(24 * density));
++        iconParams.setMarginStart(Math.round(16 * density));
++        pill.addView(icon, iconParams);
++
++        TextView hint = new TextView(context);
++        hint.setText(newTabHint(context));
++        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
++        hint.setTextColor(SemanticColorUtils.getDefaultTextColorSecondary(context));
++        hint.setSingleLine(true);
++        LinearLayout.LayoutParams hintParams =
++                new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        hintParams.setMarginStart(Math.round(16 * density));
++        pill.addView(hint, hintParams);
++
++        FrameLayout.LayoutParams pillParams =
++                new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, pillHeight);
++        pillParams.gravity = Gravity.CENTER_VERTICAL;
++        int side = Math.round(16 * density);
++        pillParams.setMarginStart(side);
++        pillParams.setMarginEnd(side);
++        addKeptButtons(context, addressBar, row, pillParams, density);
++        row.addView(pill, pillParams);
++
++        int[] barAt = new int[2];
++        int[] decorAt = new int[2];
++        addressBar.getLocationInWindow(barAt);
++        decor.getLocationInWindow(decorAt);
++        int left = barAt[0] - decorAt[0];
++        int top = barAt[1] - decorAt[1];
++        row.measure(
++                View.MeasureSpec.makeMeasureSpec(rowWidth, View.MeasureSpec.EXACTLY),
++                View.MeasureSpec.makeMeasureSpec(rowHeight, View.MeasureSpec.EXACTLY));
++        row.layout(left, top, left + rowWidth, top + rowHeight);
++        decorGroup.getOverlay().add(row);
++        addOnAttachStateChangeListener(
++                new OnAttachStateChangeListener() {
++                    @Override
++                    public void onViewAttachedToWindow(View v) {}
++
++                    @Override
++                    public void onViewDetachedFromWindow(View v) {
++                        decorGroup.getOverlay().remove(row);
++                    }
++                });
++    }
++
++    /**
++     * With the address bar and the tab and menu buttons in one row (the minimal layout), the new
++     * tab keeps the buttons on both sides of the box. Copies them from the live bar and fits the
++     * box between them.
++     */
++    private static void addKeptButtons(
++            Context context,
++            View addressBar,
++            FrameLayout row,
++            FrameLayout.LayoutParams pillParams,
++            float density) {
++        View location = addressBar.findViewById(R.id.location_bar);
++        View tabs = addressBar.findViewById(R.id.tab_switcher_button);
++        if (location == null || tabs == null || !location.isShown() || !tabs.isShown()) {
++            return;
++        }
++        int[] barAt = new int[2];
++        int[] locationAt = new int[2];
++        int[] tabsAt = new int[2];
++        addressBar.getLocationInWindow(barAt);
++        location.getLocationInWindow(locationAt);
++        tabs.getLocationInWindow(tabsAt);
++        int locationLeft = locationAt[0] - barAt[0];
++        int tabsLeft = tabsAt[0] - barAt[0];
++        int width = addressBar.getWidth();
++        int height = addressBar.getHeight();
++        if (locationLeft <= 0 || tabsLeft <= locationLeft || tabsLeft >= width || height <= 0) {
++            return;
++        }
++        Bitmap copy = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
++        addressBar.draw(new Canvas(copy));
++        row.setBackgroundColor(copy.getPixel(1, 1));
++        addPiece(context, row, Bitmap.createBitmap(copy, 0, 0, locationLeft, height), 0);
++        addPiece(
++                context,
++                row,
++                Bitmap.createBitmap(copy, tabsLeft, 0, width - tabsLeft, height),
++                tabsLeft);
++        int gap = Math.round(8 * density);
++        pillParams.setMarginStart(locationLeft);
++        pillParams.setMarginEnd(width - tabsLeft + gap);
++    }
++
++    private static void addPiece(Context context, FrameLayout row, Bitmap piece, int left) {
++        ImageView view = new ImageView(context);
++        view.setImageBitmap(piece);
++        FrameLayout.LayoutParams params =
++                new FrameLayout.LayoutParams(piece.getWidth(), piece.getHeight());
++        params.leftMargin = left;
++        row.addView(view, params);
++    }
++
++    /** The hint the address bar of a new tab shows, with the name of the search engine. */
++    private static String newTabHint(Context context) {
++        try {
++            Profile profile = ProfileManager.getLastUsedRegularProfile();
++            TemplateUrl engine =
++                    TemplateUrlServiceFactory.getForProfile(profile)
++                            .getDefaultSearchEngineTemplateUrl();
++            if (engine != null) {
++                return OmniboxResourceProvider.getString(
++                        context,
++                        org.chromium.chrome.browser.omnibox.R.string.omnibox_empty_hint_with_dse_name,
++                        engine.getShortName());
++            }
++        } catch (RuntimeException e) {
++            // Without the engine name the row simply shows no hint.
++        }
++        return "";
++    }
++
+     private int getLocationOnWindowTop() {
+         int[] at = new int[2];
+         getLocationInWindow(at);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/hub/HubLayout.java b/chrome/android/java/src/org/chromium/chrome/browser/hub/HubLayout.java
+index 8255c98ea18..6a5854c30cb 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/hub/HubLayout.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/hub/HubLayout.java
+@@ -577,7 +577,10 @@ public class HubLayout extends Layout implements HubLayoutController, AppHeaderO
+         // Skip animation:
+         // * If ContainerView is not laid out there will be no geometry for an animation.
+         // * For LFF devices which don't have new tab animations in the tab switcher.
+-        if (!containerView.isLaidOut()
++        // Bare: no card grows over the switcher for a new tab. The switcher fades out, the same
++        // as when any tab is opened from it.
++        if (true
++                || !containerView.isLaidOut()
+                 || DeviceFormFactor.isNonMultiDisplayContextOnTablet(context)) {
+             selectTabAndHideHubLayout(tabId);
+             return;
