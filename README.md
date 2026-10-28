@@ -11,7 +11,7 @@ work, and uBlock Origin comes installed.
 
 - Version: `2.0.0-beta.2`, a pre-release. versionCode `802000025` (arm64) and `802000020`
   (32-bit arm).
-- Base: Chromium `156.0.8078.25` (commit `12282315`).
+- Base: Chromium `156.0.8078.73` (commit `2f9a1109`).
 - Runs on: Android 10 or newer, on arm64 or 32-bit ARM. There is no x86 build.
 - Size: 209 patches, 35,945 insertions and 2,898 deletions across 731 files.
 

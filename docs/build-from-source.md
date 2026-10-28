@@ -41,7 +41,7 @@ git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git ~/dep
 mkdir -p /work/chromium && cd /work/chromium
 fetch --nohooks android
 cd src
-git checkout 1228231501697ff7a4a0150ea8ae6df37bb99331
+git checkout 2f9a11097447f226133bc1a31c787291a5eeab98
 gclient sync -D --force --reset
 ./build/install-build-deps.sh --android
 ```
