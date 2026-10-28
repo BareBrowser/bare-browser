@@ -1,0 +1,204 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java
+index d1ebe2e244a..c45148d5c04 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java
+@@ -58,6 +58,7 @@ import org.chromium.chrome.browser.language.GlobalAppLocaleController;
+ import org.chromium.chrome.browser.night_mode.GlobalNightModeStateProviderHolder;
+ import org.chromium.chrome.browser.night_mode.NightModeStateProvider;
+ import org.chromium.chrome.browser.night_mode.NightModeUtils;
++import org.chromium.chrome.browser.logo.BareAnimatedLogo;
+ import org.chromium.chrome.browser.night_mode.ThemeSwitchOverlay;
+ import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
+ import org.chromium.chrome.browser.ntp_customization.theme.NtpThemeStateProvider;
+@@ -272,7 +273,10 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
+         super.onStart();
+         // After Chromium's own inflation, which requests window features and would throw if
+         // content had already been added, but still before the first frame is drawn.
+-        ThemeSwitchOverlay.coverUntilDrawn(this);
++        ThemeSwitchOverlay.coverUntilDrawn(
++                this,
++                () -> BareAnimatedLogo.canvasLeaf(this, 144, /* incognito= */ false),
++                SemanticColorUtils.getColorSurfaceContainerHigh(this));
+ 
+         if (NtpCustomizationUtils.isNtpThemeCustomizationEnabled()) {
+             if (mNtpThemeStateObserver == null) {
+@@ -657,7 +661,10 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
+     @Override
+     public void onNightModeStateChanged() {
+         if (isFinishing()) return;
+-        ThemeSwitchOverlay.coverBeforeRelaunch(this);
++        ThemeSwitchOverlay.coverBeforeRelaunch(
++                this,
++                () -> BareAnimatedLogo.canvasLeaf(this, 144, /* incognito= */ false),
++                SemanticColorUtils.getColorSurfaceContainerHigh(this));
+         recreate();
+     }
+ 
+diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/ThemeSwitchOverlay.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/ThemeSwitchOverlay.java
+index 3853b0bab27..77e4ed6e7b0 100644
+--- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/ThemeSwitchOverlay.java
++++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/ThemeSwitchOverlay.java
+@@ -4,22 +4,24 @@
+ 
+ package org.chromium.chrome.browser.night_mode;
+ 
+-import android.animation.ValueAnimator;
+ import android.app.Activity;
+ import android.content.Context;
+-import android.graphics.Color;
+-import android.graphics.drawable.GradientDrawable;
++import android.graphics.drawable.Drawable;
+ import android.os.SystemClock;
+ import android.provider.Settings;
+-import android.util.TypedValue;
+ import android.view.Gravity;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.FrameLayout;
++import android.widget.ImageView;
++
++import androidx.annotation.ColorInt;
+ 
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ 
++import java.util.function.Supplier;
++
+ /**
+  * Covers the activity relaunch that a theme change causes.
+  *
+@@ -39,14 +41,13 @@ public class ThemeSwitchOverlay {
+     /** How long a pending switch stays valid, in case an activity never comes back. */
+     private static final long PENDING_TIMEOUT_MS = 4000;
+ 
+-    private static final int CIRCLE_DP = 96;
+-    private static final int RING_DP = 7;
+-    private static final int CIRCLE_FILL = 0xFF2563EB;
+-    private static final int RING_COLOR = 0xFFFFFFFF;
++    private static final int MARK_DP = 144;
+ 
+     private static final int FADE_IN_MS = 120;
+-    private static final int FADE_OUT_MS = 220;
+-    private static final int PULSE_MS = 900;
++    private static final int FADE_OUT_MS = 320;
++
++    /** The cover stays up at least this long from the moment the theme was changed. */
++    private static final long MIN_VISIBLE_MS = 1500;
+ 
+     private static long sPendingSinceMs;
+ 
+@@ -71,9 +72,10 @@ public class ThemeSwitchOverlay {
+      * Puts the cover up on an activity that is about to be relaunched, so the system snapshot
+      * captures it rather than the old theme.
+      */
+-    public static void coverBeforeRelaunch(Activity activity) {
++    public static void coverBeforeRelaunch(
++            Activity activity, Supplier<Drawable> mark, @ColorInt int background) {
+         if (animationsAreOff(activity)) return;
+-        View cover = build(activity);
++        View cover = build(activity, mark.get(), background);
+         if (cover == null) return;
+         cover.setAlpha(0f);
+         cover.animate().alpha(1f).setDuration(FADE_IN_MS).start();
+@@ -83,9 +85,10 @@ public class ThemeSwitchOverlay {
+      * Puts the cover up on a freshly built activity and takes it away once the real UI has drawn.
+      * Does nothing unless a theme change is actually in flight.
+      */
+-    public static void coverUntilDrawn(Activity activity) {
++    public static void coverUntilDrawn(
++            Activity activity, Supplier<Drawable> mark, @ColorInt int background) {
+         if (!isPending() || animationsAreOff(activity)) return;
+-        final View cover = build(activity);
++        final View cover = build(activity, mark.get(), background);
+         if (cover == null) return;
+ 
+         final View content = activity.findViewById(android.R.id.content);
+@@ -93,58 +96,34 @@ public class ThemeSwitchOverlay {
+             remove(cover);
+             return;
+         }
++        long shown = SystemClock.elapsedRealtime() - sPendingSinceMs;
++        long wait = Math.max(0, MIN_VISIBLE_MS - shown);
+         content.post(
+                 () ->
+                         cover.animate()
+                                 .alpha(0f)
++                                .setStartDelay(wait)
+                                 .setDuration(FADE_OUT_MS)
+                                 .withEndAction(() -> remove(cover))
+                                 .start());
+     }
+ 
+-    private static @Nullable View build(Activity activity) {
++    private static @Nullable View build(Activity activity, Drawable mark, @ColorInt int background) {
+         ViewGroup root = activity.findViewById(android.R.id.content);
+         if (root == null) return null;
+ 
+         FrameLayout cover = new FrameLayout(activity);
+-        cover.setBackgroundColor(windowBackground(activity));
++        cover.setBackgroundColor(background);
+         cover.setClickable(true);
+ 
+-        View mark = new View(activity);
+-        GradientDrawable circle = new GradientDrawable();
+-        circle.setShape(GradientDrawable.OVAL);
+-        circle.setColor(CIRCLE_FILL);
+-        circle.setStroke(dp(activity, RING_DP), RING_COLOR);
+-        mark.setBackground(circle);
+-
+-        int size = dp(activity, CIRCLE_DP);
++        // The leaf moves by itself, slowly: the snapshot freezes whatever frame it catches, so
++        // anything faster would read as a stalled animation while the relaunch happens.
++        ImageView leaf = new ImageView(activity);
++        leaf.setImageDrawable(mark);
++        int size = dp(activity, MARK_DP);
+         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(size, size);
+         lp.gravity = Gravity.CENTER;
+-        cover.addView(mark, lp);
+-
+-        // A slow breath rather than a spinner: the snapshot freezes whatever frame it catches,
+-        // so anything faster would read as a stalled animation while the relaunch happens.
+-        ValueAnimator pulse = ValueAnimator.ofFloat(0.94f, 1.04f);
+-        pulse.setDuration(PULSE_MS);
+-        pulse.setRepeatMode(ValueAnimator.REVERSE);
+-        pulse.setRepeatCount(ValueAnimator.INFINITE);
+-        pulse.addUpdateListener(
+-                a -> {
+-                    float s = (float) a.getAnimatedValue();
+-                    mark.setScaleX(s);
+-                    mark.setScaleY(s);
+-                });
+-        pulse.start();
+-        mark.addOnAttachStateChangeListener(
+-                new View.OnAttachStateChangeListener() {
+-                    @Override
+-                    public void onViewAttachedToWindow(View v) {}
+-
+-                    @Override
+-                    public void onViewDetachedFromWindow(View v) {
+-                        pulse.cancel();
+-                    }
+-                });
++        cover.addView(leaf, lp);
+ 
+         root.addView(
+                 cover,
+@@ -159,18 +138,6 @@ public class ThemeSwitchOverlay {
+         if (parent != null) parent.removeView(cover);
+     }
+ 
+-    private static int windowBackground(Activity activity) {
+-        TypedValue value = new TypedValue();
+-        if (activity.getTheme().resolveAttribute(android.R.attr.colorBackground, value, true)) {
+-            if (value.type >= TypedValue.TYPE_FIRST_COLOR_INT
+-                    && value.type <= TypedValue.TYPE_LAST_COLOR_INT) {
+-                return value.data;
+-            }
+-            if (value.resourceId != 0) return activity.getColor(value.resourceId);
+-        }
+-        return Color.BLACK;
+-    }
+-
+     private static int dp(Context context, int value) {
+         return Math.round(value * context.getResources().getDisplayMetrics().density);
+     }
