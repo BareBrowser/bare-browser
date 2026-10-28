@@ -1,0 +1,40 @@
+diff --git a/cc/base/features.cc b/cc/base/features.cc
+index ab8882d928a..80947a0f2a6 100644
+--- a/cc/base/features.cc
++++ b/cc/base/features.cc
+@@ -306,13 +306,9 @@ BASE_FEATURE(kBrowserControlsHeightChangeCancelAnimations,
+ // Killswitch for disabling Webview scheduler state machine.
+ BASE_FEATURE(kWebviewSchedulerStateMachine, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
++// Bare: the bars follow the finger as it moves instead of waiting and then animating.
+ BASE_FEATURE(kBrowserControlsScrollSnapAnimation,
+-#if BUILDFLAG(IS_ANDROID)
+-             base::FEATURE_ENABLED_BY_DEFAULT
+-#else
+-             base::FEATURE_DISABLED_BY_DEFAULT
+-#endif
+-);
++             base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ BASE_FEATURE(kSelectionEdgeVisibilityUsesFullEdge,
+              base::FEATURE_ENABLED_BY_DEFAULT);
+diff --git a/cc/input/browser_controls_offset_manager.cc b/cc/input/browser_controls_offset_manager.cc
+index 02c89c5ab86..7abe434c94c 100644
+--- a/cc/input/browser_controls_offset_manager.cc
++++ b/cc/input/browser_controls_offset_manager.cc
+@@ -656,7 +656,14 @@ void BrowserControlsOffsetManager::ScrollBegin() {
+ }
+ 
+ float BrowserControlsOffsetManager::MaximumShownRatioDeltaPerFrame(
+-    float min_ratio) const {
++    [[maybe_unused]] float min_ratio) const {
++  // Bare: the bars follow the finger, but never faster than a full show or hide in this long,
++  // so a hard flick still ends with the bars gliding in or out rather than jumping.
++  constexpr float kBareMinFullTravelMs = 300.0f;
++  const float bare_frame_ms = client_->CurrentFrameInterval().InMillisecondsF();
++  if (bare_frame_ms > 0.0f) {
++    return std::min(1.0f, bare_frame_ms / kBareMinFullTravelMs);
++  }
+   if (!base::FeatureList::IsEnabled(features::kBrowserControlsSmoothScroll)) {
+     return 1.0f;
+   }
