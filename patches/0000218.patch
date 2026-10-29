@@ -1,0 +1,111 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index 16f0825d8e0..e8f90bfab44 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -4484,6 +4484,23 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                 .closeTabs(TabClosureParams.closeAllTabs().build(), /* allowDialog= */ false);
+     }
+ 
++    /**
++     * Bare: a new tab opened from the button, the menu or the keyboard starts with the address bar
++     * focused and the keyboard up. Posted, so it runs once the new tab is the current one.
++     */
++    private void focusAddressBarOnNewTab() {
++        getWindow()
++                .getDecorView()
++                .post(
++                        () -> {
++                            if (isFinishing() || isDestroyed()) return;
++                            var toolbarManager = getToolbarManager();
++                            if (toolbarManager == null || !isTabNtp(getActivityTab())) return;
++                            toolbarManager.focusAndSelectAllUrlBarText(
++                                    OmniboxFocusReason.MENU_OR_KEYBOARD_ACTION);
++                        });
++    }
++
+     @Override
+     public boolean onMenuOrKeyboardAction(
+             final int id,
+@@ -4503,6 +4520,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+             reportNewTabShortcutUsed(false);
+             if (fromMenu) RecordUserAction.record("MobileMenuNewTab.AppMenu");
+             TabCreatorUtil.launchNtp(getTabCreator(/* incognito= */ false));
++            focusAddressBarOnNewTab();
+ 
+             mLocaleManager.showSearchEnginePromoIfNeeded(this, null);
+         } else if (id == R.id.new_incognito_tab_menu_id) {
+@@ -4520,6 +4538,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                 reportNewTabShortcutUsed(true);
+                 if (fromMenu) RecordUserAction.record("MobileMenuNewIncognitoTab.AppMenu");
+                 TabCreatorUtil.launchNtp(getTabCreator(/* incognito= */ true));
++                focusAddressBarOnNewTab();
+                 Tracker tracker = TrackerFactory.getTrackerForProfile(profile);
+                 tracker.notifyEvent(EventConstants.APP_MENU_NEW_INCOGNITO_TAB_CLICKED);
+             }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+index 32a10f97e98..6767be7973f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+@@ -63,6 +63,7 @@ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.logo.BareAnimatedLogo;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tab_ui.TabContentManager;
++import org.chromium.chrome.browser.app.ChromeActivity;
+ import org.chromium.chrome.browser.ui.actions.ActionHaptics;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.chrome.browser.tab.TabFavicon;
+@@ -875,6 +876,10 @@ public final class BareVerticalTabsDrawer {
+         TabCreatorManager creators = mCreatorsSupplier.get();
+         if (model == null || creators == null) return;
+         creators.getTabCreator(model.isIncognito()).launchNtp(TabLaunchType.FROM_CHROME_UI);
++        if (mActivity instanceof ChromeActivity chromeActivity
++                && chromeActivity.getToolbarManager() != null) {
++            chromeActivity.getToolbarManager().focusAddressBarOnNewTab();
++        }
+         close();
+     }
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index 75c7fdf0e9f..dba235991dc 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -2506,6 +2506,23 @@ public class ToolbarManager
+     /**
+      * @return Whether the UrlBar currently has focus.
+      */
++    /**
++     * Bare: a new tab opened from the bottom bar starts with the address bar focused and the
++     * keyboard up. Posted, so it runs once the new tab is the current one.
++     */
++    public void focusAddressBarOnNewTab() {
++        mActivity
++                .getWindow()
++                .getDecorView()
++                .post(
++                        () -> {
++                            if (mActivity.isFinishing() || mActivity.isDestroyed()) return;
++                            Tab tab = mActivityTabProvider.get();
++                            if (tab == null || !UrlUtilities.isNtpUrl(tab.getUrl())) return;
++                            focusAndSelectAllUrlBarText(OmniboxFocusReason.MENU_OR_KEYBOARD_ACTION);
++                        });
++    }
++
+     public boolean isUrlBarFocused() {
+         if (mLocationBar == null || mLocationBar.getOmniboxStub() == null) {
+             return false;
+@@ -2736,6 +2753,7 @@ public class ToolbarManager
+                         TabCreatorUtil.launchNtp(
+                                 mTabCreatorManager.getTabCreator(
+                                         tabModelSelector.isIncognitoSelected()));
++                        focusAddressBarOnNewTab();
+                     });
+ 
+             // De-Googled build: the bottom bar's spare slot toggles incognito mode.
+@@ -2754,6 +2772,7 @@ public class ToolbarManager
+                                             == 0) {
+                                 TabCreatorUtil.launchNtp(
+                                         mTabCreatorManager.getTabCreator(/* incognito= */ true));
++                                focusAddressBarOnNewTab();
+                             } else {
+                                 tabModelSelector.selectModel(goingIncognito);
+                             }

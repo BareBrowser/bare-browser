@@ -1,6 +1,6 @@
 # The patch series
 
-The series in [`patches/`](../patches) is 215 files, `0000001.patch` to `0000216.patch`, numbered
+The series in [`patches/`](../patches) is 217 files, `0000001.patch` to `0000218.patch`, numbered
 in the order they apply. The files carry no descriptions.
 
 From a clean Chromium checkout at the pinned revision, apply all of them in one command:

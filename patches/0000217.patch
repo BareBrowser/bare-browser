@@ -1,0 +1,347 @@
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 29bfe4bd40e..7b8d0c93ba2 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -489,6 +489,7 @@ chrome_java_resources = [
+   "java/res/layout/bare_welcome_chooser_row.xml",
+   "java/res/layout/bare_welcome_option_row.xml",
+   "java/res/layout/bare_welcome_overlay.xml",
++  "java/res/layout/bare_whats_new_overlay.xml",
+   "java/res/drawable/bare_welcome_button_primary.xml",
+   "java/res/drawable/bare_welcome_button_soft.xml",
+   "java/res/drawable/bare_welcome_dot.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 74ece9a686a..84e7799142f 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -276,6 +276,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java",
+   "java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java",
+   "java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java",
++  "java/src/org/chromium/chrome/browser/bare/BareWhatsNewOverlay.java",
+   "java/src/org/chromium/chrome/browser/background_sync/BackgroundSyncBackgroundTask.java",
+   "java/src/org/chromium/chrome/browser/background_sync/BackgroundSyncBackgroundTaskScheduler.java",
+   "java/src/org/chromium/chrome/browser/background_sync/GooglePlayServicesChecker.java",
+diff --git a/chrome/android/java/res/layout/bare_whats_new_overlay.xml b/chrome/android/java/res/layout/bare_whats_new_overlay.xml
+new file mode 100644
+index 00000000000..5c9b9cec9cd
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_whats_new_overlay.xml
+@@ -0,0 +1,100 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<!-- Shown once after an update, in place of the welcome: the logo, the version, a link to
++     what changed, and Continue. The list is filled in code. -->
++<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
++    android:id="@+id/bare_whats_new_root"
++    android:layout_width="match_parent"
++    android:layout_height="match_parent"
++    android:background="@color/bare_welcome_bg"
++    android:clickable="true"
++    android:focusable="false">
++
++    <ScrollView
++        android:layout_width="match_parent"
++        android:layout_height="match_parent"
++        android:fillViewport="true">
++
++        <LinearLayout
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:orientation="vertical"
++            android:gravity="center_horizontal|center_vertical"
++            android:paddingStart="32dp"
++            android:paddingTop="24dp"
++            android:paddingEnd="32dp"
++            android:paddingBottom="96dp">
++
++            <org.chromium.chrome.browser.logo.BareAnimatedLogoView
++                android:layout_width="96dp"
++                android:layout_height="96dp"
++                android:importantForAccessibility="no" />
++
++            <TextView
++                android:id="@+id/bare_whats_new_title"
++                android:layout_width="wrap_content"
++                android:layout_height="wrap_content"
++                android:layout_marginTop="28dp"
++                android:accessibilityHeading="true"
++                android:text="@string/bare_whats_new_title"
++                android:textColor="@color/bare_welcome_title"
++                android:textSize="30sp"
++                android:fontFamily="sans-serif-medium" />
++
++            <TextView
++                android:id="@+id/bare_whats_new_version"
++                android:layout_width="wrap_content"
++                android:layout_height="wrap_content"
++                android:layout_marginTop="6dp"
++                android:textColor="@color/bare_welcome_body"
++                android:textSize="14sp" />
++
++            <TextView
++                android:id="@+id/bare_whats_new_link"
++                android:layout_width="wrap_content"
++                android:layout_height="wrap_content"
++                android:minHeight="48dp"
++                android:layout_marginTop="10dp"
++                android:paddingStart="16dp"
++                android:paddingEnd="16dp"
++                android:gravity="center"
++                android:background="?attr/selectableItemBackground"
++                android:clickable="true"
++                android:focusable="true"
++                android:text="@string/bare_whats_new_link"
++                android:textColor="@color/bare_welcome_accent"
++                android:textSize="15sp"
++                android:fontFamily="sans-serif-medium" />
++
++            <LinearLayout
++                android:id="@+id/bare_whats_new_list"
++                android:layout_width="match_parent"
++                android:layout_height="wrap_content"
++                android:layout_marginTop="18dp"
++                android:orientation="vertical"
++                android:visibility="gone" />
++        </LinearLayout>
++    </ScrollView>
++
++    <Button
++        android:id="@+id/bare_whats_new_continue"
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:layout_gravity="bottom"
++        android:layout_marginStart="24dp"
++        android:layout_marginEnd="24dp"
++        android:layout_marginBottom="24dp"
++        android:minHeight="52dp"
++        android:background="@drawable/bare_welcome_button_primary"
++        android:stateListAnimator="@null"
++        android:text="@string/bare_whats_new_continue"
++        android:textAllCaps="false"
++        android:textColor="@color/bare_welcome_on_accent"
++        android:textSize="15sp"
++        android:fontFamily="sans-serif-medium" />
++</FrameLayout>
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 81a66e6d6d9..713f01ea9df 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -164,6 +164,14 @@ found in the LICENSE file.
+     <string name="bare_welcome_in_san_francisco" translatable="false">in San Francisco</string>
+     <string name="bare_welcome_made_with_spoken" translatable="false">Made with love in San Francisco</string>
+     <string name="bare_welcome_start" translatable="false">Start</string>
++    <string name="bare_whats_new_title" translatable="false">Updated</string>
++    <string name="bare_whats_new_link" translatable="false">See what\'s new</string>
++    <string name="bare_whats_new_continue" translatable="false">Continue</string>
++    <string name="bare_whats_new_menu_left" translatable="false">Menu on the left, with the sidebar and menu following</string>
++    <string name="bare_whats_new_toolbar" translatable="false">A Toolbar page in Settings, with Keep toolbar visible</string>
++    <string name="bare_whats_new_new_tab" translatable="false">New tabs open ready to type</string>
++    <string name="bare_whats_new_security" translatable="false">Security update to Chromium %1$s</string>
++    <string name="bare_whats_new_more" translatable="false">And many more features and fixes</string>
+     <string name="bare_welcome_restart" translatable="false">Back to beginning</string>
+     <string name="bare_welcome_finish_caption" translatable="false">Everything can be changed later in Settings.</string>
+     <string name="bare_welcome_value_top" translatable="false">Top</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+index ee680e3de3d..efe9504bab6 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+@@ -177,13 +177,14 @@ public class BareWelcomeOverlay {
+ 
+     private BareWelcomeOverlay() {}
+ 
+-    /** Shows the welcome after install and after each update. Does nothing otherwise. */
++    /**
++     * Shows the welcome after a first install, and what changed after an update. Does nothing
++     * otherwise.
++     */
+     public static void maybeShow(Activity activity) {
+         SharedPreferences prefs = activity.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE);
+-        // Shown again after every update, so a build that adds a choice can ask about it rather
+-        // than deciding on the user's behalf. Two builds of one release share a version name, so
+-        // the test is the update time Android records for each install. Every row is seeded from
+-        // what is already set, so a second showing is a review and not a reset.
++        // Two builds of one release share a version name, so the test for having been shown is
++        // the update time Android records for each install.
+         @Nullable PackageInfo info = packageInfo(activity);
+         long installed = info == null ? 0 : info.lastUpdateTime;
+         if (installed != 0 && installed == prefs.getLong(KEY_SHOWN_FOR_INSTALL, 0)) return;
+@@ -202,6 +203,18 @@ public class BareWelcomeOverlay {
+         if (installed != 0 && installed == prefs.getLong(KEY_DRAFT_FOR_INSTALL, 0)) {
+             page = restoreDraft(prefs, choices);
+         }
++        // An update does not repeat the welcome. It shows what changed instead, once for each
++        // version, and records this install so the welcome is not offered for it.
++        if (finishedBefore) {
++            String updatedTo = info == null || info.versionName == null ? "" : info.versionName;
++            prefs.edit()
++                    .putBoolean(KEY_SHOWN, true)
++                    .putString(KEY_SHOWN_FOR_VERSION, updatedTo)
++                    .putLong(KEY_SHOWN_FOR_INSTALL, installed)
++                    .apply();
++            BareWhatsNewOverlay.maybeShow(activity, prefs, updatedTo);
++            return;
++        }
+         String version = info == null || info.versionName == null ? "" : info.versionName;
+         new Flow(activity, root, prefs, version, installed, choices).show(page);
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWhatsNewOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWhatsNewOverlay.java
+new file mode 100644
+index 00000000000..a5f675cae45
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWhatsNewOverlay.java
+@@ -0,0 +1,149 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.app.Activity;
++import android.content.SharedPreferences;
++import android.os.Build;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
++import androidx.core.graphics.Insets;
++import androidx.core.view.ViewCompat;
++import androidx.core.view.WindowInsetsCompat;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.base.version_info.VersionInfo;
++import org.chromium.chrome.R;
++
++/**
++ * What an update shows in place of the welcome: the logo, the version, a link to what changed and
++ * Continue. It is drawn over the browser, like the welcome, and shown once for each version.
++ */
++@NullMarked
++final class BareWhatsNewOverlay {
++    private static final String KEY_WHATS_NEW_FOR_VERSION = "whats_new_for_version";
++
++    private BareWhatsNewOverlay() {}
++
++    /** Shows the screen unless this version's has already been seen. */
++    static void maybeShow(Activity activity, SharedPreferences prefs, String version) {
++        if (version.equals(prefs.getString(KEY_WHATS_NEW_FOR_VERSION, ""))) return;
++        @Nullable ViewGroup root = activity.findViewById(android.R.id.content);
++        if (root == null) return;
++
++        View overlay =
++                LayoutInflater.from(activity).inflate(R.layout.bare_whats_new_overlay, root, false);
++        // Not part of the activity's saved state, like the welcome.
++        overlay.setSaveFromParentEnabled(false);
++        TextView versionView = overlay.findViewById(R.id.bare_whats_new_version);
++        versionView.setText(version);
++
++        TextView link = overlay.findViewById(R.id.bare_whats_new_link);
++        LinearLayout list = overlay.findViewById(R.id.bare_whats_new_list);
++        int[] lines = {
++            R.string.bare_whats_new_menu_left,
++            R.string.bare_whats_new_toolbar,
++            R.string.bare_whats_new_new_tab,
++        };
++        for (int line : lines) {
++            addLine(activity, list, activity.getString(line));
++        }
++        addLine(
++                activity,
++                list,
++                activity.getString(
++                        R.string.bare_whats_new_security, VersionInfo.getProductVersion()));
++        addLine(activity, list, activity.getString(R.string.bare_whats_new_more));
++        link.setOnClickListener(
++                v -> {
++                    link.setVisibility(View.GONE);
++                    list.setAlpha(0f);
++                    list.setVisibility(View.VISIBLE);
++                    list.animate().alpha(1f).setDuration(220).start();
++                });
++
++        View[] hiddenBehind = hideBrowserBehind(root);
++        Runnable dismiss =
++                () -> {
++                    prefs.edit().putString(KEY_WHATS_NEW_FOR_VERSION, version).apply();
++                    root.removeView(overlay);
++                    for (View behind : hiddenBehind) {
++                        behind.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
++                    }
++                };
++        overlay.findViewById(R.id.bare_whats_new_continue).setOnClickListener(v -> dismiss.run());
++
++        // The browser draws edge to edge, so keep the content clear of the system bars. The
++        // insets are read from the window, as the welcome does, because the browser consumes them.
++        overlay.addOnLayoutChangeListener(
++                (view, l, t, r, b, oldL, oldT, oldR, oldB) -> {
++                    WindowInsetsCompat insets = ViewCompat.getRootWindowInsets(view);
++                    if (insets == null) return;
++                    Insets bars =
++                            insets.getInsets(
++                                    WindowInsetsCompat.Type.systemBars()
++                                            | WindowInsetsCompat.Type.displayCutout());
++                    if (view.getPaddingTop() == bars.top
++                            && view.getPaddingBottom() == bars.bottom
++                            && view.getPaddingLeft() == bars.left
++                            && view.getPaddingRight() == bars.right) {
++                        return;
++                    }
++                    view.post(() -> view.setPadding(bars.left, bars.top, bars.right, bars.bottom));
++                });
++        root.addView(overlay);
++
++        // The system splash would otherwise fade out over the screen; drop it at once.
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
++            activity.getSplashScreen()
++                    .setOnExitAnimationListener(splashView -> splashView.remove());
++        }
++    }
++
++    private static void addLine(Activity activity, LinearLayout list, String text) {
++        float density = activity.getResources().getDisplayMetrics().density;
++        LinearLayout row = new LinearLayout(activity);
++        row.setOrientation(LinearLayout.HORIZONTAL);
++        row.setGravity(android.view.Gravity.TOP);
++        LinearLayout.LayoutParams rowParams =
++                new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        rowParams.topMargin = Math.round(12 * density);
++        View dot = new View(activity);
++        dot.setBackgroundResource(R.drawable.bare_welcome_dot_active);
++        dot.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
++        LinearLayout.LayoutParams dotParams =
++                new LinearLayout.LayoutParams(Math.round(6 * density), Math.round(6 * density));
++        dotParams.topMargin = Math.round(8 * density);
++        dotParams.setMarginEnd(Math.round(14 * density));
++        row.addView(dot, dotParams);
++        TextView label = new TextView(activity);
++        label.setText(text);
++        label.setTextColor(activity.getColor(R.color.bare_welcome_body));
++        label.setTextSize(15);
++        label.setLineSpacing(0, 1.15f);
++        row.addView(
++                label,
++                new LinearLayout.LayoutParams(
++                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
++        list.addView(row, rowParams);
++    }
++
++    /** Keeps a screen reader on this screen, away from the browser it covers. */
++    private static View[] hideBrowserBehind(ViewGroup root) {
++        View[] behind = new View[root.getChildCount()];
++        for (int i = 0; i < behind.length; i++) {
++            behind[i] = root.getChildAt(i);
++            behind[i].setImportantForAccessibility(
++                    View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
++        }
++        return behind;
++    }
++}
