@@ -1,0 +1,417 @@
+diff --git a/chrome/android/java/res/xml/bare_toolbar_preferences.xml b/chrome/android/java/res/xml/bare_toolbar_preferences.xml
+index b4c98241914..ab2c180e961 100644
+--- a/chrome/android/java/res/xml/bare_toolbar_preferences.xml
++++ b/chrome/android/java/res/xml/bare_toolbar_preferences.xml
+@@ -42,21 +42,28 @@ found in the LICENSE file.
+             android:order="0"
+             android:selectable="false" />
+ 
++        <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++            android:key="bare_toolbar_menu_left"
++            android:order="1"
++            android:persistent="false"
++            android:title="@string/bare_toolbar_menu_left_title"
++            android:summary="@string/bare_toolbar_menu_left_summary" />
++
+         <ListPreference
+             android:key="bare_toolbar_swipe_action"
+-            android:order="1"
++            android:order="2"
+             android:title="@string/bare_toolbar_swipe_title" />
+ 
+         <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+             android:key="bare_address_bar_swipe_tabs"
+-            android:order="2"
++            android:order="3"
+             android:persistent="false"
+             android:title="@string/bare_address_bar_swipe_title"
+             android:summary="@string/bare_address_bar_swipe_summary" />
+ 
+         <Preference
+             android:key="bare_toolbar_reset"
+-            android:order="3"
++            android:order="4"
+             android:title="@string/bare_toolbar_settings_reset" />
+     </PreferenceCategory>
+ 
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 9dd2aca3cf2..81a66e6d6d9 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -26,6 +26,8 @@ found in the LICENSE file.
+     <string name="bare_welcome_yours_intro" translatable="false">Set up the essentials. You can change any of these later in Settings.</string>
+     <string name="bare_toolbar_general_title" translatable="false">General</string>
+     <string name="bare_toolbar_shortcuts_section" translatable="false">Shortcuts</string>
++    <string name="bare_toolbar_menu_left_title" translatable="false">Menu on the left</string>
++    <string name="bare_toolbar_menu_left_summary" translatable="false">Swaps the menu and the first button: menu on the left, sidebar on the right</string>
+     <string name="bare_toolbar_always_visible_title" translatable="false">Keep toolbar visible</string>
+     <string name="bare_toolbar_always_visible_summary" translatable="false">The toolbar stays on screen while you scroll, in both layouts</string>
+     <string name="bare_toolbar_preview_hint" translatable="false">Tap a button to choose what it does</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+index 9b6a88c4649..32a10f97e98 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+@@ -64,6 +64,7 @@ import org.chromium.chrome.browser.logo.BareAnimatedLogo;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tab_ui.TabContentManager;
+ import org.chromium.chrome.browser.ui.actions.ActionHaptics;
++import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.chrome.browser.tab.TabFavicon;
+ import org.chromium.chrome.browser.tab.TabLaunchType;
+ import org.chromium.chrome.browser.tab.TabSelectionType;
+@@ -125,6 +126,8 @@ public final class BareVerticalTabsDrawer {
+     private int mTopInset;
+     private int mBottomInset;
+     private int mPanelWidth;
++    /** 1 when the panel comes from the left edge, -1 from the right. */
++    private int mSide = 1;
+ 
+     private final TabModelObserver mModelObserver =
+             new TabModelObserver() {
+@@ -210,6 +213,7 @@ public final class BareVerticalTabsDrawer {
+         LinearLayoutManager layoutManager = mLayoutManager;
+         if (layoutManager != null) stackFromBottomIfListed(layoutManager);
+         applyListPlacement();
++        updateSide();
+         mScrollToSelected = true;
+         refresh();
+         // The window's insets are read directly: a parent in the activity may already have used
+@@ -564,6 +568,32 @@ public final class BareVerticalTabsDrawer {
+         setGrid(grid);
+     }
+ 
++    /**
++     * The panel comes from the side the sidebar button is on. That is the right edge when the menu
++     * is on the left of the bottom bar, and the left edge otherwise. Read each time the sidebar
++     * opens, so the setting applies at once.
++     */
++    private void updateSide() {
++        boolean rtl =
++                mActivity.getResources().getConfiguration().getLayoutDirection()
++                        == View.LAYOUT_DIRECTION_RTL;
++        boolean onRight =
++                BottomBarConfigUtils.isMenuOnLeft()
++                        && !BottomBarConfigUtils.isMinimalLayout()
++                        && !rtl;
++        mSide = onRight ? -1 : 1;
++        Panel panel = mPanel;
++        if (panel == null) return;
++        panel.setSide(mSide);
++        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) panel.getLayoutParams();
++        int gravity = onRight ? Gravity.RIGHT : Gravity.LEFT;
++        if (params.gravity != gravity) {
++            params.gravity = gravity;
++            panel.setLayoutParams(params);
++        }
++        applyProgress(mProgress);
++    }
++
+     private void sizePanel(int rootWidth) {
+         Panel panel = mPanel;
+         if (panel == null) return;
+@@ -732,15 +762,15 @@ public final class BareVerticalTabsDrawer {
+         Panel panel = mPanel;
+         if (scrim != null) scrim.setAlpha(mProgress * (mGlass ? GLASS_SCRIM : 1f));
+         setBlur(mProgress);
+-        if (panel != null) panel.setTranslationX(-(1f - mProgress) * (mPanelWidth > 0 ? mPanelWidth : panel.getWidth()));
++        if (panel != null) panel.setTranslationX(-mSide * (1f - mProgress) * (mPanelWidth > 0 ? mPanelWidth : panel.getWidth()));
+         View page = mActivity.findViewById(R.id.compositor_view_holder);
+-        if (page != null) page.setTranslationX(mProgress * dp(PAGE_SHIFT_DP));
++        if (page != null) page.setTranslationX(mSide * mProgress * dp(PAGE_SHIFT_DP));
+     }
+ 
+     private void dragTo(float dx) {
+         if (mAnimator != null) mAnimator.cancel();
+         int width = mPanelWidth > 0 ? mPanelWidth : 1;
+-        applyProgress(1f + Math.min(0f, dx) / width);
++        applyProgress(1f + Math.min(0f, dx * mSide) / width);
+     }
+ 
+     /**
+@@ -757,7 +787,7 @@ public final class BareVerticalTabsDrawer {
+ 
+     private void finishDrag(float dx, float velocityX) {
+         int width = mPanelWidth > 0 ? mPanelWidth : 1;
+-        boolean closeIt = velocityX < -dp(600) || dx < -width * 0.3f;
++        boolean closeIt = velocityX * mSide < -dp(600) || dx * mSide < -width * 0.3f;
+         if (closeIt) {
+             close();
+         } else {
+@@ -1239,7 +1269,7 @@ public final class BareVerticalTabsDrawer {
+         return card;
+     }
+ 
+-    /** The panel itself, which lets a deliberate swipe to the left drag it shut. */
++    /** The panel itself, which lets a deliberate swipe toward its edge drag it shut. */
+     private static final class Panel extends LinearLayout {
+         interface Drag {
+             void onDrag(float dx);
+@@ -1250,6 +1280,7 @@ public final class BareVerticalTabsDrawer {
+         }
+ 
+         private final int mSlop;
++        private int mSide = 1;
+         private float mDownX;
+         private float mDownY;
+         private boolean mDragging;
+@@ -1279,6 +1310,10 @@ public final class BareVerticalTabsDrawer {
+             onScreen.recycle();
+         }
+ 
++        void setSide(int side) {
++            mSide = side;
++        }
++
+         void setDragListener(Drag drag, Release release) {
+             mDrag = drag;
+             mRelease = release;
+@@ -1299,8 +1334,11 @@ public final class BareVerticalTabsDrawer {
+                     track(ev);
+                     float dx = ev.getRawX() - mDownX;
+                     float dy = ev.getRawY() - mDownY;
+-                    // Only a clearly sideways move to the left: vertical scrolling is not taken.
+-                    if (!mDragging && dx < -2 * mSlop && Math.abs(dx) > 1.6f * Math.abs(dy)) {
++                    // Only a clearly sideways move toward the edge the panel came from: vertical
++                    // scrolling is not taken.
++                    if (!mDragging
++                            && dx * mSide < -2 * mSlop
++                            && Math.abs(dx) > 1.6f * Math.abs(dy)) {
+                         mDragging = true;
+                         // Start from here so the panel does not jump by the slop.
+                         mDownX = ev.getRawX();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
+index 2068c0bd1cd..ec7aec570b8 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
+@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.bare.settings;
+ import android.content.Context;
+ import android.content.res.ColorStateList;
+ import android.view.View;
++import android.view.ViewGroup;
+ import android.widget.ImageView;
+ 
+ import androidx.core.widget.ImageViewCompat;
+@@ -17,6 +18,7 @@ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.ui.actions.ActionId;
+ import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
++import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ 
+ /**
+@@ -106,6 +108,18 @@ public final class BareToolbarPreviewBinder {
+ 
+         bindFixed(root, R.id.bare_preview_new_tab, ActionId.NEW_TAB, editable);
+         bindFixed(root, R.id.bare_preview_slot_app_menu, ActionId.APP_MENU, editable);
++
++        // The menu and the first button trade ends when the menu is on the left.
++        boolean menuLeft = BottomBarConfigUtils.isMenuOnLeft();
++        ViewGroup row = root.findViewById(R.id.bare_toolbar_preview_row);
++        View homeView = row.findViewById(R.id.bare_preview_slot_home);
++        View menuView = row.findViewById(R.id.bare_preview_slot_app_menu);
++        if ((row.indexOfChild(menuView) == 0) != menuLeft) {
++            row.removeView(homeView);
++            row.removeView(menuView);
++            row.addView(menuLeft ? menuView : homeView, 0);
++            row.addView(menuLeft ? homeView : menuView, 4);
++        }
+     }
+ 
+     /** A ring and a pencil on the buttons that can be changed, so they read as pressable. */
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+index 67fc12c20ea..0b095e2954e 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+@@ -49,6 +49,7 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+     static final String PREF_LAYOUT_PREVIEW = "bare_toolbar_layout_preview";
+     static final String PREF_MINIMAL = "bare_toolbar_minimal";
+     static final String PREF_ALWAYS_VISIBLE = "bare_toolbar_always_visible";
++    static final String PREF_MENU_LEFT = "bare_toolbar_menu_left";
+     static final String PREF_RESET = "bare_toolbar_reset";
+     static final String PREF_SWIPE = "bare_toolbar_swipe_action";
+     static final String PREF_ADDRESS_BAR_SWIPE = "bare_address_bar_swipe_tabs";
+@@ -70,6 +71,17 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+         initGeneralPrefs();
+         initSwipeActionPref();
+ 
++        ChromeSwitchPreference menuLeft = findPreference(PREF_MENU_LEFT);
++        assert menuLeft != null;
++        menuLeft.setChecked(BottomBarConfigUtils.isMenuOnLeft());
++        menuLeft.setOnPreferenceChangeListener(
++                (pref, newValue) -> {
++                    BottomBarConfigUtils.setMenuOnLeft((boolean) newValue);
++                    assert mPreview != null;
++                    mPreview.refresh();
++                    return true;
++                });
++
+         ChromeSwitchPreference addressBarSwipe = findPreference(PREF_ADDRESS_BAR_SWIPE);
+         assert addressBarSwipe != null;
+         addressBarSwipe.setChecked(BareToolbarSwipePrefs.isAddressBarSwipeEnabled());
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index bc853349941..45c07ceb431 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -441,6 +441,9 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_MINIMAL_LAYOUT = "Bare.Appearance.MinimalLayout";
+ 
++    /** Toolbar setting: the menu button on the left end of the bottom bar and the first button on the right. */
++    public static final String BARE_MENU_ON_LEFT = "Bare.Toolbar.MenuOnLeft";
++
+     /** Whether page translation through Google is on. Off until the user turns it on. */
+     public static final String BARE_PAGE_TRANSLATION = "Bare.Translate.PageTranslation";
+ 
+@@ -1430,6 +1433,7 @@ public final class ChromePreferenceKeys {
+                 BARE_NEW_ICON_UNLOCKED,
+                 BARE_NEW_ICON_IN_USE,
+                 BARE_MINIMAL_LAYOUT,
++                BARE_MENU_ON_LEFT,
+                 BARE_AMOLED_WHEN_SYSTEM_DARK,
+                 WEBSTORE_DESKTOP_SITE_CLEARED,
+                 WEBSTORE_DESKTOP_SITE_SEEDED,
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+index 6f6a86215b0..9871ff7423e 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+@@ -396,8 +396,16 @@ class AppMenu implements OnKeyListener {
+         popup.setOutsideTouchable(true);
+ 
+         if (!isByPermanentButton) {
++            boolean fromLeft =
++                    isFromBottomBar
++                            && isOnLeftHalf(
++                                    anchorView,
++                                    visibleDisplayFrame,
++                                    anchorView.getRootView().getLayoutDirection());
+             popup.setAnimationStyle(
+-                    isMenuIconAtStart
++                    fromLeft
++                            ? R.style.StartIconMenuAnimBottom
++                            : isMenuIconAtStart
+                             ? R.style.StartIconMenuAnim
+                             : (isFromBottomBar || controlsPosition == ControlsPosition.BOTTOM
+                                     ? R.style.EndIconMenuAnimBottom
+@@ -683,6 +691,17 @@ class AppMenu implements OnKeyListener {
+     }
+ 
+     @VisibleForTesting
++    /**
++     * Whether the button the menu opens from is on the left half of the window. The menu follows
++     * the button, so it opens on the left when the bar puts the menu button there.
++     */
++    static boolean isOnLeftHalf(View anchorView, Rect appRect, int viewLayoutDirection) {
++        if (anchorView.getWidth() <= 0) return viewLayoutDirection == View.LAYOUT_DIRECTION_RTL;
++        int[] location = new int[2];
++        anchorView.getLocationInWindow(location);
++        return location[0] + anchorView.getWidth() / 2 < appRect.centerX();
++    }
++
+     static int[] getPopupPosition(
+             int[] tempLocation,
+             boolean isByPermanentButton,
+@@ -734,7 +753,7 @@ class AppMenu implements OnKeyListener {
+                             .getDimensionPixelSize(R.dimen.bottom_bar_app_menu_lateral_margin);
+             // Adjust xPos by lateral padding so the visible menu boundary aligns with the margin.
+             int xPos =
+-                    (viewLayoutDirection == View.LAYOUT_DIRECTION_RTL)
++                    isOnLeftHalf(anchorView, appRect, viewLayoutDirection)
+                             ? appRect.left + margin - padding.left
+                             : appRect.right - margin - popupWidth + padding.right;
+             // Shift yPos down by bottom padding to align the visible menu with the anchor view.
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
+index 29ea722a4fe..939eac141a4 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
+@@ -62,6 +62,17 @@ public class BottomBarConfigUtils {
+                 .writeBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, minimal);
+     }
+ 
++    /** Whether the menu button sits on the left end of the bar, swapped with the first button. */
++    public static boolean isMenuOnLeft() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_MENU_ON_LEFT, false);
++    }
++
++    public static void setMenuOnLeft(boolean onLeft) {
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_MENU_ON_LEFT, onLeft);
++    }
++
+     /** Whether the stored choice is different from the layout this process started with. */
+     public static boolean isMinimalLayoutChangePending() {
+         return isMinimalLayoutChosen() != isMinimalLayout();
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
+index e22ac96a4f7..a2c784a5264 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
+@@ -165,7 +165,12 @@ public class BottomBarCoordinator
+             BottomBarView view, boolean shouldIncludeHomeButton) {
+         List<ActionConfig> configs = new ArrayList<>();
+ 
+-        for (int slot = 0; slot < BareToolbarSlot.COUNT; slot++) {
++        for (int position = 0; position < BareToolbarSlot.COUNT; position++) {
++            int slot = position;
++            if (BottomBarConfigUtils.isMenuOnLeft()) {
++                if (position == 0) slot = BareToolbarSlot.APP_MENU;
++                if (position == BareToolbarSlot.APP_MENU) slot = BareToolbarSlot.HOME;
++            }
+             if (slot == BareToolbarSlot.HOME && !shouldIncludeHomeButton) continue;
+             if (slot == BareToolbarSlot.APP_MENU
+                     && !BottomBarConfigUtils.shouldIncludeAppMenuButton()) {
+@@ -255,7 +260,8 @@ public class BottomBarCoordinator
+         boolean primary = ChromePreferenceKeys.BOTTOM_BAR_SLOT_PRIMARY_ACTION.hasGenerated(key);
+         boolean secondary =
+                 ChromePreferenceKeys.BOTTOM_BAR_SLOT_SECONDARY_ACTION.hasGenerated(key);
+-        if (!primary && !secondary) return;
++        boolean menuSide = ChromePreferenceKeys.BARE_MENU_ON_LEFT.equals(key);
++        if (!primary && !secondary && !menuSide) return;
+ 
+         // Off before the rebuild and on after it. The rebuild is what gives a button back its own
+         // behaviour on a hold, and anything this had added would otherwise still be sitting on top
+@@ -274,6 +280,7 @@ public class BottomBarCoordinator
+      */
+     private void rebuildArrangement() {
+         BareToolbarLayout.invalidate();
++        mView.applyMenuSide();
+         mButtonManager.rebuild(
+                 createActionConfigs(mView, mShouldIncludeHomeButton), ActionId.NEW_TAB);
+         mMediator.onArrangementChanged();
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java
+index b144011e282..173487c7368 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java
+@@ -102,6 +102,8 @@ public class BottomBarView extends LinearLayout {
+         mSlotContainers[BareToolbarSlot.TAB_SWITCHER] = mTabSwitcherContainer;
+         mSlotContainers[BareToolbarSlot.APP_MENU] = mAppMenuContainer;
+ 
++        applyMenuSide();
++
+         Context context = getContext();
+         mDisabledAlpha =
+                 ValueUtils.getFloat(context.getResources(), R.dimen.default_disabled_alpha);
+@@ -129,6 +131,24 @@ public class BottomBarView extends LinearLayout {
+         applyDynamicDimensions(context);
+     }
+ 
++    /**
++     * Puts the menu on the left end and the first button on the right end, or back, to match the
++     * setting. Only the two outer containers trade places; every slot keeps its own container.
++     */
++    public void applyMenuSide() {
++        boolean left = BottomBarConfigUtils.isMenuOnLeft();
++        if ((indexOfChild(mAppMenuContainer) == 0) == left) return;
++        removeView(mHomeContainer);
++        removeView(mAppMenuContainer);
++        if (left) {
++            addView(mAppMenuContainer, 0);
++            addView(mHomeContainer, 4);
++        } else {
++            addView(mHomeContainer, 0);
++            addView(mAppMenuContainer, 4);
++        }
++    }
++
+     /**
+      * Applies dynamic button vertical padding based on the configured bar height.
+      *

@@ -1,0 +1,69 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabStateBrowserControlsVisibilityDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabStateBrowserControlsVisibilityDelegate.java
+index aca2c0f6171..09ea9da313b 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabStateBrowserControlsVisibilityDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabStateBrowserControlsVisibilityDelegate.java
+@@ -26,6 +26,8 @@ import org.chromium.components.browser_ui.util.BrowserControlsVisibilityDelegate
+ import org.chromium.components.dom_distiller.core.DomDistillerUrlUtils;
+ import org.chromium.components.embedder_support.util.UrlUtilities;
+ import org.chromium.components.security_state.SecurityStateModel;
++import org.chromium.content_public.browser.GestureListenerManager;
++import org.chromium.content_public.browser.GestureStateListener;
+ import org.chromium.content_public.browser.ImeAdapter;
+ import org.chromium.content_public.browser.ImeEventObserver;
+ import org.chromium.content_public.browser.NavigationHandle;
+@@ -45,6 +47,18 @@ import java.util.Set;
+ public class TabStateBrowserControlsVisibilityDelegate extends BrowserControlsVisibilityDelegate
+         implements ImeEventObserver {
+     private static final String TAG = "BrowserControls";
++
++    // Ends the load hold as soon as the user starts scrolling.
++    private final GestureStateListener mBareScrollListener =
++            new GestureStateListener() {
++                @Override
++                public void onScrollStarted(
++                        int scrollOffsetY, int scrollExtentY, boolean isDirectionUp) {
++                    updateWaitingForLoad(false);
++                }
++            };
++    private @Nullable WebContents mBareScrollContents;
++
+     protected static final int MSG_ID_ENABLE_FULLSCREEN_AFTER_LOAD = 1;
+ 
+     /** The maximum amount of time to wait for a page to load before entering fullscreen. */
+@@ -262,6 +276,22 @@ public class TabStateBrowserControlsVisibilityDelegate extends BrowserControlsVi
+         if (mIsFullscreenWaitingForLoad == waiting) return;
+         mIsFullscreenWaitingForLoad = waiting;
+         updateVisibilityConstraints();
++        // Bare: a load shows the bars and holds them, but a scroll ends the hold, so a scroll right
++        // after a visit or a refresh still folds them.
++        if (mBareScrollContents != null) {
++            GestureListenerManager manager =
++                    GestureListenerManager.fromWebContents(mBareScrollContents);
++            if (manager != null) manager.removeListener(mBareScrollListener);
++            mBareScrollContents = null;
++        }
++        if (waiting && mTab.getWebContents() != null) {
++            GestureListenerManager manager =
++                    GestureListenerManager.fromWebContents(mTab.getWebContents());
++            if (manager != null) {
++                manager.addListener(mBareScrollListener);
++                mBareScrollContents = mTab.getWebContents();
++            }
++        }
+     }
+ 
+     private boolean enableHidingBrowserControls() {
+diff --git a/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/BrowserStateBrowserControlsVisibilityDelegate.java b/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/BrowserStateBrowserControlsVisibilityDelegate.java
+index df0b45aef03..ea498a567f1 100644
+--- a/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/BrowserStateBrowserControlsVisibilityDelegate.java
++++ b/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/BrowserStateBrowserControlsVisibilityDelegate.java
+@@ -28,7 +28,8 @@ import org.chromium.ui.util.TokenHolder;
+ public class BrowserStateBrowserControlsVisibilityDelegate extends BrowserControlsVisibilityDelegate
+         implements Destroyable {
+     /** Minimum duration (in milliseconds) that the controls are shown when requested. */
+-    @VisibleForTesting public static final long MINIMUM_SHOW_DURATION_MS = 3000;
++    // Bare: half a second, not three, so a scroll soon after a keyboard or tab change folds the bars.
++    @VisibleForTesting public static final long MINIMUM_SHOW_DURATION_MS = 500;
+ 
+     private static boolean sDisableOverridesForTesting;
+ 
