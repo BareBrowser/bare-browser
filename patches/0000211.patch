@@ -1,0 +1,109 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+index ac2b97f6e80..9b6a88c4649 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+@@ -24,6 +24,7 @@ import android.text.TextUtils;
+ import android.text.style.ForegroundColorSpan;
+ import android.util.TypedValue;
+ import android.view.Gravity;
++import android.view.HapticFeedbackConstants;
+ import android.view.MotionEvent;
+ import android.view.VelocityTracker;
+ import android.view.View;
+@@ -237,6 +238,7 @@ public final class BareVerticalTabsDrawer {
+                 0f,
+                 () -> {
+                     FrameLayout root = mRoot;
++                    if (root != null && !mOpen) foldHaptic(root);
+                     if (root != null && !mOpen) root.setVisibility(View.GONE);
+                     Dialog glass = mGlassWindow;
+                     if (glass != null && !mOpen && glass.isShowing()) glass.dismiss();
+@@ -741,6 +743,18 @@ public final class BareVerticalTabsDrawer {
+         applyProgress(1f + Math.min(0f, dx) / width);
+     }
+ 
++    /**
++     * A light click as the sidebar latches shut. It follows the phone's touch feedback setting and
++     * Bare's haptics switch, the same as the toolbar ticks.
++     */
++    private void foldHaptic(View view) {
++        if (!ActionHaptics.isEnabled()) return;
++        view.performHapticFeedback(
++                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
++                        ? HapticFeedbackConstants.GESTURE_END
++                        : HapticFeedbackConstants.KEYBOARD_TAP);
++    }
++
+     private void finishDrag(float dx, float velocityX) {
+         int width = mPanelWidth > 0 ? mPanelWidth : 1;
+         boolean closeIt = velocityX < -dp(600) || dx < -width * 0.3f;
+@@ -1253,6 +1267,18 @@ public final class BareVerticalTabsDrawer {
+             mDismiss = dismiss;
+         }
+ 
++        /**
++         * The panel moves under the finger while it follows a drag, so positions are taken on the
++         * screen, not in the panel's own coordinates, which would feed the motion back into itself.
++         */
++        private void track(MotionEvent ev) {
++            if (mTracker == null) return;
++            MotionEvent onScreen = MotionEvent.obtain(ev);
++            onScreen.setLocation(ev.getRawX(), ev.getRawY());
++            mTracker.addMovement(onScreen);
++            onScreen.recycle();
++        }
++
+         void setDragListener(Drag drag, Release release) {
+             mDrag = drag;
+             mRelease = release;
+@@ -1262,20 +1288,22 @@ public final class BareVerticalTabsDrawer {
+         public boolean onInterceptTouchEvent(MotionEvent ev) {
+             switch (ev.getActionMasked()) {
+                 case MotionEvent.ACTION_DOWN:
+-                    mDownX = ev.getX();
+-                    mDownY = ev.getY();
++                    mDownX = ev.getRawX();
++                    mDownY = ev.getRawY();
+                     mDragging = false;
+                     if (mTracker != null) mTracker.recycle();
+                     mTracker = VelocityTracker.obtain();
+-                    mTracker.addMovement(ev);
++                    track(ev);
+                     break;
+                 case MotionEvent.ACTION_MOVE:
+-                    if (mTracker != null) mTracker.addMovement(ev);
+-                    float dx = ev.getX() - mDownX;
+-                    float dy = ev.getY() - mDownY;
++                    track(ev);
++                    float dx = ev.getRawX() - mDownX;
++                    float dy = ev.getRawY() - mDownY;
+                     // Only a clearly sideways move to the left: vertical scrolling is not taken.
+                     if (!mDragging && dx < -2 * mSlop && Math.abs(dx) > 1.6f * Math.abs(dy)) {
+                         mDragging = true;
++                        // Start from here so the panel does not jump by the slop.
++                        mDownX = ev.getRawX();
+                         return true;
+                     }
+                     break;
+@@ -1287,10 +1315,10 @@ public final class BareVerticalTabsDrawer {
+ 
+         @Override
+         public boolean onTouchEvent(MotionEvent ev) {
+-            if (mTracker != null) mTracker.addMovement(ev);
++            track(ev);
+             switch (ev.getActionMasked()) {
+                 case MotionEvent.ACTION_MOVE:
+-                    if (mDragging && mDrag != null) mDrag.onDrag(ev.getX() - mDownX);
++                    if (mDragging && mDrag != null) mDrag.onDrag(ev.getRawX() - mDownX);
+                     return true;
+                 case MotionEvent.ACTION_UP:
+                 case MotionEvent.ACTION_CANCEL:
+@@ -1300,7 +1328,7 @@ public final class BareVerticalTabsDrawer {
+                             mTracker.computeCurrentVelocity(1000);
+                             velocity = mTracker.getXVelocity();
+                         }
+-                        mRelease.onRelease(ev.getX() - mDownX, velocity);
++                        mRelease.onRelease(ev.getRawX() - mDownX, velocity);
+                     }
+                     mDragging = false;
+                     if (mTracker != null) {

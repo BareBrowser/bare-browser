@@ -43,10 +43,10 @@ index d6ed4755066..bb870697676 100644
              android:id="@+id/tab_switcher_button"
              style="@style/ToolbarHoverableButton"
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
-index 92aaa56f9bf..2b81ce92599 100644
+index 92aaa56f9bf..7862d3011b9 100644
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
-@@ -715,12 +715,67 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -715,12 +715,97 @@ public class ToolbarPhone extends ToolbarLayout
          super.onMeasure(widthMeasureSpec, heightMeasureSpec);
      }
  
@@ -89,18 +89,48 @@ index 92aaa56f9bf..2b81ce92599 100644
 +                    end,
 +                    locationBar.getPaddingBottom());
 +        }
-+        if (urlBar != null) {
-+            int urlEnd = mBareUrlBarEndPadding;
-+            if (extensions > 0 && !minimal) {
-+                urlEnd += Math.max(0, extensions - Math.round(12 * density));
++    }
++
++    @Override
++    protected void onLayout(boolean changed, int l, int t, int r, int b) {
++        super.onLayout(changed, l, t, r, b);
++        keepUrlTextClearOfExtensions();
++    }
++
++    /**
++     * Stops the address text running under the extensions icon, by exactly as much as it would
++     * overlap. With no extensions icon the text keeps its normal room up to the share button, and a
++     * short name needs no padding at all.
++     */
++    private void keepUrlTextClearOfExtensions() {
++        View locationBar = findViewById(R.id.location_bar);
++        if (locationBar == null || mBareUrlBarEndPadding < 0) return;
++        View urlBar = locationBar.findViewById(R.id.url_bar);
++        if (urlBar == null) return;
++        int want = mBareUrlBarEndPadding;
++        if (getExtensionsWidthInsideLocationBar() > 0
++                && !BottomBarConfigUtils.isMinimalLayout()
++                && !urlBar.hasFocus()
++                && urlBar.getWidth() > 0) {
++            View container = mToolbarButtonsContainer.findViewById(R.id.extensions_toolbar_container);
++            if (container != null && container.getWidth() > 0) {
++                float density = getResources().getDisplayMetrics().density;
++                int[] urlAt = new int[2];
++                int[] containerAt = new int[2];
++                urlBar.getLocationInWindow(urlAt);
++                container.getLocationInWindow(containerAt);
++                // The icon sits in the middle of its box, 14dp in from the left edge.
++                int iconLeft = containerAt[0] + Math.round(14 * density);
++                int textRight = urlAt[0] + urlBar.getWidth() - mBareUrlBarEndPadding;
++                want += Math.max(0, textRight - (iconLeft - Math.round(8 * density)));
 +            }
-+            if (urlBar.getPaddingEnd() != urlEnd) {
-+                urlBar.setPaddingRelative(
-+                        urlBar.getPaddingStart(),
-+                        urlBar.getPaddingTop(),
-+                        urlEnd,
-+                        urlBar.getPaddingBottom());
-+            }
++        }
++        if (urlBar.getPaddingEnd() != want) {
++            urlBar.setPaddingRelative(
++                    urlBar.getPaddingStart(),
++                    urlBar.getPaddingTop(),
++                    want,
++                    urlBar.getPaddingBottom());
 +        }
 +    }
 +
@@ -114,7 +144,7 @@ index 92aaa56f9bf..2b81ce92599 100644
          int leftViewBounds = getViewBoundsLeftOfLocationBar(mVisualState);
          int rightViewBounds = getViewBoundsRightOfLocationBar(mVisualState);
  
-@@ -913,9 +968,26 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -913,9 +998,26 @@ public class ToolbarPhone extends ToolbarLayout
              toolbarButtonsContainerWidth = mToolbarButtonsContainer.getWidth();
          }
  
