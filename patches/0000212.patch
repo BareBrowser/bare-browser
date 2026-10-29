@@ -1,0 +1,47 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index 49399139680..75c7fdf0e9f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -2022,10 +2022,10 @@ public class ToolbarManager
+     }
+ 
+     private boolean shouldSuppressToolbarLongPress() {
++        // Bare: the New Tab Page has the real address bar, so the menu is offered there too.
+         return mOmniboxFocusStateSupplier.get()
+                 || (mToolbarPositionController != null
+-                        && mToolbarPositionController.doesPrefMismatchPosition())
+-                || (isNewTabPage() && !isIncognitoNewTabPageCurrentlyVisible());
++                        && mToolbarPositionController.doesPrefMismatchPosition());
+     }
+ 
+     private void back(int metaState, int buttonState) {
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java
+index 5bd90844ce9..665812c85fa 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java
+@@ -257,11 +257,20 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+                             .withMenuId(MenuItemType.MOVE_ADDRESS_BAR_TO)
+                             .build());
+         }
+-        itemList.add(
+-                new ListItemBuilder()
+-                        .withTitleRes(R.string.toolbar_copy_link)
+-                        .withMenuId(MenuItemType.COPY_LINK)
+-                        .build());
++        // Bare: there is no link to copy on the New Tab Page.
++        GURL current = mUrlSupplier.get();
++        String spec = current == null ? "" : current.getSpec();
++        boolean onNewTabPage =
++                spec.isEmpty()
++                        || spec.startsWith("chrome://newtab")
++                        || spec.startsWith("chrome-native://newtab");
++        if (!onNewTabPage) {
++            itemList.add(
++                    new ListItemBuilder()
++                            .withTitleRes(R.string.toolbar_copy_link)
++                            .withMenuId(MenuItemType.COPY_LINK)
++                            .build());
++        }
+         maybeAddSendTabToSelf(itemList);
+         // Bare: last, so the entries upstream has keep their positions.
+         if (mIsMinimalToggleAvailable) {
