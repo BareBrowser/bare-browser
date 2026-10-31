@@ -1,0 +1,1044 @@
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 92e6d0bbed0..832ed95d44a 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -268,7 +268,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BareLauncherIcon.java",
+   "java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java",
+   "java/src/org/chromium/chrome/browser/bare/BareMinimalLeftButton.java",
+-  "java/src/org/chromium/chrome/browser/bare/BareNtpAppearance.java",
++  "java/src/org/chromium/chrome/browser/bare/BareNewTabRise.java",
+   "java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java",
+   "java/src/org/chromium/chrome/browser/bare/BarePullOffset.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareMadeWithLovePreference.java",
+@@ -414,7 +414,6 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewBackgroundTabAnimationData.java",
+   "java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewBackgroundTabAnimationHostView.java",
+   "java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewBackgroundTabFakeTabSwitcherButton.java",
+-  "java/src/org/chromium/chrome/browser/compositor/layouts/phone/BareNewTabRiseView.java",
+   "java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java",
+   "java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewTabAnimationLayout.java",
+   "java/src/org/chromium/chrome/browser/compositor/overlay_panel/OverlayPanel.java",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index 3f120a5716f..4fbe66d210f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -108,6 +108,7 @@ import org.chromium.chrome.browser.auxiliary_search.module.AuxiliarySearchModule
+ import org.chromium.chrome.browser.back_press.BackPressManager;
+ import org.chromium.chrome.browser.bare.BareClearOnExit;
+ import org.chromium.chrome.browser.bare.BareClearVeil;
++import org.chromium.chrome.browser.bare.BareNewTabRise;
+ import org.chromium.chrome.browser.back_press.MinimizeAppAndCloseTabBackPressHandler;
+ import org.chromium.chrome.browser.back_press.MinimizeAppAndCloseTabBackPressHandler.MinimizeAppAndCloseTabType;
+ import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpenerImpl;
+@@ -4489,19 +4490,25 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+ 
+     /**
+      * Bare: a new tab opened from the button, the menu or the keyboard starts with the address bar
+-     * focused and the keyboard up. Posted, so it runs once the new tab is the current one.
++     * focused and the keyboard up. Posted, so it runs once the new tab is the current one, and held
++     * until the new tab has risen, so the bar stays still while the page rises.
+      */
+     private void focusAddressBarOnNewTab() {
+         getWindow()
+                 .getDecorView()
+                 .post(
+-                        () -> {
+-                            if (isFinishing() || isDestroyed()) return;
+-                            var toolbarManager = getToolbarManager();
+-                            if (toolbarManager == null || !isTabNtp(getActivityTab())) return;
+-                            toolbarManager.focusAndSelectAllUrlBarText(
+-                                    OmniboxFocusReason.MENU_OR_KEYBOARD_ACTION);
+-                        });
++                        () ->
++                                BareNewTabRise.afterRise(
++                                        () -> {
++                                            if (isFinishing() || isDestroyed()) return;
++                                            var toolbarManager = getToolbarManager();
++                                            if (toolbarManager == null
++                                                    || !isTabNtp(getActivityTab())) {
++                                                return;
++                                            }
++                                            toolbarManager.focusAndSelectAllUrlBarText(
++                                                    OmniboxFocusReason.MENU_OR_KEYBOARD_ACTION);
++                                        }));
+     }
+ 
+     @Override
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareNewTabRise.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareNewTabRise.java
+new file mode 100644
+index 00000000000..444a8ce4d0f
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareNewTabRise.java
+@@ -0,0 +1,53 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.view.View;
++
++import org.chromium.build.annotations.NullMarked;
++
++import java.util.ArrayList;
++import java.util.List;
++
++/**
++ * Work that waits for the slide-up of a new tab to finish. The address bar of a new tab takes focus
++ * and the keyboard lifts it, so that is held until the page has risen and the bar has stood still
++ * for the whole of it.
++ */
++@NullMarked
++public final class BareNewTabRise {
++    private static int sRunning;
++    private static final List<Runnable> sWaiting = new ArrayList<>();
++
++    private BareNewTabRise() {}
++
++    /** A slide-up has started. */
++    public static void begin() {
++        sRunning++;
++    }
++
++    /** A slide-up is over. What waited for it runs on the next message of {@code view}. */
++    public static void end(View view) {
++        if (sRunning > 0) sRunning--;
++        if (sRunning == 0 && !sWaiting.isEmpty()) view.post(BareNewTabRise::runWaiting);
++    }
++
++    /** Runs {@code runnable} now, or once the slide-up running now has finished. */
++    public static void afterRise(Runnable runnable) {
++        if (sRunning == 0) {
++            runnable.run();
++            return;
++        }
++        sWaiting.add(runnable);
++    }
++
++    private static void runWaiting() {
++        // Another new tab may have started its own slide-up in the meantime.
++        if (sRunning > 0) return;
++        List<Runnable> waiting = new ArrayList<>(sWaiting);
++        sWaiting.clear();
++        for (Runnable runnable : waiting) runnable.run();
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareNtpAppearance.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareNtpAppearance.java
+deleted file mode 100644
+index 22cc9d7de56..00000000000
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareNtpAppearance.java
++++ /dev/null
+@@ -1,53 +0,0 @@
+-// Copyright 2026 The Chromium Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-package org.chromium.chrome.browser.bare;
+-
+-import android.graphics.Bitmap;
+-
+-import org.chromium.build.annotations.NullMarked;
+-import org.chromium.build.annotations.Nullable;
+-
+-/**
+- * A picture of the New tab page's wordmark and search box, and where they sit in the window.
+- *
+- * <p>The slide-up shown when a new tab opens draws a copy of the page before the page itself is
+- * there. The page is not there to ask, so it leaves a picture of itself here each time it settles,
+- * and the slide-up draws that. The copy then matches the page exactly: same size, same icon, same
+- * words, same place.
+- */
+-@NullMarked
+-public final class BareNtpAppearance {
+-    /** The two pictures and their top left corners, in window pixels. */
+-    public static final class Snapshot {
+-        public final Bitmap logo;
+-        public final int logoX;
+-        public final int logoY;
+-        public final Bitmap box;
+-        public final int boxX;
+-        public final int boxY;
+-
+-        public Snapshot(Bitmap logo, int logoX, int logoY, Bitmap box, int boxX, int boxY) {
+-            this.logo = logo;
+-            this.logoX = logoX;
+-            this.logoY = logoY;
+-            this.box = box;
+-            this.boxX = boxX;
+-            this.boxY = boxY;
+-        }
+-    }
+-
+-    private static @Nullable Snapshot sSnapshot;
+-
+-    private BareNtpAppearance() {}
+-
+-    public static void remember(Snapshot snapshot) {
+-        sSnapshot = snapshot;
+-    }
+-
+-    /** The last picture a page left, or null if none has settled yet. */
+-    public static @Nullable Snapshot get() {
+-        return sSnapshot;
+-    }
+-}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/BareNewTabRiseView.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/BareNewTabRiseView.java
+deleted file mode 100644
+index fd7ba95c61b..00000000000
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/BareNewTabRiseView.java
++++ /dev/null
+@@ -1,56 +0,0 @@
+-// Copyright 2026 The Chromium Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-package org.chromium.chrome.browser.compositor.layouts.phone;
+-
+-import android.content.Context;
+-import android.graphics.Bitmap;
+-import android.widget.FrameLayout;
+-import android.widget.ImageView;
+-
+-import androidx.annotation.ColorInt;
+-
+-import org.chromium.build.annotations.NullMarked;
+-import org.chromium.chrome.browser.bare.BareNtpAppearance;
+-
+-/**
+- * A copy of the New tab page, drawn for the slide-up that opens a new tab: the wordmark and the
+- * search box, as the real page last showed them, on the page background. It swallows touches while
+- * it moves.
+- */
+-@NullMarked
+-final class BareNewTabRiseView extends FrameLayout {
+-    /**
+-     * @param originX Window x of this view's top left corner.
+-     * @param originY Window y of this view's top left corner.
+-     */
+-    BareNewTabRiseView(
+-            Context context,
+-            @ColorInt int backgroundColor,
+-            BareNtpAppearance.@org.chromium.build.annotations.Nullable Snapshot snapshot,
+-            int originX,
+-            int originY) {
+-        super(context);
+-        setBackgroundColor(backgroundColor);
+-        setClickable(true);
+-        if (snapshot == null) return;
+-        add(snapshot.logo, snapshot.logoX - originX, snapshot.logoY - originY);
+-        add(snapshot.box, snapshot.boxX - originX, snapshot.boxY - originY);
+-    }
+-
+-    private void add(Bitmap bitmap, int x, int y) {
+-        ImageView view = new ImageView(getContext());
+-        view.setImageBitmap(bitmap);
+-        view.setScaleType(ImageView.ScaleType.FIT_XY);
+-        LayoutParams params = new LayoutParams(bitmap.getWidth(), bitmap.getHeight());
+-        params.leftMargin = x;
+-        params.topMargin = y;
+-        addView(view, params);
+-    }
+-
+-    @Override
+-    public boolean performClick() {
+-        return true;
+-    }
+-}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java
+index 1c6d07be0c6..47f0848ec22 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java
+@@ -11,45 +11,27 @@ import android.animation.AnimatorSet;
+ import android.animation.ObjectAnimator;
+ import android.animation.RectEvaluator;
+ import android.animation.ValueAnimator;
+-import android.app.Activity;
+ import android.content.Context;
+-import android.graphics.Bitmap;
+-import android.graphics.Canvas;
+-import android.graphics.Matrix;
+-import android.graphics.drawable.GradientDrawable;
+-import android.view.Gravity;
+-import android.util.TypedValue;
+-import android.widget.LinearLayout;
+-import android.widget.TextView;
+-import android.os.Handler;
+-import android.os.Looper;
+-import android.view.PixelCopy;
+-import android.view.Window;
+-import android.widget.ImageView;
+ import android.graphics.Rect;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.view.ViewTreeObserver;
++import android.view.animation.LinearInterpolator;
+ import android.view.animation.PathInterpolator;
+ import android.widget.FrameLayout;
+ 
+ import androidx.annotation.ColorInt;
+ import androidx.core.content.ContextCompat;
+ 
+-import org.chromium.base.ContextUtils;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+-import org.chromium.chrome.browser.bare.BareNtpAppearance;
++import org.chromium.chrome.browser.bare.BareNewTabRise;
+ import org.chromium.chrome.browser.hub.RoundedCornerAnimatorUtil;
+ import org.chromium.chrome.browser.hub.ShrinkExpandAnimator;
+ import org.chromium.chrome.browser.hub.ShrinkExpandImageView;
+-import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
+-import org.chromium.chrome.browser.profiles.Profile;
+-import org.chromium.chrome.browser.profiles.ProfileManager;
+-import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
+-import org.chromium.components.search_engines.TemplateUrl;
+-import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.components.embedder_support.view.ContentView;
+ import org.chromium.components.browser_ui.widget.animation.CancelAwareAnimatorListener;
+ import org.chromium.ui.animation.RunOnNextLayout;
+ import org.chromium.ui.animation.RunOnNextLayoutDelegate;
+@@ -91,7 +73,7 @@ public class NewForegroundTabAnimationHostView extends FrameLayout implements Ru
+     // Bare: a new tab no longer grows out of a corner. The old page dims to the background colour
+     // (the "expand" half, now a short fade in) and the new tab fades in from it.
+     // Bare: the slide-up of a new New tab page.
+-    private static final long RISE_DURATION_MS = 440L;
++    private static final long RISE_DURATION_MS = 900L;
+     private static final long RISE_FADE_DURATION_MS = 150L;
+     private static final long EXPAND_DURATION_MS = 110L;
+     private static final long FADE_DURATION_MS = 190L;
+@@ -126,12 +108,13 @@ public class NewForegroundTabAnimationHostView extends FrameLayout implements Ru
+             @ColorInt int backgroundColor,
+             boolean isRtl,
+             Listener listener) {
+-        this(context, initialRect, startRadii, backgroundColor, isRtl, listener, false);
++        this(context, initialRect, startRadii, backgroundColor, isRtl, listener, false, null);
+     }
+ 
+     /**
+-     * @param rise Bare: slide a copy of the New tab page up from below the page instead of
+-     *     covering the old page with a fade.
++     * @param rise Bare: raise the new tab's own page from under the bottom bar instead of covering
++     *     the old page with a fade.
++     * @param newTab Bare: the tab whose page rises.
+      */
+     public NewForegroundTabAnimationHostView(
+             Context context,
+@@ -140,9 +123,11 @@ public class NewForegroundTabAnimationHostView extends FrameLayout implements Ru
+             @ColorInt int backgroundColor,
+             boolean isRtl,
+             Listener listener,
+-            boolean rise) {
++            boolean rise,
++            @Nullable Tab newTab) {
+         super(context);
+         mRise = rise;
++        mNewTab = rise ? newTab : null;
+         mBackgroundColor = backgroundColor;
+         setLayoutParams(
+                 new ViewGroup.LayoutParams(
+@@ -185,7 +170,7 @@ public class NewForegroundTabAnimationHostView extends FrameLayout implements Ru
+      */
+     /* package */ void startAnimation(Rect finalRect, int[] endRadii) {
+         if (mRise) {
+-            startRise(finalRect);
++            startRise();
+             return;
+         }
+         mExpandAnimator =
+@@ -277,395 +262,201 @@ public class NewForegroundTabAnimationHostView extends FrameLayout implements Ru
+         mExpandAnimatorSet.start();
+     }
+ 
+-    /** How long the finished glide is held before the copy is taken away. */
+-    private static final long GLIDE_HOLD_MS = 220L;
+-
+-    private @Nullable View mFollowedBar;
+-    private int mFollowedBarRestTop;
+-    private final int[] mFollowedBarAt = new int[2];
+-    private boolean mCutAtBar;
++    // Bare: the rise, as two curves joined at 46% of the time and 49% of the height, so the page
++    // slows near the middle and then glides to the top. Heights are fractions of the page area.
++    private static final float RISE_START = 1.03f;
++    private static final float RISE_MIDDLE = 0.49f;
++    private static final float RISE_MIDDLE_TIME = 0.46f;
++    private static final PathInterpolator RISE_FIRST = new PathInterpolator(0.25f, 0.05f, 0.38f, 1f);
++    private static final PathInterpolator RISE_SECOND = new PathInterpolator(0.52f, 0.05f, 0.22f, 1f);
++
++    private final @Nullable Tab mNewTab;
++    private final ViewTreeObserver.OnGlobalFocusChangeListener mUrlBarFocus = this::onFocusMoved;
++    private final ViewTreeObserver.OnPreDrawListener mParkPage = this::parkPage;
++    private @Nullable View mPage;
++    private boolean mRiseStarted;
++    private final int[] mAt = new int[2];
++    private final Rect mPageClip = new Rect();
++    private int mPageTop;
++    private int mPageHeight;
++    private boolean mRiseCounted;
+ 
+     /**
+-     * Bare: the new tab glides in from the right like a card laid on a table, while the page it
+-     * covers moves a quarter of the way out to the left. Both stay inside the page's own area, so
+-     * the bars under the page, which are drawn from a picture of themselves for the length of the
+-     * glide, never move.
+-     *
+-     * <p>The page that is leaving is a picture of the window taken as the glide starts, because
+-     * the real page cannot be moved sideways from here; until the picture is ready it is the page
+-     * colour. The page that arrives is a copy of the New tab page as it last looked. When the glide
+-     * ends the copy is held in place for a moment while the real page is drawn under it, and then
+-     * removed in one step, with no fade.
++     * Bare: the new tab's own page rises from under the bar at the bottom into the page area, over
++     * the old page, which the compositor goes on drawing until the rise is over. The page is cut at
++     * the top of the bar in every frame, so it never shows under or through the bar, and the bar
++     * does not move.
+      */
+-    private void startRise(Rect finalRect) {
+-        Context context = getContext();
+-        int[] hostAt = new int[2];
+-        getLocationInWindow(hostAt);
+-        int height = finalRect.height();
+-        int barsBottom = Integer.MAX_VALUE;
+-        View bar = getRootView().findViewById(R.id.bottom_app_bar_container);
+-        // The bar slides out of the way for the moment a tab is being made, so where it is drawn
+-        // is not where it belongs. Where it is laid out, without its own movement, is where it
+-        // comes back to, and the page stops there so it never runs over that space.
+-        if (bar != null && bar.getHeight() > 0 && bar.getParent() instanceof View barParent) {
+-            int[] parentAt = new int[2];
+-            barParent.getLocationInWindow(parentAt);
+-            int barTop = parentAt[1] + bar.getTop();
+-            height = Math.min(height, barTop - hostAt[1] - finalRect.top);
+-            barsBottom = parentAt[1] + bar.getBottom();
+-        }
+-        // With the address bar at the bottom the page is cut at the top of the address bar, not at
+-        // the buttons under it, so it never draws over the bar.
+-        View addressBar = getRootView().findViewById(R.id.control_container);
+-        if (addressBar != null && addressBar.isShown() && addressBar.getHeight() > 0) {
+-            int[] addressAt = new int[2];
+-            addressBar.getLocationInWindow(addressAt);
+-            if (addressAt[1] > hostAt[1] + getHeight() / 2) {
+-                height = Math.min(height, addressAt[1] - hostAt[1] - finalRect.top);
+-                keepAddressBarInView(addressBar, addressAt[1]);
+-            }
+-        }
+-        final int viewportHeight = Math.max(height, 1);
+-        final int viewportWidth = finalRect.width();
+-        final int windowLeft = hostAt[0] + finalRect.left;
+-        final int windowTop = hostAt[1] + finalRect.top;
+-        final int lowestBarPixel = barsBottom;
+-
+-        FrameLayout viewport = new FrameLayout(context);
+-        viewport.setClipChildren(true);
+-        viewport.setClickable(true);
+-        FrameLayout.LayoutParams params =
+-                new FrameLayout.LayoutParams(viewportWidth, viewportHeight);
+-        params.leftMargin = finalRect.left;
+-        params.topMargin = finalRect.top;
+-        addView(viewport, params);
+-
+-        // The page that is leaving. The page colour until its picture arrives, so that nothing
+-        // shows through, then the picture itself.
+-        ImageView previous = new ImageView(context);
+-        previous.setBackgroundColor(mBackgroundColor);
+-        previous.setScaleType(ImageView.ScaleType.MATRIX);
+-        viewport.addView(
+-                previous,
+-                new FrameLayout.LayoutParams(
+-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+-
+-        BareNewTabRiseView content =
+-                new BareNewTabRiseView(
+-                        context,
+-                        mBackgroundColor,
+-                        BareNtpAppearance.get(),
+-                        windowLeft,
+-                        windowTop);
+-        viewport.addView(
+-                content,
+-                new FrameLayout.LayoutParams(
+-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+-        glide(content, previous, viewportWidth, viewportHeight);
+-
+-        @Nullable Activity activity = ContextUtils.activityFromContext(context);
+-        @Nullable Window window = activity == null ? null : activity.getWindow();
+-        View decor = window == null ? null : window.getDecorView();
+-        if (window == null || decor == null || decor.getWidth() <= 0 || decor.getHeight() <= 0) {
++    private void startRise() {
++        mRiseStarted = true;
++        View page = track(risingPage());
++        if (page == null) {
++            mListener.onExpandAnimationFinished();
++            mListener.onForegroundAnimationFinished();
+             return;
+         }
+-        Bitmap shot =
+-                Bitmap.createBitmap(decor.getWidth(), decor.getHeight(), Bitmap.Config.ARGB_8888);
+-        PixelCopy.request(
+-                window,
+-                shot,
+-                result -> {
+-                    if (!isAttachedToWindow() || result != PixelCopy.SUCCESS) return;
+-                    previous.setImageBitmap(shot);
+-                    Matrix toPage = new Matrix();
+-                    toPage.setTranslate(-windowLeft, -windowTop);
+-                    previous.setImageMatrix(toPage);
+-                    // The bars under the page: still, drawn from the picture, for the glide.
+-                    int belowTop = windowTop + viewportHeight;
+-                    int belowBottom = Math.min(shot.getHeight(), lowestBarPixel);
+-                    if (belowBottom <= belowTop) return;
+-                    ImageView bars = new ImageView(context);
+-                    bars.setImageBitmap(shot);
+-                    bars.setScaleType(ImageView.ScaleType.MATRIX);
+-                    Matrix toBars = new Matrix();
+-                    toBars.setTranslate(0, -belowTop);
+-                    bars.setImageMatrix(toBars);
+-                    FrameLayout.LayoutParams barsParams =
+-                            new FrameLayout.LayoutParams(
+-                                    ViewGroup.LayoutParams.MATCH_PARENT, belowBottom - belowTop);
+-                    barsParams.topMargin = belowTop - getLocationOnWindowTop();
+-                    addView(bars, barsParams);
+-                    // Bare: the picture is of the old page, line included. The New tab page has
+-                    // no line above the bars and is the colour of the bars, so a strip of that
+-                    // colour takes the line out of the picture.
+-                    View seal = new View(context);
+-                    seal.setBackgroundColor(SemanticColorUtils.getColorSurfaceContainerHigh(context));
+-                    FrameLayout.LayoutParams sealParams =
+-                            new FrameLayout.LayoutParams(
+-                                    ViewGroup.LayoutParams.MATCH_PARENT,
+-                                    Math.round(2 * context.getResources().getDisplayMetrics().density));
+-                    sealParams.topMargin = barsParams.topMargin;
+-                    addView(seal, sealParams);
+-                    showNewTabAddressRow(context);
+-                },
+-                new Handler(Looper.getMainLooper()));
+-    }
++        page.getLocationInWindow(mAt);
++        mPageTop = mAt[1] - Math.round(page.getTranslationY());
++        mPageHeight = Math.max(1, pageBottom(page) - mPageTop);
+ 
+-    /**
+-     * Bare: the real toolbar only changes when the new tab is selected at the end of the glide, so
+-     * the old address and the share button would stay for all of it. This lays the address row of
+-     * a new tab over the real one, wherever the address bar is, top or bottom, from the first
+-     * frame, and takes it away when the glide is over.
+-     */
+-    private void showNewTabAddressRow(Context context) {
+-        View decor = getRootView();
+-        View addressBar = decor.findViewById(R.id.control_container);
+-        if (addressBar == null
+-                || addressBar.getHeight() <= 0
+-                || !addressBar.isShown()
+-                || !(decor instanceof ViewGroup decorGroup)) {
+-            return;
+-        }
+-        float density = context.getResources().getDisplayMetrics().density;
+-        int rowWidth = addressBar.getWidth();
+-        int rowHeight = addressBar.getHeight();
+-        int pillHeight = Math.round(40 * density);
+-
+-        FrameLayout row = new FrameLayout(context);
+-        row.setBackgroundColor(SemanticColorUtils.getColorSurfaceContainerHigh(context));
+-
+-        LinearLayout pill = new LinearLayout(context);
+-        pill.setOrientation(LinearLayout.HORIZONTAL);
+-        pill.setGravity(Gravity.CENTER_VERTICAL);
+-        GradientDrawable shape = new GradientDrawable();
+-        shape.setCornerRadius(pillHeight / 2f);
+-        shape.setColor(ContextCompat.getColor(context, R.color.toolbar_text_box_bg_color));
+-        pill.setBackground(shape);
+-
+-        ImageView icon = new ImageView(context);
+-        icon.setImageResource(R.drawable.ic_search_24dp);
+-        icon.setColorFilter(SemanticColorUtils.getDefaultIconColor(context));
+-        LinearLayout.LayoutParams iconParams =
+-                new LinearLayout.LayoutParams(Math.round(24 * density), Math.round(24 * density));
+-        iconParams.setMarginStart(Math.round(16 * density));
+-        pill.addView(icon, iconParams);
+-
+-        TextView hint = new TextView(context);
+-        hint.setText(newTabHint(context));
+-        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+-        hint.setTextColor(SemanticColorUtils.getDefaultTextColorSecondary(context));
+-        hint.setSingleLine(true);
+-        LinearLayout.LayoutParams hintParams =
+-                new LinearLayout.LayoutParams(
+-                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+-        hintParams.setMarginStart(Math.round(16 * density));
+-        pill.addView(hint, hintParams);
+-
+-        FrameLayout.LayoutParams pillParams =
+-                new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, pillHeight);
+-        pillParams.gravity = Gravity.CENTER_VERTICAL;
+-        int side = Math.round(16 * density);
+-        pillParams.setMarginStart(side);
+-        pillParams.setMarginEnd(side);
+-        addKeptButtons(context, addressBar, row, pillParams, density);
+-        row.addView(pill, pillParams);
+-
+-        int[] barAt = new int[2];
+-        int[] decorAt = new int[2];
+-        addressBar.getLocationInWindow(barAt);
+-        decor.getLocationInWindow(decorAt);
+-        int left = barAt[0] - decorAt[0];
+-        int top = barAt[1] - decorAt[1];
+-        row.measure(
+-                View.MeasureSpec.makeMeasureSpec(rowWidth, View.MeasureSpec.EXACTLY),
+-                View.MeasureSpec.makeMeasureSpec(rowHeight, View.MeasureSpec.EXACTLY));
+-        row.layout(left, top, left + rowWidth, top + rowHeight);
+-        decorGroup.getOverlay().add(row);
+-        addOnAttachStateChangeListener(
+-                new OnAttachStateChangeListener() {
++        ValueAnimator animator = ValueAnimator.ofFloat(0f, 1f);
++        animator.setInterpolator(new LinearInterpolator());
++        animator.addUpdateListener(
++                animation -> {
++                    View current = track(risingPage());
++                    if (current != null) {
++                        placePage(current, risePosition(animation.getAnimatedFraction()));
++                    }
++                });
++        placePage(page, RISE_START);
++
++        AnimatorSet rise = new AnimatorSet();
++        rise.play(animator);
++        rise.setDuration(RISE_DURATION_MS);
++        mExpandAnimatorSet = rise;
++        rise.addListener(
++                new CancelAwareAnimatorListener() {
+                     @Override
+-                    public void onViewAttachedToWindow(View v) {}
++                    public void onEnd(Animator animation) {
++                        mExpandAnimatorSet = null;
++                        settlePage();
++                        // The real page is in place, so the new tab is selected and the rise is
++                        // over in the same step.
++                        mListener.onExpandAnimationFinished();
++                        mListener.onForegroundAnimationFinished();
++                    }
+ 
+                     @Override
+-                    public void onViewDetachedFromWindow(View v) {
+-                        decorGroup.getOverlay().remove(row);
++                    public void onCancel(Animator animation) {
++                        mExpandAnimatorSet = null;
++                        mFadeAnimator = null;
++                        settlePage();
+                     }
+                 });
++        rise.start();
++    }
++
++    /** Where the top of the rising page is at {@code time}, as a fraction of the page area. */
++    private static float risePosition(float time) {
++        if (time < RISE_MIDDLE_TIME) {
++            float part = RISE_FIRST.getInterpolation(time / RISE_MIDDLE_TIME);
++            return RISE_START + (RISE_MIDDLE - RISE_START) * part;
++        }
++        float part =
++                RISE_SECOND.getInterpolation((time - RISE_MIDDLE_TIME) / (1f - RISE_MIDDLE_TIME));
++        return RISE_MIDDLE * (1f - part);
++    }
++
++    /** Moves the page to {@code position} and cuts it at the top of the bar under it. */
++    private void placePage(View page, float position) {
++        // The page is laid out again just after it is put on screen, so where it rests is read
++        // in every frame rather than once at the start.
++        page.getLocationInWindow(mAt);
++        mPageTop = mAt[1] - Math.round(page.getTranslationY());
++        mPageHeight = Math.max(1, pageBottom(page) - mPageTop);
++        float top = position * mPageHeight;
++        page.setTranslationY(top);
++        int visible = Math.max(0, Math.round(pageBottom(page) - mPageTop - top));
++        mPageClip.set(0, 0, page.getWidth(), visible);
++        page.setClipBounds(mPageClip);
+     }
+ 
+     /**
+-     * With the address bar and the tab and menu buttons in one row (the minimal layout), the new
+-     * tab keeps the buttons on both sides of the box. Copies them from the live bar and fits the
+-     * box between them.
++     * The window y where the page area ends: the top of the address bar when it is at the bottom,
++     * else the top of the bottom button row, else the bottom of the page itself.
+      */
+-    private static void addKeptButtons(
+-            Context context,
+-            View addressBar,
+-            FrameLayout row,
+-            FrameLayout.LayoutParams pillParams,
+-            float density) {
+-        View location = addressBar.findViewById(R.id.location_bar);
+-        View tabs = addressBar.findViewById(R.id.tab_switcher_button);
+-        if (location == null || tabs == null || !location.isShown() || !tabs.isShown()) {
+-            return;
++    private int pageBottom(View page) {
++        View root = getRootView();
++        View address = root.findViewById(R.id.control_container);
++        if (address != null && address.isShown() && address.getHeight() > 0) {
++            address.getLocationInWindow(mAt);
++            if (mAt[1] > root.getHeight() / 2) return mAt[1];
+         }
+-        int[] barAt = new int[2];
+-        int[] locationAt = new int[2];
+-        int[] tabsAt = new int[2];
+-        addressBar.getLocationInWindow(barAt);
+-        location.getLocationInWindow(locationAt);
+-        tabs.getLocationInWindow(tabsAt);
+-        int locationLeft = locationAt[0] - barAt[0];
+-        int tabsLeft = tabsAt[0] - barAt[0];
+-        int width = addressBar.getWidth();
+-        int height = addressBar.getHeight();
+-        if (locationLeft <= 0 || tabsLeft <= locationLeft || tabsLeft >= width || height <= 0) {
+-            return;
++        View row = root.findViewById(R.id.bottom_app_bar_container);
++        if (row != null && row.isShown() && row.getHeight() > 0) {
++            row.getLocationInWindow(mAt);
++            return mAt[1];
+         }
+-        Bitmap copy = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+-        addressBar.draw(new Canvas(copy));
+-        row.setBackgroundColor(copy.getPixel(1, 1));
+-        addPiece(context, row, Bitmap.createBitmap(copy, 0, 0, locationLeft, height), 0);
+-        addPiece(
+-                context,
+-                row,
+-                Bitmap.createBitmap(copy, tabsLeft, 0, width - tabsLeft, height),
+-                tabsLeft);
+-        int gap = Math.round(8 * density);
+-        pillParams.setMarginStart(locationLeft);
+-        pillParams.setMarginEnd(width - tabsLeft + gap);
++        return mPageTop + page.getHeight();
+     }
+ 
+-    private static void addPiece(Context context, FrameLayout row, Bitmap piece, int left) {
+-        ImageView view = new ImageView(context);
+-        view.setImageBitmap(piece);
+-        FrameLayout.LayoutParams params =
+-                new FrameLayout.LayoutParams(piece.getWidth(), piece.getHeight());
+-        params.leftMargin = left;
+-        row.addView(view, params);
++    /**
++     * The new tab's page as it is on screen. The tab can swap the view it first had for another
++     * as it is shown, so this is looked up again each time.
++     */
++    private @Nullable View risingPage() {
++        View page = mNewTab != null ? mNewTab.getView() : null;
++        if (page != null && page.isAttachedToWindow()) return page;
++        View holder = getRootView().findViewById(R.id.compositor_view_holder);
++        if (holder instanceof ViewGroup group && group.getChildCount() > 1) {
++            View shown = group.getChildAt(1);
++            if (shown.isAttachedToWindow() && !(shown instanceof ContentView)) return shown;
++        }
++        return null;
+     }
+ 
+-    /** The hint the address bar of a new tab shows, with the name of the search engine. */
+-    private static String newTabHint(Context context) {
+-        try {
+-            Profile profile = ProfileManager.getLastUsedRegularProfile();
+-            TemplateUrl engine =
+-                    TemplateUrlServiceFactory.getForProfile(profile)
+-                            .getDefaultSearchEngineTemplateUrl();
+-            if (engine != null) {
+-                return OmniboxResourceProvider.getString(
+-                        context,
+-                        org.chromium.chrome.browser.omnibox.R.string.omnibox_empty_hint_with_dse_name,
+-                        engine.getShortName());
+-            }
+-        } catch (RuntimeException e) {
+-            // Without the engine name the row simply shows no hint.
++    /** Remembers {@code page} as the one being moved, and puts back one moved before it. */
++    private @Nullable View track(@Nullable View page) {
++        if (page != mPage) {
++            settle(mPage);
++            mPage = page;
+         }
+-        return "";
++        return page;
+     }
+ 
+     /**
+-     * Bare: a new tab focuses the address bar, so with the bar at the bottom the keyboard comes up
+-     * during the glide and lifts the bar into the page area, where the glide covers it. While the
+-     * bar is above where it rests, the glide is cut at the top of the bar. The cut is worked out when
+-     * the glide draws, after the bar has its place for the frame.
++     * Until the rise starts, the new tab's page waits below the window, so it is not seen in full
++     * for the frames between the tab appearing and the rise starting.
+      */
+-    private void keepAddressBarInView(View addressBar, int restTop) {
+-        mFollowedBar = addressBar;
+-        mFollowedBarRestTop = restTop;
+-        ViewTreeObserver.OnPreDrawListener follow =
+-                () -> {
+-                    addressBar.getLocationInWindow(mFollowedBarAt);
+-                    if (mFollowedBarAt[1] < restTop || mCutAtBar) invalidate();
+-                    return true;
+-                };
+-        addressBar.getViewTreeObserver().addOnPreDrawListener(follow);
+-        addOnAttachStateChangeListener(
+-                new OnAttachStateChangeListener() {
+-                    @Override
+-                    public void onViewAttachedToWindow(View v) {}
++    private boolean parkPage() {
++        if (!mRiseStarted) {
++            View page = track(risingPage());
++            if (page != null) page.setTranslationY(getRootView().getHeight());
++        }
++        return true;
++    }
+ 
+-                    @Override
+-                    public void onViewDetachedFromWindow(View v) {
+-                        addressBar.getViewTreeObserver().removeOnPreDrawListener(follow);
+-                        mFollowedBar = null;
+-                    }
+-                });
++    private void settlePage() {
++        settle(mPage);
+     }
+ 
+-    @Override
+-    protected void dispatchDraw(Canvas canvas) {
+-        View bar = mFollowedBar;
+-        mCutAtBar = false;
+-        if (bar != null) {
+-            bar.getLocationInWindow(mFollowedBarAt);
+-            if (mFollowedBarAt[1] < mFollowedBarRestTop) {
+-                int[] hostAt = new int[2];
+-                getLocationInWindow(hostAt);
+-                mCutAtBar = true;
+-                int saved = canvas.save();
+-                canvas.clipRect(0, 0, getWidth(), Math.max(0, mFollowedBarAt[1] - hostAt[1]));
+-                super.dispatchDraw(canvas);
+-                canvas.restoreToCount(saved);
+-                return;
+-            }
+-        }
+-        super.dispatchDraw(canvas);
++    private static void settle(@Nullable View page) {
++        if (page == null) return;
++        page.setTranslationY(0f);
++        page.setClipBounds(null);
+     }
+ 
+-    private int getLocationOnWindowTop() {
+-        int[] at = new int[2];
+-        getLocationInWindow(at);
+-        return at[1];
++    /**
++     * Bare: a tap on the address bar while the page rises ends the rise at once, so the new tab's
++     * page and bar are there for the typing straight away.
++     */
++    private void onFocusMoved(@Nullable View oldFocus, @Nullable View newFocus) {
++        if (newFocus == null || newFocus.getId() != R.id.url_bar) return;
++        AnimatorSet rise = mExpandAnimatorSet;
++        if (rise != null) rise.end();
+     }
+ 
+-    private void glide(
+-            BareNewTabRiseView content, ImageView previous, int viewportWidth, int viewportHeight) {
+-        float density = getContext().getResources().getDisplayMetrics().density;
+-        // Starts off the right edge, a little low and turned a little, and turns about a point
+-        // near the bottom of the page, as a card laid down by hand would.
+-        content.setPivotX(viewportWidth * 0.5f);
+-        content.setPivotY(viewportHeight * 0.8f);
+-        content.setTranslationX(viewportWidth * 1.04f);
+-        content.setTranslationY(12f * density);
+-        content.setRotation(2.5f);
+-
+-        AnimatorSet glide = new AnimatorSet();
+-        ObjectAnimator slideIn =
+-                ObjectAnimator.ofFloat(content, View.TRANSLATION_X, viewportWidth * 1.04f, 0f);
+-        glide.play(slideIn)
+-                .with(ObjectAnimator.ofFloat(content, View.TRANSLATION_Y, 12f * density, 0f))
+-                .with(ObjectAnimator.ofFloat(content, View.ROTATION, 2.5f, 0f))
+-                .with(
+-                        ObjectAnimator.ofFloat(
+-                                previous, View.TRANSLATION_X, 0f, -viewportWidth * 0.24f));
+-        glide.setDuration(RISE_DURATION_MS);
+-        glide.setInterpolator(new PathInterpolator(0.16f, 1f, 0.3f, 1f));
+-        mExpandAnimatorSet = glide;
+-        glide.addListener(
+-                new CancelAwareAnimatorListener() {
+-                    @Override
+-                    public void onEnd(Animator animation) {
+-                        mExpandAnimatorSet = null;
+-                        // The real tab is selected now. The copy stays exactly as it is while the
+-                        // real page is drawn under it, then goes in one step.
+-                        mListener.onExpandAnimationFinished();
+-                        postDelayed(
+-                                () -> {
+-                                    if (isAttachedToWindow()) {
+-                                        mListener.onForegroundAnimationFinished();
+-                                    }
+-                                },
+-                                GLIDE_HOLD_MS);
+-                    }
++    @Override
++    protected void onAttachedToWindow() {
++        super.onAttachedToWindow();
++        if (!mRise) return;
++        // Bare: the keyboard of a new tab waits for the rise; see BareNewTabRise.
++        BareNewTabRise.begin();
++        mRiseCounted = true;
++        getViewTreeObserver().addOnGlobalFocusChangeListener(mUrlBarFocus);
++        getViewTreeObserver().addOnPreDrawListener(mParkPage);
++    }
+ 
+-                    @Override
+-                    public void onCancel(Animator animation) {
+-                        mExpandAnimatorSet = null;
+-                        mFadeAnimator = null;
+-                    }
+-                });
+-        glide.start();
++    @Override
++    protected void onDetachedFromWindow() {
++        settlePage();
++        if (mRiseCounted) {
++            mRiseCounted = false;
++            getViewTreeObserver().removeOnGlobalFocusChangeListener(mUrlBarFocus);
++            getViewTreeObserver().removeOnPreDrawListener(mParkPage);
++            BareNewTabRise.end(getRootView());
++        }
++        super.onDetachedFromWindow();
+     }
+ 
+     @Override
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewTabAnimationLayout.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewTabAnimationLayout.java
+index cf5173ad64f..d4447255843 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewTabAnimationLayout.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewTabAnimationLayout.java
+@@ -721,7 +721,7 @@ public class NewTabAnimationLayout extends Layout {
+                     mForegroundHostView.startAnimation(finalAnimationRect, endRadii);
+                 };
+ 
+-        // Bare: a regular New tab page slides up as a copy of itself; any other new tab keeps the
++        // Bare: a regular New tab page rises from under the bottom bar; any other new tab keeps the
+         // fade.
+         boolean slideUp =
+                 !newIsIncognito
+@@ -735,8 +735,12 @@ public class NewTabAnimationLayout extends Layout {
+                         backgroundColor,
+                         isRtl,
+                         listener,
+-                        slideUp);
++                        slideUp,
++                        newTab);
+         mAnimationHostView.addView(mForegroundHostView);
++        // Bare: this layout keeps the tab's own page hidden, so the new tab's page would only
++        // appear once the layout is over. It is shown now, so it can rise over the old page.
++        if (slideUp) mCompositorViewHolder.setContentOverlayVisibility(true, false);
+         setRunOnNextLayout(mForegroundHostView, mAnimationRunnable);
+     }
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageLayout.java b/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageLayout.java
+index 243f6a593e9..fb74a5dd306 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageLayout.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageLayout.java
+@@ -5,8 +5,6 @@
+ package org.chromium.chrome.browser.ntp;
+ 
+ import android.content.Context;
+-import android.graphics.Bitmap;
+-import android.graphics.Canvas;
+ import android.util.AttributeSet;
+ import android.util.DisplayMetrics;
+ import android.view.View;
+@@ -18,8 +16,6 @@ import org.chromium.base.Log;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+-import org.chromium.chrome.browser.bare.BareNtpAppearance;
+-import org.chromium.chrome.browser.omnibox.BareSearchOverride;
+ import org.chromium.chrome.browser.ui.theme.ChromeSemanticColorUtils;
+ 
+ /**
+@@ -87,40 +83,6 @@ public class NewTabPageLayout extends LinearLayout {
+         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+     }
+ 
+-    @Override
+-    protected void onLayout(boolean changed, int l, int t, int r, int b) {
+-        super.onLayout(changed, l, t, r, b);
+-        // Bare: once the page has stopped moving, leave a picture of it for the slide-up.
+-        removeCallbacks(mCaptureRunnable);
+-        postDelayed(mCaptureRunnable, 400);
+-    }
+-
+-    private final Runnable mCaptureRunnable = this::captureForSlideUp;
+-
+-    private void captureForSlideUp() {
+-        View box = mSearchBoxView;
+-        View logo = findViewById(R.id.logo_container_view);
+-        if (box == null || logo == null || !isShown() || BareSearchOverride.isActive()) return;
+-        if (box.getWidth() <= 0 || logo.getWidth() <= 0 || logo.getVisibility() != VISIBLE) return;
+-        if (box.getTranslationY() != 0 || box.getAlpha() != 1f || logo.getTranslationY() != 0) {
+-            return;
+-        }
+-        int[] boxAt = new int[2];
+-        int[] logoAt = new int[2];
+-        box.getLocationInWindow(boxAt);
+-        logo.getLocationInWindow(logoAt);
+-        BareNtpAppearance.remember(
+-                new BareNtpAppearance.Snapshot(
+-                        draw(logo), logoAt[0], logoAt[1], draw(box), boxAt[0], boxAt[1]));
+-    }
+-
+-    private static Bitmap draw(View view) {
+-        Bitmap bitmap =
+-                Bitmap.createBitmap(view.getWidth(), view.getHeight(), Bitmap.Config.ARGB_8888);
+-        view.draw(new Canvas(bitmap));
+-        return bitmap;
+-    }
+-
+     @Override
+     protected void onAttachedToWindow() {
+         super.onAttachedToWindow();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index bd51f62935b..772a247b9ee 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -74,6 +74,7 @@ import org.chromium.chrome.browser.back_press.BackPressMetrics;
+ import org.chromium.chrome.browser.back_press.BackPressMetrics.NavigationDirection;
+ import org.chromium.chrome.browser.back_press.BackPressMetrics.PredictiveGestureNavPhase;
+ import org.chromium.chrome.browser.bare.BareFrostBackdrop;
++import org.chromium.chrome.browser.bare.BareNewTabRise;
+ import org.chromium.chrome.browser.bare.BareTabSwitcher;
+ import org.chromium.chrome.browser.bare.BareUpdateCheck;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+@@ -2511,19 +2512,28 @@ public class ToolbarManager
+      */
+     /**
+      * Bare: a new tab opened from the bottom bar starts with the address bar focused and the
+-     * keyboard up. Posted, so it runs once the new tab is the current one.
++     * keyboard up. Posted, so it runs once the new tab is the current one, and held until the new
++     * tab has risen, so the bar stays still while the page rises.
+      */
+     public void focusAddressBarOnNewTab() {
+         mActivity
+                 .getWindow()
+                 .getDecorView()
+                 .post(
+-                        () -> {
+-                            if (mActivity.isFinishing() || mActivity.isDestroyed()) return;
+-                            Tab tab = mActivityTabProvider.get();
+-                            if (tab == null || !UrlUtilities.isNtpUrl(tab.getUrl())) return;
+-                            focusAndSelectAllUrlBarText(OmniboxFocusReason.MENU_OR_KEYBOARD_ACTION);
+-                        });
++                        () ->
++                                BareNewTabRise.afterRise(
++                                        () -> {
++                                            if (mActivity.isFinishing()
++                                                    || mActivity.isDestroyed()) {
++                                                return;
++                                            }
++                                            Tab tab = mActivityTabProvider.get();
++                                            if (tab == null || !UrlUtilities.isNtpUrl(tab.getUrl())) {
++                                                return;
++                                            }
++                                            focusAndSelectAllUrlBarText(
++                                                    OmniboxFocusReason.MENU_OR_KEYBOARD_ACTION);
++                                        }));
+     }
+ 
+     public boolean isUrlBarFocused() {
