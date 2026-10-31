@@ -1,0 +1,282 @@
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/BUILD.gn b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/BUILD.gn
+index fe7cae3c4ce..c17ce982271 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/BUILD.gn
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/BUILD.gn
+@@ -37,6 +37,7 @@ android_library("java") {
+     "ExtensionsMenuItemViewBinder.java",
+     "ExtensionsMenuMediator.java",
+     "ExtensionsMenuProperties.java",
++    "ExtensionsMenuSheetContent.java",
+     "ExtensionsMenuViewBinder.java",
+     "ExtensionsToolbarCoordinatorImpl.java",
+     "ExtensionsToolbarDragTouchHandler.java",
+@@ -64,6 +65,7 @@ android_library("java") {
+     "//chrome/browser/ui/android/toolbar:optional_button_java",
+     "//chrome/browser/ui/browser_window/public/android:java",
+     "//chrome/browser/user_education:java",
++    "//components/browser_ui/bottomsheet/android:java",
+     "//components/browser_ui/styles/android:java",
+     "//components/browser_ui/widget/android:java",
+     "//components/embedder_support/android:content_view_java",
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
+index 77301c18c37..99c96208977 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
+@@ -37,6 +37,10 @@ import org.chromium.chrome.browser.ui.extensions.ExtensionsToolbarBridge;
+ import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
+ import org.chromium.chrome.browser.user_education.IphCommandBuilder;
+ import org.chromium.chrome.browser.user_education.UserEducationHelper;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvider;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.components.feature_engagement.EventConstants;
+ import org.chromium.components.feature_engagement.FeatureConstants;
+@@ -98,7 +102,7 @@ public class ExtensionsMenuCoordinator
+             new ModalDialogManagerObserver() {
+                 @Override
+                 public void onDialogAdded(PropertyModel model) {
+-                    mExtensionsMenuButton.dismiss();
++                    dismissMenu();
+                 }
+             };
+     private final ModalDialogManager mModalDialogManager;
+@@ -107,6 +111,17 @@ public class ExtensionsMenuCoordinator
+ 
+     @Nullable @VisibleForTesting ExtensionsMenuMediator mMediator;
+     private long mLastDismissalTimeMs;
++
++    // The menu opens as a bottom card where the window has a bottom sheet, else as the pop-up.
++    private @Nullable ExtensionsMenuSheetContent mSheetContent;
++    private @Nullable BottomSheetController mSheetController;
++    private final BottomSheetObserver mSheetObserver =
++            new BottomSheetObserver() {
++                @Override
++                public void onSheetContentChanged(@Nullable BottomSheetContent newContent) {
++                    if (mSheetContent != null && newContent != mSheetContent) onSheetGone();
++                }
++            };
+     private boolean mIsMenuOpen;
+     private final boolean mIsWebApp;
+ 
+@@ -279,10 +294,46 @@ public class ExtensionsMenuCoordinator
+                         mExtensionModels,
+                         mMainPageModel,
+                         mSitePermissionsPageModel,
+-                        /* onDismissMenu= */ mExtensionsMenuButton::dismiss,
+-                        /* onReady= */ () -> {
+-                            mExtensionsMenuButton.showMenu();
+-                        });
++                        /* onDismissMenu= */ this::dismissMenu,
++                        /* onReady= */ this::showMenu);
++    }
++
++    private void showMenu() {
++        BottomSheetController controller = BottomSheetControllerProvider.from(mWindowAndroid);
++        if (controller == null) {
++            mExtensionsMenuButton.showMenu();
++            return;
++        }
++        mSheetController = controller;
++        mSheetContent = new ExtensionsMenuSheetContent(mContext, mContentView);
++        controller.addObserver(mSheetObserver);
++        mIsMenuOpen = true;
++        controller.requestShowContent(mSheetContent, /* animate= */ true);
++    }
++
++    private void dismissMenu() {
++        if (mSheetContent != null && mSheetController != null) {
++            mSheetController.hideContent(mSheetContent, /* animate= */ true);
++            return;
++        }
++        mExtensionsMenuButton.dismiss();
++    }
++
++    /** The same clean-up as when the pop-up is dismissed. */
++    private void onSheetGone() {
++        ExtensionsMenuSheetContent content = mSheetContent;
++        if (content == null) return;
++        mSheetContent = null;
++        if (mSheetController != null) {
++            mSheetController.removeObserver(mSheetObserver);
++            mSheetController = null;
++        }
++        content.release();
++        mIsMenuOpen = false;
++        mLastDismissalTimeMs = TimeUtils.elapsedRealtimeMillis();
++        mMenuButtonPinningDelegate.requestLayoutWithViewUtils();
++        destroyMediator();
++        mExtensionModels.clear();
+     }
+ 
+     /**
+@@ -319,9 +370,7 @@ public class ExtensionsMenuCoordinator
+     }
+ 
+     private void setupMainPageModel() {
+-        mMainPageModel.set(
+-                ExtensionsMenuProperties.CLOSE_CLICK_LISTENER,
+-                (view) -> mExtensionsMenuButton.dismiss());
++        mMainPageModel.set(ExtensionsMenuProperties.CLOSE_CLICK_LISTENER, (view) -> dismissMenu());
+         mMainPageModel.set(
+                 ExtensionsMenuProperties.DISCOVER_EXTENSIONS_CLICK_LISTENER,
+                 (view) -> {
+@@ -438,8 +487,7 @@ public class ExtensionsMenuCoordinator
+                     }
+                 });
+         mSitePermissionsPageModel.set(
+-                SitePermissionsPageProperties.CLOSE_CLICK_LISTENER,
+-                (view) -> mExtensionsMenuButton.dismiss());
++                SitePermissionsPageProperties.CLOSE_CLICK_LISTENER, (view) -> dismissMenu());
+         mSitePermissionsPageModel.set(
+                 SitePermissionsPageProperties.MANAGE_EXTENSION_CLICK_LISTENER,
+                 (view) -> {
+@@ -530,11 +578,15 @@ public class ExtensionsMenuCoordinator
+ 
+     @Override
+     public void closeExtensionsMenuIfOpen() {
+-        mExtensionsMenuButton.dismiss();
++        dismissMenu();
+     }
+ 
+     @Override
+     public void destroy() {
++        if (mSheetContent != null && mSheetController != null) {
++            mSheetController.hideContent(mSheetContent, /* animate= */ false);
++        }
++        onSheetGone();
+         mIsMenuOpen = false;
+         mCurrentTabSupplier.removeObserver(mTabSupplierObserver);
+         destroyMediator();
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java
+new file mode 100644
+index 00000000000..ab1665cc679
+--- /dev/null
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java
+@@ -0,0 +1,125 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.toolbar.extensions;
++
++import android.content.Context;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.FrameLayout;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetType;
++
++/** The extensions menu shown as a card from the bottom of the screen, like the share card. */
++@NullMarked
++class ExtensionsMenuSheetContent implements BottomSheetContent {
++    private static final BottomSheetType SHEET_TYPE =
++            new BottomSheetType.Builder().setUserInitiated(true).build();
++    private static final int BOTTOM_PADDING_DP = 16;
++
++    private final FrameLayout mContainer;
++
++    /**
++     * @param menuView the menu's own view, moved into the card for as long as it is shown.
++     */
++    ExtensionsMenuSheetContent(Context context, View menuView) {
++        mContainer = new FrameLayout(context);
++        if (menuView.getParent() instanceof ViewGroup parent) parent.removeView(menuView);
++        mContainer.addView(
++                menuView,
++                new FrameLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
++        // The card has its own background, corners and handle; the pop-up's panel would draw a
++        // second card inside it.
++        if (menuView instanceof ViewGroup group && group.getChildCount() > 0) {
++            View panel = group.getChildAt(0);
++            panel.setBackground(null);
++            panel.setElevation(0);
++            panel.setMinimumWidth(0);
++        }
++        float density = context.getResources().getDisplayMetrics().density;
++        mContainer.setPadding(0, 0, 0, Math.round(BOTTOM_PADDING_DP * density));
++    }
++
++    /** Hands the menu's view back once the card has gone. */
++    void release() {
++        mContainer.removeAllViews();
++    }
++
++    @Override
++    public View getContentView() {
++        return mContainer;
++    }
++
++    @Override
++    public @Nullable View getToolbarView() {
++        return null;
++    }
++
++    @Override
++    public int getVerticalScrollOffset() {
++        return 0;
++    }
++
++    @Override
++    public void destroy() {}
++
++    @Override
++    public BottomSheetType getSheetType() {
++        return SHEET_TYPE;
++    }
++
++    @Override
++    public int getPriority() {
++        return ContentPriority.HIGH;
++    }
++
++    @Override
++    public boolean swipeToDismissEnabled() {
++        return true;
++    }
++
++    @Override
++    public boolean showHandlebar() {
++        return true;
++    }
++
++    @Override
++    public int getPeekHeight() {
++        return HeightMode.DISABLED;
++    }
++
++    @Override
++    public float getHalfHeightRatio() {
++        return HeightMode.DISABLED;
++    }
++
++    @Override
++    public float getFullHeightRatio() {
++        return HeightMode.WRAP_CONTENT;
++    }
++
++    @Override
++    public @Nullable String getSheetContentDescription(Context context) {
++        return context.getString(R.string.extensions_menu_title);
++    }
++
++    @Override
++    public int getSheetHalfHeightAccessibilityStringId() {
++        return R.string.extensions_menu_title;
++    }
++
++    @Override
++    public int getSheetFullHeightAccessibilityStringId() {
++        return R.string.extensions_menu_title;
++    }
++
++    @Override
++    public int getSheetClosedAccessibilityStringId() {
++        return R.string.extensions_menu_title;
++    }
++}

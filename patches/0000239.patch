@@ -1,0 +1,387 @@
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 93f69d1cf8d..6a56e2582f5 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -271,6 +271,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BareMinimalLeftButton.java",
+   "java/src/org/chromium/chrome/browser/bare/BareNtpAppearance.java",
+   "java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java",
++  "java/src/org/chromium/chrome/browser/bare/BarePullOffset.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareMadeWithLovePreference.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareUpdatePreference.java",
+   "java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/SwipeRefreshHandler.java b/chrome/android/java/src/org/chromium/chrome/browser/SwipeRefreshHandler.java
+index 77603d1cf8a..7df099d6d82 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/SwipeRefreshHandler.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/SwipeRefreshHandler.java
+@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
+ 
+ import android.annotation.SuppressLint;
+ import android.content.Context;
++import android.graphics.Color;
+ import android.os.Build.VERSION;
+ import android.os.Build.VERSION_CODES;
+ import android.view.HapticFeedbackConstants;
+@@ -24,6 +25,7 @@ import org.chromium.base.metrics.RecordUserAction;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.BarePullOffset;
+ import org.chromium.chrome.browser.browser_controls.BottomOverscrollHandler;
+ import org.chromium.chrome.browser.gesturenav.HistoryNavigationCoordinator;
+ import org.chromium.chrome.browser.tab.Tab;
+@@ -75,6 +77,11 @@ public class SwipeRefreshHandler extends TabWebContentsUserData
+     // guarding against cases where the page reload fails or takes too long.
+     private static final int MAX_REFRESH_ANIMATION_DURATION_MS = 7500;
+ 
++    // How far the page stays down, with the spinner in the gap above it, while it reloads.
++    private static final int PAGE_REST_WHILE_REFRESHING_DP = 72;
++
++    private boolean mPullReady;
++
+     private @OverscrollAction int mSwipeType;
+ 
+     // Creates new values for mSwipeRefreshLayout when mSwipeRefreshLayout needs to be non-null.
+@@ -204,6 +211,31 @@ public class SwipeRefreshHandler extends TabWebContentsUserData
+                         ? context.getColor(R.color.default_icon_color_blue_light)
+                         : SemanticColorUtils.getDefaultIconColorAccent1(context);
+         mSwipeRefreshLayout.setColorSchemeColors(iconColor);
++
++        // The page moves down with the pull, twice as far as the spinner, so it follows the
++        // finger up to the point where letting go refreshes. The spinner is a plain arrow in the
++        // gap until then, and a filled disc once a release would refresh.
++        final @ColorInt int discColor = iconColor;
++        final @ColorInt int onDiscColor = SemanticColorUtils.getDefaultTextColorOnAccent1(context);
++        final @ColorInt int arrowColor =
++                incognitoBranded ? iconColor : SemanticColorUtils.getDefaultIconColor(context);
++        mPullReady = false;
++        mSwipeRefreshLayout.setProgressBackgroundColorSchemeColor(Color.TRANSPARENT);
++        mSwipeRefreshLayout.setColorSchemeColors(arrowColor);
++        mSwipeRefreshLayout.setOnOffsetListener(
++                (travelPx, ready) -> {
++                    BarePullOffset.set(mTab.getId(), travelPx * 2f);
++                    if (ready == mPullReady) return;
++                    mPullReady = ready;
++                    assumeNonNull(mSwipeRefreshLayout);
++                    mSwipeRefreshLayout.setProgressBackgroundColorSchemeColor(
++                            ready ? discColor : Color.TRANSPARENT);
++                    mSwipeRefreshLayout.setColorSchemeColors(ready ? onDiscColor : arrowColor);
++                },
++                Math.round(
++                        PAGE_REST_WHILE_REFRESHING_DP
++                                / 2f
++                                * context.getResources().getDisplayMetrics().density));
+         if (mTab.getContentView() != null) mSwipeRefreshLayout.setEnabled(true);
+         mSwipeRefreshLayout.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+ 
+@@ -459,5 +491,7 @@ public class SwipeRefreshHandler extends TabWebContentsUserData
+         if (parent != null) {
+             parent.removeView(mSwipeRefreshLayout);
+         }
++        // Nothing moves the page once the spinner is gone, so it goes back to its place.
++        BarePullOffset.set(mTab.getId(), 0);
+     }
+ }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePullOffset.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePullOffset.java
+new file mode 100644
+index 00000000000..1b1494beb95
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePullOffset.java
+@@ -0,0 +1,55 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.graphics.Color;
++
++import androidx.annotation.ColorInt;
++
++import org.chromium.base.ObserverList;
++import org.chromium.base.ThreadUtils;
++import org.chromium.build.annotations.NullMarked;
++
++/**
++ * How far pull to refresh has moved a tab's page down. SwipeRefreshHandler sets it while the user
++ * pulls and while the page reloads; the layout that draws the page reads it.
++ */
++@NullMarked
++public final class BarePullOffset {
++    /** Told when a tab's pull offset changes. */
++    public interface Observer {
++        void onPullOffsetChanged(int tabId, float offsetPx);
++    }
++
++    private static final ObserverList<Observer> sObservers = new ObserverList<>();
++    private static @ColorInt int sGapColor = Color.TRANSPARENT;
++
++    public static void set(int tabId, float offsetPx) {
++        ThreadUtils.assertOnUiThread();
++        for (Observer observer : sObservers) observer.onPullOffsetChanged(tabId, offsetPx);
++    }
++
++    public static void addObserver(Observer observer) {
++        ThreadUtils.assertOnUiThread();
++        sObservers.addObserver(observer);
++    }
++
++    public static void removeObserver(Observer observer) {
++        ThreadUtils.assertOnUiThread();
++        sObservers.removeObserver(observer);
++    }
++
++    /** Records the status bar colour, which the gap above a pulled page takes, to look joined. */
++    public static void setGapColor(@ColorInt int color) {
++        sGapColor = color;
++    }
++
++    /** The colour for the gap above a pulled page, or transparent if none is known yet. */
++    public static @ColorInt int getGapColor() {
++        return sGapColor;
++    }
++
++    private BarePullOffset() {}
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/StaticLayout.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/StaticLayout.java
+index 042aa0f9e18..074f251bba6 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/StaticLayout.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/StaticLayout.java
+@@ -8,8 +8,10 @@ import static org.chromium.build.NullUtil.assumeNonNull;
+ 
+ import android.content.Context;
+ import android.content.res.Resources;
++import android.graphics.Color;
+ import android.graphics.RectF;
+ 
++import androidx.annotation.ColorInt;
+ import androidx.annotation.Px;
+ import androidx.annotation.VisibleForTesting;
+ 
+@@ -18,6 +20,7 @@ import org.chromium.base.supplier.NonNullObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.cc.input.BrowserControlsState;
++import org.chromium.chrome.browser.bare.BarePullOffset;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsOffsetTagsInfo;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
+ import org.chromium.chrome.browser.compositor.layouts.components.LayoutTab;
+@@ -70,6 +73,8 @@ public class StaticLayout extends Layout {
+     private final Runnable mRequestFrameRunnable;
+ 
+     private final PropertyModel mModel;
++    private final BarePullOffset.Observer mPullOffsetObserver;
++    private float mPullOffsetPx;
+     private CompositorModelChangeProcessor mMcp;
+ 
+     private StaticTabSceneLayer mSceneLayer;
+@@ -184,6 +189,29 @@ public class StaticLayout extends Layout {
+         mBrowserControlsStateProvider = browserControlsStateProvider;
+         mModel.set(LayoutTab.CONTENT_OFFSET_Y, mBrowserControlsStateProvider.getContentOffset());
+ 
++        // Pull to refresh moves the page down by drawing it lower; the renderer is not resized.
++        // Y rather than RENDER_Y, which updateSnap() sets from Y on every frame.
++        mPullOffsetObserver =
++                (tabId, offsetPx) -> {
++                    if (mModel.get(LayoutTab.TAB_ID) != tabId) return;
++                    boolean wasPulled = mPullOffsetPx > 0;
++                    mPullOffsetPx = offsetPx;
++                    mModel.set(LayoutTab.Y, offsetPx / LayoutTab.sDpToPx);
++                    if (offsetPx > 0) {
++                        // The gap above the page takes the status bar's colour, so the pull
++                        // looks like it opens out of the status bar, rather than the page's own
++                        // background, which is often white behind a dark site.
++                        mModel.set(LayoutTab.BACKGROUND_COLOR, getPullGapColor());
++                    } else if (wasPulled && mTabModelSelector != null) {
++                        Tab tab = mTabModelSelector.getTabById(tabId);
++                        if (tab != null) {
++                            mModel.set(
++                                    LayoutTab.BACKGROUND_COLOR, ThemeUtils.getBackgroundColor(tab));
++                        }
++                    }
++                };
++        BarePullOffset.addObserver(mPullOffsetObserver);
++
+         mUpdateOffsetTagsCallback = (ignored) -> updateOffsetTag();
+         mNeedsOffsetTag.addSyncObserverAndPostIfNonNull(mUpdateOffsetTagsCallback);
+ 
+@@ -393,6 +421,8 @@ public class StaticLayout extends Layout {
+         if (mModel.get(LayoutTab.TAB_ID) == tab.getId()) return;
+ 
+         mModel.set(LayoutTab.TAB_ID, tab.getId());
++        mModel.set(LayoutTab.Y, 0.0f);
++        mPullOffsetPx = 0;
+         mModel.set(LayoutTab.IS_INCOGNITO, tab.isIncognito());
+         mModel.set(LayoutTab.ORIGINAL_CONTENT_WIDTH_IN_DP, mViewHost.getWidth() * mPxToDp);
+         mModel.set(LayoutTab.ORIGINAL_CONTENT_HEIGHT_IN_DP, mViewHost.getHeight() * mPxToDp);
+@@ -402,6 +432,12 @@ public class StaticLayout extends Layout {
+         updateStaticTab(tab, /* skipUpdateVisibleIds= */ true);
+     }
+ 
++    private @ColorInt int getPullGapColor() {
++        @ColorInt int color = BarePullOffset.getGapColor();
++        if (Color.alpha(color) == 255) return color;
++        return mModel.get(LayoutTab.TOOLBAR_BACKGROUND_COLOR);
++    }
++
+     private void updateStaticTab(Tab tab, boolean skipUpdateVisibleIds) {
+         if (mModel.get(LayoutTab.TAB_ID) != tab.getId()) return;
+ 
+@@ -413,6 +449,9 @@ public class StaticLayout extends Layout {
+         ToolbarThemeColorProvider toolbarTheme = mToolbarThemeColorProvider.get();
+         mModel.set(LayoutTab.BACKGROUND_COLOR, ThemeUtils.getBackgroundColor(tab));
+         mModel.set(LayoutTab.TOOLBAR_BACKGROUND_COLOR, toolbarTheme.getToolbarBackgroundColor(tab));
++        if (mPullOffsetPx > 0) {
++            mModel.set(LayoutTab.BACKGROUND_COLOR, getPullGapColor());
++        }
+         mModel.set(LayoutTab.TEXT_BOX_BACKGROUND_COLOR, getToolbarTextBoxBackgroundColor(tab));
+         mModel.set(LayoutTab.CAN_USE_LIVE_TEXTURE, useLiveTexture);
+     }
+@@ -518,6 +557,7 @@ public class StaticLayout extends Layout {
+     @Override
+     @SuppressWarnings("NullAway")
+     public void destroy() {
++        BarePullOffset.removeObserver(mPullOffsetObserver);
+         if (mSceneLayer != null) {
+             mSceneLayer.destroy();
+             mSceneLayer = null;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java b/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
+index 9936e284227..b67b9b40193 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
+@@ -25,6 +25,7 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.ActivityTabProvider;
++import org.chromium.chrome.browser.bare.BarePullOffset;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
+ import org.chromium.chrome.browser.layouts.LayoutManager;
+@@ -507,6 +508,7 @@ public class StatusBarColorController
+     /** Calculate and update the status bar's color. */
+     public void updateStatusBarColor() {
+         @ColorInt int statusBarColor = calculateFinalStatusBarColor();
++        BarePullOffset.setGapColor(statusBarColor);
+         setStatusBarColor(
+                 mEdgeToEdgeSystemBarColorHelper,
+                 mActivity,
+diff --git a/third_party/android_swipe_refresh/java/src/org/chromium/third_party/android/swiperefresh/SwipeRefreshLayout.java b/third_party/android_swipe_refresh/java/src/org/chromium/third_party/android/swiperefresh/SwipeRefreshLayout.java
+index e18cfe49c95..ae1b06e1481 100644
+--- a/third_party/android_swipe_refresh/java/src/org/chromium/third_party/android/swiperefresh/SwipeRefreshLayout.java
++++ b/third_party/android_swipe_refresh/java/src/org/chromium/third_party/android/swiperefresh/SwipeRefreshLayout.java
+@@ -157,6 +157,11 @@ public class SwipeRefreshLayout extends ViewGroup {
+ 
+     // Chrome-specific additions.
+     private float mTotalMotionY;
++
++    // Bare: set when the page follows the pull. See setOnOffsetListener().
++    private OnOffsetListener mOffsetListener;
++    private int mRefreshingTravel = -1;
++    private boolean mSlidingToReset;
+     // Minimum number of pull updates necessary to trigger a refresh.
+     private static int MIN_PULLS_TO_ACTIVATE = 3;
+     // Multiplier for the default top offset relative to the size of the progress spinner.
+@@ -374,6 +379,9 @@ public class SwipeRefreshLayout extends ViewGroup {
+             mRefreshing = refreshing;
+             if (mRefreshing) {
+                 animateOffsetToCorrectPosition(mCurrentTargetOffsetTop, mRefreshListener);
++            } else if (mOffsetListener != null) {
++                // The page is held down with the spinner, so both slide back up together.
++                animateOffsetToStartPosition(mCurrentTargetOffsetTop, mRefreshListener);
+             } else {
+                 startScaleDownAnimation(mRefreshListener);
+             }
+@@ -470,6 +478,7 @@ public class SwipeRefreshLayout extends ViewGroup {
+     public boolean start() {
+         if (!isEnabled()) return false;
+         if (mRefreshing) return false;
++        mSlidingToReset = false;
+         mCircleView.clearAnimation();
+         mProgress.stop();
+         // See ACTION_DOWN handling in {@link #onTouchEvent(...)}.
+@@ -595,6 +604,36 @@ public class SwipeRefreshLayout extends ViewGroup {
+      * Reset the effect, clearing any active animations.
+      */
+     public void reset() {
++        if (mOffsetListener != null
++                && !mSlidingToReset
++                && mCircleView.getVisibility() == View.VISIBLE
++                && mCurrentTargetOffsetTop > mOriginalOffsetTop) {
++            // The page is held down with the spinner, so slide both back up first; a reset in
++            // one step would drop the page, and setRefreshing(false) below would start a slide
++            // whose first frame puts it back down.
++            mIsBeingDragged = false;
++            mRefreshing = false;
++            mNotify = false;
++            mProgress.stop();
++            mSlidingToReset = true;
++            animateOffsetToStartPosition(
++                    mCurrentTargetOffsetTop,
++                    new Animation.AnimationListener() {
++                        @Override
++                        public void onAnimationStart(Animation animation) {}
++
++                        @Override
++                        public void onAnimationRepeat(Animation animation) {}
++
++                        @Override
++                        public void onAnimationEnd(Animation animation) {
++                            if (!mSlidingToReset) return;
++                            mSlidingToReset = false;
++                            reset();
++                        }
++                    });
++            return;
++        }
+         mIsBeingDragged = false;
+         setRefreshing(false, false /* notify */);
+         mProgress.stop();
+@@ -647,7 +686,9 @@ public class SwipeRefreshLayout extends ViewGroup {
+                 public void applyTransformation(float interpolatedTime, Transformation t) {
+                     int targetTop = 0;
+                     int endTarget = 0;
+-                    if (!mUsingCustomStart) {
++                    if (mRefreshingTravel >= 0) {
++                        endTarget = mOriginalOffsetTop + mRefreshingTravel;
++                    } else if (!mUsingCustomStart) {
+                         endTarget = (int) (mSpinnerFinalOffset - Math.abs(mOriginalOffsetTop));
+                     } else {
+                         endTarget = (int) mSpinnerFinalOffset;
+@@ -699,6 +740,37 @@ public class SwipeRefreshLayout extends ViewGroup {
+         mCircleView.bringToFront();
+         mCircleView.offsetTopAndBottom(offset);
+         mCurrentTargetOffsetTop = mCircleView.getTop();
++        if (mOffsetListener != null) {
++            int travel = Math.max(0, mCurrentTargetOffsetTop - mOriginalOffsetTop);
++            // The whole view fades in instead. Below full alpha the drawable masks the arrow with a
++            // disc of its background colour, which shows as grey when that colour is transparent.
++            mCircleView.setAlpha(Math.min(1f, travel / (float) mCircleHeight));
++            mProgress.setAlpha(MAX_ALPHA);
++            mOffsetListener.onOffset(
++                    travel, mIsBeingDragged ? mTotalMotionY > mTotalDragDistance : mRefreshing);
++        }
++    }
++
++    /**
++     * Reports every spinner move so the page can follow it. With a listener set, the spinner
++     * draws no shadow and sits half its height lower, centred in the gap above a page that has
++     * moved twice as far as the spinner; it rests {@code refreshingTravelPx} below its start while
++     * the page reloads, and slides back up rather than shrinking when the reload is done.
++     */
++    public void setOnOffsetListener(OnOffsetListener listener, int refreshingTravelPx) {
++        mOffsetListener = listener;
++        mRefreshingTravel = refreshingTravelPx;
++        mCircleView.setElevation(0);
++        mCircleView.setTranslationY(mCircleHeight / 2f);
++    }
++
++    /** Told where the spinner is after each move. */
++    public interface OnOffsetListener {
++        /**
++         * @param travelPx how far the spinner is below its start.
++         * @param ready whether letting go now refreshes, or a refresh is under way.
++         */
++        void onOffset(int travelPx, boolean ready);
+     }
+ 
+     /**

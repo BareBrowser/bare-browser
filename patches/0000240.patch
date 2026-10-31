@@ -1,0 +1,748 @@
+diff --git a/chrome/browser/ui/android/omnibox/java/res/layout/location_bar.xml b/chrome/browser/ui/android/omnibox/java/res/layout/location_bar.xml
+index daa213e43c1..7761e1be6fb 100644
+--- a/chrome/browser/ui/android/omnibox/java/res/layout/location_bar.xml
++++ b/chrome/browser/ui/android/omnibox/java/res/layout/location_bar.xml
+@@ -28,6 +28,20 @@ small devices.
+         android:layout_marginEnd="4dp"
+         android:visibility="gone" />
+ 
++    <!--
++    Site settings at the end of the bar while it is at rest. ToolbarPhone moves it in from the end,
++    left of the extensions icon and the address bar shortcut.
++    -->
++    <ImageButton
++        android:id="@+id/location_bar_site_settings_button"
++        android:layout_width="40dp"
++        android:layout_height="@dimen/location_bar_height"
++        android:padding="8dp"
++        android:scaleType="fitCenter"
++        android:background="?attr/selectableItemBackgroundBorderless"
++        android:visibility="gone"
++        app:layout_constraintEnd_toEndOf="parent"
++        app:layout_constraintTop_toBottomOf="@id/location_bar_attachments"/>
+     <include layout="@layout/url_action_container"/>
+     <View
+         android:id="@+id/focus_thief"
+diff --git a/chrome/browser/ui/android/omnibox/java/res/layout/location_status.xml b/chrome/browser/ui/android/omnibox/java/res/layout/location_status.xml
+index 1045b792e76..d2654cf3729 100644
+--- a/chrome/browser/ui/android/omnibox/java/res/layout/location_status.xml
++++ b/chrome/browser/ui/android/omnibox/java/res/layout/location_status.xml
+@@ -47,6 +47,19 @@ found in the LICENSE file.
+             android:focusable="false"/>
+ 
+         <include layout="@layout/location_status_icon"/>
++
++        <!-- The page's own icon, after the site settings icon, while the bar is at rest. -->
++        <ImageView
++            android:id="@+id/location_bar_site_favicon"
++            android:layout_width="20dp"
++            android:layout_height="20dp"
++            android:layout_gravity="center_vertical"
++            android:layout_marginStart="6dp"
++            android:layout_marginEnd="8dp"
++            android:scaleType="fitCenter"
++            android:visibility="gone"
++            android:importantForAccessibility="no"
++            android:focusable="false"/>
+         <TextView
+             android:id="@+id/location_bar_verbose_status"
+             android:layout_width="wrap_content"
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
+index 5ab9a88d5a5..33ddd5fc5c3 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
+@@ -22,6 +22,7 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxState;
+ import org.chromium.chrome.browser.omnibox.status.StatusCoordinator;
++import org.chromium.chrome.browser.omnibox.status.StatusView;
+ import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteCoordinator;
+ import org.chromium.chrome.browser.toolbar.ToolbarVariationUtils;
+ import org.chromium.components.metrics.OmniboxEventProtosIntDef.PageClassification;
+@@ -73,6 +74,10 @@ class LocationBarPhone extends LocationBarLayout {
+     protected void onFinishInflate() {
+         super.onFinishInflate();
+ 
++        if (mLocationBarStatusView instanceof StatusView statusView) {
++            statusView.setEndIconButton(findViewById(R.id.location_bar_site_settings_button));
++        }
++
+         if (isToolbarUiRefactorEnabled()) {
+             setClickable(true);
+             setLongClickable(true);
+@@ -94,18 +99,17 @@ class LocationBarPhone extends LocationBarLayout {
+                 locationBarDataProvider,
+                 windowAndroid);
+ 
+-        if (isToolbarUiRefactorEnabled()) {
+-            mUrlObserver =
+-                    new LocationBarDataProvider.Observer() {
+-                        @Override
+-                        public void onUrlChanged(boolean isTabChanging) {
+-                            ViewUtils.requestLayout(
+-                                    LocationBarPhone.this,
+-                                    "LocationBarPhone.LocationBarDataProvider.onUrlChanged");
+-                        }
+-                    };
+-            mLocationBarDataProvider.addObserver(mUrlObserver);
+-        }
++        // Whether the name is centred depends on the address, so every variation follows it.
++        mUrlObserver =
++                new LocationBarDataProvider.Observer() {
++                    @Override
++                    public void onUrlChanged(boolean isTabChanging) {
++                        ViewUtils.requestLayout(
++                                LocationBarPhone.this,
++                                "LocationBarPhone.LocationBarDataProvider.onUrlChanged");
++                    }
++                };
++        mLocationBarDataProvider.addObserver(mUrlObserver);
+     }
+ 
+     @Override
+@@ -133,13 +137,16 @@ class LocationBarPhone extends LocationBarLayout {
+     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+         try (TraceEvent e = TraceEvent.scoped("LocationBarPhone.onMeasure")) {
+             boolean wasCentering = mIsCenteringApplied;
+-            boolean shouldCenter = shouldCenterUrlAndStatus();
++            boolean shouldCenter =
++                    shouldCenterUrlAndStatus()
++                            && fitsCentred(
++                                    MeasureSpec.getSize(widthMeasureSpec), heightMeasureSpec);
+             if (shouldCenter != mIsCenteringApplied) {
+                 mIsCenteringApplied = shouldCenter;
+                 setCenteringUrlAndStatusConstraints(mIsCenteringApplied);
+             }
+ 
+-            if (isToolbarUiRefactorEnabled() || wasCentering) {
++            if (isToolbarUiRefactorEnabled() || wasCentering || mIsCenteringApplied) {
+                 updateUrlBarWidth(widthMeasureSpec, heightMeasureSpec);
+             }
+ 
+@@ -181,7 +188,13 @@ class LocationBarPhone extends LocationBarLayout {
+ 
+     @Override
+     protected void updateCenteringUrlAndStatusState() {
+-        boolean shouldCenter = shouldCenterUrlAndStatus();
++        boolean shouldCenter =
++                shouldCenterUrlAndStatus()
++                        && (getWidth() == 0
++                                || fitsCentred(
++                                        getWidth(),
++                                        MeasureSpec.makeMeasureSpec(
++                                                getHeight(), MeasureSpec.EXACTLY)));
+         if (shouldCenter != mIsCenteringApplied) {
+             mIsCenteringApplied = shouldCenter;
+             setCenteringUrlAndStatusConstraints(mIsCenteringApplied);
+@@ -199,12 +212,13 @@ class LocationBarPhone extends LocationBarLayout {
+                 (ConstraintLayout.LayoutParams) mBackButton.getLayoutParams();
+ 
+         if (shouldCenter) {
+-            // Constrain the chain to the parent edges to center it globally.
+-            // We use CHAIN_PACKED to clump StatusView and UrlBar together.
+-            statusParams.startToStart = ConstraintLayout.LayoutParams.PARENT_ID;
++            // Bare centres the address text on its own and hangs the status view, which holds
++            // the site icon at rest, off its start, rather than centring the two as a group.
++            statusParams.startToStart = ConstraintLayout.LayoutParams.UNSET;
+             statusParams.startToEnd = ConstraintLayout.LayoutParams.UNSET;
+-            statusParams.horizontalChainStyle = ConstraintLayout.LayoutParams.CHAIN_PACKED;
+ 
++            urlBarParams.startToEnd = ConstraintLayout.LayoutParams.UNSET;
++            urlBarParams.startToStart = ConstraintLayout.LayoutParams.PARENT_ID;
+             urlBarParams.endToEnd = ConstraintLayout.LayoutParams.PARENT_ID;
+             urlBarParams.endToStart = ConstraintLayout.LayoutParams.UNSET;
+             urlBarParams.horizontalWeight = 0;
+@@ -225,6 +239,8 @@ class LocationBarPhone extends LocationBarLayout {
+             statusParams.startToEnd = R.id.back_button_barrier;
+             statusParams.horizontalChainStyle = ConstraintLayout.LayoutParams.CHAIN_SPREAD_INSIDE;
+ 
++            urlBarParams.startToStart = ConstraintLayout.LayoutParams.UNSET;
++            urlBarParams.startToEnd = R.id.location_bar_status;
+             urlBarParams.endToEnd = ConstraintLayout.LayoutParams.UNSET;
+             urlBarParams.endToStart =
+                     mFuseboxState == FuseboxState.EXPANDED
+@@ -260,13 +276,24 @@ class LocationBarPhone extends LocationBarLayout {
+                             ? getMeasuredWidthWithMargins(mOptionalButton, heightMeasureSpec)
+                             : 0;
+ 
+-            int buttonSpace = Math.max(backButtonWidth, optButtonWidth);
++            // The icons at the end of the bar: site settings, which ToolbarPhone moves in past
++            // the extensions icon and the shortcut, so its end margin covers them too.
++            View siteSettings = findViewById(R.id.location_bar_site_settings_button);
++            int endIconsWidth =
++                    siteSettings != null
++                            ? getMeasuredWidthWithMargins(siteSettings, heightMeasureSpec)
++                            : 0;
++
++            int buttonSpace = Math.max(Math.max(backButtonWidth, optButtonWidth), endIconsWidth);
+             // Ensure we have at least some minimum spacing.
+             buttonSpace = Math.max(buttonSpace, mCenteringSpacePx);
+ 
+             int maxComponentWidth = totalWidth - 2 * buttonSpace;
++            // The text is centred alone, so the room the status view takes on one side is kept
++            // free on the other side too.
+             int maxUrlWidth =
+-                    getMaxUrlWidth(mLocationBarStatusView, maxComponentWidth, heightMeasureSpec);
++                    getMaxUrlWidth(mLocationBarStatusView, maxComponentWidth, heightMeasureSpec)
++                            - getStatusWidth();
+             maxUrlWidth = Math.max(mMinUrlWidthPx, maxUrlWidth);
+ 
+             int desiredUrlWidth =
+@@ -413,10 +440,8 @@ class LocationBarPhone extends LocationBarLayout {
+ 
+     /** Returns whether the URL and status should be centered. */
+     private boolean shouldCenterUrlAndStatus() {
+-        // Only apply centering if the experimental flag is enabled.
+-        if (!isToolbarUiRefactorEnabled()) {
+-            return false;
+-        }
++        // Bare centres the name at rest whatever the toolbar variation, with the site icon beside
++        // it; site settings is at the end of the bar.
+ 
+         // Do not center when the URL bar is focused.
+         if (mUrlBar == null || mUrlBar.hasFocus()) {
+@@ -436,6 +461,43 @@ class LocationBarPhone extends LocationBarLayout {
+         return !OmniboxUrlUtils.isNtpUrl(mLocationBarDataProvider.getCurrentGurl());
+     }
+ 
++    /**
++     * Whether the name fits centred between the icons at both ends of the bar. A name that does not
++     * runs from the start instead, with the same gap before the end icons as after the back button,
++     * rather than centred with a wide gap on the side with fewer icons.
++     */
++    private boolean fitsCentred(int totalWidth, int heightMeasureSpec) {
++        int backButtonWidth = getMeasuredWidthWithMargins(mBackButton, heightMeasureSpec);
++        int optButtonWidth =
++                mOptionalButton != null
++                        ? getMeasuredWidthWithMargins(mOptionalButton, heightMeasureSpec)
++                        : 0;
++        View siteSettings = findViewById(R.id.location_bar_site_settings_button);
++        int endIconsWidth =
++                siteSettings != null
++                        ? getMeasuredWidthWithMargins(siteSettings, heightMeasureSpec)
++                        : 0;
++        int buttonSpace =
++                Math.max(
++                        Math.max(Math.max(backButtonWidth, optButtonWidth), endIconsWidth),
++                        mCenteringSpacePx);
++        int maxUrlWidth =
++                getMaxUrlWidth(
++                                mLocationBarStatusView,
++                                totalWidth - 2 * buttonSpace,
++                                heightMeasureSpec)
++                        - getStatusWidth();
++        int desiredUrlWidth =
++                getUrlBarTextWidth() + mUrlBar.getPaddingStart() + mUrlCenteringSafetyMarginPx;
++        return desiredUrlWidth <= maxUrlWidth;
++    }
++
++    private int getStatusWidth() {
++        return mLocationBarStatusView.getVisibility() == View.GONE
++                ? 0
++                : mLocationBarStatusView.getMeasuredWidth();
++    }
++
+     private boolean isToolbarUiRefactorEnabled() {
+         return ToolbarVariationUtils.isToolbarUiRefactorEnabled(getContext());
+     }
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusIconView.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusIconView.java
+index 812724898c5..63c5bbeb97c 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusIconView.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusIconView.java
+@@ -72,6 +72,14 @@ public class StatusIconView extends LinearLayout {
+         mStatusIconHoldingSpace.setVisibility(visibility == View.GONE ? View.VISIBLE : View.GONE);
+     }
+ 
++    /**
++     * Hides the icon together with its holding space, so the slot takes no room. setVisibility()
++     * only swaps the icon for the holding space.
++     */
++    void setCollapsed(boolean collapsed) {
++        super.setVisibility(collapsed ? View.GONE : View.VISIBLE);
++    }
++
+     /** return the status icon's visibility. */
+     int getIconVisibility() {
+         return mIconView.getVisibility();
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
+index b74def4c3ad..82a25a4490c 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
+@@ -9,6 +9,9 @@ import static org.chromium.build.NullUtil.assumeNonNull;
+ import android.content.Context;
+ import android.content.res.Resources;
+ import android.graphics.Bitmap;
++import android.graphics.Color;
++import android.graphics.drawable.BitmapDrawable;
++import android.graphics.drawable.ColorDrawable;
+ import android.graphics.drawable.Drawable;
+ import android.os.Handler;
+ import android.view.View;
+@@ -45,6 +48,7 @@ import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
+ import org.chromium.chrome.browser.page_info.ChromePageInfoHighlight;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.chrome.browser.tab.TabObserver;
+ import org.chromium.chrome.browser.theme.ThemeUtils;
+ import org.chromium.chrome.browser.ui.extensions.ExtensionUi;
+ import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
+@@ -114,6 +118,32 @@ public class StatusMediator
+             this::onAutocompleteStateChanged;
+ 
+     private boolean mUrlHasFocus;
++
++    // The site icon slot. The icon comes from the favicon database when the page is shown, and
++    // from the tab when the page reports a new one. Until one arrives the slot stays empty, and
++    // a globe only fills it once there is nothing left to wait for.
++    private @Nullable GURL mSiteFaviconUrl;
++    private @Nullable Drawable mSiteFavicon;
++    private boolean mSiteFaviconPending;
++    private @Nullable Tab mSiteFaviconTab;
++    private final TabObserver mSiteFaviconTabObserver =
++            new TabObserver() {
++                @Override
++                public void onFaviconUpdated(
++                        Tab tab, @Nullable Bitmap icon, @Nullable GURL iconUrl) {
++                    if (icon == null || !tab.getUrl().equals(mSiteFaviconUrl)) return;
++                    mSiteFavicon = new BitmapDrawable(mContext.getResources(), icon);
++                    mSiteFaviconPending = false;
++                    showSiteFavicon();
++                }
++
++                @Override
++                public void onPageLoadFinished(Tab tab, GURL url) {
++                    if (!mSiteFaviconPending || !url.equals(mSiteFaviconUrl)) return;
++                    mSiteFaviconPending = false;
++                    showSiteFavicon();
++                }
++            };
+     private boolean mVerboseStatusSpaceAvailable;
+     private boolean mPageIsPaintPreview;
+     private boolean mPageIsOffline;
+@@ -229,6 +259,10 @@ public class StatusMediator
+     }
+ 
+     public void destroy() {
++        if (mSiteFaviconTab != null) {
++            mSiteFaviconTab.removeObserver(mSiteFaviconTabObserver);
++            mSiteFaviconTab = null;
++        }
+         if (mSearchEngineService != null) {
+             mSearchEngineService.removeIconObserver(this);
+             mSearchEngineService = null;
+@@ -366,6 +400,7 @@ public class StatusMediator
+         if (mUrlHasFocus) return;
+ 
+         mUrlHasFocus = true;
++        showSiteFavicon();
+         setFuseboxSessionState(sessionState);
+         updateVerboseStatusTextVisibility();
+         updateLocationBarIcon(IconTransitionType.CROSSFADE);
+@@ -381,6 +416,7 @@ public class StatusMediator
+         if (!mUrlHasFocus) return;
+ 
+         mUrlHasFocus = false;
++        showSiteFavicon();
+         setFuseboxSessionState(null);
+         updateVerboseStatusTextVisibility();
+         updateLocationBarIcon(IconTransitionType.CROSSFADE);
+@@ -758,7 +794,7 @@ public class StatusMediator
+      */
+     boolean shouldDisplaySearchEngineIcon() {
+         if (PageClassificationUtils.isHubOrTabSearch(
+-                        mLocationBarDataProvider.getPageClassification(/* prefetch= */ false))) {
++                mLocationBarDataProvider.getPageClassification(/* prefetch= */ false))) {
+             return false;
+         }
+ 
+@@ -888,6 +924,75 @@ public class StatusMediator
+         }
+     }
+ 
++    /** Follows the current tab and page for the site icon slot. */
++    private void updateSiteFavicon() {
++        Tab tab = mLocationBarDataProvider.getTab();
++        if (tab != mSiteFaviconTab) {
++            if (mSiteFaviconTab != null) mSiteFaviconTab.removeObserver(mSiteFaviconTabObserver);
++            mSiteFaviconTab = tab;
++            if (tab != null) tab.addObserver(mSiteFaviconTabObserver);
++        }
++
++        GURL url = mLocationBarDataProvider.getCurrentGurl();
++        if (url.equals(mSiteFaviconUrl)) return;
++        GURL previous = mSiteFaviconUrl;
++        mSiteFaviconUrl = url;
++        boolean web = url.getScheme().equals("https") || url.getScheme().equals("http");
++        // Another page on the same site keeps its icon while the new one loads, so the slot
++        // does not blink to the globe and back.
++        boolean sameSite =
++                previous != null
++                        && mSiteFavicon != null
++                        && previous.getHost().equals(url.getHost());
++        if (!sameSite) mSiteFavicon = null;
++        mSiteFaviconPending = web && mSiteFavicon == null;
++        showSiteFavicon();
++        if (!web) return;
++        mImageSupplier.fetchFavicon(
++                url,
++                favicon -> {
++                    if (!url.equals(mSiteFaviconUrl)) return;
++                    if (favicon != null) {
++                        mSiteFavicon = favicon;
++                        mSiteFaviconPending = false;
++                    } else if (tab == null || !tab.isLoading()) {
++                        // Nothing in the database and no page load to bring one.
++                        mSiteFaviconPending = false;
++                    }
++                    showSiteFavicon();
++                });
++    }
++
++    private void showSiteFavicon() {
++        mModel.set(StatusProperties.ICON_AT_END, !mUrlHasFocus);
++        GURL url = mSiteFaviconUrl;
++        boolean show =
++                !mUrlHasFocus
++                        && url != null
++                        && !url.isEmpty()
++                        && !OmniboxUrlUtils.isNtpUrl(url)
++                        && !PageClassificationUtils.isHubOrTabSearch(
++                                mLocationBarDataProvider.getPageClassification(
++                                        /* prefetch= */ false));
++        if (!show) {
++            mModel.set(StatusProperties.SITE_FAVICON, null);
++            return;
++        }
++        Drawable icon = mSiteFavicon;
++        if (icon == null && mSiteFaviconPending) {
++            // Holds the slot so the name does not move when the icon arrives.
++            icon = new ColorDrawable(Color.TRANSPARENT);
++        } else if (icon == null) {
++            icon = mContext.getDrawable(R.drawable.ic_globe_24dp);
++            if (icon != null) {
++                icon = icon.mutate();
++                icon.setTintList(
++                        ThemeUtils.getThemedToolbarIconTint(mContext, mBrandedColorScheme));
++            }
++        }
++        mModel.set(StatusProperties.SITE_FAVICON, icon);
++    }
++
+     @VisibleForTesting
+     /* package */ void onFaviconFetched(GURL url, @Nullable Drawable favicon) {
+         // If we're not the most recent fetch request, give up.
+@@ -991,6 +1096,7 @@ public class StatusMediator
+     }
+ 
+     public void onUrlChanged() {
++        updateSiteFavicon();
+         updateStatusViewMinWidth();
+         Tab currentTab = mLocationBarDataProvider.getTab();
+         Profile profile = mProfileSupplier.get();
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusProperties.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusProperties.java
+index 4ebb8aa0cbc..b22344e95ce 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusProperties.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusProperties.java
+@@ -280,6 +280,13 @@ public class StatusProperties {
+     /** The StatusView tooltip text resource. */
+     static final WritableIntPropertyKey STATUS_VIEW_TOOLTIP_TEXT = new WritableIntPropertyKey();
+ 
++    /** Whether the status icon shows in the button at the end of the bar instead. */
++    static final WritableBooleanPropertyKey ICON_AT_END = new WritableBooleanPropertyKey();
++
++    /** The page's own icon shown after the status icon, or null to hide it. */
++    static final WritableObjectPropertyKey<Drawable> SITE_FAVICON =
++            new WritableObjectPropertyKey<>();
++
+     /** Specifies the preferred size of the Status field. */
+     static final WritableBooleanPropertyKey USE_SMALL_WIDGET = new WritableBooleanPropertyKey();
+ 
+@@ -306,10 +313,12 @@ public class StatusProperties {
+                 // go/keep-sorted start
+                 ALPHA,
+                 ANIMATIONS_ENABLED,
++                ICON_AT_END,
+                 INCOGNITO_BADGE_VISIBLE,
+                 RESOURCE_PROVIDER,
+                 SEPARATOR_COLOR,
+                 SHOW_STATUS_VIEW,
++                SITE_FAVICON,
+                 STATUS_ACCESSIBILITY_DOUBLE_TAP_DESCRIPTION_RES,
+                 STATUS_ACCESSIBILITY_TOAST_RES,
+                 STATUS_CLICK_LISTENER,
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusView.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusView.java
+index 04116a4d9ad..3b25ff32374 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusView.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusView.java
+@@ -69,6 +69,10 @@ public class StatusView extends LinearLayout {
+     private int mTouchDelegateEndOffset;
+ 
+     private ImageView mIconView;
++    private @Nullable ImageView mSiteFaviconView;
++    private @Nullable ImageView mEndIconButton;
++    private boolean mIconAtEnd;
++    private boolean mVerboseStatusTextVisible;
+     private StatusIconView mStatusIconView;
+     private TextView mVerboseStatusTextView;
+     private View mSeparatorView;
+@@ -111,6 +115,7 @@ public class StatusView extends LinearLayout {
+         super.onFinishInflate();
+ 
+         mIconView = findViewById(R.id.location_bar_status_icon);
++        mSiteFaviconView = findViewById(R.id.location_bar_site_favicon);
+         mStatusIconView = findViewById(R.id.location_bar_status_icon_view);
+         mVerboseStatusTextView = findViewById(R.id.location_bar_verbose_status);
+         mSeparatorView = findViewById(R.id.location_bar_verbose_status_separator);
+@@ -400,7 +405,35 @@ public class StatusView extends LinearLayout {
+     }
+ 
+     private void setStatusIconVisibility(int visibility) {
+-        mStatusIconView.setVisibility(visibility);
++        mStatusIconView.setVisibility(mIconAtEnd ? View.GONE : visibility);
++    }
++
++    /** The button at the end of the bar that carries the status icon while the bar is at rest. */
++    public void setEndIconButton(@Nullable ImageView button) {
++        mEndIconButton = button;
++        updateEndIconButton();
++    }
++
++    /** Moves the status icon to the button at the end of the bar, or back. */
++    void setIconAtEnd(boolean atEnd) {
++        if (mIconAtEnd == atEnd) return;
++        mIconAtEnd = atEnd;
++        mStatusIconView.setCollapsed(atEnd);
++        setVerboseStatusTextVisible(mVerboseStatusTextVisible);
++        updateEndIconButton();
++    }
++
++    private void updateEndIconButton() {
++        if (mEndIconButton == null) return;
++        Drawable icon = mIconAtEnd ? mStatusIconDrawable : null;
++        // The status icon view keeps its own drawable, so the button gets a copy. A cross-fade
++        // may have the original half faded in when it is copied, so the copy is made opaque.
++        if (icon != null && icon.getConstantState() != null) {
++            icon = icon.getConstantState().newDrawable(getResources()).mutate();
++            icon.setAlpha(255);
++        }
++        mEndIconButton.setImageDrawable(icon);
++        mEndIconButton.setVisibility(icon == null ? View.GONE : View.VISIBLE);
+     }
+ 
+     /** Returns a rotated version of the icon passed in. */
+@@ -420,6 +453,7 @@ public class StatusView extends LinearLayout {
+      */
+     void setStatusClickListener(View.OnClickListener listener) {
+         setOnClickListener(listener);
++        if (mEndIconButton != null) mEndIconButton.setOnClickListener(listener);
+     }
+ 
+     /** Configure accessibility descriptions. */
+@@ -500,6 +534,7 @@ public class StatusView extends LinearLayout {
+             @Nullable Runnable animationFinishedCallback) {
+         mStatusIconDrawable = statusIconDrawable;
+         animateStatusIcon(transitionType, animationFinishedCallback);
++        updateEndIconButton();
+     }
+ 
+     /** Specify accessibility string presented to user upon long click. */
+@@ -521,6 +556,7 @@ public class StatusView extends LinearLayout {
+             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES;
+         }
+         mIconView.setContentDescription(description);
++        if (mEndIconButton != null) mEndIconButton.setContentDescription(description);
+         setImportantForAccessibility(importantForAccessibility);
+         setFocusable(descriptionRes != 0);
+         setClickable(descriptionRes != 0);
+@@ -542,9 +578,18 @@ public class StatusView extends LinearLayout {
+         mVerboseStatusTextView.setText(content);
+     }
+ 
++    /** Shows the page's own icon after the status icon, or hides it when null. */
++    void setSiteFavicon(@Nullable Drawable favicon) {
++        if (mSiteFaviconView == null) return;
++        mSiteFaviconView.setImageDrawable(favicon);
++        mSiteFaviconView.setVisibility(favicon == null ? View.GONE : View.VISIBLE);
++    }
++
+     /** Specify visibility of the verbose status text. */
+     public void setVerboseStatusTextVisible(boolean visible) {
+-        int visibility = visible ? View.VISIBLE : View.GONE;
++        mVerboseStatusTextVisible = visible;
++        // The text belongs next to the status icon, so it goes when the icon is at the end.
++        int visibility = visible && !mIconAtEnd ? View.VISIBLE : View.GONE;
+         mVerboseStatusTextView.setVisibility(visibility);
+         mSeparatorView.setVisibility(visibility);
+         mStatusExtraSpace.setVisibility(visibility);
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusViewBinder.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusViewBinder.java
+index 096deb8c709..2f22234078c 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusViewBinder.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusViewBinder.java
+@@ -35,6 +35,10 @@ class StatusViewBinder implements ViewBinder<PropertyModel, StatusView, Property
+             int visibility =
+                     model.get(StatusProperties.SHOW_STATUS_VIEW) ? View.VISIBLE : View.GONE;
+             view.setVisibility(visibility);
++        } else if (propertyKey == StatusProperties.ICON_AT_END) {
++            view.setIconAtEnd(model.get(StatusProperties.ICON_AT_END));
++        } else if (propertyKey == StatusProperties.SITE_FAVICON) {
++            view.setSiteFavicon(model.get(StatusProperties.SITE_FAVICON));
+         } else if (propertyKey
+                 == StatusProperties.STATUS_ACCESSIBILITY_DOUBLE_TAP_DESCRIPTION_RES) {
+             view.setStatusAccessibilityDoubleTapDescription(
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+index 7862d3011b9..1e55a2f1f4e 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+@@ -45,6 +45,7 @@ import android.view.ViewGroup;
+ import android.view.ViewOutlineProvider;
+ import android.view.ViewStub;
+ import android.widget.ImageView;
++import android.widget.TextView;
+ 
+ import androidx.annotation.ColorInt;
+ import androidx.annotation.DimenRes;
+@@ -81,15 +82,15 @@ import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
+ import org.chromium.chrome.browser.omnibox.suggestions.OmniboxSuggestionsDropdownScrollListener;
+ import org.chromium.chrome.browser.tabmodel.IncognitoStateProvider;
+ import org.chromium.chrome.browser.theme.ThemeColorProvider;
+-import org.chromium.chrome.browser.theme.ThemeUtils;
+ import org.chromium.chrome.browser.toolbar.R;
+ import org.chromium.chrome.browser.toolbar.ToolbarDataProvider;
+ import org.chromium.chrome.browser.toolbar.ToolbarProgressBar;
+ import org.chromium.chrome.browser.toolbar.ToolbarTabController;
+ import org.chromium.chrome.browser.toolbar.ToolbarVariationUtils;
++import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarFeatures;
++import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarPrefs;
+ import org.chromium.chrome.browser.toolbar.back_button.BackButtonCoordinator;
+ import org.chromium.chrome.browser.toolbar.forward_button.ForwardButtonCoordinator;
+-import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarFeatures;
+ import org.chromium.chrome.browser.toolbar.home_button.HomeButtonCoordinator;
+ import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonCoordinator;
+ import org.chromium.chrome.browser.toolbar.optional_button.ButtonData;
+@@ -719,9 +720,10 @@ public class ToolbarPhone extends ToolbarLayout
+     private int mBareUrlBarEndPadding = -1;
+ 
+     /**
+-     * Lays out the address bar ends on the full toolbar as name, extensions icon, share icon, with
+-     * the same inset on the right as the back button has on the left. On the minimal layout the
+-     * extensions icon sits at the end of the address bar.
++     * Lays out the end of the address bar on the full toolbar as site settings, extensions icon and
++     * the address bar shortcut when it is on, with the same inset on the right as the back button
++     * has on the left. On the minimal layout the extensions icon sits at the end of the address
++     * bar.
+      */
+     private void applyExtensionsInsideLocationBar() {
+         View locationBar = findViewById(R.id.location_bar);
+@@ -734,8 +736,14 @@ public class ToolbarPhone extends ToolbarLayout
+         float density = getResources().getDisplayMetrics().density;
+         int extensions = getExtensionsWidthInsideLocationBar();
+         boolean minimal = BottomBarConfigUtils.isMinimalLayout();
+-        // The share slot is kept even when no share icon shows, so the extensions icon stays put.
+-        int share = Math.round(52 * density);
++        // The shortcut's slot is kept while the shortcut is on, even when it has nothing to show,
++        // so the extensions icon stays put. With it off the extensions icon moves to the end, as
++        // far in from it as the back arrow is from the start.
++        View shortcut = locationBar.findViewById(R.id.optional_button);
++        boolean shortcutShown =
++                AdaptiveToolbarPrefs.isCustomizationPreferenceEnabled()
++                        || (shortcut != null && shortcut.getVisibility() == View.VISIBLE);
++        int share = Math.round((shortcutShown ? 52 : 10) * density);
+         int margin = extensions > 0 && !minimal ? mToolbarSidePadding + share : 0;
+         ViewGroup.MarginLayoutParams params =
+                 (ViewGroup.MarginLayoutParams) mToolbarButtonsContainer.getLayoutParams();
+@@ -763,33 +771,68 @@ public class ToolbarPhone extends ToolbarLayout
+     }
+ 
+     /**
+-     * Stops the address text running under the extensions icon, by exactly as much as it would
+-     * overlap. With no extensions icon the text keeps its normal room up to the share button, and a
+-     * short name needs no padding at all.
++     * Puts the site settings button just left of the extensions icon, or of the shortcut, or at the
++     * end of the address bar, and stops the address text running under whichever icon comes first,
++     * by exactly as much as it would overlap. A short name needs no padding at all.
+      */
+     private void keepUrlTextClearOfExtensions() {
+         View locationBar = findViewById(R.id.location_bar);
+         if (locationBar == null || mBareUrlBarEndPadding < 0) return;
+         View urlBar = locationBar.findViewById(R.id.url_bar);
+         if (urlBar == null) return;
+-        int want = mBareUrlBarEndPadding;
++        float density = getResources().getDisplayMetrics().density;
++        int[] locationBarAt = new int[2];
++        locationBar.getLocationInWindow(locationBarAt);
++        int innerRight = locationBarAt[0] + locationBar.getWidth() - locationBar.getPaddingEnd();
++
++        // Window x of the first icon from the right that the text and site settings must clear.
++        int iconsLeft = innerRight;
++        View container = mToolbarButtonsContainer.findViewById(R.id.extensions_toolbar_container);
++        View shortcut = locationBar.findViewById(R.id.optional_button);
+         if (getExtensionsWidthInsideLocationBar() > 0
+                 && !BottomBarConfigUtils.isMinimalLayout()
+-                && !urlBar.hasFocus()
+-                && urlBar.getWidth() > 0) {
+-            View container = mToolbarButtonsContainer.findViewById(R.id.extensions_toolbar_container);
+-            if (container != null && container.getWidth() > 0) {
+-                float density = getResources().getDisplayMetrics().density;
+-                int[] urlAt = new int[2];
+-                int[] containerAt = new int[2];
+-                urlBar.getLocationInWindow(urlAt);
+-                container.getLocationInWindow(containerAt);
+-                // The icon sits in the middle of its box, 14dp in from the left edge.
+-                int iconLeft = containerAt[0] + Math.round(14 * density);
+-                int textRight = urlAt[0] + urlBar.getWidth() - mBareUrlBarEndPadding;
+-                want += Math.max(0, textRight - (iconLeft - Math.round(8 * density)));
++                && container != null
++                && container.getWidth() > 0) {
++            int[] containerAt = new int[2];
++            container.getLocationInWindow(containerAt);
++            // The icon sits in the middle of its box, 14dp in from the left edge.
++            iconsLeft = containerAt[0] + Math.round(14 * density) - Math.round(8 * density);
++        } else if (shortcut != null && shortcut.getVisibility() == View.VISIBLE) {
++            int[] shortcutAt = new int[2];
++            shortcut.getLocationInWindow(shortcutAt);
++            iconsLeft = shortcutAt[0];
++        }
++
++        View siteSettings = locationBar.findViewById(R.id.location_bar_site_settings_button);
++        if (siteSettings != null) {
++            ViewGroup.MarginLayoutParams params =
++                    (ViewGroup.MarginLayoutParams) siteSettings.getLayoutParams();
++            int margin = Math.max(0, innerRight - iconsLeft);
++            if (params.getMarginEnd() != margin) {
++                params.setMarginEnd(margin);
++                siteSettings.setLayoutParams(params);
++            }
++            if (siteSettings.getVisibility() == View.VISIBLE) {
++                iconsLeft = innerRight - margin - siteSettings.getWidth();
+             }
+         }
++
++        // A centred name sets its own even padding; adding the end padding back would pull the
++        // text off centre.
++        if (urlBar instanceof TextView text
++                && (text.getGravity() & Gravity.HORIZONTAL_GRAVITY_MASK)
++                        == Gravity.CENTER_HORIZONTAL) {
++            return;
++        }
++        int want = mBareUrlBarEndPadding;
++        if (!urlBar.hasFocus() && urlBar.getWidth() > 0 && iconsLeft < innerRight) {
++            int[] urlAt = new int[2];
++            urlBar.getLocationInWindow(urlAt);
++            int textRight = urlAt[0] + urlBar.getWidth() - mBareUrlBarEndPadding;
++            // The same gap before the end icons as the site icon has after the back button.
++            int gap = Math.round(6 * density);
++            want += Math.max(0, textRight - (iconsLeft - gap));
++        }
+         if (urlBar.getPaddingEnd() != want) {
+             urlBar.setPaddingRelative(
+                     urlBar.getPaddingStart(),
+@@ -1006,7 +1049,8 @@ public class ToolbarPhone extends ToolbarLayout
+      * Bare: on the full toolbar the extensions icon sits inside the address bar, next to the share
+      * icon, instead of past its right edge.
+      *
+-     * @return The width of the extensions container when it is drawn inside the address bar, else 0.
++     * @return The width of the extensions container when it is drawn inside the address bar, else
++     *     0.
+      */
+     private int getExtensionsWidthInsideLocationBar() {
+         if (!BottomBarConfigUtils.isMinimalLayout()
