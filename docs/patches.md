@@ -1,6 +1,6 @@
 # The patch series
 
-The series in [`patches/`](../patches) is 217 files, `0000001.patch` to `0000218.patch`, numbered
+The series in [`patches/`](../patches) is 234 files, `0000001.patch` to `0000235.patch`, numbered
 in the order they apply. The files carry no descriptions.
 
 `0000210.patch` is not in the series. That number belongs to the Google Play build, which compiles
@@ -13,5 +13,5 @@ git apply --index patches/*.patch
 ```
 
 The shell expands the glob in filename order, which is the order that matters. The patches are
-staged and not committed. Use `git apply`, not `git am`: the last two files are plain diffs
-without a mail header, which `git am` rejects.
+staged and not committed. Use `git apply`, not `git am`: the files from `0000195.patch` on are plain
+diffs without a mail header, which `git am` rejects.
