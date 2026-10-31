@@ -1,0 +1,301 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index 22f2f17a1db..347c7f18d96 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -3390,6 +3390,8 @@ public class ToolbarManager
+ 
+         // Bare: the page shows behind the address bar while it has focus, so the line along the
+         // top of the toolbar would show as a white stripe across it.
++        BottomControlsCoordinator bareBottomControls = mBottomAppBarCoordinatorSupplier.get();
++        if (bareBottomControls != null) bareBottomControls.onOmniboxFocusChanged(hasFocus);
+         if (hasFocus) {
+             setToolbarShadowVisibility(View.INVISIBLE);
+             mBareFrost.show(mActivity, mCompositorViewHolder, mBottomControlsStacker.getTotalHeight());
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
+index 6d8f3f98f4e..4726c2c2151 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
+@@ -238,7 +238,10 @@ public class BottomBarMediator
+         boolean isOmniboxFocused = mOmniboxFocusStateSupplier.get();
+         boolean shouldDisableOnNtp =
+                 BottomBarConfigUtils.shouldDisableOnNtp() && currentTabIsRegularNtp;
+-        boolean isVisible = !shouldDisableOnNtp && !isOmniboxFocused && !mShouldHideForHub;
++        // Bare: the row stays where it is while the address bar has focus. It is under the
++        // keyboard anyway, and taking it away and putting it back is what made the bar drop and
++        // jump when the keyboard came and went.
++        boolean isVisible = !shouldDisableOnNtp && !mShouldHideForHub;
+ 
+         if (mIsVisible == TriStateUtils.from(isVisible)) return;
+ 
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarPositionController.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarPositionController.java
+index 77bf949779f..ffee7e307ca 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarPositionController.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarPositionController.java
+@@ -9,6 +9,7 @@ import android.content.Context;
+ import android.content.SharedPreferences;
+ import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
+ import android.os.Handler;
++import android.os.SystemClock;
+ import android.view.Gravity;
+ import android.view.View;
+ import android.view.ViewGroup;
+@@ -155,6 +156,18 @@ public class ToolbarPositionController implements OnSharedPreferenceChangeListen
+     private final Callback<Boolean> mIsNtpShowingObserver;
+     private final Callback<Boolean> mIsTabSwitcherFinishedShowingObserver;
+     private final Callback<Boolean> mIsOmniboxFocusedObserver;
++
++    // Bare: the bar follows the keyboard on every frame, in both directions. When focus ends the
++    // keyboard is still sliding away, and the bar goes down with it instead of snapping.
++    private static final long BARE_FOLLOW_MS = 700;
++    private boolean mBareKeyboardClosing;
++    private boolean mBareStripWaitsForLanding;
++    private boolean mBareSawTranslation;
++    // Where the bar rests with no keyboard, bottom row and gesture strip included. While the
++    // keyboard is up the gesture strip leaves the stack, so this is remembered from the last rest.
++    private int mBareRestBarOffset = Integer.MAX_VALUE;
++    private long mBareFollowDeadline;
++    private final Runnable mBareFollow = this::bareFollowStep;
+     private final Callback<Boolean> mIsFormFieldFocusedObserver;
+     private final Callback<Boolean> mIsFindInPageShowingObserver;
+     private final Callback<Boolean> mIsPictureInPictureShowingObserver;
+@@ -273,7 +286,11 @@ public class ToolbarPositionController implements OnSharedPreferenceChangeListen
+ 
+         mIsNtpShowingObserver = (showing) -> updateCurrentPosition();
+         mIsTabSwitcherFinishedShowingObserver = (showing) -> updateCurrentPosition();
+-        mIsOmniboxFocusedObserver = (focused) -> updateCurrentPosition();
++        mIsOmniboxFocusedObserver =
++                (focused) -> {
++                    bareStartFollowing(focused);
++                    updateCurrentPosition();
++                };
+         mIsFormFieldFocusedObserver =
+                 (focused) -> updateCurrentPosition(/* prefStateChanged= */ false);
+         mIsFindInPageShowingObserver = (showing) -> updateCurrentPosition();
+@@ -386,8 +403,13 @@ public class ToolbarPositionController implements OnSharedPreferenceChangeListen
+                 (showing) -> updateViewOffset(mBottomToolbarLayer, mControlContainer.getView());
+         mFormFieldViewOffsetCallback =
+                 (focused) -> updateViewOffset(mProgressBarLayer, mToolbarProgressBarContainer);
++        // Bare: the loading strip follows this translation too. Otherwise it keeps the value from
++        // the first frame of the keyboard animation and stays up where the keyboard was.
+         mControlContainerTranslationCallback =
+-                (offset) -> updateViewOffset(mBottomToolbarLayer, mControlContainer.getView());
++                (offset) -> {
++                    updateViewOffset(mBottomToolbarLayer, mControlContainer.getView());
++                    updateViewOffset(mProgressBarLayer, mToolbarProgressBarContainer);
++                };
+         mKeyboardAccessoryHeightObserver =
+                 (height) -> {
+                     if (mCurrentPosition.get() == ControlsPosition.TOP) {
+@@ -721,6 +743,56 @@ public class ToolbarPositionController implements OnSharedPreferenceChangeListen
+         return switchingToBottom ? StateTransition.SNAP_TO_BOTTOM : StateTransition.SNAP_TO_TOP;
+     }
+ 
++    /** The height of the keyboard now, as the window reports it on this frame. */
++    private int bareImeBottom() {
++        View view = mControlContainer.getView();
++        if (view.getRootWindowInsets() == null) return 0;
++        return WindowInsetsCompat.toWindowInsetsCompat(view.getRootWindowInsets(), view.getRootView())
++                .getInsets(WindowInsetsCompat.Type.ime())
++                .bottom;
++    }
++
++    /** Starts moving the bar with the keyboard, frame by frame, for as long as it moves. */
++    private void bareStartFollowing(boolean focused) {
++        View view = mControlContainer.getView();
++        mBareKeyboardClosing = !focused && bareImeBottom() > 0;
++        mBareStripWaitsForLanding = mBareKeyboardClosing;
++        mBareSawTranslation = false;
++        // The thin loading strip above the bar shows as a white line while the bar moves, so it
++        // is hidden while the address bar has focus.
++        if (focused) mToolbarProgressBarContainer.setAlpha(0f);
++        mBareFollowDeadline = SystemClock.uptimeMillis() + BARE_FOLLOW_MS;
++        view.removeCallbacks(mBareFollow);
++        view.postOnAnimation(mBareFollow);
++    }
++
++    private void bareFollowStep() {
++        updateViewOffset(mBottomToolbarLayer, mControlContainer.getView());
++        updateViewOffset(mProgressBarLayer, mToolbarProgressBarContainer);
++        int translation = mControlContainerTranslationSupplier.get();
++        if (translation != 0) mBareSawTranslation = true;
++        boolean timeUp = SystemClock.uptimeMillis() >= mBareFollowDeadline;
++        if (mBareKeyboardClosing && (bareImeBottom() == 0 || timeUp)) {
++            mBareKeyboardClosing = false;
++            updateViewOffset(mBottomToolbarLayer, mControlContainer.getView());
++            updateViewOffset(mProgressBarLayer, mToolbarProgressBarContainer);
++        }
++        // After a close the loading strip stays hidden until the bar has slid all the way down,
++        // which is when the keyboard translation has moved and come back to 0.
++        boolean landed =
++                mBareStripWaitsForLanding
++                        && !mBareKeyboardClosing
++                        && mBareSawTranslation
++                        && translation == 0;
++        boolean done = landed || (timeUp && !mBareKeyboardClosing);
++        if (!done) {
++            mControlContainer.getView().postOnAnimation(mBareFollow);
++            return;
++        }
++        mBareStripWaitsForLanding = false;
++        if (!mIsOmniboxFocusedSupplier.get()) mToolbarProgressBarContainer.setAlpha(1f);
++    }
++
+     private void updateViewOffset(BottomControlsLayerWithOffset layer, View viewForLayer) {
+         if (mLayerVisibility == LayerVisibility.HIDDEN) return;
+ 
+@@ -737,7 +809,8 @@ public class ToolbarPositionController implements OnSharedPreferenceChangeListen
+             layerYOffset += chinHeight;
+         }
+ 
+-        if (mIsOmniboxFocusedSupplier.get() && mCurrentPosition.get() == ControlsPosition.BOTTOM) {
++        if ((mIsOmniboxFocusedSupplier.get() || mBareKeyboardClosing)
++                && mCurrentPosition.get() == ControlsPosition.BOTTOM) {
+             WindowInsetsCompat windowInsetsCompat =
+                     WindowInsetsCompat.toWindowInsetsCompat(
+                             mControlContainer.getView().getRootWindowInsets(),
+@@ -746,10 +819,25 @@ public class ToolbarPositionController implements OnSharedPreferenceChangeListen
+             int keyboardHeight = windowInsetsCompat.getInsets(WindowInsetsCompat.Type.ime()).bottom;
+ 
+             // Ignore keyboard's height for offset calculation if the keyboard resizes the window.
+-            if (shouldIgnoreKeyboardHeightInResizeMode()) {
++            // Bare: not while the keyboard is closing. The omnibox session ends before the
++            // keyboard starts to hide, which drops overlay mode, and the bar would fall behind
++            // the keyboard that is still on screen.
++            if (shouldIgnoreKeyboardHeightInResizeMode() && !mBareKeyboardClosing) {
+                 keyboardHeight = 0;
+             }
+ 
++            // Bare: the window reports the keyboard's final height as soon as it starts to move.
++            // Chrome's translation is what says where it is on this frame: still to rise while it
++            // opens, still to fall while it closes.
++            int translation = mControlContainerTranslationSupplier.get();
++            if (translation < 0) {
++                keyboardHeight = Math.max(keyboardHeight, bareKeyboardFromTranslation(translation));
++            } else if (translation > 0) {
++                keyboardHeight = Math.max(0, keyboardHeight - translation);
++            }
++            int onKeyboard = bareOffsetOnKeyboard(layer, keyboardHeight);
++            if (chinVisibleWithAccessory) onKeyboard += chinHeight;
++
+             int statusBarHeight =
+                     windowInsetsCompat.getInsets(WindowInsetsCompat.Type.statusBars()).top;
+             // The control container can grow quite large with a multiline url bar, making its full
+@@ -763,9 +851,24 @@ public class ToolbarPositionController implements OnSharedPreferenceChangeListen
+             int maxTranslation = -(windowHeight - layer.getHeight() - statusBarHeight);
+             // The translation is negative so we take the arithmetic max to get the minimum visible
+             // delta.
+-            layerYOffset = Math.max(layerYOffset - keyboardHeight, maxTranslation);
++            layerYOffset = Math.max(onKeyboard, maxTranslation);
+         } else {
+             mControlContainer.setMaxHeight(Integer.MAX_VALUE);
++            // Bare: Chrome slides the bar down by a translation that assumes the bottom row hides
++            // with the keyboard. The row stays here, so the bar is placed from the keyboard that
++            // translation stands for instead: on its top edge, never below where it rests.
++            int translation = mControlContainerTranslationSupplier.get();
++            if (mCurrentPosition.get() == ControlsPosition.BOTTOM) {
++                if (translation < 0) {
++                    layerYOffset =
++                            bareOffsetOnKeyboard(layer, bareKeyboardFromTranslation(translation));
++                    if (chinVisibleWithAccessory) layerYOffset += chinHeight;
++                } else if (translation == 0
++                        && mBrowserControlsSizer.getBrowserControlHiddenRatio() == 0f
++                        && bareImeBottom() == 0) {
++                    mBareRestBarOffset = mBottomToolbarLayer.getLayerOffsetPx();
++                }
++            }
+         }
+ 
+         viewForLayer.setTranslationY(layerYOffset);
+@@ -774,6 +877,35 @@ public class ToolbarPositionController implements OnSharedPreferenceChangeListen
+         }
+     }
+ 
++    /**
++     * The offset for a layer when the bar sits with its bottom edge on the top edge of a keyboard
++     * this tall, but never lower than where the bar rests with no keyboard.
++     */
++    private int bareOffsetOnKeyboard(BottomControlsLayerWithOffset layer, int keyboardHeight) {
++        int barOffset = mBottomToolbarLayer.getLayerOffsetPx();
++        int barY = Math.min(barOffset, mBareRestBarOffset);
++        View containerView = mControlContainer.getView();
++        if (keyboardHeight > 0 && containerView.getParent() instanceof View) {
++            int[] parentAt = new int[2];
++            ((View) containerView.getParent()).getLocationInWindow(parentAt);
++            int layoutBottom = parentAt[1] + containerView.getBottom();
++            int keyboardTop = containerView.getRootView().getHeight() - keyboardHeight;
++            barY = Math.min(barY, keyboardTop - layoutBottom);
++        }
++        return layer.getLayerOffsetPx() - barOffset + barY;
++    }
++
++    /** The keyboard height that a sliding-away translation stands for. */
++    private int bareKeyboardFromTranslation(int translation) {
++        View view = mControlContainer.getView();
++        if (view.getRootWindowInsets() == null) return -translation;
++        int navigationBar =
++                WindowInsetsCompat.toWindowInsetsCompat(view.getRootWindowInsets(), view.getRootView())
++                        .getInsets(WindowInsetsCompat.Type.systemBars())
++                        .bottom;
++        return navigationBar - translation;
++    }
++
+     private void updateControlContainerHeight(int height) {
+         assert height >= 0;
+         mControlContainerHeight = height;
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsCoordinator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsCoordinator.java
+index 55ef500b413..7d98c07adab 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsCoordinator.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsCoordinator.java
+@@ -252,4 +252,9 @@ public class BottomControlsCoordinator implements BackPressHandler {
+     public ViewResourceAdapter getResourceAdapterForTesting() {
+         return mRootFrameLayout.getResourceAdapter();
+     }
++
++    /** Bare: tells the bottom controls the address bar gained or lost focus. */
++    public void onOmniboxFocusChanged(boolean focused) {
++        mMediator.onOmniboxFocusChanged(focused);
++    }
+ }
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsMediator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsMediator.java
+index fde4f609eb2..b8f3711a977 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsMediator.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsMediator.java
+@@ -113,6 +113,12 @@ class BottomControlsMediator
+     /** Whether the soft keyboard is visible. */
+     private boolean mIsKeyboardVisible;
+ 
++    /**
++     * Bare: the bottom row stays while the address bar has the keyboard, and until the keyboard
++     * has gone, so it neither drops out nor pops back while the keyboard moves.
++     */
++    private boolean mKeepRowForOmnibox;
++
+     private @Nullable LayoutStateProvider mLayoutStateProvider;
+ 
+     /**
+@@ -262,6 +268,7 @@ class BottomControlsMediator
+     @Override
+     public void keyboardVisibilityChanged(boolean isShowing) {
+         mIsKeyboardVisible = isShowing;
++        if (!isShowing) mKeepRowForOmnibox = false;
+         updateCompositedViewVisibility();
+         updateAndroidViewVisibility();
+     }
+@@ -322,7 +329,16 @@ class BottomControlsMediator
+     }
+ 
+     boolean isCompositedViewVisible() {
+-        return mIsBottomControlsVisible && !mIsKeyboardVisible && !isInFullscreenMode();
++        return mIsBottomControlsVisible
++                && (!mIsKeyboardVisible || mKeepRowForOmnibox)
++                && !isInFullscreenMode();
++    }
++
++    /** Bare: the address bar gained or lost focus. */
++    void onOmniboxFocusChanged(boolean focused) {
++        mKeepRowForOmnibox = focused || mIsKeyboardVisible;
++        updateCompositedViewVisibility();
++        updateAndroidViewVisibility();
+     }
+ 
+     private boolean isNtpScrollOffEnabled() {

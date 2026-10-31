@@ -1,0 +1,265 @@
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 29c5555ee54..93f69d1cf8d 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -262,6 +262,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java",
+   "java/src/org/chromium/chrome/browser/bare/BareClearVeil.java",
++  "java/src/org/chromium/chrome/browser/bare/BareFrostBackdrop.java",
+   "java/src/org/chromium/chrome/browser/bare/BareAddressBarPreviewView.java",
+   "java/src/org/chromium/chrome/browser/bare/BareGoldenGateView.java",
+   "java/src/org/chromium/chrome/browser/bare/BareLauncherIcon.java",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index 92fc4970abc..22f2f17a1db 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -73,6 +73,7 @@ import org.chromium.chrome.browser.back_press.BackPressManager;
+ import org.chromium.chrome.browser.back_press.BackPressMetrics;
+ import org.chromium.chrome.browser.back_press.BackPressMetrics.NavigationDirection;
+ import org.chromium.chrome.browser.back_press.BackPressMetrics.PredictiveGestureNavPhase;
++import org.chromium.chrome.browser.bare.BareFrostBackdrop;
+ import org.chromium.chrome.browser.bare.BareTabSwitcher;
+ import org.chromium.chrome.browser.bare.BareUpdateCheck;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+@@ -409,6 +410,7 @@ public class ToolbarManager
+     private final WindowAndroid mWindowAndroid;
+     private final AppMenuDelegate mAppMenuDelegate;
+     private final CompositorViewHolder mCompositorViewHolder;
++    private final BareFrostBackdrop mBareFrost = new BareFrostBackdrop();
+     private final BottomControlsStacker mBottomControlsStacker;
+     private final TopControlsStacker mTopControlsStacker;
+     private final BrowserControlsSizer mBrowserControlsSizer;
+@@ -3390,8 +3392,10 @@ public class ToolbarManager
+         // top of the toolbar would show as a white stripe across it.
+         if (hasFocus) {
+             setToolbarShadowVisibility(View.INVISIBLE);
++            mBareFrost.show(mActivity, mCompositorViewHolder, mBottomControlsStacker.getTotalHeight());
+         } else {
+             updateHairlineVisibility();
++            mBareFrost.hide();
+         }
+ 
+         if (mFindToolbarManager != null && hasFocus) mFindToolbarManager.hideToolbar();
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsContainer.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsContainer.java
+index 996dc2e5a3b..7fbfb85f9be 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsContainer.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsContainer.java
+@@ -40,6 +40,13 @@ import org.chromium.ui.base.ViewUtils;
+  */
+ @NullMarked
+ public class OmniboxSuggestionsContainer extends FrameLayout {
++    private boolean mPassEmptyTouches;
++
++    /** Bare: whether a touch the list did not take is left for the view behind. */
++    public void setPassEmptyTouches(boolean pass) {
++        mPassEmptyTouches = pass;
++    }
++
+     private OmniboxSuggestionsDropdown mDropdown;
+     private @Nullable OmniboxSuggestionsDropdownEmbedder mEmbedder;
+     private @Nullable Callback<Integer> mHeightChangeListener;
+@@ -97,6 +104,9 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
+     @Override
+     @SuppressLint("ClickableViewAccessibility")
+     public boolean onTouchEvent(MotionEvent event) {
++        // Bare: on a phone the empty space belongs to the page behind, and a touch there closes
++        // the address bar.
++        if (mPassEmptyTouches) return false;
+         // Swallow all touch events, especially if these were not consumed by the Dropdown.
+         // This ensures that touching the blank areas of the container does not dismiss the
+         // Omnibox.
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/SuggestionListViewBinder.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/SuggestionListViewBinder.java
+index a481bdb3ed0..fbaee292e3b 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/SuggestionListViewBinder.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/SuggestionListViewBinder.java
+@@ -172,6 +172,7 @@ class SuggestionListViewBinder
+             holder.dropdown.setBackgroundColor(Color.TRANSPARENT);
+             holder.dropdown.setCardColor(backgroundColor);
+             holder.container.setBackgroundColor(Color.TRANSPARENT);
++            holder.container.setPassEmptyTouches(true);
+             return;
+         }
+         holder.dropdown.setBackgroundColor(backgroundColor);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareFrostBackdrop.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareFrostBackdrop.java
+new file mode 100644
+index 00000000000..b3d037281d0
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareFrostBackdrop.java
+@@ -0,0 +1,176 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.app.Activity;
++import android.graphics.Bitmap;
++import android.graphics.Canvas;
++import android.graphics.Rect;
++import android.graphics.RenderEffect;
++import android.graphics.Shader;
++import android.os.Build;
++import android.os.Handler;
++import android.os.Looper;
++import android.view.PixelCopy;
++import android.view.SurfaceView;
++import android.view.View;
++import android.view.ViewGroup;
++import android.view.WindowManager;
++import android.widget.ImageView;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++/**
++ * A lightly blurred still of the page, shown behind the address bar while it has focus and
++ * Frosted glass is on. The page is not a window of its own, so the system cannot blur it the way
++ * it blurs the sidebar. A copy of the page is taken instead, blurred, and laid over the page under
++ * the scrim.
++ */
++@NullMarked
++public final class BareFrostBackdrop {
++    private static final float BLUR_DP = 6f;
++    private static final float EDGE_MARGIN_DP = 20f;
++    private static final int DOWNSCALE = 3;
++    private static final long FADE_IN_MS = 220;
++    private static final long FADE_OUT_MS = 160;
++
++
++    private @Nullable ImageView mView;
++    private int mToken;
++
++    /** Whether the setting is on and the system can blur. */
++    private static boolean wanted(Activity activity) {
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false;
++        if (!ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_GLASS, true)) {
++            return false;
++        }
++        WindowManager windowManager = activity.getSystemService(WindowManager.class);
++        return windowManager != null && windowManager.isCrossWindowBlurEnabled();
++    }
++
++    /**
++     * Copies {@code page}, down to {@code bottomInset} pixels above its bottom edge, and shows it
++     * blurred above the page and under the scrim.
++     */
++    public void show(Activity activity, View page, int bottomInset) {
++        hide();
++        if (!wanted(activity)) return;
++        int width = page.getWidth();
++        // Stop a little above the bar so the copy never holds its edge line, which the blur
++        // would smear into a band.
++        bottomInset += (int) (EDGE_MARGIN_DP * activity.getResources().getDisplayMetrics().density);
++        int height = page.getHeight() - Math.max(0, bottomInset);
++        if (width <= 0 || height <= 0 || !(page.getParent() instanceof ViewGroup)) return;
++        int[] location = new int[2];
++        page.getLocationInWindow(location);
++        Rect source = new Rect(location[0], location[1], location[0] + width, location[1] + height);
++        Bitmap bitmap =
++                Bitmap.createBitmap(
++                        Math.max(1, width / DOWNSCALE),
++                        Math.max(1, height / DOWNSCALE),
++                        Bitmap.Config.ARGB_8888);
++        final int token = ++mToken;
++        Handler handler = new Handler(Looper.getMainLooper());
++        // The window copy leaves out a surface of its own, which is what a website is drawn on,
++        // so the page is copied from its surface first and the window copy goes over it.
++        SurfaceView surface = findSurfaceView(page);
++        Bitmap window = bitmap;
++        Bitmap behind =
++                surface != null && surface.getHolder().getSurface().isValid()
++                        ? Bitmap.createBitmap(
++                                window.getWidth(), window.getHeight(), Bitmap.Config.ARGB_8888)
++                        : null;
++        int[] pending = {behind != null ? 2 : 1};
++        PixelCopy.OnPixelCopyFinishedListener done =
++                result -> {
++                    if (--pending[0] > 0) return;
++                    if (token != mToken) {
++                        window.recycle();
++                        if (behind != null) behind.recycle();
++                        return;
++                    }
++                    Bitmap out = window;
++                    if (behind != null) {
++                        Canvas canvas = new Canvas(behind);
++                        canvas.drawBitmap(window, 0, 0, null);
++                        window.recycle();
++                        out = behind;
++                    }
++                    attach(activity, page, out, width, height);
++                };
++        try {
++            PixelCopy.request(activity.getWindow(), source, window, done, handler);
++            if (behind != null) {
++                Rect surfaceSource =
++                        new Rect(
++                                0,
++                                0,
++                                surface.getWidth(),
++                                surface.getHeight() - Math.max(0, bottomInset));
++                PixelCopy.request(surface, surfaceSource, behind, done, handler);
++            }
++        } catch (IllegalArgumentException e) {
++            window.recycle();
++            if (behind != null) behind.recycle();
++        }
++    }
++
++    private static @Nullable SurfaceView findSurfaceView(View view) {
++        if (view instanceof SurfaceView) return (SurfaceView) view;
++        if (!(view instanceof ViewGroup)) return null;
++        ViewGroup group = (ViewGroup) view;
++        for (int i = 0; i < group.getChildCount(); i++) {
++            SurfaceView found = findSurfaceView(group.getChildAt(i));
++            if (found != null) return found;
++        }
++        return null;
++    }
++
++    private void attach(Activity activity, View page, Bitmap bitmap, int width, int height) {
++        ViewGroup parent = (ViewGroup) page.getParent();
++        ImageView view = new ImageView(activity);
++        view.setImageBitmap(bitmap);
++        view.setScaleType(ImageView.ScaleType.FIT_XY);
++        float radius = BLUR_DP * activity.getResources().getDisplayMetrics().density;
++        view.setRenderEffect(
++                RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP));
++        view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
++        view.setTranslationX(page.getX());
++        view.setTranslationY(page.getY());
++        view.setAlpha(0f);
++        parent.addView(view, parent.indexOfChild(page) + 1, new ViewGroup.LayoutParams(width, height));
++        // The scrim goes over the copy, so the dim and the fade are the same as without it.
++        for (int i = 0; i < parent.getChildCount(); i++) {
++            View child = parent.getChildAt(i);
++            if (child != view && child.getClass().getSimpleName().equals("ScrimView")) {
++                child.bringToFront();
++                break;
++            }
++        }
++        view.animate().alpha(1f).setDuration(FADE_IN_MS).start();
++        mView = view;
++    }
++
++    /** Fades the copy out and removes it. Safe to call when there is none. */
++    public void hide() {
++        mToken++;
++        ImageView view = mView;
++        mView = null;
++        if (view == null) return;
++        view.animate()
++                .alpha(0f)
++                .setDuration(FADE_OUT_MS)
++                .withEndAction(
++                        () -> {
++                            ViewGroup parent = (ViewGroup) view.getParent();
++                            if (parent != null) parent.removeView(view);
++                        })
++                .start();
++    }
++}

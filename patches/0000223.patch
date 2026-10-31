@@ -1,0 +1,314 @@
+diff --git a/chrome/android/java/res/xml/bare_clear_on_exit_preferences.xml b/chrome/android/java/res/xml/bare_clear_on_exit_preferences.xml
+index 2eaafb623ff..354ca7cfa66 100644
+--- a/chrome/android/java/res/xml/bare_clear_on_exit_preferences.xml
++++ b/chrome/android/java/res/xml/bare_clear_on_exit_preferences.xml
+@@ -13,6 +13,12 @@ found in the LICENSE file.
+         android:summary="@string/bare_clear_on_exit_header"
+         android:selectable="false" />
+ 
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_leave_as_exit"
++        android:persistent="false"
++        android:title="@string/bare_leave_as_exit_title"
++        android:summary="@string/bare_leave_as_exit_summary" />
++
+     <org.chromium.components.browser_ui.settings.ChromeBaseCheckBoxPreference
+         android:key="bare_clear_history"
+         android:persistent="false"
+@@ -45,4 +51,10 @@ found in the LICENSE file.
+         android:persistent="false"
+         android:title="@string/clear_passwords_title" />
+ 
++    <org.chromium.components.browser_ui.settings.ChromeBaseCheckBoxPreference
++        android:key="bare_clear_close_tabs"
++        android:persistent="false"
++        android:title="@string/bare_clear_close_tabs_title"
++        android:summary="@string/bare_clear_close_tabs_summary" />
++
+ </PreferenceScreen>
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 523d27be078..f06b8f2808f 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -57,6 +57,10 @@ found in the LICENSE file.
+     <string name="bare_welcome_hint_hardened">Safer against browser exploits, slower on heavy sites</string>
+     <string name="bare_welcome_security_note">Websites can still use the information they receive, and characteristics of your browser, to recognize or track a visitor.</string>
+     <string name="bare_page_translation_title" translatable="false">Translate pages with Google</string>
++    <string name="bare_leave_as_exit_title" translatable="false">Treat leaving the app as exit</string>
++    <string name="bare_leave_as_exit_summary" translatable="false">When you leave Bare, what is selected below is cleared right away, as with Exit. Opening a file picker, the share sheet or Settings does not count as leaving.</string>
++    <string name="bare_clear_close_tabs_title" translatable="false">Close all tabs</string>
++    <string name="bare_clear_close_tabs_summary" translatable="false">Normal and private tabs. Nothing is kept to reopen.</string>
+     <string name="bare_translate_own_category" translatable="false">My own server</string>
+     <string name="bare_translate_own_title" translatable="false">Translate pages with my own server</string>
+     <string name="bare_translate_own_summary" translatable="false">Adds Translate to the menu and sends the text of the page to the server below, not to Google. Turns Google off. Off by default.</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index e8f90bfab44..c068f134823 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -20,6 +20,7 @@ import android.app.Activity;
+ import android.app.ApplicationStartInfo;
+ import android.content.Context;
+ import android.content.Intent;
++import android.content.IntentSender;
+ import android.content.pm.ShortcutManager;
+ import android.content.res.Configuration;
+ import android.net.Uri;
+@@ -5840,10 +5841,61 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+         }
+     }
+ 
++    /** Set when Bare starts another screen itself, so that going there is not leaving the app. */
++    private boolean mStartedOtherScreen;
++
++    @Override
++    public void startActivityForResult(Intent intent, int requestCode, @Nullable Bundle options) {
++        mStartedOtherScreen = true;
++        super.startActivityForResult(intent, requestCode, options);
++    }
++
++    @Override
++    public void startIntentSenderForResult(
++            IntentSender intent,
++            int requestCode,
++            @Nullable Intent fillInIntent,
++            int flagsMask,
++            int flagsValues,
++            int extraFlags,
++            @Nullable Bundle options)
++            throws IntentSender.SendIntentException {
++        mStartedOtherScreen = true;
++        super.startIntentSenderForResult(
++                intent, requestCode, fillInIntent, flagsMask, flagsValues, extraFlags, options);
++    }
++
++    /**
++     * Bare: with "Treat leaving the app as exit" on, going to the background clears what Clear on
++     * exit names, and closes the tabs if that is chosen. Screens Bare opens itself, a rotation and
++     * an exit already under way are not leaving.
++     */
++    private void clearIfLeaving() {
++        if (!BareClearOnExit.isLeaveAsExit()
++                || mStartedOtherScreen
++                || isFinishing()
++                || isChangingConfigurations()
++                || !areTabModelsInitialized()) {
++            return;
++        }
++        Profile profile = getCurrentTabModel().getProfile();
++        if (profile == null) return;
++        boolean closeTabs = BareClearOnExit.isCloseTabs();
++        if (closeTabs) BareClearOnExit.closeAllTabs(getTabModelSelector());
++        BareClearOnExit.clearThen(
++                profile.getOriginalProfile(),
++                () -> {
++                    if (closeTabs && !isActivityFinishingOrDestroyed()) {
++                        getTabCreator(/* incognito= */ false).launchNtp(TabLaunchType.FROM_CHROME_UI);
++                    }
++                });
++    }
++
+     @Override
+     public void onStop() {
+         try (TraceEvent e = TraceEvent.scoped("ChromeTabbedActivity.onStop")) {
+             super.onStop();
++            clearIfLeaving();
+             if (mSendTabToSelfGestureDetector != null) {
+                 mSendTabToSelfGestureDetector.stop();
+             }
+@@ -5872,6 +5924,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+     public void onResume() {
+         try (TraceEvent e = TraceEvent.scoped("ChromeTabbedActivity.onResume")) {
+             super.onResume();
++            mStartedOtherScreen = false;
+         }
+     }
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index f923cfd5924..3380c1c570e 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -3066,6 +3066,9 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+             // empty selection simply closes. Incognito needs no part in this: its profile is
+             // discarded when the browser goes, and the selection belongs to the regular profile.
+             RecordUserAction.record("MobileMenuBareExit");
++            if (BareClearOnExit.isCloseTabs()) {
++                BareClearOnExit.closeAllTabs(getTabModelSelector());
++            }
+             BareClearOnExit.clearThen(
+                     getCurrentTabModel().getProfile().getOriginalProfile(),
+                     this::finishAndRemoveTask);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java
+index 28e3e253ad4..fc18410a6d9 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java
+@@ -8,13 +8,21 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.chrome.browser.browsing_data.BrowsingDataBridge;
+ import org.chromium.chrome.browser.browsing_data.BrowsingDataType;
+ import org.chromium.chrome.browser.browsing_data.TimePeriod;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.preferences.Pref;
+ import org.chromium.chrome.browser.profiles.Profile;
++import org.chromium.chrome.browser.tabmodel.TabClosureParams;
++import org.chromium.chrome.browser.tabmodel.TabModel;
++import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+ import org.chromium.components.user_prefs.UserPrefs;
+ 
+ /**
+  * What the Exit item in the app menu deletes before the browser closes.
+  *
++ * <p>Close all tabs is a choice of its own, kept beside the selection, and applies wherever the
++ * selection does: to Exit, and to leaving the app when that is switched on.
++ *
+  * <p>The selection is a bitmask of {@link BrowsingDataType} values held in a profile preference, so
+  * it belongs to a profile rather than to the installation and will follow a profile if this build
+  * ever grows more than one. Zero, the default, means Exit closes the browser and deletes nothing.
+@@ -45,6 +53,44 @@ public final class BareClearOnExit {
+         BrowsingDataType.PASSWORDS,
+     };
+ 
++    /**
++     * Whether leaving the app counts as exit: the selection is cleared as soon as the app goes to
++     * the background, without waiting for the Exit item.
++     */
++    public static boolean isLeaveAsExit() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_LEAVE_AS_EXIT, false);
++    }
++
++    public static void setLeaveAsExit(boolean enabled) {
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_LEAVE_AS_EXIT, enabled);
++    }
++
++    /** Whether exiting also closes every tab, in both normal and private browsing. */
++    public static boolean isCloseTabs() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_CLEAR_CLOSE_TABS, false);
++    }
++
++    public static void setCloseTabs(boolean enabled) {
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_CLEAR_CLOSE_TABS, enabled);
++    }
++
++    /** Closes every tab in every model. Nothing is kept to undo or to restore later. */
++    public static void closeAllTabs(TabModelSelector selector) {
++        for (TabModel model : selector.getModels()) {
++            model.getTabRemover()
++                    .closeTabs(
++                            TabClosureParams.closeAllTabs()
++                                    .allowUndo(false)
++                                    .hideTabGroups(false)
++                                    .build(),
++                            /* allowDialog= */ false);
++        }
++    }
++
+     /** Returns the bitmask of types the user has chosen for this profile. */
+     public static int getSelection(Profile profile) {
+         return UserPrefs.get(profile).getInteger(Pref.CLEAR_ON_EXIT_TYPES);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareClearOnExitSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareClearOnExitSettings.java
+index 329ae9baa71..a01d7e9a904 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareClearOnExitSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareClearOnExitSettings.java
+@@ -18,6 +18,7 @@ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.bare.BareClearOnExit;
+ import org.chromium.chrome.browser.browsing_data.BrowsingDataType;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+ import org.chromium.components.browser_ui.settings.SettingsUtils;
+ import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
+ 
+@@ -56,6 +57,23 @@ public class BareClearOnExitSettings extends ChromeBaseSettingsFragment {
+         mPageTitle.set(getTitle(getContext()));
+         SettingsUtils.addPreferencesFromResource(this, R.xml.bare_clear_on_exit_preferences);
+ 
++        ChromeSwitchPreference leave = findPreference("bare_leave_as_exit");
++        assert leave != null;
++        leave.setChecked(BareClearOnExit.isLeaveAsExit());
++        leave.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    BareClearOnExit.setLeaveAsExit((boolean) newValue);
++                    return true;
++                });
++        CheckBoxPreference closeTabs = (CheckBoxPreference) findPreference("bare_clear_close_tabs");
++        assert closeTabs != null;
++        closeTabs.setChecked(BareClearOnExit.isCloseTabs());
++        closeTabs.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    BareClearOnExit.setCloseTabs((boolean) newValue);
++                    return true;
++                });
++
+         int mask = BareClearOnExit.getSelection(getProfile());
+         for (int i = 0; i < KEYS.length; i++) {
+             final @BrowsingDataType int type = BareClearOnExit.AVAILABLE_TYPES[i];
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
+index ffd8a3feafc..d32b862ba37 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
+@@ -27,8 +27,8 @@ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.bare.BarePageTranslation;
+ import org.chromium.chrome.browser.bare.BareScriptBridge;
+ import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+-import org.chromium.chrome.browser.tab.EmptyTabObserver;
+ import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.chrome.browser.tab.TabObserver;
+ import org.chromium.content_public.browser.WebContents;
+ import org.chromium.url.GURL;
+ 
+@@ -219,7 +219,7 @@ public final class BarePageTranslator {
+      * is translated the same way, until the user shows the original, turns the server off, or
+      * closes the tab.
+      */
+-    private static final class Session extends EmptyTabObserver implements UserData {
++    private static final class Session implements TabObserver, UserData {
+         private static final Class<Session> KEY = Session.class;
+ 
+         private final Tab mTab;
+diff --git a/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java b/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java
+index 90d116fecec..68547de273d 100644
+--- a/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java
++++ b/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java
+@@ -6,8 +6,8 @@ package org.chromium.chrome.browser.translate;
+ 
+ import org.chromium.base.UserData;
+ import org.chromium.build.annotations.NullMarked;
+-import org.chromium.chrome.browser.tab.EmptyTabObserver;
+ import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.chrome.browser.tab.TabObserver;
+ import org.chromium.content_public.browser.NavigationHandle;
+ 
+ /**
+@@ -15,7 +15,7 @@ import org.chromium.content_public.browser.NavigationHandle;
+  * then loads is translated the same way, until the tab is closed.
+  */
+ @NullMarked
+-class TranslateSession extends EmptyTabObserver implements UserData {
++class TranslateSession implements TabObserver, UserData {
+     private static final Class<TranslateSession> USER_DATA_KEY = TranslateSession.class;
+ 
+     private final Tab mTab;
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 2d780daa758..2426ca0192f 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -447,6 +447,8 @@ public final class ChromePreferenceKeys {
+     /** Whether page translation through Google is on. Off until the user turns it on. */
+     public static final String BARE_PAGE_TRANSLATION = "Bare.Translate.PageTranslation";
+     public static final String BARE_TRANSLATE_OWN_SERVER = "Bare.Translate.OwnServer";
++    public static final String BARE_LEAVE_AS_EXIT = "Bare.ClearOnExit.LeaveAsExit";
++    public static final String BARE_CLEAR_CLOSE_TABS = "Bare.ClearOnExit.CloseTabs";
+ 
+     /** Whether the vertical tabs drawer shows its tabs as a grid, two to a row. */
+     public static final String BARE_VERTICAL_TABS_GRID = "Chrome.Bare.VerticalTabsGrid";
+@@ -1430,6 +1432,8 @@ public final class ChromePreferenceKeys {
+                 BARE_TRANSLATE_TARGET,
+                 BARE_PAGE_TRANSLATION,
+                 BARE_TRANSLATE_OWN_SERVER,
++                BARE_LEAVE_AS_EXIT,
++                BARE_CLEAR_CLOSE_TABS,
+                 BARE_LAUNCHER_ICON,
+                 BARE_VERTICAL_TABS_GRID,
+                 BARE_NEW_ICON_UNLOCKED,

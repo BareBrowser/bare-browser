@@ -1,0 +1,124 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
+index d32b862ba37..1f2b73749c8 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
+@@ -29,6 +29,7 @@ import org.chromium.chrome.browser.bare.BareScriptBridge;
+ import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tab.TabObserver;
++import org.chromium.components.embedder_support.util.UrlUtilities;
+ import org.chromium.content_public.browser.WebContents;
+ import org.chromium.url.GURL;
+ 
+@@ -216,19 +217,29 @@ public final class BarePageTranslator {
+ 
+     /**
+      * Keeps translating a tab once the user has translated a page in it: each page the tab loads
+-     * is translated the same way, until the user shows the original, turns the server off, or
+-     * closes the tab.
++     * is translated the same way, until the user shows the original, turns the server off, goes to
++     * another site, or closes the tab.
+      */
+     private static final class Session implements TabObserver, UserData {
+         private static final Class<Session> KEY = Session.class;
+ 
+         private final Tab mTab;
++        private final String mSite;
+ 
+         private Session(Tab tab) {
+             mTab = tab;
++            mSite = siteOf(tab.getUrl());
+             tab.addObserver(this);
+         }
+ 
++        /** The site a page belongs to: its registrable domain, so subdomains are the same site. */
++        private static String siteOf(GURL url) {
++            String site =
++                    UrlUtilities.getDomainAndRegistry(
++                            url.getSpec(), /* includePrivateRegistries= */ true);
++            return site == null || site.isEmpty() ? url.getHost() : site;
++        }
++
+         static void begin(Tab tab) {
+             if (tab.getUserDataHost().getUserData(KEY) != null) return;
+             tab.getUserDataHost().setUserData(KEY, new Session(tab));
+@@ -241,7 +252,14 @@ public final class BarePageTranslator {
+         @Override
+         public void onPageLoadFinished(Tab tab, GURL url) {
+             String scheme = url.getScheme();
+-            if (!"http".equals(scheme) && !"https".equals(scheme)) return;
++            if (!"http".equals(scheme) && !"https".equals(scheme)) {
++                end(tab);
++                return;
++            }
++            if (!mSite.equals(siteOf(url))) {
++                end(tab);
++                return;
++            }
+             if (!BarePageTranslation.isOwnServer()
+                     || !BareTranslateSettings.isConfigured()
+                     || !BareTranslateSettings.hasConsent()) {
+diff --git a/chrome/browser/language/android/BUILD.gn b/chrome/browser/language/android/BUILD.gn
+index 3a177261bf3..3c825cff12b 100644
+--- a/chrome/browser/language/android/BUILD.gn
++++ b/chrome/browser/language/android/BUILD.gn
+@@ -68,6 +68,7 @@ android_library("java") {
+     "//components/browser_ui/settings/android:java",
+     "//components/browser_ui/styles/android:java",
+     "//components/browser_ui/widget/android:java",
++    "//components/embedder_support/android:util_java",
+     "//components/language/android:java",
+     "//components/prefs/android:java",
+     "//components/user_prefs/android:java",
+diff --git a/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java b/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java
+index 68547de273d..099552e844b 100644
+--- a/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java
++++ b/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java
+@@ -8,20 +8,24 @@ import org.chromium.base.UserData;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tab.TabObserver;
++import org.chromium.components.embedder_support.util.UrlUtilities;
+ import org.chromium.content_public.browser.NavigationHandle;
++import org.chromium.url.GURL;
+ 
+ /**
+  * Keeps translation on for a tab once the user has translated a page in it. Each page the tab
+- * then loads is translated the same way, until the tab is closed.
++ * then loads is translated the same way, until the tab is closed or goes to another site.
+  */
+ @NullMarked
+ class TranslateSession implements TabObserver, UserData {
+     private static final Class<TranslateSession> USER_DATA_KEY = TranslateSession.class;
+ 
+     private final Tab mTab;
++    private final String mSite;
+ 
+     private TranslateSession(Tab tab) {
+         mTab = tab;
++        mSite = siteOf(tab.getUrl());
+         tab.addObserver(this);
+     }
+ 
+@@ -40,9 +44,21 @@ class TranslateSession implements TabObserver, UserData {
+                 || tab.getWebContents() == null) {
+             return;
+         }
++        if (!mSite.equals(siteOf(navigation.getUrl()))) {
++            tab.getUserDataHost().removeUserData(USER_DATA_KEY);
++            return;
++        }
+         TranslateBridge.translateNow(tab);
+     }
+ 
++    /** The site a page belongs to: its registrable domain, so subdomains are the same site. */
++    private static String siteOf(GURL url) {
++        String site =
++                UrlUtilities.getDomainAndRegistry(
++                        url.getSpec(), /* includePrivateRegistries= */ true);
++        return site == null || site.isEmpty() ? url.getHost() : site;
++    }
++
+     private static boolean isHttpOrHttps(String scheme) {
+         return "http".equals(scheme) || "https".equals(scheme);
+     }

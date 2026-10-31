@@ -1,0 +1,174 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
+index d1a72a0698c..1416374dd7a 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
+@@ -2197,7 +2197,8 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+                         mEdgeToEdgeControllerSupplier.get(),
+                         mBottomControlsStacker,
+                         mFullscreenManager,
+-                        defaultVisibility);
++                        defaultVisibility,
++                        getOmniboxFocusStateSupplier());
+         mSystemBarColorHelperSupplier.set(bottomChinColorHelper);
+         return bottomChinColorHelper;
+     }
+diff --git a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinCoordinator.java b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinCoordinator.java
+index 476d325db7e..fb28f1a3087 100644
+--- a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinCoordinator.java
++++ b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinCoordinator.java
+@@ -9,6 +9,7 @@ import android.view.View;
+ import androidx.annotation.VisibleForTesting;
+ 
+ import org.chromium.base.lifetime.Destroyable;
++import org.chromium.base.supplier.NonNullObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.chrome.browser.browser_controls.BottomControlsStacker;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+@@ -126,6 +127,11 @@ public class EdgeToEdgeBottomChinCoordinator implements Destroyable, SystemBarCo
+         mLayoutManager.addSceneOverlay(sceneLayer);
+     }
+ 
++    /** Bare: lets the strip stay while the address bar has the keyboard. */
++    void setOmniboxFocusSupplier(NonNullObservableSupplier<Boolean> omniboxFocusSupplier) {
++        mMediator.setOmniboxFocusSupplier(omniboxFocusSupplier);
++    }
++
+     /** Clean up all observers and release any held resources. */
+     @Override
+     public void destroy() {
+diff --git a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinMediator.java b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinMediator.java
+index e90e1da31f7..0044c50c9ea 100644
+--- a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinMediator.java
++++ b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinMediator.java
+@@ -13,7 +13,10 @@ import static org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeBottomChinPr
+ import static org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeBottomChinProperties.Y_OFFSET;
+ import static org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils.isBottomChinAllowed;
+ 
++import org.chromium.base.Callback;
++import org.chromium.base.supplier.NonNullObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.browser_controls.BottomControlsLayer;
+ import org.chromium.chrome.browser.browser_controls.BottomControlsStacker;
+ import org.chromium.chrome.browser.browser_controls.BottomControlsStacker.LayerScrollBehavior;
+@@ -62,6 +65,13 @@ class EdgeToEdgeBottomChinMediator
+     private @LayerVisibility int mLatestLayerVisibility;
+ 
+     private boolean mIsKeyboardVisible;
++
++    // Bare: the strip stays while the address bar has the keyboard, and until the keyboard has
++    // gone. Otherwise it leaves on the first keyboard frame, the bottom row drops into its place
++    // and the page background shows through the gap before the keyboard covers it.
++    private @Nullable NonNullObservableSupplier<Boolean> mOmniboxFocusSupplier;
++    private final Callback<Boolean> mOmniboxFocusObserver = this::onOmniboxFocusChanged;
++    private boolean mKeepForOmnibox;
+     private int mKeyboardInset;
+     private boolean mHasSafeAreaConstraint;
+ 
+@@ -142,6 +152,24 @@ class EdgeToEdgeBottomChinMediator
+         mEdgeToEdgeController.unregisterObserver(this);
+         mBottomControlsStacker.removeLayer(this);
+         mFullscreenManager.removeObserver(this);
++        if (mOmniboxFocusSupplier != null) {
++            mOmniboxFocusSupplier.removeObserver(mOmniboxFocusObserver);
++        }
++    }
++
++    /** Bare: follows the address bar's focus so the strip can stay while it has the keyboard. */
++    void setOmniboxFocusSupplier(NonNullObservableSupplier<Boolean> omniboxFocusSupplier) {
++        mOmniboxFocusSupplier = omniboxFocusSupplier;
++        omniboxFocusSupplier.addSyncObserverAndCallIfNonNull(mOmniboxFocusObserver);
++    }
++
++    private boolean isOmniboxFocused() {
++        return mOmniboxFocusSupplier != null && mOmniboxFocusSupplier.get();
++    }
++
++    private void onOmniboxFocusChanged(boolean focused) {
++        mKeepForOmnibox = focused || (mIsKeyboardVisible && mKeyboardInset > 0);
++        updateHeightAndVisibility();
+     }
+ 
+     private boolean isVisible() {
+@@ -180,11 +208,13 @@ class EdgeToEdgeBottomChinMediator
+      */
+     private void updateHeightAndVisibility() {
+         int newHeight = mEdgeToEdgeBottomInsetPx;
+-        boolean isKeyboardVisible = mIsKeyboardVisible && mKeyboardInset > 0;
++        // Bare: the window stops reporting the strip's inset as the keyboard comes up. While the
++        // address bar has the keyboard the strip keeps its last height.
++        if (mKeepForOmnibox && newHeight == 0) newHeight = mModel.get(HEIGHT);
++        boolean isKeyboardVisible = mIsKeyboardVisible && mKeyboardInset > 0 && !mKeepForOmnibox;
+         boolean newVisibility =
+                 mIsDrawingToEdge
+-                        && isBottomChinAllowed(
+-                                mLayoutManager.getActiveLayoutType(), mEdgeToEdgeBottomInsetPx)
++                        && isBottomChinAllowed(mLayoutManager.getActiveLayoutType(), newHeight)
+                         && !mFullscreenManager.getPersistentFullscreenMode()
+                         && !isKeyboardVisible;
+ 
+@@ -243,6 +273,7 @@ class EdgeToEdgeBottomChinMediator
+     @Override
+     public void keyboardVisibilityChanged(boolean isShowing) {
+         mIsKeyboardVisible = isShowing;
++        if (!isShowing) mKeepForOmnibox = isOmniboxFocused();
+         updateHeightAndVisibility();
+     }
+ 
+@@ -289,7 +320,9 @@ class EdgeToEdgeBottomChinMediator
+ 
+     @Override
+     public @LayerVisibility int getLayerVisibility() {
+-        if (mIsKeyboardVisible && mKeyboardInset > 0) return LayerVisibility.HIDDEN;
++        if (mIsKeyboardVisible && mKeyboardInset > 0 && !mKeepForOmnibox) {
++            return LayerVisibility.HIDDEN;
++        }
+         if (mIsPagedOptedIntoEdgeToEdge || !mDefaultVisibility) {
+             return LayerVisibility.VISIBLE_IF_OTHERS_VISIBLE;
+         }
+diff --git a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeControllerFactory.java b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeControllerFactory.java
+index 949d4f1c4f8..8f24b9702c1 100644
+--- a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeControllerFactory.java
++++ b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeControllerFactory.java
+@@ -10,6 +10,7 @@ import android.os.Build.VERSION_CODES;
+ import android.view.View;
+ 
+ import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.NonNullObservableSupplier;
+ import org.chromium.base.supplier.NullableObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.NullUnmarked;
+@@ -110,6 +111,33 @@ public class EdgeToEdgeControllerFactory {
+                 defaultVisibility);
+     }
+ 
++    /** Bare: as above, and the strip stays while the address bar has the keyboard. */
++    public static SystemBarColorHelper createBottomChin(
++            View androidView,
++            KeyboardVisibilityDelegate keyboardVisibilityDelegate,
++            InsetObserver insetObserver,
++            LayoutManager layoutManager,
++            Runnable requestRenderRunnable,
++            EdgeToEdgeController edgeToEdgeController,
++            BottomControlsStacker bottomControlsStacker,
++            FullscreenManager fullscreenManager,
++            boolean defaultVisibility,
++            NonNullObservableSupplier<Boolean> omniboxFocusSupplier) {
++        EdgeToEdgeBottomChinCoordinator chin =
++                new EdgeToEdgeBottomChinCoordinator(
++                        androidView,
++                        keyboardVisibilityDelegate,
++                        insetObserver,
++                        layoutManager,
++                        requestRenderRunnable,
++                        edgeToEdgeController,
++                        bottomControlsStacker,
++                        fullscreenManager,
++                        defaultVisibility);
++        chin.setOmniboxFocusSupplier(omniboxFocusSupplier);
++        return chin;
++    }
++
+     /**
+      * Creates an adjuster for padding to the view to account for edge-to-edge. Note: this doesn't
+      * account for browser controls.

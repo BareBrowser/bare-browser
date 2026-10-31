@@ -1,0 +1,123 @@
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java
+index fdb8c235241..4c6a1bf455e 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java
+@@ -125,6 +125,9 @@ public class LocationBarFocusScrimHandler {
+         @ColorInt Integer scrimColor = null;
+         if (useTransparentScrim) {
+             scrimColor = Color.TRANSPARENT;
++        } else if (!isTablet) {
++            // Bare: the page stays readable behind the list, a little dimmed.
++            scrimColor = ColorUtils.inNightMode(mContext) ? 0x66000000 : 0x40FFFFFF;
+         } else if (useLightColor) {
+             scrimColor = mLightScrimColor;
+         }
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
+index de89e361f58..595caf1b57a 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
+@@ -7,6 +7,9 @@ package org.chromium.chrome.browser.omnibox.suggestions;
+ import static org.chromium.build.NullUtil.assumeNonNull;
+ 
+ import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Paint;
++import android.graphics.RectF;
+ import android.os.Handler;
+ import android.os.Looper;
+ import android.util.AttributeSet;
+@@ -18,6 +21,7 @@ import android.view.View;
+ import android.view.ViewGroup;
+ import android.view.accessibility.AccessibilityEvent;
+ 
++import androidx.annotation.ColorInt;
+ import androidx.annotation.Px;
+ import androidx.annotation.StringRes;
+ import androidx.annotation.VisibleForTesting;
+@@ -85,6 +89,11 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+     private float mChildVerticalTranslation;
+     private float mChildAlpha = 1.0f;
+ 
++    // Bare: the card drawn behind the rows, and the touches it lets through. Zero means none.
++    private @ColorInt int mCardColor;
++    private final Paint mCardPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final RectF mCardRect = new RectF();
++
+     private @Px int mBaseBottomPadding;
+     private @Px int mBaseTopPadding;
+     private final HeaderDecoration mHeaderDecoration;
+@@ -682,6 +691,9 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+ 
+     @Override
+     public boolean dispatchTouchEvent(MotionEvent ev) {
++        // Bare: the empty space above the card passes the touch to the page behind, which
++        // closes the address bar.
++        if (isAboveCard(ev)) return false;
+         final int eventType = ev.getActionMasked();
+         if (eventType == MotionEvent.ACTION_UP || eventType == MotionEvent.ACTION_DOWN) {
+             mLayoutScrollListener.onNewGesture();
+@@ -739,6 +751,45 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+      * @param topPadding Top padding in pixels.
+      * @param bottomPadding Bottom padding in pixels.
+      */
++    /** Bare: draws a rounded card of this color behind the rows, in place of a full background. */
++    public void setCardColor(@ColorInt int color) {
++        mCardColor = color;
++        mCardPaint.setColor(color);
++        invalidate();
++    }
++
++    /** Bare: the card is as tall as the rows, and the empty space above it is not part of it. */
++    private boolean updateCardRect() {
++        int top = Integer.MAX_VALUE;
++        int bottom = Integer.MIN_VALUE;
++        for (int i = 0; i < getChildCount(); i++) {
++            View child = getChildAt(i);
++            if (child.getVisibility() != VISIBLE) continue;
++            top = Math.min(top, child.getTop());
++            bottom = Math.max(bottom, child.getBottom());
++        }
++        if (top == Integer.MAX_VALUE) return false;
++        float inset = getResources().getDisplayMetrics().density * 8;
++        mCardRect.set(inset, top, getWidth() - inset, bottom);
++        return true;
++    }
++
++    @Override
++    protected void dispatchDraw(Canvas canvas) {
++        if (mCardColor != 0 && updateCardRect()) {
++            float radius = getResources().getDisplayMetrics().density * 20;
++            canvas.drawRoundRect(mCardRect, radius, radius, mCardPaint);
++        }
++        super.dispatchDraw(canvas);
++    }
++
++    /** Bare: whether a touch lands on the empty space above the card, not on a row. */
++    private boolean isAboveCard(MotionEvent event) {
++        return mCardColor != 0
++                && event.getActionMasked() == MotionEvent.ACTION_DOWN
++                && (!updateCardRect() || event.getY() < mCardRect.top);
++    }
++
+     public void setVerticalPadding(@Px int topPadding, @Px int bottomPadding) {
+         mBaseTopPadding = topPadding;
+         mBaseBottomPadding = bottomPadding;
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/SuggestionListViewBinder.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/SuggestionListViewBinder.java
+index b175e7cf5b5..a481bdb3ed0 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/SuggestionListViewBinder.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/SuggestionListViewBinder.java
+@@ -166,6 +166,14 @@ class SuggestionListViewBinder
+                 getResourceProvider(model)
+                         .getSuggestionBackgroundColor(layoutMode, /* isDropdownContainer= */ true);
+ 
++        // Bare: on a phone the page stays visible behind the list. The list draws a card behind
++        // its rows and nothing else.
++        if (!model.get(SuggestionListProperties.IS_LARGE_SCREEN)) {
++            holder.dropdown.setBackgroundColor(Color.TRANSPARENT);
++            holder.dropdown.setCardColor(backgroundColor);
++            holder.container.setBackgroundColor(Color.TRANSPARENT);
++            return;
++        }
+         holder.dropdown.setBackgroundColor(backgroundColor);
+ 
+         if (model.get(SuggestionListProperties.IS_LARGE_SCREEN)

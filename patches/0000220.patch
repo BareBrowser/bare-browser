@@ -1,0 +1,90 @@
+diff --git a/chrome/browser/language/android/BUILD.gn b/chrome/browser/language/android/BUILD.gn
+index 695bb945198..3a177261bf3 100644
+--- a/chrome/browser/language/android/BUILD.gn
++++ b/chrome/browser/language/android/BUILD.gn
+@@ -46,6 +46,7 @@ android_library("java") {
+ 
+     # Todo(https://crbug.com/40168592): Remove cyclical dependancy with Translate bridge.
+     "java/src/org/chromium/chrome/browser/translate/TranslateBridge.java",
++    "java/src/org/chromium/chrome/browser/translate/TranslateSession.java",
+     "java/src/org/chromium/chrome/browser/translate/TranslationObserver.java",
+   ]
+   deps = [
+diff --git a/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateBridge.java b/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateBridge.java
+index 776f684d969..48eec392bcc 100644
+--- a/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateBridge.java
++++ b/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateBridge.java
+@@ -30,6 +30,13 @@ public class TranslateBridge {
+      */
+     public static void translateTabWhenReady(Tab tab) {
+         RecordUserAction.record("Android.ManualTranslate");
++        translateNow(tab);
++        // Bare: once a page is translated, the tab's next pages are too, until the tab is closed.
++        TranslateSession.keepOn(tab);
++    }
++
++    /** Translates the tab when the source language is known, without recording a user action. */
++    static void translateNow(Tab tab) {
+         TranslateBridgeJni.get().manualTranslateWhenReady(assertNonNull(tab.getWebContents()));
+     }
+ 
+diff --git a/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java b/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java
+new file mode 100644
+index 00000000000..90d116fecec
+--- /dev/null
++++ b/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java
+@@ -0,0 +1,54 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.translate;
++
++import org.chromium.base.UserData;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.tab.EmptyTabObserver;
++import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.content_public.browser.NavigationHandle;
++
++/**
++ * Keeps translation on for a tab once the user has translated a page in it. Each page the tab
++ * then loads is translated the same way, until the tab is closed.
++ */
++@NullMarked
++class TranslateSession extends EmptyTabObserver implements UserData {
++    private static final Class<TranslateSession> USER_DATA_KEY = TranslateSession.class;
++
++    private final Tab mTab;
++
++    private TranslateSession(Tab tab) {
++        mTab = tab;
++        tab.addObserver(this);
++    }
++
++    /** Starts keeping translation on for the tab. Does nothing if it already is. */
++    static void keepOn(Tab tab) {
++        if (tab.getUserDataHost().getUserData(USER_DATA_KEY) != null) return;
++        tab.getUserDataHost().setUserData(USER_DATA_KEY, new TranslateSession(tab));
++    }
++
++    @Override
++    public void onDidFinishNavigationInPrimaryMainFrame(Tab tab, NavigationHandle navigation) {
++        if (!navigation.hasCommitted()
++                || navigation.isSameDocument()
++                || navigation.isErrorPage()
++                || !isHttpOrHttps(navigation.getUrl().getScheme())
++                || tab.getWebContents() == null) {
++            return;
++        }
++        TranslateBridge.translateNow(tab);
++    }
++
++    private static boolean isHttpOrHttps(String scheme) {
++        return "http".equals(scheme) || "https".equals(scheme);
++    }
++
++    @Override
++    public void destroy() {
++        mTab.removeObserver(this);
++    }
++}

@@ -1,0 +1,39 @@
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
+index e1fffaf5874..cd64524b2dc 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
+@@ -747,6 +747,8 @@ public class LocationBarMediator
+             }
+         } else {
+             mUrlFocusedWithoutAnimations = false;
++            // Bare: hide the keyboard as focus leaves, not when the focus animation ends.
++            if (mUrlCoordinator != null) mUrlCoordinator.hideKeyboardNow();
+         }
+ 
+         if (!mUrlFocusedWithoutAnimations) handleUrlFocusAnimation(hasFocus);
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarCoordinator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarCoordinator.java
+index 35230b21b33..74e25cee7a0 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarCoordinator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarCoordinator.java
+@@ -401,6 +401,21 @@ public class UrlBarCoordinator
+         }
+     }
+ 
++    /**
++     * Bare: hides the keyboard at once, skipping the hide delay and the debounce. Used when focus
++     * leaves the address bar: until the keyboard hid it showed an empty field's layout, and the
++     * bottom bar follows the keyboard down anyway.
++     */
++    public void hideKeyboardNow() {
++        if (mKeyboardHideTask != null) {
++            mUrlBar.removeCallbacks(mKeyboardHideTask);
++            mKeyboardHideTask = null;
++        }
++        mUrlBar.removeCallbacks(mKeyboardTransitionRunnable);
++        mKeyboardState = KeyboardState.HIDDEN;
++        mKeyboardVisibilityDelegate.hideKeyboard(mUrlBar);
++    }
++
+     private void setKeyboardVisibilityDebounced(boolean showKeyboard) {
+         boolean isCurrentlyShowing =
+                 mKeyboardState == KeyboardState.SHOWN || mKeyboardState == KeyboardState.SHOWING;

@@ -1,0 +1,196 @@
+diff --git a/chrome/browser/ui/android/omnibox/java/res/layout/url_action_container.xml b/chrome/browser/ui/android/omnibox/java/res/layout/url_action_container.xml
+index 9309afdb473..ea3f99c6506 100644
+--- a/chrome/browser/ui/android/omnibox/java/res/layout/url_action_container.xml
++++ b/chrome/browser/ui/android/omnibox/java/res/layout/url_action_container.xml
+@@ -89,6 +89,30 @@ found in the LICENSE file.
+         app:layout_constraintTop_toBottomOf="@id/location_bar_attachments"
+         app:layout_constraintEnd_toStartOf="@id/margin_spacer"/>
+ 
++    <!-- Bare: share and copy the address, shown in place of the delete button while the address
++         is in the field and has not been edited. -->
++    <org.chromium.ui.widget.ChromeImageButton
++        style="@style/LocationBarActionButton.AdaptiveDensity"
++        android:id="@+id/bare_share_button"
++        android:foreground="@drawable/circle_button_focus_ring"
++        android:visibility="gone"
++        android:src="@drawable/ic_share_white_24dp"
++        android:contentDescription="@string/share"
++        android:tooltipText="@string/share"
++        app:layout_constraintTop_toBottomOf="@id/location_bar_attachments"
++        app:layout_constraintEnd_toStartOf="@id/margin_spacer"/>
++
++    <org.chromium.ui.widget.ChromeImageButton
++        style="@style/LocationBarActionButton.AdaptiveDensity"
++        android:id="@+id/bare_copy_button"
++        android:foreground="@drawable/circle_button_focus_ring"
++        android:visibility="gone"
++        android:src="@drawable/ic_content_copy"
++        android:contentDescription="@string/copy_link"
++        android:tooltipText="@string/copy_link"
++        app:layout_constraintTop_toBottomOf="@id/location_bar_attachments"
++        app:layout_constraintEnd_toStartOf="@id/bare_share_button"/>
++
+     <!-- LINT.ThenChange(/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarUtils.java:toolbar_tablet_components) -->
+ 
+     <Space
+@@ -103,7 +127,7 @@ found in the LICENSE file.
+         android:layout_width="0dp"
+         android:layout_height="0dp"
+         app:barrierDirection="start"
+-        app:constraint_referenced_ids="omnibox_chip_container,fusebox_activation_chip,composeplate_button,install_button,delete_button,mic_button,margin_spacer"/>
++        app:constraint_referenced_ids="omnibox_chip_container,fusebox_activation_chip,composeplate_button,install_button,delete_button,bare_share_button,bare_copy_button,mic_button,margin_spacer"/>
+ 
+     <!-- URL Bar barrier for multimodal location bar -->
+     <androidx.constraintlayout.widget.Barrier
+@@ -111,6 +135,6 @@ found in the LICENSE file.
+         android:layout_width="0dp"
+         android:layout_height="0dp"
+         app:barrierDirection="start"
+-        app:constraint_referenced_ids="omnibox_chip_container,fusebox_activation_chip,composeplate_button,install_button,delete_button,margin_spacer"/>
++        app:constraint_referenced_ids="omnibox_chip_container,fusebox_activation_chip,composeplate_button,install_button,delete_button,bare_share_button,bare_copy_button,margin_spacer"/>
+ 
+ </merge>
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/FuseboxSessionState.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/FuseboxSessionState.java
+index b66ab062e37..e7a9c0b6b3f 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/FuseboxSessionState.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/FuseboxSessionState.java
+@@ -159,8 +159,8 @@ public class FuseboxSessionState implements UserData {
+         // Hub and Tab Search always start with an empty search box (see below), so the page URL
+         // must not become their initial input either. Otherwise an empty search box would be
+         // treated as text edited by the user (crbug.com/561860973).
+-        if (OmniboxCapabilities.hasDesktopExperience(context)
+-                && !PageClassificationUtils.isHubOrTabSearch(
++        // Bare: the address stays in the field when it is tapped, on a phone as on a desktop.
++        if (!PageClassificationUtils.isHubOrTabSearch(
+                         mAutocompleteInput.getPageClassification())
+                 && UrlBarData.shouldShowUrl(
+                         mAutocompleteInput.getPageUrl(), /* isOffTheRecord= */ false)) {
+@@ -188,10 +188,7 @@ public class FuseboxSessionState implements UserData {
+                         mAutocompleteInput.getPageClassification())) {
+             mAutocompleteInput
+                     .setUserText(mAutocompleteInput.getInitialUserText())
+-                    .setSelection(
+-                            OmniboxCapabilities.hasDesktopExperience(context)
+-                                    ? TextSelection.SELECT_ALL
+-                                    : TextSelection.SELECT_END);
++                    .setSelection(TextSelection.SELECT_ALL);
+         }
+ 
+         // Stop here if we're already waiting for profile.
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinator.java
+index f6a6a736f2a..44d7045b088 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinator.java
+@@ -75,6 +75,7 @@ import org.chromium.chrome.browser.omnibox.suggestions.basic.BasicSuggestionProc
+ import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
++import org.chromium.chrome.browser.share.ShareDelegate.ShareOrigin;
+ import org.chromium.chrome.browser.share.ShareDelegate;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tabmodel.IncognitoStateProvider;
+@@ -97,6 +98,7 @@ import org.chromium.components.omnibox.OmniboxFocusReason;
+ import org.chromium.components.omnibox.TextSelection;
+ import org.chromium.components.search_engines.TemplateUrlService;
+ import org.chromium.ui.KeyboardVisibilityDelegate;
++import org.chromium.ui.base.Clipboard;
+ import org.chromium.ui.base.DeviceFormFactor;
+ import org.chromium.ui.base.WindowAndroid;
+ import org.chromium.ui.interpolators.Interpolators;
+@@ -439,6 +441,19 @@ public class LocationBarCoordinator
+         mFuseboxCoordinator.setUrlTextWrappingSupplier(
+                 mUrlCoordinator.getUrlTextWrappingSupplier());
+ 
++        mLocationBarLayout.setBareActionHandlers(
++                () -> {
++                    Tab tab = activityTabSupplier.get();
++                    if (tab == null || shareDelegateSupplier == null) return;
++                    mUrlCoordinator.clearFocus();
++                    shareDelegateSupplier.get().share(tab, false, ShareOrigin.EDIT_URL);
++                },
++                () -> {
++                    Tab tab = activityTabSupplier.get();
++                    if (tab == null) return;
++                    Clipboard.getInstance().copyUrlToClipboard(tab.getUrl());
++                });
++
+         mAutocompleteCoordinator =
+                 new AutocompleteCoordinator(
+                         mLocationBarLayout,
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarLayout.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarLayout.java
+index 3f648ac2f3f..2d032320da5 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarLayout.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarLayout.java
+@@ -55,6 +55,8 @@ public class LocationBarLayout extends ConstraintLayout {
+ 
+     protected ImageButton mDeleteButton;
+     protected ImageButton mMicButton;
++    private @Nullable ImageButton mBareShareButton;
++    private @Nullable ImageButton mBareCopyButton;
+     protected ImageButton mLensButton;
+     protected ImageButton mZoomButton;
+     protected ImageButton mInstallButton;
+@@ -110,6 +112,8 @@ public class LocationBarLayout extends ConstraintLayout {
+         mUrlBar = findViewById(R.id.url_bar);
+         mLocationBarStatusView = findViewById(R.id.location_bar_status);
+         mMicButton = findViewById(R.id.mic_button);
++        mBareShareButton = findViewById(R.id.bare_share_button);
++        mBareCopyButton = findViewById(R.id.bare_copy_button);
+         mLensButton = findViewById(R.id.lens_camera_button);
+         mZoomButton = findViewById(R.id.zoom_button);
+         mInstallButton = findViewById(R.id.install_button);
+@@ -319,6 +323,18 @@ public class LocationBarLayout extends ConstraintLayout {
+         setButtonVisibility(mDeleteButton, shouldShow);
+     }
+ 
++    /** Bare: shows or hides the share and copy buttons that sit in the field beside the address. */
++    /* package */ void setBareActionsVisibility(boolean shouldShow) {
++        setButtonVisibility(mBareShareButton, shouldShow);
++        setButtonVisibility(mBareCopyButton, shouldShow);
++    }
++
++    /** Bare: what the share and copy buttons do. */
++    /* package */ void setBareActionHandlers(Runnable share, Runnable copy) {
++        if (mBareShareButton != null) mBareShareButton.setOnClickListener(v -> share.run());
++        if (mBareCopyButton != null) mBareCopyButton.setOnClickListener(v -> copy.run());
++    }
++
+     /** Sets the tooltip text of the delete URL content button. */
+     /* package */ void setDeleteButtonTooltip(@Nullable String tooltipText) {
+         if (mDeleteButton == null) return;
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
+index ad4158b8f25..e1fffaf5874 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
+@@ -2265,6 +2265,16 @@ public class LocationBarMediator
+         }
+         mPreviousDeleteButtonVisible = showDeleteButton;
+ 
++        // Bare: while the address is in the field and has not been edited, share and copy take the
++        // place of the delete button.
++        boolean showBareActions =
++                showDeleteButton
++                        && mUrlHasFocus
++                        && mCurrentInput != null
++                        && !TextUtils.isEmpty(mCurrentInput.getInitialUserText())
++                        && isUrlBarTextUnchanged();
++        if (showBareActions) showDeleteButton = false;
++        mLocationBarLayout.setBareActionsVisibility(showBareActions);
+         mLocationBarLayout.setDeleteButtonVisibility(showDeleteButton);
+         updateUrlBarAccessibilityOrder(mActivationChipVisibilitySupplier.get());
+ 
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/editurl/EditUrlSuggestionProcessor.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/editurl/EditUrlSuggestionProcessor.java
+index 31d0e6f5f1a..cd631d0f18d 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/editurl/EditUrlSuggestionProcessor.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/editurl/EditUrlSuggestionProcessor.java
+@@ -65,6 +65,10 @@ public class EditUrlSuggestionProcessor extends BaseSuggestionViewProcessor {
+         // cases. If the first suggestion isn't the one we want, ignore all subsequent suggestions.
+         if (position != 0) return false;
+ 
++        // Bare: share and copy are in the address bar itself while the address is shown, and the
++        // address is already editable there, so this card above the field is not shown.
++        if (true) return false;
++
+         // Fall back to the base suggestion processor when retaining omnibox on focus so as not to
+         // show mobile-optimized actions in a desktop-like context.
+         //

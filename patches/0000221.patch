@@ -1,0 +1,528 @@
+diff --git a/chrome/android/java/res/xml/bare_translate_preferences.xml b/chrome/android/java/res/xml/bare_translate_preferences.xml
+index 9e84de1b0ca..302d5bdbc2b 100644
+--- a/chrome/android/java/res/xml/bare_translate_preferences.xml
++++ b/chrome/android/java/res/xml/bare_translate_preferences.xml
+@@ -19,4 +19,38 @@ found in the LICENSE file.
+         android:title="@string/bare_page_translation_title"
+         android:summary="@string/bare_page_translation_summary" />
+ 
++    <PreferenceCategory
++        android:key="bare_translate_own_category"
++        android:order="2"
++        android:title="@string/bare_translate_own_category">
++
++        <org.chromium.components.browser_ui.settings.TextMessagePreference
++            android:key="bare_translate_about"
++            android:order="0"
++            android:summary="@string/bare_translate_about" />
++
++        <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++            android:key="bare_translate_own_enabled"
++            android:order="1"
++            android:persistent="false"
++            android:title="@string/bare_translate_own_title"
++            android:summary="@string/bare_translate_own_summary" />
++
++        <Preference
++            android:key="bare_translate_server"
++            android:order="2"
++            android:title="@string/bare_translate_server_title" />
++
++        <Preference
++            android:key="bare_translate_key"
++            android:order="3"
++            android:title="@string/bare_translate_key_title" />
++
++        <ListPreference
++            android:key="bare_translate_target"
++            android:order="4"
++            android:title="@string/bare_translate_target_title" />
++
++    </PreferenceCategory>
++
+ </PreferenceScreen>
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 713f01ea9df..523d27be078 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -57,6 +57,9 @@ found in the LICENSE file.
+     <string name="bare_welcome_hint_hardened">Safer against browser exploits, slower on heavy sites</string>
+     <string name="bare_welcome_security_note">Websites can still use the information they receive, and characteristics of your browser, to recognize or track a visitor.</string>
+     <string name="bare_page_translation_title" translatable="false">Translate pages with Google</string>
++    <string name="bare_translate_own_category" translatable="false">My own server</string>
++    <string name="bare_translate_own_title" translatable="false">Translate pages with my own server</string>
++    <string name="bare_translate_own_summary" translatable="false">Adds Translate to the menu and sends the text of the page to the server below, not to Google. Turns Google off. Off by default.</string>
+     <string name="bare_page_translation_summary" translatable="false">Adds Translate to the menu and to the choices under Appearance, Address bar shortcut. Your shortcut is not changed. Off by default.</string>
+     <string name="bare_page_translation_about" translatable="false">Translation happens only when you choose to send the current page for translation. Bare will not suggest it automatically. When you do, the text of that page is sent to Google, and Google can see it. Other tabs are not sent. Google also gets your IP address, as with any request, and may get other details about the page. Bare does not control Google’s service, and it may stop working.</string>
+     <string name="bare_welcome_translate_title" translatable="false">Page translation</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index 83abb094f88..f923cfd5924 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -104,6 +104,8 @@ import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
+ import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
+ import org.chromium.chrome.browser.back_press.BackPressManager;
+ import org.chromium.chrome.browser.bare.BareClearOnExit;
++import org.chromium.chrome.browser.bare.BarePageTranslation;
++import org.chromium.chrome.browser.bare.translate.BarePageTranslator;
+ import org.chromium.chrome.browser.back_press.CloseListenerManager;
+ import org.chromium.chrome.browser.base.ColdStartTracker;
+ import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpener;
+@@ -2159,6 +2161,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+      * {@link WindowAndroid}.
+      */
+     protected void onDestroyInternal() {
++        TranslateBridge.setTabTranslateOverride(null);
+         if (mAcceleratorManager != null) {
+             mAcceleratorManager.destroy();
+             mAcceleratorManager = null;
+@@ -2338,6 +2341,12 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+ 
+     @Override
+     public void finishNativeInitialization() {
++        TranslateBridge.setTabTranslateOverride(
++                tab -> {
++                    if (!BarePageTranslation.isOwnServer()) return false;
++                    BarePageTranslator.onMenuItemClicked(this, tab);
++                    return true;
++                });
+         mNativeInitialized = true;
+ 
+         if (ChromeFeatureList.isEnabled(ChromeFeatureList.UMA_SESSION_CORRECTNESS_FIXES)) {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
+index 5a3fabf1d79..c0fb2497501 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
+@@ -42,6 +42,7 @@ import org.chromium.build.annotations.RequiresNonNull;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.ActivityTabProvider;
+ import org.chromium.chrome.browser.accessibility.PageZoomMenuItemViewBinder;
++import org.chromium.chrome.browser.bare.translate.BarePageTranslator;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+ import org.chromium.chrome.browser.bookmarks.PowerBookmarkUtils;
+ import org.chromium.chrome.browser.commerce.ShoppingServiceFactory;
+@@ -407,7 +408,9 @@ public abstract class AppMenuPropertiesDelegateImpl implements AppMenuProperties
+                         mContext,
+                         mAppMenuItemTheme,
+                         R.id.translate_id,
+-                        R.string.menu_translate,
++                        BarePageTranslator.isTranslated(currentTab)
++                                ? R.string.bare_translate_show_original
++                                : R.string.menu_translate,
+                         showIcon ? R.drawable.ic_translate : 0,
+                         isMenuIconAtStart()));
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java
+index 5a9f934b475..cb84a4afc8e 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java
+@@ -9,8 +9,9 @@ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ 
+ /**
+- * Whether page translation is on. It is off until the user turns it on, in the welcome or in
+- * Settings, because translating a page sends its text to Google.
++ * Whether page translation is on, and with what. It is off until the user turns it on, in the
++ * welcome or in Settings: either with Google, which is sent the text of the page, or with a
++ * server of their own. Only one of the two is on at a time.
+  */
+ @NullMarked
+ public final class BarePageTranslation {
+@@ -24,5 +25,29 @@ public final class BarePageTranslation {
+     public static void setEnabled(boolean enabled) {
+         ChromeSharedPreferences.getInstance()
+                 .writeBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, enabled);
++        if (enabled) {
++            ChromeSharedPreferences.getInstance()
++                    .writeBoolean(ChromePreferenceKeys.BARE_TRANSLATE_OWN_SERVER, false);
++        }
++    }
++
++    /** Whether pages are translated by the server the user entered, not by Google. */
++    public static boolean isOwnServer() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_TRANSLATE_OWN_SERVER, false);
++    }
++
++    public static void setOwnServer(boolean enabled) {
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_TRANSLATE_OWN_SERVER, enabled);
++        if (enabled) {
++            ChromeSharedPreferences.getInstance()
++                    .writeBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, false);
++        }
++    }
++
++    /** Whether Translate is offered at all, with either one. */
++    public static boolean canTranslate() {
++        return isEnabled() || isOwnServer();
+     }
+ }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
+index b950dea5fa1..ffd8a3feafc 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
+@@ -18,15 +18,19 @@ import org.json.JSONException;
+ import org.json.JSONTokener;
+ 
+ import org.chromium.base.Log;
++import org.chromium.base.UserData;
+ import org.chromium.base.task.PostTask;
+ import org.chromium.base.task.TaskTraits;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.BarePageTranslation;
+ import org.chromium.chrome.browser.bare.BareScriptBridge;
+ import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
++import org.chromium.chrome.browser.tab.EmptyTabObserver;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.content_public.browser.WebContents;
++import org.chromium.url.GURL;
+ 
+ import java.io.ByteArrayOutputStream;
+ import java.io.InputStream;
+@@ -99,6 +103,7 @@ public final class BarePageTranslator {
+         if (isTranslated(tab)) {
+             BareScriptBridge.evaluate(webContents, RESTORE_SCRIPT, null);
+             sTranslated.remove(tab.getId());
++            Session.end(tab);
+             return;
+         }
+         if (!BareTranslateSettings.isConfigured()) {
+@@ -202,12 +207,56 @@ public final class BarePageTranslator {
+                     String key = BareTranslateSettings.getApiKey();
+                     String target = BareTranslateSettings.getTargetLanguage();
+                     sTranslated.put(tabId, url);
++                    Session.begin(tab);
+                     PostTask.postTask(
+                             TaskTraits.BEST_EFFORT_MAY_BLOCK,
+                             () -> run(context, webContents, texts, batches, endpoint, key, target));
+                 });
+     }
+ 
++    /**
++     * Keeps translating a tab once the user has translated a page in it: each page the tab loads
++     * is translated the same way, until the user shows the original, turns the server off, or
++     * closes the tab.
++     */
++    private static final class Session extends EmptyTabObserver implements UserData {
++        private static final Class<Session> KEY = Session.class;
++
++        private final Tab mTab;
++
++        private Session(Tab tab) {
++            mTab = tab;
++            tab.addObserver(this);
++        }
++
++        static void begin(Tab tab) {
++            if (tab.getUserDataHost().getUserData(KEY) != null) return;
++            tab.getUserDataHost().setUserData(KEY, new Session(tab));
++        }
++
++        static void end(Tab tab) {
++            tab.getUserDataHost().removeUserData(KEY);
++        }
++
++        @Override
++        public void onPageLoadFinished(Tab tab, GURL url) {
++            String scheme = url.getScheme();
++            if (!"http".equals(scheme) && !"https".equals(scheme)) return;
++            if (!BarePageTranslation.isOwnServer()
++                    || !BareTranslateSettings.isConfigured()
++                    || !BareTranslateSettings.hasConsent()) {
++                end(tab);
++                return;
++            }
++            start(tab.getContext(), tab);
++        }
++
++        @Override
++        public void destroy() {
++            mTab.removeObserver(this);
++        }
++    }
++
+     /** Reads the string the collect script returned: a JSON string holding a JSON array. */
+     static @Nullable List<String> decodeCollected(@Nullable String result) {
+         if (result == null) return null;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java
+index 32ddf59e32c..d90fc580e7f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java
+@@ -4,8 +4,14 @@
+ 
+ package org.chromium.chrome.browser.bare.translate;
+ 
++import android.app.AlertDialog;
+ import android.content.Context;
+ import android.os.Bundle;
++import android.text.InputType;
++import android.widget.EditText;
++import android.widget.FrameLayout;
++import androidx.preference.ListPreference;
++import androidx.preference.Preference;
+ 
+ import org.chromium.base.supplier.MonotonicObservableSupplier;
+ import org.chromium.base.supplier.ObservableSuppliers;
+@@ -18,10 +24,16 @@ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
+ import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+ import org.chromium.components.browser_ui.settings.SettingsUtils;
+ 
+-/** Settings for translating pages with Google. */
++import java.util.Locale;
++
++/** Settings for translating pages, with Google or with a server the user chooses. */
+ @NullMarked
+ public class BareTranslateSettingsFragment extends ChromeBaseSettingsFragment {
+     static final String PREF_ENABLED = "bare_translate_enabled";
++    static final String PREF_OWN = "bare_translate_own_enabled";
++    static final String PREF_SERVER = "bare_translate_server";
++    static final String PREF_KEY = "bare_translate_key";
++    static final String PREF_TARGET = "bare_translate_target";
+ 
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+             ObservableSuppliers.createMonotonic();
+@@ -32,7 +44,143 @@ public class BareTranslateSettingsFragment extends ChromeBaseSettingsFragment {
+         SettingsUtils.addPreferencesFromResource(this, R.xml.bare_translate_preferences);
+         ChromeSwitchPreference enabled = findPreference(PREF_ENABLED);
+         assert enabled != null;
+-        bindSwitch(enabled);
++        bindSwitch(enabled, this::syncSwitches);
++
++        ChromeSwitchPreference own = findPreference(PREF_OWN);
++        assert own != null;
++        own.setChecked(BarePageTranslation.isOwnServer());
++        own.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    if (!(boolean) newValue) {
++                        BarePageTranslation.setOwnServer(false);
++                        syncSwitches();
++                        return true;
++                    }
++                    if (BareTranslateSettings.isConfigured()) {
++                        BarePageTranslation.setOwnServer(true);
++                        syncSwitches();
++                        return true;
++                    }
++                    // The switch stays off until there is an address that can be used.
++                    askForServer();
++                    return false;
++                });
++
++        Preference server = findPreference(PREF_SERVER);
++        assert server != null;
++        server.setOnPreferenceClickListener(
++                preference -> {
++                    askForServer();
++                    return true;
++                });
++        Preference key = findPreference(PREF_KEY);
++        assert key != null;
++        key.setOnPreferenceClickListener(
++                preference -> {
++                    askForText(
++                            R.string.bare_translate_key_title,
++                            R.string.bare_translate_key_hint,
++                            BareTranslateSettings.getApiKey(),
++                            InputType.TYPE_TEXT_VARIATION_PASSWORD,
++                            value -> {
++                                BareTranslateSettings.setApiKey(value.trim());
++                                updateSummaries();
++                            });
++                    return true;
++                });
++
++        ListPreference target = findPreference(PREF_TARGET);
++        assert target != null;
++        target.setPersistent(false);
++        int count = BareTranslateSettings.TARGET_LANGUAGES.size();
++        CharSequence[] names = new CharSequence[count];
++        CharSequence[] codes = new CharSequence[count];
++        for (int i = 0; i < count; i++) {
++            String code = BareTranslateSettings.TARGET_LANGUAGES.get(i);
++            Locale locale = Locale.forLanguageTag(code);
++            names[i] = locale.getDisplayLanguage(locale) + " (" + code + ")";
++            codes[i] = code;
++        }
++        target.setEntries(names);
++        target.setEntryValues(codes);
++        target.setValue(BareTranslateSettings.getTargetLanguage());
++        target.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    BareTranslateSettings.setTargetLanguage((String) newValue);
++                    updateSummaries();
++                    return true;
++                });
++        updateSummaries();
++    }
++
++    /** Shows which of the two is on. Turning one on turns the other off. */
++    private void syncSwitches() {
++        ChromeSwitchPreference google = findPreference(PREF_ENABLED);
++        ChromeSwitchPreference own = findPreference(PREF_OWN);
++        if (google != null) google.setChecked(BarePageTranslation.isEnabled());
++        if (own != null) own.setChecked(BarePageTranslation.isOwnServer());
++    }
++
++    /** Asks for the server address. Once it can be used, translating with it is switched on. */
++    private void askForServer() {
++        askForText(
++                R.string.bare_translate_server_title,
++                R.string.bare_translate_server_hint,
++                BareTranslateSettings.getEndpoint(),
++                InputType.TYPE_TEXT_VARIATION_URI,
++                value -> {
++                    BareTranslateSettings.setEndpoint(value);
++                    if (BareTranslateSettings.isConfigured()) {
++                        BarePageTranslation.setOwnServer(true);
++                    }
++                    updateSummaries();
++                    syncSwitches();
++                });
++    }
++
++    private void updateSummaries() {
++        Preference server = findPreference(PREF_SERVER);
++        Preference key = findPreference(PREF_KEY);
++        ListPreference target = findPreference(PREF_TARGET);
++        if (server == null || key == null || target == null) return;
++        String endpoint = BareTranslateSettings.getEndpoint();
++        if (endpoint.isEmpty()) {
++            server.setSummary(R.string.bare_translate_server_unset);
++        } else if (!BareTranslateSettings.isConfigured()) {
++            server.setSummary(getString(R.string.bare_translate_server_refused, endpoint));
++        } else {
++            server.setSummary(endpoint);
++        }
++        key.setSummary(
++                BareTranslateSettings.getApiKey().isEmpty()
++                        ? R.string.bare_translate_key_unset
++                        : R.string.bare_translate_key_set);
++        target.setSummary(target.getEntry());
++    }
++
++    private interface OnText {
++        void onText(String value);
++    }
++
++    private void askForText(int titleRes, int hintRes, String current, int inputType, OnText done) {
++        Context context = requireContext();
++        EditText input = new EditText(context);
++        input.setInputType(InputType.TYPE_CLASS_TEXT | inputType);
++        input.setHint(hintRes);
++        input.setText(current);
++        input.setSingleLine(true);
++        FrameLayout frame = new FrameLayout(context);
++        int pad = Math.round(20 * context.getResources().getDisplayMetrics().density);
++        frame.setPadding(pad, pad / 2, pad, 0);
++        frame.addView(input);
++        new AlertDialog.Builder(context, R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                .setTitle(titleRes)
++                .setView(frame)
++                .setPositiveButton(
++                        android.R.string.ok,
++                        (dialog, which) -> done.onText(input.getText().toString()))
++                .setNegativeButton(android.R.string.cancel, null)
++                .show();
+     }
+ 
+     /**
+@@ -41,10 +189,16 @@ public class BareTranslateSettingsFragment extends ChromeBaseSettingsFragment {
+      * Translate one of the things they can pick.
+      */
+     public static void bindSwitch(ChromeSwitchPreference enabled) {
++        bindSwitch(enabled, null);
++    }
++
++    /** Same, and runs {@code changed} after a change, for a page that shows other switches. */
++    public static void bindSwitch(ChromeSwitchPreference enabled, @Nullable Runnable changed) {
+         enabled.setChecked(BarePageTranslation.isEnabled());
+         enabled.setOnPreferenceChangeListener(
+                 (preference, newValue) -> {
+                     BarePageTranslation.setEnabled((boolean) newValue);
++                    if (changed != null) changed.run();
+                     return true;
+                 });
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java b/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
+index 3b79900c22a..dcbd4a79adc 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
+@@ -31,7 +31,7 @@ public class TranslateUtils {
+     public static boolean canTranslateCurrentTab(Tab tab, boolean menuLogging) {
+         // Page translation is the user's choice. Chromium's own key check is not asked, the same
+         // as for the address bar shortcut, which translates without it.
+-        return BarePageTranslation.isEnabled()
++        return BarePageTranslation.canTranslate()
+                 && !tab.isNativePage()
+                 && tab.getWebContents() != null
+                 && UrlUtilities.isHttpOrHttps(tab.getUrl());
+diff --git a/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateBridge.java b/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateBridge.java
+index 48eec392bcc..bd4624ac6f6 100644
+--- a/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateBridge.java
++++ b/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateBridge.java
+@@ -25,10 +25,22 @@ import java.util.List;
+ /** Bridge class that lets Android code access native code to execute translate on a tab. */
+ @NullMarked
+ public class TranslateBridge {
++    /** Lets the browser translate a tab itself. Returns true when it has, so Google is not asked. */
++    public interface TabTranslateOverride {
++        boolean translate(Tab tab);
++    }
++
++    private static @Nullable TabTranslateOverride sOverride;
++
++    public static void setTabTranslateOverride(@Nullable TabTranslateOverride override) {
++        sOverride = override;
++    }
++
+     /**
+      * Translates the given tab when the necessary state has been computed (e.g. source language).
+      */
+     public static void translateTabWhenReady(Tab tab) {
++        if (sOverride != null && sOverride.translate(tab)) return;
+         RecordUserAction.record("Android.ManualTranslate");
+         translateNow(tab);
+         // Bare: once a page is translated, the tab's next pages are too, until the tab is closed.
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 45c07ceb431..2d780daa758 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -446,6 +446,7 @@ public final class ChromePreferenceKeys {
+ 
+     /** Whether page translation through Google is on. Off until the user turns it on. */
+     public static final String BARE_PAGE_TRANSLATION = "Bare.Translate.PageTranslation";
++    public static final String BARE_TRANSLATE_OWN_SERVER = "Bare.Translate.OwnServer";
+ 
+     /** Whether the vertical tabs drawer shows its tabs as a grid, two to a row. */
+     public static final String BARE_VERTICAL_TABS_GRID = "Chrome.Bare.VerticalTabsGrid";
+@@ -1428,6 +1429,7 @@ public final class ChromePreferenceKeys {
+                 BARE_TRANSLATE_ENDPOINT,
+                 BARE_TRANSLATE_TARGET,
+                 BARE_PAGE_TRANSLATION,
++                BARE_TRANSLATE_OWN_SERVER,
+                 BARE_LAUNCHER_ICON,
+                 BARE_VERTICAL_TABS_GRID,
+                 BARE_NEW_ICON_UNLOCKED,
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 7d1c39d580d..d2b73abeb49 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4397,13 +4397,13 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+         Translate pages
+       </message>
+       <message name="IDS_BARE_TRANSLATE_ABOUT" desc="Explains page translation: it sends page text to a server the user chooses.">
+-        Google Translate is not part of Bare: it needs access to Google that Bare does not have. Instead, enter the address of a LibreTranslate-compatible server, such as one you run yourself. Then Translate in the menu sends the text of the page to that server, and nothing else.
++        Enter the address of a LibreTranslate-compatible server, such as one you run yourself. Then Translate in the menu sends the text of the page to that server, and nothing else.
+       </message>
+       <message name="IDS_BARE_TRANSLATE_SETUP_TITLE" desc="Title of the dialog shown by the Translate menu item when no translation server is set. [CHAR_LIMIT=40]">
+         Set up page translation
+       </message>
+       <message name="IDS_BARE_TRANSLATE_SETUP_MESSAGE" desc="Dialog text: Google Translate is not available; page translation needs the address of a server the user chooses.">
+-        Google Translate is not part of Bare. To translate pages, enter the address of a LibreTranslate-compatible server, such as one you run yourself. Translating sends the text of the page to that server.
++        To translate pages with your own server, enter the address of a LibreTranslate-compatible server, such as one you run yourself. Translating sends the text of the page to that server.
+       </message>
+       <message name="IDS_BARE_TRANSLATE_SETUP_SAVE" desc="Button that saves the translation server address and translates the page. [CHAR_LIMIT=24]">
+         Save and translate
