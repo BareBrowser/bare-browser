@@ -1,0 +1,470 @@
+diff --git a/chrome/browser/ui/android/appmenu/internal/BUILD.gn b/chrome/browser/ui/android/appmenu/internal/BUILD.gn
+index 3caae1037b9..f03deaf44ab 100644
+--- a/chrome/browser/ui/android/appmenu/internal/BUILD.gn
++++ b/chrome/browser/ui/android/appmenu/internal/BUILD.gn
+@@ -17,6 +17,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuCoordinatorFactory.java",
+     "java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuCoordinatorImpl.java",
+     "java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuDragHelper.java",
++    "java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java",
+     "java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java",
+     "java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuItemIcon.java",
+     "java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuItemViewBinder.java",
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+index 9871ff7423e..a461fb7e3fb 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+@@ -4,6 +4,8 @@
+ 
+ package org.chromium.chrome.browser.ui.appmenu;
+ 
++import static org.chromium.build.NullUtil.assumeNonNull;
++
+ import android.animation.Animator;
+ import android.animation.AnimatorSet;
+ import android.animation.ValueAnimator;
+@@ -277,6 +279,7 @@ class AppMenu implements OnKeyListener {
+ 
+     private @Nullable Context mContext;
+     private @Nullable ListView mListView;
++    private @Nullable BareMenuSheet mSheet;
+     private @Nullable ListAdapter mAdapter;
+     private @Nullable View mFooterView;
+     private int mCurrentScreenRotation = -1;
+@@ -359,6 +362,7 @@ class AppMenu implements OnKeyListener {
+ 
+         popup.setOnDismissListener(
+                 () -> {
++                    mSheet = null;
+                     recordTimeToTakeActionHistogram();
+                     if (anchorView instanceof ImageButton) {
+                         ((ImageButton) anchorView).setSelected(false);
+@@ -554,7 +558,34 @@ class AppMenu implements OnKeyListener {
+                         popupHeight,
+                         anchorView.getRootView().getLayoutDirection(),
+                         mPositionBelowAnchor);
+-        popup.setContentView(contentView);
++
++        // Bare: on phones, opened from the button on screen, the menu is a sheet that comes up
++        // from behind the bottom toolbar. Its window ends at the top of the toolbar, so the
++        // toolbar stays in front of it and undimmed.
++        mSheet = null;
++        View popupContent = contentView;
++        int[] position = popupPosition;
++        if (!isByPermanentButton
++                && !DeviceInfo.isDesktop()
++                && context.getResources().getConfiguration().smallestScreenWidthDp < 600) {
++            View root = anchorView.getRootView();
++            int windowBottom = BareMenuSheet.toolbarTop(root, visibleDisplayFrame.bottom);
++            int windowHeight = Math.max(1, windowBottom - visibleDisplayFrame.top);
++            popup.setWidth(visibleDisplayFrame.width());
++            popup.setHeight(windowHeight);
++            popup.setAnimationStyle(0);
++            position = new int[] {visibleDisplayFrame.left, visibleDisplayFrame.top};
++            mSheet =
++                    new BareMenuSheet(
++                            context,
++                            contentView,
++                            assumeNonNull(mListView),
++                            Math.round(windowHeight * BareMenuSheet.HEIGHT),
++                            BareMenuSheet.toolbarColor(root, context),
++                            this::dismiss);
++            popupContent = mSheet.getView();
++        }
++        popup.setContentView(popupContent);
+ 
+         mHierarchicalMenuController.setupFlyoutController(
+                 /* flyoutHandler= */ flyoutHandler,
+@@ -568,7 +599,7 @@ class AppMenu implements OnKeyListener {
+         mHierarchicalMenuController.setupBackPressBehaviorForPopupWindow(
+                 contentView, this::dismiss);
+ 
+-        showPopup(anchorView, popupPosition);
++        showPopup(anchorView, position);
+ 
+         mSelectedItemBeforeDismiss = false;
+         mMenuShownTimeMs = SystemClock.elapsedRealtime();
+@@ -864,6 +895,8 @@ class AppMenu implements OnKeyListener {
+      * animation.
+      */
+     public void updateMenuHeightWithAnimation() {
++        // Bare: the sheet keeps its size; its list scrolls instead.
++        if (mSheet != null) return;
+         if (mHeightAnimator != null && mHeightAnimator.isRunning()) {
+             mHeightAnimator.cancel();
+         }
+@@ -1119,7 +1152,11 @@ class AppMenu implements OnKeyListener {
+                     Gravity.NO_GRAVITY,
+                     popupPosition[0],
+                     popupPosition[1]);
+-            blurPageBehind(mainPopup);
++            if (mSheet != null) {
++                mSheet.open();
++            } else {
++                blurPageBehind(mainPopup);
++            }
+         } catch (WindowManager.BadTokenException e) {
+             // Intentionally ignore BadTokenException. This can happen in a real
+             // edge case where parent.getWindowToken is not valid. See
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+new file mode 100644
+index 00000000000..def69387855
+--- /dev/null
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+@@ -0,0 +1,356 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.ui.appmenu;
++
++import android.animation.ValueAnimator;
++import android.content.Context;
++import android.graphics.Color;
++import android.graphics.drawable.ColorDrawable;
++import android.graphics.drawable.Drawable;
++import android.graphics.drawable.GradientDrawable;
++import android.view.Gravity;
++import android.view.MotionEvent;
++import android.view.VelocityTracker;
++import android.view.View;
++import android.view.ViewConfiguration;
++import android.view.ViewGroup;
++import android.view.animation.Interpolator;
++import android.widget.FrameLayout;
++import android.widget.LinearLayout;
++import android.widget.ListView;
++
++import androidx.annotation.ColorInt;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.ui.appmenu.internal.R;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.ui.interpolators.Interpolators;
++
++/**
++ * Bare: the three-dot menu as a sheet that comes up from behind the bottom toolbar and carries on
++ * from it, in the toolbar's colour. It opens half way, can be dragged or scrolled up to its full
++ * height and dragged down to close. It only moves the menu; what the menu holds and what its items
++ * do are unchanged.
++ */
++@NullMarked
++final class BareMenuSheet {
++    /** The share of the space above the toolbar the sheet takes when it is all the way up. */
++    static final float HEIGHT = 0.92f;
++
++    /** The share of the sheet kept behind the toolbar when it first opens. */
++    private static final float COMPACT_HIDDEN = 0.46f;
++
++    private static final long SETTLE_MS = 300;
++    private static final long CLOSE_MS = 220;
++    private static final float FLING_DP_PER_SECOND = 900f;
++    private static final float HANDLE_ZONE_DP = 28f;
++    private static final float CORNER_DP = 24f;
++    private static final int SCRIM_COLOR = 0x66000000;
++
++    private final View mContent;
++    private final ListView mList;
++    private final View mScrim;
++    private final int mHeight;
++    private final int mCompactY;
++    private final Runnable mDismiss;
++    private final Frame mFrame;
++    private @Nullable ValueAnimator mAnimator;
++    private boolean mClosing;
++
++    /**
++     * @param content The menu's content view; it is moved and dressed, its items are not changed.
++     * @param list The menu's list inside {@code content}.
++     * @param height The sheet's height when it is all the way up.
++     * @param color The toolbar's colour, which the sheet takes.
++     * @param dismiss Closes the menu the usual way.
++     */
++    BareMenuSheet(
++            Context context,
++            View content,
++            ListView list,
++            int height,
++            @ColorInt int color,
++            Runnable dismiss) {
++        mContent = content;
++        mList = list;
++        mHeight = height;
++        mCompactY = Math.round(height * COMPACT_HIDDEN);
++        mDismiss = dismiss;
++        mFrame = new Frame(context);
++        mScrim = new View(context);
++        mScrim.setBackgroundColor(SCRIM_COLOR);
++        mScrim.setAlpha(0f);
++        mFrame.addView(
++                mScrim,
++                new FrameLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        dress(context, content, color);
++        mFrame.addView(
++                content,
++                new FrameLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, height, Gravity.BOTTOM));
++        moveTo(height);
++    }
++
++    /** The view to show in the menu's window. */
++    View getView() {
++        return mFrame;
++    }
++
++    /** Slides the sheet up from behind the toolbar to its first, half-open position. */
++    void open() {
++        mFrame.post(() -> animateTo(mCompactY, SETTLE_MS, Interpolators.EMPHASIZED_DECELERATE, null));
++    }
++
++    /**
++     * The screen y of the top of the bottom toolbar: the address bar when it is at the bottom, full
++     * or minimal, else the visible button row, else {@code fallback}.
++     */
++    static int toolbarTop(View root, int fallback) {
++        int[] at = new int[2];
++        View address = find(root, "control_container");
++        if (address != null && address.isShown() && address.getHeight() > 0) {
++            address.getLocationOnScreen(at);
++            if (at[1] > root.getHeight() / 2) return at[1];
++        }
++        View row = find(root, "bottom_app_bar_container");
++        if (row != null && row.isShown() && row.getHeight() > 0) {
++            // The row's container starts above the buttons with a clear strip; the row itself is
++            // the edge to meet.
++            View slot = find(row, "bottom_container_slot");
++            View edge = slot != null && slot.isShown() && slot.getHeight() > 0 ? slot : row;
++            edge.getLocationOnScreen(at);
++            return at[1];
++        }
++        return fallback;
++    }
++
++    /** The colour of the bottom toolbar, read from the bar itself where it has a plain colour. */
++    static @ColorInt int toolbarColor(View root, Context context) {
++        View address = find(root, "control_container");
++        View bar = address != null && address.isShown() ? address : null;
++        int[] at = new int[2];
++        if (bar != null) {
++            bar.getLocationOnScreen(at);
++            if (at[1] <= root.getHeight() / 2) bar = null;
++        }
++        if (bar == null) bar = find(root, "bottom_app_bar_container");
++        Integer color = bar == null ? null : plainColor(bar, 3);
++        return color != null ? color : SemanticColorUtils.getColorSurfaceContainerHigh(context);
++    }
++
++    private static @Nullable Integer plainColor(View view, int depth) {
++        Drawable background = view.getBackground();
++        if (view.getVisibility() == View.VISIBLE
++                && background instanceof ColorDrawable plain
++                && Color.alpha(plain.getColor()) == 255) {
++            return plain.getColor();
++        }
++        if (depth == 0 || !(view instanceof ViewGroup group)) return null;
++        for (int i = 0; i < group.getChildCount(); i++) {
++            Integer color = plainColor(group.getChildAt(i), depth - 1);
++            if (color != null) return color;
++        }
++        return null;
++    }
++
++    private static @Nullable View find(View root, String name) {
++        int id = root.getResources().getIdentifier(name, "id", root.getContext().getPackageName());
++        return id == 0 ? null : root.findViewById(id);
++    }
++
++    /** Square at the bottom, where it meets the toolbar; a handle at the top. */
++    private static void dress(Context context, View content, @ColorInt int color) {
++        float density = context.getResources().getDisplayMetrics().density;
++        content.setBackground(null);
++        content.setPadding(0, 0, 0, 0);
++        View container = content.findViewById(R.id.app_menu_content_container);
++        if (!(container instanceof LinearLayout column)) return;
++        float corner = CORNER_DP * density;
++        GradientDrawable shape = new GradientDrawable();
++        shape.setColor(color);
++        shape.setCornerRadii(new float[] {corner, corner, corner, corner, 0, 0, 0, 0});
++        column.setBackground(shape);
++
++        GradientDrawable bar = new GradientDrawable();
++        bar.setCornerRadius(2 * density);
++        bar.setColor(SemanticColorUtils.getDefaultIconColor(context));
++        bar.setAlpha(110);
++        View handle = new View(context);
++        handle.setBackground(bar);
++        handle.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
++        LinearLayout.LayoutParams params =
++                new LinearLayout.LayoutParams(Math.round(38 * density), Math.round(4 * density));
++        params.gravity = Gravity.CENTER_HORIZONTAL;
++        params.topMargin = Math.round(10 * density);
++        params.bottomMargin = Math.round(10 * density);
++        column.addView(handle, 0, params);
++    }
++
++    /** Puts the sheet at {@code y} below its top position and dims the page to match. */
++    private void moveTo(float y) {
++        mContent.setTranslationY(y);
++        float shown = (mHeight - y) / Math.max(1f, mHeight - mCompactY);
++        mScrim.setAlpha(Math.max(0f, Math.min(1f, shown)));
++    }
++
++    private void animateTo(
++            float y, long duration, Interpolator interpolator, @Nullable Runnable after) {
++        stop();
++        ValueAnimator animator = ValueAnimator.ofFloat(mContent.getTranslationY(), y);
++        animator.setDuration(duration);
++        animator.setInterpolator(interpolator);
++        animator.addUpdateListener(a -> moveTo((float) a.getAnimatedValue()));
++        if (after != null) {
++            animator.addListener(
++                    new android.animation.AnimatorListenerAdapter() {
++                        @Override
++                        public void onAnimationEnd(android.animation.Animator animation) {
++                            after.run();
++                        }
++                    });
++        }
++        mAnimator = animator;
++        animator.start();
++    }
++
++    private void stop() {
++        if (mAnimator != null) mAnimator.cancel();
++        mAnimator = null;
++    }
++
++    private void settle(float y) {
++        animateTo(y, SETTLE_MS, Interpolators.EMPHASIZED_DECELERATE, null);
++    }
++
++    private void close() {
++        if (mClosing) return;
++        mClosing = true;
++        animateTo(mHeight, CLOSE_MS, Interpolators.EMPHASIZED_ACCELERATE, mDismiss);
++    }
++
++    /**
++     * Where the sheet goes when a drag ends, from where it is, where it started and the speed. A
++     * drag down from the top stops half way; only a drag from half way closes the menu.
++     */
++    private void release(float startY, float velocity) {
++        float y = mContent.getTranslationY();
++        float fling = FLING_DP_PER_SECOND * mFrame.getResources().getDisplayMetrics().density;
++        if (startY < mCompactY / 2f) {
++            settle(velocity < -fling || (velocity <= fling && y < mCompactY / 2f) ? 0 : mCompactY);
++        } else if (velocity < -fling || (velocity <= fling && y < mCompactY / 2f)) {
++            settle(0);
++        } else if (velocity > fling || y >= (mCompactY + mHeight) / 2f) {
++            close();
++        } else {
++            settle(mCompactY);
++        }
++    }
++
++    /**
++     * Holds the menu and takes a gesture from the list when it should move the sheet: up while the
++     * sheet is half open, down while the list is at its top, and any drag on the handle. A tap
++     * above the sheet closes it.
++     */
++    private final class Frame extends FrameLayout {
++        private final int mSlop;
++        private float mDownY;
++        private float mStartY;
++        private boolean mDragging;
++        private boolean mAbove;
++        private @Nullable VelocityTracker mVelocity;
++
++        Frame(Context context) {
++            super(context);
++            mSlop = ViewConfiguration.get(context).getScaledTouchSlop();
++        }
++
++        /** The y in this frame where the sheet's top is now. */
++        private float sheetTop() {
++            return mContent.getTop() + mContent.getTranslationY();
++        }
++
++        @Override
++        public boolean onInterceptTouchEvent(MotionEvent event) {
++            if (mClosing) return true;
++            track(event);
++            switch (event.getActionMasked()) {
++                case MotionEvent.ACTION_DOWN:
++                    stop();
++                    mDownY = event.getY();
++                    mStartY = mContent.getTranslationY();
++                    mDragging = false;
++                    mAbove = mDownY < sheetTop();
++                    float handleZone = HANDLE_ZONE_DP * getResources().getDisplayMetrics().density;
++                    boolean onHandle = !mAbove && mDownY < sheetTop() + handleZone;
++                    return mAbove || onHandle;
++                case MotionEvent.ACTION_MOVE:
++                    float dy = event.getY() - mDownY;
++                    if (Math.abs(dy) <= mSlop) return false;
++                    boolean halfOpen = mStartY > 1;
++                    boolean listAtTop = !mList.canScrollVertically(-1);
++                    if ((halfOpen && dy < 0) || (dy > 0 && listAtTop)) {
++                        mDragging = true;
++                        mDownY = event.getY();
++                        mStartY = mContent.getTranslationY();
++                        return true;
++                    }
++                    return false;
++                default:
++                    return false;
++            }
++        }
++
++        @Override
++        public boolean onTouchEvent(MotionEvent event) {
++            if (mClosing) return true;
++            track(event);
++            switch (event.getActionMasked()) {
++                case MotionEvent.ACTION_MOVE:
++                    float dy = event.getY() - mDownY;
++                    if (!mDragging && !mAbove && Math.abs(dy) > mSlop) {
++                        mDragging = true;
++                        mDownY = event.getY();
++                        dy = 0;
++                    }
++                    if (mDragging) moveTo(Math.max(0, Math.min(mHeight, mStartY + dy)));
++                    return true;
++                case MotionEvent.ACTION_UP:
++                    if (mDragging) {
++                        float velocity = 0;
++                        if (mVelocity != null) {
++                            mVelocity.computeCurrentVelocity(1000);
++                            velocity = mVelocity.getYVelocity();
++                        }
++                        release(mStartY, velocity);
++                    } else if (mAbove) {
++                        close();
++                    }
++                    clearVelocity();
++                    return true;
++                case MotionEvent.ACTION_CANCEL:
++                    if (mDragging) release(mStartY, 0);
++                    clearVelocity();
++                    return true;
++                default:
++                    return true;
++            }
++        }
++
++        private void track(MotionEvent event) {
++            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) clearVelocity();
++            if (mVelocity == null) mVelocity = VelocityTracker.obtain();
++            mVelocity.addMovement(event);
++        }
++
++        private void clearVelocity() {
++            if (mVelocity != null) {
++                mVelocity.recycle();
++                mVelocity = null;
++            }
++        }
++    }
++}
