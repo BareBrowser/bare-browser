@@ -1,0 +1,72 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageCoordinator.java
+index 2b17111adbf..3ced58ef3b2 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageCoordinator.java
+@@ -208,8 +208,6 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
+     private boolean mInitialized;
+ 
+     private float mUrlFocusChangePercent;
+-    // How far the logo and search box rise as search opens.
+-    private static final float FOCUS_LIFT_DP = 12f;
+ 
+     private boolean mDisableUrlFocusChangeAnimations;
+ 
+@@ -1024,14 +1022,13 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
+             return;
+         }
+ 
+-        // Bare: the logo and the search box fade out and lift a little while the omnibox takes
+-        // over, instead of sliding to the top. The fraction is the omnibox's own focus animation,
+-        // so this follows the keyboard and the bar above it and reverses with them.
+-        float lift = FOCUS_LIFT_DP * mNewTabPageLayout.getResources().getDisplayMetrics().density;
+-        mModel.set(NewTabPageLayoutProperties.TRANSITION_Y, -lift * mUrlFocusChangePercent);
+-        float alpha = 1f - mUrlFocusChangePercent;
+-        setSearchBoxAlpha(alpha);
+-        setSearchProviderLogoAlpha(alpha);
++        // Bare: the logo stays put while the address bar is open. On phones the toolbar never
++        // sends this value; it is set once, from the bar's focus when the page is attached. A new
++        // tab is attached with the bar already open, so a fade here hid the logo until the next
++        // tab switch.
++        mModel.set(NewTabPageLayoutProperties.TRANSITION_Y, 0f);
++        setSearchBoxAlpha(1f);
++        setSearchProviderLogoAlpha(1f);
+     }
+ 
+     /**
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index 9b389dbafd7..bd51f62935b 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -3395,7 +3395,13 @@ public class ToolbarManager
+         if (bareBottomControls != null) bareBottomControls.onOmniboxFocusChanged(hasFocus);
+         if (hasFocus) {
+             setToolbarShadowVisibility(View.INVISIBLE);
+-            mBareFrost.show(mActivity, mCompositorViewHolder, mBottomControlsStacker.getTotalHeight());
++            // Bare: no frost on the new tab page. There is nothing on it to blur but the logo,
++            // and a new tab takes focus before its page is drawn, so the still came out blank and
++            // hid the logo.
++            if (!isNewTabPage()) {
++                mBareFrost.show(
++                        mActivity, mCompositorViewHolder, mBottomControlsStacker.getTotalHeight());
++            }
+         } else {
+             updateHairlineVisibility();
+             mBareFrost.hide();
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/ntp/NewTabPageCoordinatorUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/ntp/NewTabPageCoordinatorUnitTest.java
+index ef8fc4cac3e..acae33b0bf5 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/ntp/NewTabPageCoordinatorUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/ntp/NewTabPageCoordinatorUnitTest.java
+@@ -444,10 +444,10 @@ public class NewTabPageCoordinatorUnitTest {
+         assertNotNull(searchBoxView);
+         searchBoxView.layout(0, 100, 1080, 200); // Height is 100, bottom is 200.
+ 
+-        // 4. Re-enable focus animations. This should trigger onUrlFocusAnimationChanged()
+-        // and recalculate/apply a non-zero (negative) vertical translation.
++        // 4. Re-enable focus animations. Bare keeps the page in place while the address bar is
++        // open, so the translation stays at 0f.
+         mCoordinator.setUrlFocusAnimationsDisabled(false);
+-        assertTrue(model.get(NewTabPageLayoutProperties.TRANSITION_Y) < 0f);
++        assertEquals(0f, model.get(NewTabPageLayoutProperties.TRANSITION_Y), 0.01f);
+     }
+ 
+     private void createCoordinator() {
