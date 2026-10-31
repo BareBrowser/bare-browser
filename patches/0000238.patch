@@ -1,0 +1,284 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java
+index 5671664d424..e8e3c7b35ce 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java
+@@ -376,6 +376,20 @@ public class ExternalNavigationDelegateImpl implements ExternalNavigationDelegat
+         return BareOpenInAppsMode.asksFirst(BareOpenInAppsMode.get());
+     }
+ 
++    // The two above cover web links only. These apply the same setting to every other way a link
++    // can open an app. Incognito needs no case here: the leaving-incognito dialog already asks.
++    @Override
++    public boolean allowLinkToOpenApp() {
++        if (!OpenInAppUtils.isOpenInAppAvailable()) return true;
++        return BareOpenInAppsMode.allowsHandoff(BareOpenInAppsMode.get());
++    }
++
++    @Override
++    public boolean shouldAskBeforeLinkOpensApp() {
++        if (!OpenInAppUtils.isOpenInAppAvailable()) return false;
++        return BareOpenInAppsMode.asksFirst(BareOpenInAppsMode.get());
++    }
++
+     /**
+      * Sets the {@link TabLaunchType} for this delegate for testing purposes. This has no effect on
+      * the related Tab launch type.
+diff --git a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java
+index c1de756ee9e..42e89a39401 100644
+--- a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java
++++ b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java
+@@ -240,4 +240,24 @@ public interface ExternalNavigationDelegate {
+     default boolean shouldAskBeforeLeavingForApp(GURL url) {
+         return false;
+     }
++
++    /**
++     * Returns whether a navigation may open another app without the user confirming it.
++     *
++     * <p>Asked about every launch a navigation would make on its own, whatever the link: a web
++     * page, an intent: URL, a scheme an app registers or a store link. False keeps the page in
++     * the browser and suppresses the prompts that would offer the app. Launches the user confirms
++     * in a dialog or the intent chooser are not asked about.
++     */
++    default boolean allowLinkToOpenApp() {
++        return true;
++    }
++
++    /**
++     * Returns whether the user is asked before a navigation opens another app on its own, for
++     * every kind of link {@link #allowLinkToOpenApp} covers.
++     */
++    default boolean shouldAskBeforeLinkOpensApp() {
++        return false;
++    }
+ }
+diff --git a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
+index 5ad4e6ec9c8..2e156a69d80 100644
+--- a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
++++ b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
+@@ -705,6 +705,11 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+     @VisibleForTesting
+     protected @Nullable OpenInAppDialogDelegate mOpenInAppDialogDelegate;
+ 
++    // True while shouldOverrideUrlLoading() is deciding a navigation. A launch made then has not
++    // been confirmed by the user; launches made later come from a dialog, the intent chooser or a
++    // message the user answered.
++    private boolean mDecidingNavigation;
++
+     @VisibleForTesting
+     protected @Nullable DigitalCredentialsWarningDialogDelegate
+             mDigitalCredentialsWarningDialogDelegate;
+@@ -768,17 +773,27 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+         MutableBoolean canLaunchExternalFallbackResult = new MutableBoolean();
+ 
+         long time = SystemClock.elapsedRealtime();
+-        OverrideUrlLoadingResult result =
+-                shouldOverrideUrlLoadingInternal(
+-                        params, targetIntent, browserFallbackUrl, canLaunchExternalFallbackResult);
+-        assert canLaunchExternalFallbackResult.get() != null;
+-        RecordHistogram.recordTimesHistogram(
+-                "Android.StrictMode.OverrideUrlLoadingTime", SystemClock.elapsedRealtime() - time);
+-
+-        if (result.getResultType() == OverrideUrlLoadingResultType.NO_OVERRIDE) {
++        OverrideUrlLoadingResult result;
++        mDecidingNavigation = true;
++        try {
+             result =
+-                    handleFallbackUrl(
+-                            params, browserFallbackUrl, canLaunchExternalFallbackResult.get());
++                    shouldOverrideUrlLoadingInternal(
++                            params,
++                            targetIntent,
++                            browserFallbackUrl,
++                            canLaunchExternalFallbackResult);
++            assert canLaunchExternalFallbackResult.get() != null;
++            RecordHistogram.recordTimesHistogram(
++                    "Android.StrictMode.OverrideUrlLoadingTime",
++                    SystemClock.elapsedRealtime() - time);
++
++            if (result.getResultType() == OverrideUrlLoadingResultType.NO_OVERRIDE) {
++                result =
++                        handleFallbackUrl(
++                                params, browserFallbackUrl, canLaunchExternalFallbackResult.get());
++            }
++        } finally {
++            mDecidingNavigation = false;
+         }
+         if (debug()) printDebugShouldOverrideUrlLoadingResultType(result);
+ 
+@@ -840,7 +855,10 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+                         == OverrideUrlLoadingResultType.OVERRIDE_WITH_EXTERNAL_INTENT) {
+                     result = OverrideUrlLoadingResult.forExternalFallbackUrl();
+                 }
+-                return result;
++                // If the store did not open, the Play page loads here instead.
++                if (result.getResultType() != OverrideUrlLoadingResultType.NO_OVERRIDE) {
++                    return result;
++                }
+             }
+         }
+ 
+@@ -1623,6 +1641,7 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+      */
+     private boolean startIncognitoIntent(
+             ExternalNavigationParams params, Intent intent, GURL fallbackUrl) {
++        if (keepsUnconfirmedLaunchesHere(intent)) return false;
+         Context context = mDelegate.getContext();
+         if (!canLaunchIncognitoIntent(intent, context)) return false;
+         assumeNonNull(context);
+@@ -2269,6 +2288,12 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+                 resumeUrl = intentTargetUrl;
+             }
+         }
++        // An app's own scheme, or a store link for an app that is not installed, has no page
++        // here to resume, so the current page stays.
++        if (!UrlUtilities.isAcceptedScheme(resumeUrl)) {
++            callback.onResult(AsyncActionTakenParams.forNoAction());
++            return;
++        }
+         callback.onResult(AsyncActionTakenParams.forNavigate(resumeUrl, params));
+     }
+ 
+@@ -2547,9 +2572,10 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+             if (debug()) Log.i(TAG, "Incognito intent to Play Store.");
+             return OverrideUrlLoadingResult.forAsyncAction();
+         } else {
+-            startActivity(intent, params);
++            OverrideUrlLoadingResult result =
++                    startActivity(intent, params, false, null, null, fallbackUrl, null);
+             if (debug()) Log.i(TAG, "Intent to Play Store.");
+-            return OverrideUrlLoadingResult.forExternalIntent();
++            return result;
+         }
+     }
+ 
+@@ -2614,6 +2640,10 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+             ExternalNavigationParams params) {
+         String packageName = pickWebApkIfSoleIntentHandler(params, resolvingInfos);
+         if (packageName == null) return false;
++        // Held or asked about, the launch goes through startActivity() on the general path.
++        if (!mDelegate.allowLinkToOpenApp() || mDelegate.shouldAskBeforeLinkOpensApp()) {
++            return false;
++        }
+ 
+         if (mDelegate.shouldLaunchNewWindow(params)) {
+             if (debug()) Log.i(TAG, "Launching WebAPK in a new window");
+@@ -2786,6 +2816,17 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+             @Nullable ResolveActivitySupplier resolveActivity,
+             @Nullable GURL browserFallbackUrl,
+             @Nullable GURL intentTargetUrl) {
++        OverrideUrlLoadingResult held =
++                holdUnconfirmedLaunch(
++                        intent,
++                        params,
++                        requiresIntentChooser,
++                        resolvingInfos,
++                        resolveActivity,
++                        browserFallbackUrl,
++                        intentTargetUrl);
++        if (held != null) return held;
++
+         // https://crbug.com/330555390. If we've launched an app on the current redirect chain, we
+         // should never launch a second one.
+         if (params.getRedirectHandler().isOnNavigation()) {
+@@ -2814,6 +2855,89 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+         return doStartActivity(intent, context);
+     }
+ 
++    /**
++     * Applies the embedder's open-in-apps rule to a launch the user has not confirmed.
++     *
++     * <p>Every launch made while a navigation is being decided passes through startActivity(), so
++     * this is where the rule holds for every kind of link: web pages, intent: URLs, schemes apps
++     * register, the Play Store for an app that is not installed, and store links the web check
++     * lets through. Links to a phone number, an email address or a text message, and intents back
++     * into this app, are not app links and go ahead.
++     *
++     * @return null to launch, or the result to return instead.
++     */
++    private @Nullable OverrideUrlLoadingResult holdUnconfirmedLaunch(
++            Intent intent,
++            ExternalNavigationParams params,
++            boolean requiresIntentChooser,
++            @Nullable QueryIntentActivitiesSupplier resolvingInfos,
++            @Nullable ResolveActivitySupplier resolveActivity,
++            @Nullable GURL browserFallbackUrl,
++            @Nullable GURL intentTargetUrl) {
++        if (!mDecidingNavigation || isLaunchOfSelf(intent) || isMessagingIntent(intent)) {
++            return null;
++        }
++        GURL fallbackUrl = browserFallbackUrl != null ? browserFallbackUrl : GURL.emptyGURL();
++        GURL targetUrl =
++                intentTargetUrl != null ? intentTargetUrl : new GURL(intent.getDataString());
++
++        if (!mDelegate.allowLinkToOpenApp()) {
++            // The fallback address, when there is one, loads after this returns.
++            if (UrlUtilities.hasIntentScheme(params.getUrl())
++                    && fallbackUrl.isEmpty()
++                    && UrlUtilities.isHttpOrHttps(targetUrl)) {
++                return OverrideUrlLoadingResult.forNavigateTab(targetUrl, params);
++            }
++            if (debug()) Log.i(TAG, "App launch held by the embedder.");
++            return OverrideUrlLoadingResult.forNoOverride();
++        }
++        if (mDelegate.shouldAskBeforeLinkOpensApp()) {
++            return askBeforeLeavingForApp(
++                    intent,
++                    params,
++                    requiresIntentChooser,
++                    resolvingInfos != null
++                            ? resolvingInfos
++                            : new QueryIntentActivitiesSupplier(intent),
++                    resolveActivity != null ? resolveActivity : new ResolveActivitySupplier(intent),
++                    fallbackUrl,
++                    targetUrl);
++        }
++        return null;
++    }
++
++    /** Whether an unconfirmed launch is held, so no prompt about it should be shown either. */
++    private boolean keepsUnconfirmedLaunchesHere(Intent intent) {
++        return mDecidingNavigation
++                && !isLaunchOfSelf(intent)
++                && !isMessagingIntent(intent)
++                && !mDelegate.allowLinkToOpenApp();
++    }
++
++    private static boolean isLaunchOfSelf(Intent intent) {
++        String self = ContextUtils.getApplicationContext().getPackageName();
++        ComponentName component = intent.getComponent();
++        return self.equals(intent.getPackage())
++                || (component != null && self.equals(component.getPackageName()));
++    }
++
++    private static boolean isMessagingIntent(Intent intent) {
++        Uri data = intent.getData();
++        String scheme = data == null ? null : data.getScheme();
++        if (scheme == null) return false;
++        switch (scheme.toLowerCase(Locale.ROOT)) {
++            case "tel":
++            case "mailto":
++            case "sms":
++            case "smsto":
++            case "mms":
++            case "mmsto":
++                return true;
++            default:
++                return false;
++        }
++    }
++
+     private OverrideUrlLoadingResult doStartActivity(Intent intent, Context context) {
+         // Only touches disk on Kitkat. See http://crbug.com/617725 for more context.
+         StrictMode.ThreadPolicy oldPolicy = StrictMode.allowThreadDiskWrites();
+@@ -2987,6 +3111,10 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+         // For URLs the browser supports, we shouldn't have reached here.
+         assert isExternalProtocol;
+ 
++        if (keepsUnconfirmedLaunchesHere(targetIntent)) {
++            return OverrideUrlLoadingResult.forNoOverride();
++        }
++
+         // Use the fallback URL if we have it, otherwise we give sites a fingerprinting mechanism
+         // where they can repeatedly attempt to launch apps without a user gesture until they find
+         // one the user has installed.
