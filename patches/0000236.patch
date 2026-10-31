@@ -1,0 +1,88 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java
+index 0121d1a8576..1c6d07be0c6 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/phone/NewForegroundTabAnimationHostView.java
+@@ -29,6 +29,7 @@ import android.widget.ImageView;
+ import android.graphics.Rect;
+ import android.view.View;
+ import android.view.ViewGroup;
++import android.view.ViewTreeObserver;
+ import android.view.animation.PathInterpolator;
+ import android.widget.FrameLayout;
+ 
+@@ -279,6 +280,11 @@ public class NewForegroundTabAnimationHostView extends FrameLayout implements Ru
+     /** How long the finished glide is held before the copy is taken away. */
+     private static final long GLIDE_HOLD_MS = 220L;
+ 
++    private @Nullable View mFollowedBar;
++    private int mFollowedBarRestTop;
++    private final int[] mFollowedBarAt = new int[2];
++    private boolean mCutAtBar;
++
+     /**
+      * Bare: the new tab glides in from the right like a card laid on a table, while the page it
+      * covers moves a quarter of the way out to the left. Both stay inside the page's own area, so
+@@ -316,6 +322,7 @@ public class NewForegroundTabAnimationHostView extends FrameLayout implements Ru
+             addressBar.getLocationInWindow(addressAt);
+             if (addressAt[1] > hostAt[1] + getHeight() / 2) {
+                 height = Math.min(height, addressAt[1] - hostAt[1] - finalRect.top);
++                keepAddressBarInView(addressBar, addressAt[1]);
+             }
+         }
+         final int viewportHeight = Math.max(height, 1);
+@@ -557,6 +564,55 @@ public class NewForegroundTabAnimationHostView extends FrameLayout implements Ru
+         return "";
+     }
+ 
++    /**
++     * Bare: a new tab focuses the address bar, so with the bar at the bottom the keyboard comes up
++     * during the glide and lifts the bar into the page area, where the glide covers it. While the
++     * bar is above where it rests, the glide is cut at the top of the bar. The cut is worked out when
++     * the glide draws, after the bar has its place for the frame.
++     */
++    private void keepAddressBarInView(View addressBar, int restTop) {
++        mFollowedBar = addressBar;
++        mFollowedBarRestTop = restTop;
++        ViewTreeObserver.OnPreDrawListener follow =
++                () -> {
++                    addressBar.getLocationInWindow(mFollowedBarAt);
++                    if (mFollowedBarAt[1] < restTop || mCutAtBar) invalidate();
++                    return true;
++                };
++        addressBar.getViewTreeObserver().addOnPreDrawListener(follow);
++        addOnAttachStateChangeListener(
++                new OnAttachStateChangeListener() {
++                    @Override
++                    public void onViewAttachedToWindow(View v) {}
++
++                    @Override
++                    public void onViewDetachedFromWindow(View v) {
++                        addressBar.getViewTreeObserver().removeOnPreDrawListener(follow);
++                        mFollowedBar = null;
++                    }
++                });
++    }
++
++    @Override
++    protected void dispatchDraw(Canvas canvas) {
++        View bar = mFollowedBar;
++        mCutAtBar = false;
++        if (bar != null) {
++            bar.getLocationInWindow(mFollowedBarAt);
++            if (mFollowedBarAt[1] < mFollowedBarRestTop) {
++                int[] hostAt = new int[2];
++                getLocationInWindow(hostAt);
++                mCutAtBar = true;
++                int saved = canvas.save();
++                canvas.clipRect(0, 0, getWidth(), Math.max(0, mFollowedBarAt[1] - hostAt[1]));
++                super.dispatchDraw(canvas);
++                canvas.restoreToCount(saved);
++                return;
++            }
++        }
++        super.dispatchDraw(canvas);
++    }
++
+     private int getLocationOnWindowTop() {
+         int[] at = new int[2];
+         getLocationInWindow(at);

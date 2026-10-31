@@ -1,0 +1,30 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
+index 1f2b73749c8..67a8c1f795a 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
+@@ -246,7 +246,11 @@ public final class BarePageTranslator {
+         }
+ 
+         static void end(Tab tab) {
++            Session session = tab.getUserDataHost().getUserData(KEY);
++            if (session == null) return;
++            // Removing user data does not destroy it, and the observer would stay on the tab.
+             tab.getUserDataHost().removeUserData(KEY);
++            session.destroy();
+         }
+ 
+         @Override
+diff --git a/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java b/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java
+index 099552e844b..739d0b23521 100644
+--- a/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java
++++ b/chrome/browser/language/android/java/src/org/chromium/chrome/browser/translate/TranslateSession.java
+@@ -45,7 +45,9 @@ class TranslateSession implements TabObserver, UserData {
+             return;
+         }
+         if (!mSite.equals(siteOf(navigation.getUrl()))) {
++            // Removing user data does not destroy it, and this observer would stay on the tab.
+             tab.getUserDataHost().removeUserData(USER_DATA_KEY);
++            destroy();
+             return;
+         }
+         TranslateBridge.translateNow(tab);
