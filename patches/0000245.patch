@@ -1,0 +1,46 @@
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/AutocompleteMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/AutocompleteMediator.java
+index eb088ac7339..041b551e361 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/AutocompleteMediator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/AutocompleteMediator.java
+@@ -159,6 +159,10 @@ class AutocompleteMediator
+     private final Handler mHandler;
+     private final LocationBarDataProvider mDataProvider;
+     private final Supplier<@Nullable ModalDialogManager> mModalDialogManagerSupplier;
++    // Bare: an empty address bar shows no suggestions, neither history nor anything the search
++    // engine would suggest, and nothing is asked of the search engine until the user types.
++    private static final boolean SHOW_ZERO_PREFIX_SUGGESTIONS = false;
++
+     private final DropdownItemViewInfoListBuilder mDropdownViewInfoListBuilder;
+     private final DropdownItemViewInfoListManager mDropdownViewInfoListManager;
+     private final Callback<String> mBringTabGroupToFrontCallback;
+@@ -439,6 +443,14 @@ class AutocompleteMediator
+     void startZeroSuggest() {
+         if (!isInInputSession()) return;
+ 
++        if (!SHOW_ZERO_PREFIX_SUGGESTIONS) {
++            // Clears whatever the last typed text left in the list.
++            mNewOmniboxEditSessionTimestamp = -1;
++            showSuggestions(
++                    mAutocompleteInput, AutocompleteResult.EMPTY_RESULT, /* isFinal= */ true);
++            return;
++        }
++
+         if (OmniboxFeatures.sServeJavaCachedZeroSuggest.isEnabled()) {
+             // Serve suggestions anticipating higher latency from the server?
+             serveCachedZeroSuggest(mAutocompleteInput);
+@@ -1883,6 +1895,7 @@ class AutocompleteMediator
+      * @param dataProvider Context describing page to prefetch ZPS for.
+      */
+     /* package */ static void startPrefetch(Profile profile, LocationBarDataProvider dataProvider) {
++        if (!SHOW_ZERO_PREFIX_SUGGESTIONS) return;
+         if (dataProvider.isLoading()) return;
+ 
+         var autocomplete = AutocompleteController.getForProfile(profile);
+@@ -2367,6 +2380,7 @@ class AutocompleteMediator
+         // Retrieve suggestions related to the most recently visited page.
+         // This is a best-effort action and may not always work (e.g. if Chrome gets killed or
+         // swiped away before we manage to retrieve and persist the information).
++        if (!SHOW_ZERO_PREFIX_SUGGESTIONS) return;
+         mAutocomplete.startZeroSuggest(mSessionState.getContextualTasksWebContents(), input);
+     }
+ 

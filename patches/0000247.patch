@@ -1,0 +1,378 @@
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 6a56e2582f5..92e6d0bbed0 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -266,7 +266,6 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BareAddressBarPreviewView.java",
+   "java/src/org/chromium/chrome/browser/bare/BareGoldenGateView.java",
+   "java/src/org/chromium/chrome/browser/bare/BareLauncherIcon.java",
+-  "java/src/org/chromium/chrome/browser/bare/BareEngineLetterDrawable.java",
+   "java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java",
+   "java/src/org/chromium/chrome/browser/bare/BareMinimalLeftButton.java",
+   "java/src/org/chromium/chrome/browser/bare/BareNtpAppearance.java",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/search/SearchBoxMediator.java b/chrome/android/java/src/org/chromium/chrome/browser/ntp/search/SearchBoxMediator.java
+index 23ed3305788..baf90b0d4fb 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ntp/search/SearchBoxMediator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ntp/search/SearchBoxMediator.java
+@@ -18,7 +18,6 @@ import androidx.annotation.VisibleForTesting;
+ import org.chromium.base.MathUtils;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+-import org.chromium.chrome.browser.bare.BareEngineLetterDrawable;
+ import org.chromium.chrome.browser.composeplate.ComposeplateUtils;
+ import org.chromium.chrome.browser.feed.FeedSurfaceScrollDelegate;
+ import org.chromium.chrome.browser.lens.LensController;
+@@ -30,6 +29,7 @@ import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
+ import org.chromium.chrome.browser.lifecycle.DestroyObserver;
+ import org.chromium.chrome.browser.ntp.NewTabPageManager;
+ import org.chromium.chrome.browser.ntp.NewTabPageUtils;
++import org.chromium.chrome.browser.omnibox.BareEngineLetterDrawable;
+ import org.chromium.chrome.browser.omnibox.BareSearchOverride;
+ import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
+ import org.chromium.chrome.browser.omnibox.R;
+diff --git a/chrome/browser/ui/android/omnibox/BUILD.gn b/chrome/browser/ui/android/omnibox/BUILD.gn
+index f80a8b27beb..1e99e666ba2 100644
+--- a/chrome/browser/ui/android/omnibox/BUILD.gn
++++ b/chrome/browser/ui/android/omnibox/BUILD.gn
+@@ -46,6 +46,8 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/omnibox/LocationBarEmbedderUiOverrides.java",
+     "java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java",
+     "java/src/org/chromium/chrome/browser/omnibox/LocationBarLayout.java",
++    "java/src/org/chromium/chrome/browser/omnibox/BareEnginePicker.java",
++    "java/src/org/chromium/chrome/browser/omnibox/BareEngineLetterDrawable.java",
+     "java/src/org/chromium/chrome/browser/omnibox/BareSearchOverride.java",
+     "java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java",
+     "java/src/org/chromium/chrome/browser/omnibox/LocationBarMetrics.java",
+@@ -472,6 +474,7 @@ android_resources("java_resources") {
+     "java/res/values-night/drawables.xml",
+     "java/res/values-sw600dp-w600dp/dimens.xml",
+     "java/res/values-sw600dp/dimens.xml",
++    "java/res/values/bare_strings.xml",
+     "java/res/values/colors.xml",
+     "java/res/values/dimens.xml",
+     "java/res/values/drawables.xml",
+diff --git a/chrome/browser/ui/android/omnibox/java/res/values/bare_strings.xml b/chrome/browser/ui/android/omnibox/java/res/values/bare_strings.xml
+new file mode 100644
+index 00000000000..3e37f292c8b
+--- /dev/null
++++ b/chrome/browser/ui/android/omnibox/java/res/values/bare_strings.xml
+@@ -0,0 +1,9 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<resources>
++    <string name="bare_engine_once_title" translatable="false">Search once with</string>
++</resources>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareEngineLetterDrawable.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEngineLetterDrawable.java
+similarity index 92%
+rename from chrome/android/java/src/org/chromium/chrome/browser/bare/BareEngineLetterDrawable.java
+rename to chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEngineLetterDrawable.java
+index 6bc31022de2..286a23b05f5 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareEngineLetterDrawable.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEngineLetterDrawable.java
+@@ -2,7 +2,7 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+-package org.chromium.chrome.browser.bare;
++package org.chromium.chrome.browser.omnibox;
+ 
+ import android.graphics.Canvas;
+ import android.graphics.ColorFilter;
+@@ -15,7 +15,9 @@ import android.graphics.drawable.Drawable;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ 
+-/** A round badge with the first letter of a search engine, for engines with no icon of their own. */
++/**
++ * A round badge with the first letter of a search engine, for engines with no icon of their own.
++ */
+ @NullMarked
+ public class BareEngineLetterDrawable extends Drawable {
+     private final Paint mCircle = new Paint(Paint.ANTI_ALIAS_FLAG);
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEnginePicker.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEnginePicker.java
+new file mode 100644
+index 00000000000..c84ef6be725
+--- /dev/null
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEnginePicker.java
+@@ -0,0 +1,74 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.omnibox;
++
++import android.app.AlertDialog;
++import android.content.Context;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.components.search_engines.StarterPackId;
++import org.chromium.components.search_engines.TemplateUrl;
++import org.chromium.components.search_engines.TemplateUrlService;
++
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
++
++/**
++ * The list the address bar's search engine icon opens: picking an engine sends the next search to
++ * it without changing the default. Picking the default drops an earlier choice.
++ */
++@NullMarked
++public final class BareEnginePicker {
++    private BareEnginePicker() {}
++
++    /** Shows the list; the choice is held in {@link BareSearchOverride} for {@code owner}. */
++    public static @Nullable AlertDialog show(
++            Context context, TemplateUrlService service, Object owner) {
++        List<TemplateUrl> engines = new ArrayList<>();
++        Set<String> seen = new HashSet<>();
++        for (TemplateUrl tu : service.getTemplateUrls()) {
++            if (tu.getStarterPackId() != StarterPackId.NONE) continue;
++            if (tu.getKeyword().isEmpty() || !seen.add(tu.getShortName())) continue;
++            engines.add(tu);
++        }
++        if (engines.isEmpty()) return null;
++        @Nullable TemplateUrl defaultEngine = service.getDefaultSearchEngineTemplateUrl();
++        @Nullable String chosen = BareSearchOverride.getName();
++        String[] names = new String[engines.size()];
++        int checked = -1;
++        for (int i = 0; i < names.length; i++) {
++            TemplateUrl tu = engines.get(i);
++            names[i] = tu.getShortName();
++            boolean current =
++                    chosen != null
++                            ? tu.getShortName().equals(chosen)
++                            : defaultEngine != null && tu.getURL().equals(defaultEngine.getURL());
++            if (current) checked = i;
++        }
++        AlertDialog dialog =
++                new AlertDialog.Builder(context)
++                        .setTitle(R.string.bare_engine_once_title)
++                        .setSingleChoiceItems(
++                                names,
++                                checked,
++                                (d, which) -> {
++                                    d.dismiss();
++                                    TemplateUrl picked = engines.get(which);
++                                    if (defaultEngine != null
++                                            && picked.getURL().equals(defaultEngine.getURL())) {
++                                        BareSearchOverride.clear(owner);
++                                    } else {
++                                        BareSearchOverride.set(
++                                                owner, picked.getURL(), picked.getShortName());
++                                    }
++                                })
++                        .create();
++        dialog.show();
++        return dialog;
++    }
++}
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareSearchOverride.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareSearchOverride.java
+index 3d211a5d804..555f8ace102 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareSearchOverride.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareSearchOverride.java
+@@ -4,6 +4,7 @@
+ 
+ package org.chromium.chrome.browser.omnibox;
+ 
++import org.chromium.base.ObserverList;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.components.search_engines.TemplateUrlService;
+@@ -14,27 +15,56 @@ import org.chromium.url.GURL;
+  *
+  * <p>The page's search icon lets the user pick another engine. That choice does not touch the
+  * default. It is held here, tied to the page that made it, and applied once: when a search is sent
+- * from the address bar, its address, which the address bar built for the default engine, is
+- * rebuilt for the chosen one from the same query. The page clears it when it goes away.
++ * from the address bar, its address, which the address bar built for the default engine, is rebuilt
++ * for the chosen one from the same query. The page clears it when it goes away.
+  */
+ @NullMarked
+ public final class BareSearchOverride {
+     private static @Nullable Object sOwner;
+     private static @Nullable String sTemplate;
++    private static @Nullable String sName;
++    private static final ObserverList<Runnable> sObservers = new ObserverList<>();
+ 
+     private BareSearchOverride() {}
+ 
+     /** Searches from {@code owner} go to the engine whose address template is {@code template}. */
+     public static void set(Object owner, String template) {
++        set(owner, template, null);
++    }
++
++    /** As {@link #set(Object, String)}, with the engine's name for the address bar to show. */
++    public static void set(Object owner, String template, @Nullable String name) {
+         sOwner = owner;
+         sTemplate = template;
++        sName = name;
++        notifyObservers();
++    }
++
++    /** The chosen engine's name, or null with no choice or no name. */
++    public static @Nullable String getName() {
++        return sTemplate == null ? null : sName;
++    }
++
++    /** Told when a choice is made, dropped or used up. */
++    public static void addObserver(Runnable observer) {
++        sObservers.addObserver(observer);
++    }
++
++    public static void removeObserver(Runnable observer) {
++        sObservers.removeObserver(observer);
++    }
++
++    private static void notifyObservers() {
++        for (Runnable observer : sObservers) observer.run();
+     }
+ 
+     /** Drops the choice if {@code owner} made it. */
+     public static void clear(Object owner) {
+-        if (sOwner == owner) {
++        if (sOwner == owner && sTemplate != null) {
+             sOwner = null;
+             sTemplate = null;
++            sName = null;
++            notifyObservers();
+         }
+     }
+ 
+@@ -59,6 +89,8 @@ public final class BareSearchOverride {
+         if (expanded == null) return null;
+         sOwner = null;
+         sTemplate = null;
++        sName = null;
++        notifyObservers();
+         return expanded.getSpec();
+     }
+ }
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/HintTextUpdater.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/HintTextUpdater.java
+index 0cb9a6df46a..4d58cbdaec1 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/HintTextUpdater.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/HintTextUpdater.java
+@@ -70,6 +70,7 @@ public class HintTextUpdater implements LocationBarDataProvider.Observer {
+     private final Callback<Boolean> mActivationChipSelectedObserver =
+             (selected) -> updateHintText();
+     private final Callback<Profile> mProfileObserver = (profile) -> updateHintText();
++    private final Runnable mSearchOverrideObserver = this::updateHintText;
+     private final Callback<String> mUserTextObserver = (text) -> updateHintText();
+     private final Callback<@DisplayState Integer> mDisplayStateObserver =
+             (state) -> updateHintText();
+@@ -107,12 +108,14 @@ public class HintTextUpdater implements LocationBarDataProvider.Observer {
+         mActivationChipVisibilitySupplier.addSyncObserver(mActivationChipVisibilityObserver);
+         mActivationChipSelectedSupplier.addSyncObserver(mActivationChipSelectedObserver);
+         mProfileSupplier.addSyncObserver(mProfileObserver);
++        BareSearchOverride.addObserver(mSearchOverrideObserver);
+ 
+         updateHintText();
+     }
+ 
+     /** Clean up resources used by this class. */
+     public void destroy() {
++        BareSearchOverride.removeObserver(mSearchOverrideObserver);
+         mLocationBarDataProvider.removeObserver(this);
+         mSearchEngineServiceSupplier.removeObserver(mSearchEngineServiceObserver);
+         if (mSearchEngineService != null) {
+@@ -128,7 +131,6 @@ public class HintTextUpdater implements LocationBarDataProvider.Observer {
+         endInput();
+     }
+ 
+-
+     /**
+      * Begins a new input session.
+      *
+@@ -229,6 +231,11 @@ public class HintTextUpdater implements LocationBarDataProvider.Observer {
+ 
+         assert mSearchEngineService != null;
+         SearchEngineService searchEngineService = mSearchEngineService;
++        // Bare: an engine picked for the next search names itself in the hint.
++        String onceName = BareSearchOverride.getName();
++        if (onceName != null) {
++            return mResourceProvider.getString(R.string.omnibox_empty_hint_with_dse_name, onceName);
++        }
+         String searchEngineName = searchEngineService.getSearchEngineName();
+         if (TextUtils.isEmpty(searchEngineName)) {
+             return mResourceProvider.getString(R.string.omnibox_empty_hint);
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
+index 4f4981bd009..aa79d5b48a8 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
+@@ -30,6 +30,9 @@ import org.chromium.base.supplier.NullableObservableSupplier;
+ import org.chromium.base.supplier.OneshotSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.omnibox.BareEngineLetterDrawable;
++import org.chromium.chrome.browser.omnibox.BareEnginePicker;
++import org.chromium.chrome.browser.omnibox.BareSearchOverride;
+ import org.chromium.chrome.browser.omnibox.FuseboxSessionState;
+ import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
+ import org.chromium.chrome.browser.omnibox.OmniboxUrlUtils;
+@@ -218,6 +221,7 @@ public class StatusMediator
+                     templateUrlService.addObserver(this);
+                     updateLocationBarIcon(IconTransitionType.CROSSFADE);
+                 });
++        BareSearchOverride.addObserver(mSearchOverrideObserver);
+ 
+         mProfileSupplier = profileSupplier;
+ 
+@@ -275,6 +279,8 @@ public class StatusMediator
+         if (templateUrlService != null) {
+             templateUrlService.removeObserver(this);
+         }
++        BareSearchOverride.removeObserver(mSearchOverrideObserver);
++        BareSearchOverride.clear(this);
+         if (mCookieControlsBridge != null) {
+             mCookieControlsBridge.destroy();
+             mCookieControlsBridge = null;
+@@ -781,9 +787,16 @@ public class StatusMediator
+         // Show the logo unfocused if we're on the NTP.
+         if (!shouldDisplaySearchEngineIcon()) return false;
+ 
++        // Bare: the icon opens a list for sending the next search to another engine, and shows
++        // that engine while the choice holds.
++        String onceName = BareSearchOverride.getName();
+         mModel.set(
+-                StatusProperties.STATUS_ICON_RESOURCE, getStatusIconResourceForSearchEngineIcon());
+-        setStatusClickListener(null);
++                StatusProperties.STATUS_ICON_RESOURCE,
++                onceName != null
++                        ? new StatusIconResource(new BareEngineLetterDrawable(onceName))
++                        : getStatusIconResourceForSearchEngineIcon());
++        setStatusClickListener(
++                mLocationBarDataProvider.isIncognitoBranded() ? null : this::onClickEngineIcon);
+         updateStatusViewVisibility();
+         return true;
+     }
+@@ -924,6 +937,15 @@ public class StatusMediator
+         }
+     }
+ 
++    private final Runnable mSearchOverrideObserver =
++            () -> updateLocationBarIcon(IconTransitionType.CROSSFADE);
++
++    private void onClickEngineIcon(View view) {
++        TemplateUrlService service = mTemplateUrlServiceSupplier.get();
++        if (service == null) return;
++        BareEnginePicker.show(mContext, service, this);
++    }
++
+     /** Follows the current tab and page for the site icon slot. */
+     private void updateSiteFavicon() {
+         Tab tab = mLocationBarDataProvider.getTab();
+@@ -937,6 +959,8 @@ public class StatusMediator
+         if (url.equals(mSiteFaviconUrl)) return;
+         GURL previous = mSiteFaviconUrl;
+         mSiteFaviconUrl = url;
++        // An engine picked for the next search does not outlast the page it was picked on.
++        BareSearchOverride.clear(this);
+         boolean web = url.getScheme().equals("https") || url.getScheme().equals("http");
+         // Another page on the same site keeps its icon while the new one loads, so the slot
+         // does not blink to the globe and back.

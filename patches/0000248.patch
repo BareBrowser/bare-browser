@@ -1,0 +1,161 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index 347c7f18d96..9b389dbafd7 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -1315,6 +1315,7 @@ public class ToolbarManager
+                         scrimTarget,
+                         mTabStripTopControlLayer.getSupplier(),
+                         mBottomControlsStacker);
++        mLocationBarFocusHandler.setTouchPassThroughView(mToolbarLayout);
+ 
+         if (mIsCustomTab) {
+             CustomTabToolbar customTabToolbar = ((CustomTabToolbar) mToolbarLayout);
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java
+index 4c6a1bf455e..e44d8a55d9b 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java
+@@ -110,7 +110,6 @@ public class LocationBarFocusScrimHandler {
+         mTabStripHeightSupplier.addSyncObserverAndPostIfNonNull(mTabStripHeightChangeCallback);
+     }
+ 
+-
+     /** Compute and apply property updates needed for accurate visual representation of scrim. */
+     public void updateScrimVisualState() {
+         boolean isTablet = DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext);
+@@ -137,6 +136,27 @@ public class LocationBarFocusScrimHandler {
+                 mBottomControlsStacker.getHeightFromLayerToBottom(LayerType.BOTTOM_CHIN));
+     }
+ 
++    /**
++     * Leaves touches on {@code view} to it while the scrim shows. Bare moves the bottom address bar
++     * up over the scrim with the keyboard, where the scrim would otherwise take the touches meant
++     * for the text and close the bar.
++     */
++    public void setTouchPassThroughView(View view) {
++        int[] at = new int[2];
++        mScrimModel.set(
++                ScrimProperties.PASS_THROUGH_TOUCH,
++                event -> {
++                    if (!view.isShown()) return false;
++                    view.getLocationOnScreen(at);
++                    float x = event.getRawX();
++                    float y = event.getRawY();
++                    return x >= at[0]
++                            && x < at[0] + view.getWidth()
++                            && y >= at[1]
++                            && y < at[1] + view.getHeight();
++                });
++    }
++
+     /** Controls the visibility of scrim overlay. */
+     public void setVisibility(boolean shouldShow) {
+         setVisibility(shouldShow, /* animate= */ true);
+diff --git a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/scrim/ScrimProperties.java b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/scrim/ScrimProperties.java
+index d214459e4c5..d177a52f3cb 100644
+--- a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/scrim/ScrimProperties.java
++++ b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/scrim/ScrimProperties.java
+@@ -5,6 +5,7 @@
+ package org.chromium.components.browser_ui.widget.scrim;
+ 
+ import android.view.GestureDetector;
++import android.view.MotionEvent;
+ import android.view.View;
+ import android.view.ViewGroup;
+ 
+@@ -19,6 +20,8 @@ import org.chromium.ui.modelutil.PropertyModel.WritableFloatPropertyKey;
+ import org.chromium.ui.modelutil.PropertyModel.WritableIntPropertyKey;
+ import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
+ 
++import java.util.function.Predicate;
++
+ /** The properties that can be used to describe the behavior of the scrim widget. */
+ @NullMarked
+ public class ScrimProperties {
+@@ -83,6 +86,14 @@ public class ScrimProperties {
+     public static final WritableBooleanPropertyKey AFFECTS_NAVIGATION_BAR =
+             new WritableBooleanPropertyKey();
+ 
++    /**
++     * Touches this returns true for on the way down are left to the views underneath, for the whole
++     * gesture. Bare uses it for the address bar, which moves up over the scrim with the keyboard
++     * and would otherwise have its touches taken by the scrim.
++     */
++    public static final WritableObjectPropertyKey<Predicate<MotionEvent>> PASS_THROUGH_TOUCH =
++            new WritableObjectPropertyKey<>();
++
+     /** Used to decide if touch events should be handled or not. */
+     /* package */ static final WritableObjectPropertyKey<TouchEventDelegate> TOUCH_EVENT_DELEGATE =
+             new WritableObjectPropertyKey<>();
+@@ -103,5 +114,6 @@ public class ScrimProperties {
+                 BACKGROUND_COLOR,
+                 GESTURE_DETECTOR,
+                 AFFECTS_NAVIGATION_BAR,
++                PASS_THROUGH_TOUCH,
+             };
+ }
+diff --git a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/scrim/ScrimView.java b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/scrim/ScrimView.java
+index 02efdc0a2eb..733ade21459 100644
+--- a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/scrim/ScrimView.java
++++ b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/scrim/ScrimView.java
+@@ -20,6 +20,8 @@ import org.chromium.ui.UiUtils;
+ import org.chromium.ui.base.UiAndroidFeatureList;
+ import org.chromium.ui.util.MotionEventUtils;
+ 
++import java.util.function.Predicate;
++
+ /**
+  * This view is used to obscure content and bring focus to a foreground view (i.e. the bottom sheet
+  * or the omnibox suggestions).
+@@ -35,6 +37,9 @@ public class ScrimView extends View {
+     /** A means of passing all touch events to an external handler. */
+     private @Nullable TouchEventDelegate mEventDelegate;
+ 
++    private @Nullable Predicate<MotionEvent> mPassThroughTouch;
++    private boolean mPassingThrough;
++
+     /**
+      * @param context An Android {@link Context} for creating the view.
+      * @param parent The {@link ViewGroup} the scrim should exist in.
+@@ -93,6 +98,21 @@ public class ScrimView extends View {
+         }
+     }
+ 
++    /** See {@link ScrimProperties#PASS_THROUGH_TOUCH}. */
++    void setPassThroughTouch(@Nullable Predicate<MotionEvent> passThroughTouch) {
++        mPassThroughTouch = passThroughTouch;
++    }
++
++    @Override
++    public boolean dispatchTouchEvent(MotionEvent e) {
++        if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
++            mPassingThrough = mPassThroughTouch != null && mPassThroughTouch.test(e);
++        }
++        // Declining the down event sends the whole gesture to the views underneath.
++        if (mPassingThrough) return false;
++        return super.dispatchTouchEvent(e);
++    }
++
+     @Override
+     public boolean onTouchEvent(MotionEvent e) {
+         if (mEventDelegate != null && mEventDelegate.onTouchEvent(e)) return true;
+diff --git a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/scrim/ScrimViewBinder.java b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/scrim/ScrimViewBinder.java
+index d7c32722189..4e5e2f16d58 100644
+--- a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/scrim/ScrimViewBinder.java
++++ b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/scrim/ScrimViewBinder.java
+@@ -12,6 +12,7 @@ import static org.chromium.components.browser_ui.widget.scrim.ScrimProperties.BA
+ import static org.chromium.components.browser_ui.widget.scrim.ScrimProperties.BOTTOM_MARGIN;
+ import static org.chromium.components.browser_ui.widget.scrim.ScrimProperties.CLICK_DELEGATE;
+ import static org.chromium.components.browser_ui.widget.scrim.ScrimProperties.GESTURE_DETECTOR;
++import static org.chromium.components.browser_ui.widget.scrim.ScrimProperties.PASS_THROUGH_TOUCH;
+ import static org.chromium.components.browser_ui.widget.scrim.ScrimProperties.SHOW_IN_FRONT_OF_ANCHOR_VIEW;
+ import static org.chromium.components.browser_ui.widget.scrim.ScrimProperties.TOP_MARGIN;
+ import static org.chromium.components.browser_ui.widget.scrim.ScrimProperties.TOUCH_EVENT_DELEGATE;
+@@ -90,6 +91,8 @@ class ScrimViewBinder {
+             view.setBackgroundColor(backgroundColor);
+         } else if (GESTURE_DETECTOR == propertyKey) {
+             // Noop; gesture handling is delegated out to the mediator.
++        } else if (PASS_THROUGH_TOUCH == propertyKey) {
++            view.setPassThroughTouch(model.get(PASS_THROUGH_TOUCH));
+         } else if (AFFECTS_NAVIGATION_BAR == propertyKey) {
+             // Noop; the mediator handles this interaction.
+         } else if (TOUCH_EVENT_DELEGATE == propertyKey) {
