@@ -1,0 +1,85 @@
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+index 2cfad42010e..d44b297fea5 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+@@ -101,6 +101,7 @@ import org.chromium.chrome.browser.toolbar.signin_button.SigninButtonCoordinator
+ import org.chromium.chrome.browser.toolbar.top.CaptureReadinessResult.TopToolbarBlockCaptureReason;
+ import org.chromium.chrome.browser.toolbar.top.NavigationPopup.HistoryDelegate;
+ import org.chromium.chrome.browser.toolbar.top.TopToolbarCoordinator.ToolbarColorObserver;
++import org.chromium.chrome.browser.ui.actions.ActionHaptics;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
+ import org.chromium.chrome.browser.ui.theme.ChromeSemanticColorUtils;
+@@ -168,6 +169,7 @@ public class ToolbarPhone extends ToolbarLayout
+     private @MonotonicNonNull OptionalButtonCoordinator mOptionalButtonCoordinator;
+     // Non-null after inflation occurs.
+     private ImageView mHomeButton;
++    private @Nullable View mBarePressedButton;
+     private View mToolbarBackButton;
+     private @Nullable BackButtonCoordinator mBackButtonCoordinator;
+ 
+@@ -663,6 +665,7 @@ public class ToolbarPhone extends ToolbarLayout
+ 
+     @Override
+     public boolean onInterceptTouchEvent(MotionEvent ev) {
++        if (BottomBarConfigUtils.isMinimalLayout()) tickForPress(ev);
+         // If the NTP is partially scrolled, prevent all touch events to the child views.  This
+         // is to not allow a secondary touch event to trigger entering the tab switcher, which
+         // can lead to really odd snapshots and transitions to the switcher.
+@@ -675,6 +678,56 @@ public class ToolbarPhone extends ToolbarLayout
+         return super.onInterceptTouchEvent(ev);
+     }
+ 
++    /**
++     * Bare: the minimal bar's buttons are the toolbar's own and, unlike the bottom bar's, have no
++     * tick when pressed. The tick is given here, watching the touches on their way to the buttons
++     * without taking them: on touch down for the menu, which opens on touch down, and for the
++     * others when the finger lifts on the button it went down on.
++     */
++    private void tickForPress(MotionEvent ev) {
++        switch (ev.getActionMasked()) {
++            case MotionEvent.ACTION_DOWN:
++                mBarePressedButton = minimalButtonAt(ev);
++                if (mBarePressedButton != null && mBarePressedButton.getId() == R.id.menu_button) {
++                    ActionHaptics.tick(mBarePressedButton);
++                    mBarePressedButton = null;
++                }
++                break;
++            case MotionEvent.ACTION_UP:
++                View pressed = mBarePressedButton;
++                mBarePressedButton = null;
++                if (pressed != null && pressed == minimalButtonAt(ev)) ActionHaptics.tick(pressed);
++                break;
++            case MotionEvent.ACTION_CANCEL:
++                mBarePressedButton = null;
++                break;
++            default:
++                break;
++        }
++    }
++
++    private @Nullable View minimalButtonAt(MotionEvent ev) {
++        int[] at = new int[2];
++        getLocationInWindow(at);
++        float x = ev.getX() + at[0];
++        float y = ev.getY() + at[1];
++        int[] ids = {
++            R.id.home_button, R.id.optional_toolbar_button, R.id.tab_switcher_button, R.id.menu_button
++        };
++        for (int id : ids) {
++            View button = findViewById(id);
++            if (button == null || !button.isShown() || !button.isEnabled()) continue;
++            button.getLocationInWindow(at);
++            if (x >= at[0]
++                    && x < at[0] + button.getWidth()
++                    && y >= at[1]
++                    && y < at[1] + button.getHeight()) {
++                return button;
++            }
++        }
++        return null;
++    }
++
+     @Override
+     public boolean onTouchEvent(MotionEvent ev) {
+         // Forward touch events to the NTP if the toolbar is moved away but the search box hasn't
