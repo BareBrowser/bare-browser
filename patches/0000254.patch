@@ -1,0 +1,42 @@
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+index def69387855..41b4dbbd9cc 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+@@ -47,6 +47,7 @@ final class BareMenuSheet {
+     private static final long CLOSE_MS = 220;
+     private static final float FLING_DP_PER_SECOND = 900f;
+     private static final float HANDLE_ZONE_DP = 28f;
++    private static final float CLOSE_DRAG_DP = 48f;
+     private static final float CORNER_DP = 24f;
+     private static final int SCRIM_COLOR = 0x66000000;
+ 
+@@ -233,20 +234,20 @@ final class BareMenuSheet {
+     }
+ 
+     /**
+-     * Where the sheet goes when a drag ends, from where it is, where it started and the speed. A
+-     * drag down from the top stops half way; only a drag from half way closes the menu.
++     * Where the sheet goes when a drag ends. Down closes the menu from half or full height in one
++     * go, up opens it all the way, and a drag too small to mean either puts it back.
+      */
+     private void release(float startY, float velocity) {
+         float y = mContent.getTranslationY();
+-        float fling = FLING_DP_PER_SECOND * mFrame.getResources().getDisplayMetrics().density;
+-        if (startY < mCompactY / 2f) {
+-            settle(velocity < -fling || (velocity <= fling && y < mCompactY / 2f) ? 0 : mCompactY);
+-        } else if (velocity < -fling || (velocity <= fling && y < mCompactY / 2f)) {
+-            settle(0);
+-        } else if (velocity > fling || y >= (mCompactY + mHeight) / 2f) {
++        float density = mFrame.getResources().getDisplayMetrics().density;
++        float fling = FLING_DP_PER_SECOND * density;
++        float moved = y - startY;
++        if (velocity > fling || (velocity >= -fling && moved > CLOSE_DRAG_DP * density)) {
+             close();
++        } else if (velocity < -fling || moved < -CLOSE_DRAG_DP * density) {
++            settle(0);
+         } else {
+-            settle(mCompactY);
++            settle(startY < mCompactY / 2f ? 0 : mCompactY);
+         }
+     }
+ 

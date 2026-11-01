@@ -1,6 +1,6 @@
 # The patch series
 
-The series in [`patches/`](../patches) is 252 files, `0000001.patch` to `0000253.patch`, numbered
+The series in [`patches/`](../patches) is 253 files, `0000001.patch` to `0000254.patch`, numbered
 in the order they apply. The files carry no descriptions.
 
 `0000210.patch` is not in the series. That number belongs to the Google Play build, which compiles
