@@ -1,0 +1,65 @@
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java
+index e44d8a55d9b..eb0fc89cc58 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java
+@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.omnibox;
+ 
+ import android.content.Context;
+ import android.graphics.Color;
++import android.view.MotionEvent;
+ import android.view.View;
+ 
+ import androidx.annotation.ColorInt;
+@@ -19,6 +20,7 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.chrome.browser.browser_controls.BottomControlsStacker;
+ import org.chromium.chrome.browser.browser_controls.BottomControlsStacker.LayerType;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.omnibox.suggestions.OmniboxSuggestionsDropdown;
+ import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
+ import org.chromium.components.browser_ui.widget.scrim.ScrimProperties;
+ import org.chromium.components.omnibox.OmniboxCapabilities;
+@@ -146,6 +148,7 @@ public class LocationBarFocusScrimHandler {
+         mScrimModel.set(
+                 ScrimProperties.PASS_THROUGH_TOUCH,
+                 event -> {
++                    if (isOnSuggestionCard(view, event)) return true;
+                     if (!view.isShown()) return false;
+                     view.getLocationOnScreen(at);
+                     float x = event.getRawX();
+@@ -157,6 +160,14 @@ public class LocationBarFocusScrimHandler {
+                 });
+     }
+ 
++    /** Whether the touch lands on the suggestion card, which has to get it to open a suggestion. */
++    private static boolean isOnSuggestionCard(View anyView, MotionEvent event) {
++        View dropdown = anyView.getRootView().findViewById(R.id.omnibox_suggestions_dropdown);
++        return dropdown instanceof OmniboxSuggestionsDropdown
++                && ((OmniboxSuggestionsDropdown) dropdown)
++                        .isOnCard(event.getRawX(), event.getRawY());
++    }
++
+     /** Controls the visibility of scrim overlay. */
+     public void setVisibility(boolean shouldShow) {
+         setVisibility(shouldShow, /* animate= */ true);
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
+index 595caf1b57a..734864978e7 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
+@@ -783,6 +783,17 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+         super.dispatchDraw(canvas);
+     }
+ 
++    /**
++     * Bare: whether a point on the screen lands on the card behind the rows. The scrim uses it to
++     * leave those touches to the list instead of closing the address bar.
++     */
++    public boolean isOnCard(float rawX, float rawY) {
++        if (mCardColor == 0 || !isShown() || !updateCardRect()) return false;
++        int[] at = new int[2];
++        getLocationOnScreen(at);
++        return mCardRect.contains(rawX - at[0], rawY - at[1]);
++    }
++
+     /** Bare: whether a touch lands on the empty space above the card, not on a row. */
+     private boolean isAboveCard(MotionEvent event) {
+         return mCardColor != 0

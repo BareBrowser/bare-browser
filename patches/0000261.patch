@@ -1,0 +1,159 @@
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index a93d077597a..adea746c330 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -462,6 +462,7 @@ chrome_java_resources = [
+   "java/res/layout/autofill_settings_work_profile_icon.xml",
+   "java/res/drawable/bare_welcome_chooser_bg.xml",
+   "java/res/values-night/bare_welcome_colors.xml",
++  "java/res/values/bare_menu_strings.xml",
+   "java/res/values/bare_welcome_colors.xml",
+   "java/res/drawable/bare_settings_ic_palette.xml",
+   "java/res/drawable/bare_settings_ic_shield.xml",
+@@ -728,6 +729,7 @@ chrome_java_resources = [
+   "java/res/xml/bare_clear_on_exit_preferences.xml",
+   "java/res/drawable/bare_menu_close.xml",
+   "java/res/drawable/bare_menu_eye.xml",
++  "java/res/drawable/bare_menu_view_list.xml",
+   "java/res/drawable/bare_menu_eye_off.xml",
+   "java/res/drawable/bare_menu_tap.xml",
+   "java/res/values/bare_incognito_arrays.xml",
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java
+index fd485b8e1f5..57f5a50ad33 100644
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java
+@@ -217,6 +217,22 @@ public abstract class TabSwitcherPaneBase extends PaneBase
+                         coordinator.showTabListEditor();
+                         RecordUserAction.record("MobileMenuSelectTabs");
+                         return true;
++                    } else if (id == R.id.bare_tab_view_toggle_id) {
++                        // Bare: the one row in the menu that flips the grid and the list.
++                        SharedPreferences prefs = ContextUtils.getAppSharedPreferences();
++                        boolean list =
++                                BareTabViewMode.VALUE_LIST.equals(
++                                        prefs.getString(
++                                                ChromePreferenceKeys.BARE_TAB_VIEW,
++                                                BareTabViewMode.VALUE_GRID));
++                        prefs.edit()
++                                .putString(
++                                        ChromePreferenceKeys.BARE_TAB_VIEW,
++                                        list
++                                                ? BareTabViewMode.VALUE_GRID
++                                                : BareTabViewMode.VALUE_LIST)
++                                .apply();
++                        return true;
+                     } else if (id == R.id.new_tab_group_menu_id) {
+                         mUiFlow.newTabGroupFlow();
+                         RecordUserAction.record("MobileMenuNewTabGroup");
+diff --git a/chrome/android/java/res/drawable/bare_menu_view_list.xml b/chrome/android/java/res/drawable/bare_menu_view_list.xml
+new file mode 100644
+index 00000000000..33475282bd3
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_menu_view_list.xml
+@@ -0,0 +1,17 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24"
++    android:tint="?attr/colorControlNormal">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M3,14h4v-4H3v4zM3,19h4v-4H3v4zM3,9h4V5H3v4zM8,14h13v-4H8v4zM8,19h13v-4H8v4zM8,5v4h13V5H8z" />
++</vector>
+diff --git a/chrome/android/java/res/values/bare_menu_strings.xml b/chrome/android/java/res/values/bare_menu_strings.xml
+new file mode 100644
+index 00000000000..c4cf4348dd5
+--- /dev/null
++++ b/chrome/android/java/res/values/bare_menu_strings.xml
+@@ -0,0 +1,11 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<resources>
++    <string name="bare_tab_view_show_list" translatable="false">Show as list</string>
++    <string name="bare_tab_view_show_grid" translatable="false">Show as grid</string>
++</resources>
+diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
+index 9e74756480c..394f08bb49d 100644
+--- a/chrome/android/java/res/values/ids.xml
++++ b/chrome/android/java/res/values/ids.xml
+@@ -263,6 +263,7 @@ found in the LICENSE file.
+     <item type="id" name="pin_tab_menu_id" />
+     <item type="id" name="preferences_id" />
+     <item type="id" name="bare_exit_id" />
++    <item type="id" name="bare_tab_view_toggle_id" />
+     <item type="id" name="qr_code_menu_id" />
+     <item type="id" name="quick_delete_divider_line_id" />
+     <item type="id" name="quick_delete_menu_id" />
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+index dcb63c26e8a..42e3f1cca00 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+@@ -823,7 +823,10 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+         }
+         modelList.add(mTabGroupItemBuilder.buildNewTabGroupItemWithoutTab());
+         modelList.add(buildCloseAllTabsItem());
+-        if (shouldShowSelectTabsItem()) modelList.add(buildSelectTabsItem());
++        if (shouldShowSelectTabsItem()) {
++            modelList.add(buildSelectTabsItem());
++            modelList.add(buildTabViewItem());
++        }
+         if (shouldShowQuickDeleteItem()) modelList.add(buildQuickDeleteItem());
+         modelList.add(buildSettingsItem());
+     }
+@@ -1362,6 +1365,29 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+                 || focusedPane.getPaneId() == PaneId.INCOGNITO_TAB_SWITCHER;
+     }
+ 
++    /** Bare: one row that flips the tab grid between grid and list, in place of a second menu. */
++    private ListItem buildTabViewItem() {
++        boolean list =
++                "list"
++                        .equals(
++                                org.chromium.base.ContextUtils.getAppSharedPreferences()
++                                        .getString(
++                                                org.chromium.chrome.browser.preferences
++                                                        .ChromePreferenceKeys.BARE_TAB_VIEW,
++                                                "grid"));
++        PropertyModel model =
++                AppMenuItemUtils.buildModelForStandardMenuItem(
++                        mContext,
++                        getAppMenuItemTheme(),
++                        R.id.bare_tab_view_toggle_id,
++                        list ? R.string.bare_tab_view_show_grid : R.string.bare_tab_view_show_list,
++                        shouldShowIconBeforeItem()
++                                ? (list ? R.drawable.ic_grid_view_24dp : R.drawable.bare_menu_view_list)
++                                : Resources.ID_NULL,
++                        isMenuIconAtStart());
++        return new ListItem(AppMenuHandler.AppMenuItemType.STANDARD, model);
++    }
++
+     private ListItem buildSelectTabsItem() {
+         PropertyModel model =
+                 AppMenuItemUtils.buildModelForStandardMenuItem(
+diff --git a/chrome/browser/hub/internal/android/java/src/org/chromium/chrome/browser/hub/HubToolbarView.java b/chrome/browser/hub/internal/android/java/src/org/chromium/chrome/browser/hub/HubToolbarView.java
+index 7b8051ed5a9..dbbee72f6ab 100644
+--- a/chrome/browser/hub/internal/android/java/src/org/chromium/chrome/browser/hub/HubToolbarView.java
++++ b/chrome/browser/hub/internal/android/java/src/org/chromium/chrome/browser/hub/HubToolbarView.java
+@@ -138,7 +138,8 @@ public class HubToolbarView extends LinearLayout {
+ 
+     void setViewButtonVisible(boolean visible) {
+         if (mViewButton == null) return;
+-        mViewButton.setVisibility(visible ? View.VISIBLE : View.GONE);
++        // Bare: the grid and list choice is a row in the tab menu, so this button stays hidden.
++        mViewButton.setVisibility(View.GONE);
+     }
+ 
+     /**

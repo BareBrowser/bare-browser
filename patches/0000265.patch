@@ -1,0 +1,182 @@
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index adea746c330..23fa9d6b51d 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -305,6 +305,7 @@ chrome_java_resources = [
+   "java/res/drawable/ic_feedback_24dp.xml",
+   "java/res/drawable/ic_find_in_page.xml",
+   "java/res/drawable/ic_bare_vertical_tabs.xml",
++  "java/res/drawable/ic_bare_vertical_tabs_right.xml",
+   "java/res/drawable/ic_bare_chevron_left.xml",
+   "java/res/drawable/ic_bare_incognito_badge.xml",
+   "java/res/drawable/ic_bare_incognito_fact_cookie.xml",
+diff --git a/chrome/android/java/res/drawable/ic_bare_vertical_tabs_right.xml b/chrome/android/java/res/drawable/ic_bare_vertical_tabs_right.xml
+new file mode 100644
+index 00000000000..8ca1a494f34
+--- /dev/null
++++ b/chrome/android/java/res/drawable/ic_bare_vertical_tabs_right.xml
+@@ -0,0 +1,26 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector
++    xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24"
++    android:tint="@macro/default_icon_color">
++    <path
++        android:pathData="M5.5 3.5H18.5A3 3 0 0 1 21.5 6.5V17.5A3 3 0 0 1 18.5 20.5H5.5A3 3 0 0 1 2.5 17.5V6.5A3 3 0 0 1 5.5 3.5Z"
++        android:strokeColor="@android:color/white"
++        android:strokeWidth="1.8"
++        android:strokeLineCap="round"
++        android:strokeLineJoin="round"/>
++    <path
++        android:pathData="M15 3.5V20.5M17.2 8H18.8M17.2 12H18.8M17.2 16H18.8"
++        android:strokeColor="@android:color/white"
++        android:strokeWidth="1.8"
++        android:strokeLineCap="round"
++        android:strokeLineJoin="round"/>
++</vector>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+index 6767be7973f..fa67b7094d4 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+@@ -129,6 +129,7 @@ public final class BareVerticalTabsDrawer {
+     private int mPanelWidth;
+     /** 1 when the panel comes from the left edge, -1 from the right. */
+     private int mSide = 1;
++    private @Nullable ImageButton mToggle;
+ 
+     private final TabModelObserver mModelObserver =
+             new TabModelObserver() {
+@@ -424,6 +425,7 @@ public final class BareVerticalTabsDrawer {
+         footer.addView(buttons);
+         // The sidebar icon stays where the bottom bar has it, so the same spot closes the drawer.
+         ImageButton toggle = new ImageButton(mActivity);
++        mToggle = toggle;
+         toggle.setImageResource(R.drawable.ic_bare_vertical_tabs);
+         toggle.setColorFilter(color(0xFFEEEEEE, 0xFF1B1B1F));
+         toggle.setBackground(null);
+@@ -575,17 +577,20 @@ public final class BareVerticalTabsDrawer {
+      * opens, so the setting applies at once.
+      */
+     private void updateSide() {
+-        boolean rtl =
+-                mActivity.getResources().getConfiguration().getLayoutDirection()
+-                        == View.LAYOUT_DIRECTION_RTL;
+-        boolean onRight =
+-                BottomBarConfigUtils.isMenuOnLeft()
+-                        && !BottomBarConfigUtils.isMinimalLayout()
+-                        && !rtl;
++        boolean onRight = BottomBarConfigUtils.isSidebarOnRight(mActivity);
+         mSide = onRight ? -1 : 1;
+         Panel panel = mPanel;
+         if (panel == null) return;
+         panel.setSide(mSide);
++        // Opening from the right, the panel is drawn the other way round: its header, its rows and
++        // the sidebar button that closes it all sit mirrored.
++        panel.setLayoutDirection(onRight ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
++        if (mToggle != null) {
++            mToggle.setImageResource(
++                    onRight
++                            ? R.drawable.ic_bare_vertical_tabs_right
++                            : R.drawable.ic_bare_vertical_tabs);
++        }
+         FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) panel.getLayoutParams();
+         int gravity = onRight ? Gravity.RIGHT : Gravity.LEFT;
+         if (params.gravity != gravity) {
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
+index 939eac141a4..995b9cd012a 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
+@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.ui.bottombar;
+ import static org.chromium.build.NullUtil.assumeNonNull;
+ 
+ import android.content.Context;
++import android.view.View;
+ 
+ import org.chromium.base.DeviceInfo;
+ import org.chromium.build.annotations.NullMarked;
+@@ -63,6 +64,18 @@ public class BottomBarConfigUtils {
+     }
+ 
+     /** Whether the menu button sits on the left end of the bar, swapped with the first button. */
++    /**
++     * Whether the sidebar button is at the right end of the bottom bar, and so the sidebar opens
++     * from the right: the menu is on the left of the full bar. The minimal bar keeps the sidebar
++     * on the left, and a right-to-left layout is left as the system draws it.
++     */
++    public static boolean isSidebarOnRight(Context context) {
++        boolean rtl =
++                context.getResources().getConfiguration().getLayoutDirection()
++                        == View.LAYOUT_DIRECTION_RTL;
++        return isMenuOnLeft() && !isMinimalLayout() && !rtl;
++    }
++
+     public static boolean isMenuOnLeft() {
+         return ChromeSharedPreferences.getInstance()
+                 .readBoolean(ChromePreferenceKeys.BARE_MENU_ON_LEFT, false);
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
+index a2c784a5264..579ce610835 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
+@@ -26,6 +26,7 @@ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.theme.ThemeColorProvider;
+ import org.chromium.chrome.browser.ui.actions.ActionId;
++import org.chromium.chrome.browser.ui.actions.ActionProperties;
+ import org.chromium.chrome.browser.ui.actions.ActionRegistry;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarButtonManager.ActionConfig;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarHostManager.Host;
+@@ -45,6 +46,7 @@ public class BottomBarCoordinator
+     private final PropertyModel mModel;
+     private final BottomBarMediator mMediator;
+     private final BottomBarView mView;
++    private final ActionRegistry mActionRegistry;
+     private final PropertyModelChangeProcessor<PropertyModel, BottomBarView, PropertyKey> mMcp;
+     private final BottomBarButtonManager mButtonManager;
+     private final BottomBarPromoDialogCoordinator mPromoDialogCoordinator;
+@@ -125,6 +127,8 @@ public class BottomBarCoordinator
+         mPromoDialogCoordinator.setListener(mMediator);
+ 
+         mTabSupplier = tabSupplier;
++        mActionRegistry = actionRegistry;
++        applySidebarIcon();
+         mMcp = PropertyModelChangeProcessor.create(mModel, mView, BottomBarViewBinder::bind);
+ 
+         // What a sideways drag along the bar does. Built here because it needs the window, and
+@@ -278,9 +282,29 @@ public class BottomBarCoordinator
+      * as they are. What changes is which action each position is bound to, and the view it is
+      * drawn into when the new action needs a different one.
+      */
++    /**
++     * Draws the sidebar button's icon facing the side the sidebar opens from: the panel on the
++     * right when the sidebar is on the right.
++     */
++    private void applySidebarIcon() {
++        PropertyModel model = mActionRegistry.get(ActionId.VERTICAL_TABS).get();
++        if (model == null) return;
++        Context context = mView.getContext();
++        String name =
++                BottomBarConfigUtils.isSidebarOnRight(context)
++                        ? "ic_bare_vertical_tabs_right"
++                        : "ic_bare_vertical_tabs";
++        int icon =
++                context.getResources().getIdentifier(name, "drawable", context.getPackageName());
++        if (icon != 0 && model.get(ActionProperties.ICON_ID) != icon) {
++            model.set(ActionProperties.ICON_ID, icon);
++        }
++    }
++
+     private void rebuildArrangement() {
+         BareToolbarLayout.invalidate();
+         mView.applyMenuSide();
++        applySidebarIcon();
+         mButtonManager.rebuild(
+                 createActionConfigs(mView, mShouldIncludeHomeButton), ActionId.NEW_TAB);
+         mMediator.onArrangementChanged();

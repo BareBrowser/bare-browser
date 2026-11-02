@@ -1,0 +1,333 @@
+diff --git a/components/page_info/android/BUILD.gn b/components/page_info/android/BUILD.gn
+index 6c68a7250a4..29d76e6f077 100644
+--- a/components/page_info/android/BUILD.gn
++++ b/components/page_info/android/BUILD.gn
+@@ -47,6 +47,7 @@ android_resources("java_resources") {
+     "java/res/layout/page_info_row.xml",
+     "java/res/layout/page_info_summary.xml",
+     "java/res/layout/page_info_title.xml",
++    "java/res/values/bare_strings.xml",
+     "java/res/values/dimens.xml",
+     "java/res/values/ids.xml",
+     "java/res/xml/page_info_cookie_preference.xml",
+@@ -82,6 +83,7 @@ android_library("java") {
+     "java/src/org/chromium/components/page_info/PageInfoPermissionsController.java",
+     "java/src/org/chromium/components/page_info/PageInfoPreferenceSubpageController.java",
+     "java/src/org/chromium/components/page_info/PageInfoRowView.java",
++    "java/src/org/chromium/components/page_info/PageInfoSheetContent.java",
+     "java/src/org/chromium/components/page_info/PageInfoSubpageController.java",
+     "java/src/org/chromium/components/page_info/PageInfoView.java",
+     "java/src/org/chromium/components/page_info/PermissionParamsListBuilder.java",
+@@ -93,6 +95,7 @@ android_library("java") {
+     ":page_info_action_enum_java",
+     "//base:base_java",
+     "//build/android:build_java",
++    "//components/browser_ui/bottomsheet/android:java",
+     "//components/browser_ui/settings/android:java",
+     "//components/browser_ui/site_settings/android:java",
+     "//components/browser_ui/styles/android:java",
+diff --git a/components/page_info/android/DEPS b/components/page_info/android/DEPS
+index eb0d84514b0..16b21ccff50 100644
+--- a/components/page_info/android/DEPS
++++ b/components/page_info/android/DEPS
+@@ -1,4 +1,5 @@
+ include_rules = [
++  "+components/browser_ui/bottomsheet/android/java",
+   "+components/browser_ui/settings/android/java",
+   "+components/browser_ui/settings/android/widget/java",
+   "+components/browser_ui/site_settings/android/java",
+diff --git a/components/page_info/android/java/res/values/bare_strings.xml b/components/page_info/android/java/res/values/bare_strings.xml
+new file mode 100644
+index 00000000000..6f6f308d03c
+--- /dev/null
++++ b/components/page_info/android/java/res/values/bare_strings.xml
+@@ -0,0 +1,10 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<resources>
++    <string name="bare_page_info_title" translatable="false">Site settings</string>
++</resources>
+diff --git a/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoController.java b/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoController.java
+index 51feba6a812..53e9a5273e3 100644
+--- a/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoController.java
++++ b/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoController.java
+@@ -30,6 +30,7 @@ import org.jni_zero.NativeMethods;
+ import org.chromium.base.metrics.RecordUserAction;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvider;
+ import org.chromium.components.browser_ui.settings.SettingsUtils;
+ import org.chromium.components.content_settings.ContentSettingsType;
+ import org.chromium.components.dom_distiller.core.DomDistillerUrlUtils;
+@@ -335,7 +336,8 @@ public class PageInfoController
+                         isSheet(),
+                         delegate.getModalDialogManager(),
+                         this,
+-                        dialogPosition);
++                        dialogPosition,
++                        BottomSheetControllerProvider.from(mWindowAndroid));
+ 
+         mWebContentsObserver =
+                 new WebContentsObserver(webContents) {
+diff --git a/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoDialog.java b/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoDialog.java
+index c27bc4abc51..8f98b206d5a 100644
+--- a/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoDialog.java
++++ b/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoDialog.java
+@@ -25,6 +25,8 @@ import androidx.annotation.GravityInt;
+ 
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.components.browser_ui.widget.FadingEdgeScrollView;
+ import org.chromium.ui.interpolators.Interpolators;
+@@ -48,6 +50,12 @@ public class PageInfoDialog {
+     // mSheetDialog is set if the dialog appears as a sheet. Otherwise, mModalDialog is set.
+     private final @Nullable Dialog mSheetDialog;
+     private final @Nullable PropertyModel mModalDialogModel;
++    // Bare: on a phone the panel is a card from the bottom, shown through the bottom sheet. The
++    // dialog above is kept for when there is no sheet to show it in.
++    private final @Nullable BottomSheetController mSheetController;
++    private final @Nullable PageInfoSheetContent mSheetContent;
++    private @Nullable BottomSheetObserver mSheetObserver;
++    private boolean mSheetClosedNotified;
+     private final ModalDialogManager mManager;
+     private final ModalDialogProperties.Controller mController;
+ 
+@@ -75,13 +83,17 @@ public class PageInfoDialog {
+             boolean isSheet,
+             ModalDialogManager manager,
+             Controller controller,
+-            @GravityInt int dialogPosition) {
++            @GravityInt int dialogPosition,
++            @Nullable BottomSheetController sheetController) {
+         mPageInfoContainer = pageInfoContainer;
+         mManager = manager;
+         mController = controller;
+         mDialogPosition = dialogPosition;
+ 
+-        if (isSheet) {
++        mSheetController = isSheet ? sheetController : null;
++        if (mSheetController != null) {
++            mScrollView = new FadingEdgeScrollView(context, null);
++        } else if (isSheet) {
+             // On smaller screens, make the dialog fill the width of the screen.
+             mScrollView = createSheetContainer(context, containerView);
+         } else {
+@@ -90,26 +102,34 @@ public class PageInfoDialog {
+             mScrollView.disableScrollbarOnTablet();
+         }
+ 
+-        mScrollView.setVisibility(View.INVISIBLE);
+-        mScrollView.addOnLayoutChangeListener(
+-                new View.OnLayoutChangeListener() {
+-                    @Override
+-                    public void onLayoutChange(
+-                            View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
+-                        // Trigger the entrance animations once the main container has been laid out
+-                        // and has a height.
+-                        mScrollView.removeOnLayoutChangeListener(this);
+-                        mScrollView.setVisibility(View.VISIBLE);
+-                        createDialogSlideAnimaton(true, null).start();
+-                    }
+-                });
++        if (mSheetController == null) {
++            mScrollView.setVisibility(View.INVISIBLE);
++            mScrollView.addOnLayoutChangeListener(
++                    new View.OnLayoutChangeListener() {
++                        @Override
++                        public void onLayoutChange(
++                                View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
++                            // Trigger the entrance animations once the main container has been
++                            // laid out and has a height.
++                            mScrollView.removeOnLayoutChangeListener(this);
++                            mScrollView.setVisibility(View.VISIBLE);
++                            createDialogSlideAnimaton(true, null).start();
++                        }
++                    });
++        }
+ 
+         mScrollView.addView(pageInfoContainer);
+ 
+-        if (isSheet) {
++        if (mSheetController != null) {
++            mSheetContent = new PageInfoSheetContent(context, mScrollView);
++            mSheetDialog = null;
++            mModalDialogModel = null;
++        } else if (isSheet) {
++            mSheetContent = null;
+             mSheetDialog = createSheetDialog(context, mScrollView);
+             mModalDialogModel = null;
+         } else {
++            mSheetContent = null;
+             mModalDialogModel = createModalDialog(mScrollView);
+             mSheetDialog = null;
+         }
+@@ -121,7 +141,22 @@ public class PageInfoDialog {
+ 
+     /** Shows the dialogs. */
+     public void show() {
+-        if (mSheetDialog != null) {
++        if (mSheetController != null && mSheetContent != null) {
++            mSheetObserver =
++                    new BottomSheetObserver() {
++                        @Override
++                        public void onSheetClosed(@BottomSheetController.StateChangeReason int reason) {
++                            mSheetController.removeObserver(this);
++                            mSheetObserver = null;
++                            if (mSheetClosedNotified) return;
++                            mSheetClosedNotified = true;
++                            mController.onDismiss(
++                                    assumeNonNull(null), DialogDismissalCause.UNKNOWN);
++                        }
++                    };
++            mSheetController.addObserver(mSheetObserver);
++            mSheetController.requestShowContent(mSheetContent, true);
++        } else if (mSheetDialog != null) {
+             mSheetDialog.show();
+         } else {
+             assumeNonNull(mModalDialogModel);
+@@ -136,7 +171,9 @@ public class PageInfoDialog {
+      */
+     public void dismiss(boolean animated) {
+         mDismissWithoutAnimation = !animated;
+-        if (mSheetDialog != null) {
++        if (mSheetController != null && mSheetContent != null) {
++            mSheetController.hideContent(mSheetContent, animated);
++        } else if (mSheetDialog != null) {
+             mSheetDialog.dismiss();
+         } else {
+             assumeNonNull(mModalDialogModel);
+diff --git a/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoSheetContent.java b/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoSheetContent.java
+new file mode 100644
+index 00000000000..44af0634622
+--- /dev/null
++++ b/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoSheetContent.java
+@@ -0,0 +1,121 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.components.page_info;
++
++import android.content.Context;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.FrameLayout;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetType;
++import org.chromium.components.browser_ui.widget.FadingEdgeScrollView;
++
++/**
++ * The site settings panel shown as a card from the bottom of the screen, like the menu and the
++ * extensions, wherever the address bar is.
++ */
++@NullMarked
++class PageInfoSheetContent implements BottomSheetContent {
++    private static final BottomSheetType SHEET_TYPE =
++            new BottomSheetType.Builder().setUserInitiated(true).build();
++    private static final int BOTTOM_PADDING_DP = 16;
++
++    private final FrameLayout mContainer;
++    private final FadingEdgeScrollView mScrollView;
++    private final String mTitle;
++
++    PageInfoSheetContent(Context context, FadingEdgeScrollView scrollView) {
++        mScrollView = scrollView;
++        mTitle = context.getString(R.string.bare_page_info_title);
++        mContainer = new FrameLayout(context);
++        mContainer.addView(
++                scrollView,
++                new FrameLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
++        float density = context.getResources().getDisplayMetrics().density;
++        mContainer.setPadding(0, 0, 0, Math.round(BOTTOM_PADDING_DP * density));
++    }
++
++    /** Hands the scroll view back once the card has gone. */
++    void release() {
++        mContainer.removeAllViews();
++    }
++
++    @Override
++    public View getContentView() {
++        return mContainer;
++    }
++
++    @Override
++    public @Nullable View getToolbarView() {
++        return null;
++    }
++
++    @Override
++    public int getVerticalScrollOffset() {
++        return mScrollView.getScrollY();
++    }
++
++    @Override
++    public void destroy() {}
++
++    @Override
++    public BottomSheetType getSheetType() {
++        return SHEET_TYPE;
++    }
++
++    @Override
++    public int getPriority() {
++        return ContentPriority.HIGH;
++    }
++
++    @Override
++    public boolean swipeToDismissEnabled() {
++        return true;
++    }
++
++    @Override
++    public boolean showHandlebar() {
++        return true;
++    }
++
++    @Override
++    public int getPeekHeight() {
++        return HeightMode.DISABLED;
++    }
++
++    @Override
++    public float getHalfHeightRatio() {
++        return HeightMode.DISABLED;
++    }
++
++    @Override
++    public float getFullHeightRatio() {
++        return HeightMode.WRAP_CONTENT;
++    }
++
++    @Override
++    public @Nullable String getSheetContentDescription(Context context) {
++        return mTitle;
++    }
++
++    @Override
++    public int getSheetHalfHeightAccessibilityStringId() {
++        return R.string.bare_page_info_title;
++    }
++
++    @Override
++    public int getSheetFullHeightAccessibilityStringId() {
++        return R.string.bare_page_info_title;
++    }
++
++    @Override
++    public int getSheetClosedAccessibilityStringId() {
++        return R.string.bare_page_info_title;
++    }
++}

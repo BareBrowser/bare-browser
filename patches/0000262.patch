@@ -1,0 +1,199 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
+index eedf891f3af..4c72b4ff771 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
+@@ -49,7 +49,7 @@ import java.util.Set;
+  */
+ @NullMarked
+ public final class BareAppMenuCustomization {
+-    private static final int TIP_LIMIT = 3;
++    private static final int TIP_LIMIT = 5;
+     private static final int FADED_ALPHA = 90;
+ 
+     /** The hideable items: a stable name, then the id the menu gives that item. */
+@@ -271,6 +271,7 @@ public final class BareAppMenuCustomization {
+      */
+     public static ModelList apply(
+             Context context, AppMenuItemTheme theme, boolean isIconAtStart, ModelList list) {
++        arrange(list);
+         Set<String> hidden = getHidden();
+         List<ListItem> hiddenItems = new ArrayList<>();
+         for (int i = list.size() - 1; i >= 0; i--) {
+@@ -339,6 +340,89 @@ public final class BareAppMenuCustomization {
+         return list;
+     }
+ 
++    /**
++     * Puts the short list first, ending with Exit, and everything else below Exit: the shortcut
++     * row, then Add tab to new group, Customize new tab page, Settings and Exit, each group set
++     * apart by a divider. The rest keeps the order and the dividers it had. A menu with no Exit,
++     * such as the tab grid's, is left as it is.
++     */
++    private static void arrange(ModelList list) {
++        ListItem buttons = null;
++        ListItem group = null;
++        ListItem customize = null;
++        ListItem settings = null;
++        ListItem exit = null;
++        List<ListItem> rest = new ArrayList<>();
++        for (int i = 0; i < list.size(); i++) {
++            ListItem item = list.get(i);
++            int id = isRowType(item.type) ? item.model.get(AppMenuItemProperties.MENU_ITEM_ID) : -1;
++            if (item.type == AppMenuItemType.BUTTON_ROW) {
++                buttons = item;
++            } else if (id == R.id.add_tab_to_new_group_menu_id
++                    || id == R.id.add_to_group_menu_id
++                    || id == R.id.add_tab_to_group_menu_id) {
++                group = item;
++            } else if (id == R.id.ntp_customization_id) {
++                customize = item;
++            } else if (id == R.id.preferences_id) {
++                settings = item;
++            } else if (id == R.id.bare_exit_id) {
++                exit = item;
++            } else {
++                rest.add(item);
++            }
++        }
++        if (exit == null || settings == null) return;
++        while (list.size() > 0) list.removeAt(list.size() - 1);
++        if (buttons != null) list.add(buttons);
++        if (group != null) {
++            list.add(group);
++            list.add(new ListItem(AppMenuItemType.DIVIDER, dividerModel()));
++        }
++        if (customize != null) list.add(customize);
++        list.add(settings);
++        list.add(new ListItem(AppMenuItemType.DIVIDER, dividerModel()));
++        list.add(exit);
++        // Below Exit: History, Bookmarks, Downloads and Delete browsing data, then New tab, New
++        // Incognito tab and Recently closed, then the rest in the order the menu gave it.
++        List<ListItem> saved = new ArrayList<>();
++        List<ListItem> tabs = new ArrayList<>();
++        List<ListItem> others = new ArrayList<>();
++        for (ListItem item : rest) {
++            if (item.type == AppMenuItemType.DIVIDER) continue;
++            int rank = belowExitRank(item);
++            if (rank < 10) {
++                saved.add(item);
++            } else if (rank < 100) {
++                tabs.add(item);
++            } else {
++                others.add(item);
++            }
++        }
++        saved.sort((a, b) -> belowExitRank(a) - belowExitRank(b));
++        tabs.sort((a, b) -> belowExitRank(a) - belowExitRank(b));
++        for (List<ListItem> part : List.of(saved, tabs, others)) {
++            if (part.isEmpty()) continue;
++            list.add(new ListItem(AppMenuItemType.DIVIDER, dividerModel()));
++            for (ListItem item : part) list.add(item);
++        }
++        removeStrandedDividers(list);
++    }
++
++    /** Where an item goes below Exit: under 10 is the first group, under 100 the second. */
++    private static int belowExitRank(ListItem item) {
++        if (!isRowType(item.type)) return 100;
++        int id = item.model.get(AppMenuItemProperties.MENU_ITEM_ID);
++        if (id == R.id.open_history_menu_id) return 0;
++        if (id == R.id.all_bookmarks_menu_id || id == R.id.bookmarks_parent_menu_id) return 1;
++        if (id == R.id.downloads_menu_id) return 2;
++        if (id == R.id.quick_delete_menu_id) return 3;
++        if (id == R.id.new_tab_menu_id) return 10;
++        if (id == R.id.new_incognito_tab_menu_id) return 11;
++        if (id == R.id.recent_tabs_menu_id) return 12;
++        return 100;
++    }
++
+     /**
+      * Whether an item of this type is a choice the user can hide. It is everything except the
+      * pieces that only lay the menu out. The menu has types of its own beyond the standard ones
+@@ -405,6 +489,7 @@ public final class BareAppMenuCustomization {
+                                 AppCompatResources.getDrawable(context, R.drawable.bare_menu_close)),
+                         isIconAtStart);
+         model.set(AppMenuItemProperties.TITLE_CONDENSED, context.getString(R.string.bare_menu_tip));
++        model.set(AppMenuItemProperties.TITLE_MAX_LINES, 2);
+         model.set(AppMenuItemProperties.ENABLED, true);
+         return new ListItem(AppMenuItemType.TITLE_BUTTON, model);
+     }
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+index 41b4dbbd9cc..3ab365a0826 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+@@ -28,6 +28,7 @@ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.ui.appmenu.internal.R;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.ui.interpolators.Interpolators;
++import org.chromium.ui.modelutil.MVCListAdapter;
+ 
+ /**
+  * Bare: the three-dot menu as a sheet that comes up from behind the bottom toolbar and carries on
+@@ -55,7 +56,7 @@ final class BareMenuSheet {
+     private final ListView mList;
+     private final View mScrim;
+     private final int mHeight;
+-    private final int mCompactY;
++    private int mCompactY;
+     private final Runnable mDismiss;
+     private final Frame mFrame;
+     private @Nullable ValueAnimator mAnimator;
+@@ -103,7 +104,42 @@ final class BareMenuSheet {
+ 
+     /** Slides the sheet up from behind the toolbar to its first, half-open position. */
+     void open() {
+-        mFrame.post(() -> animateTo(mCompactY, SETTLE_MS, Interpolators.EMPHASIZED_DECELERATE, null));
++        mFrame.post(
++                () -> {
++                    fitCompactToExit();
++                    animateTo(mCompactY, SETTLE_MS, Interpolators.EMPHASIZED_DECELERATE, null);
++                });
++    }
++
++    /**
++     * Opens the sheet just far enough to show the list through its Exit row, so Exit is the last
++     * row in view and the rest waits below it until the sheet is pulled up. A menu with no Exit
++     * keeps the half-open position.
++     */
++    private void fitCompactToExit() {
++        Context context = mContent.getContext();
++        int exitId = context.getResources().getIdentifier("bare_exit_id", "id", context.getPackageName());
++        if (exitId == 0 || mList.getAdapter() == null) return;
++        int exitAt = -1;
++        for (int i = 0; i < mList.getAdapter().getCount(); i++) {
++            Object item = mList.getAdapter().getItem(i);
++            if (item instanceof MVCListAdapter.ListItem listItem
++                    && listItem.model.containsKey(AppMenuItemProperties.MENU_ITEM_ID)
++                    && listItem.model.get(AppMenuItemProperties.MENU_ITEM_ID) == exitId) {
++                exitAt = i;
++                break;
++            }
++        }
++        if (exitAt < 0) return;
++        View row = mList.getChildAt(exitAt - mList.getFirstVisiblePosition());
++        if (row == null) return;
++        int[] contentAt = new int[2];
++        int[] rowAt = new int[2];
++        mContent.getLocationOnScreen(contentAt);
++        row.getLocationOnScreen(rowAt);
++        float density = context.getResources().getDisplayMetrics().density;
++        int needed = rowAt[1] + row.getHeight() - contentAt[1] + Math.round(8 * density);
++        mCompactY = Math.max(0, Math.min(mHeight, mHeight - needed));
+     }
+ 
+     /**
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index d2b73abeb49..c4517214db7 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4525,8 +4525,8 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_INCOGNITO_HAPTIC_SUMMARY" desc="Explains the haptic option. It follows the phone's touch feedback setting.">
+         A short vibration when you switch into Incognito, on phones that support it and have touch feedback on.
+       </message>
+-      <message name="IDS_BARE_MENU_TIP" desc="A tip at the top of the three-dot menu, shown the first few times. Tapping it starts editing. [CHAR_LIMIT=40]">
+-        Hold an item to edit
++      <message name="IDS_BARE_MENU_TIP" desc="A tip at the top of the three-dot menu, shown the first few times. Tapping it starts editing. [CHAR_LIMIT=64]">
++        Tap and hold to hide, pin or rearrange menu items.
+       </message>
+       <message name="IDS_BARE_MENU_TIP_NEVER" desc="Label of the small cross on the menu tip. It stops the tip from being shown again. [CHAR_LIMIT=32]">
+         Never show again

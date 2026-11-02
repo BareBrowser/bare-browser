@@ -1,0 +1,373 @@
+diff --git a/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/BareEngineLogos.java b/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/BareEngineLogos.java
+index 9071a0f67aa..b91bfee205e 100644
+--- a/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/BareEngineLogos.java
++++ b/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/BareEngineLogos.java
+@@ -41,6 +41,8 @@ public final class BareEngineLogos {
+      */
+     public static @Nullable Bitmap get(Context context, @Nullable String hostOrUrl) {
+         String host = hostOrUrl;
++        // Google's own address starts with a placeholder for its base address, not a host.
++        if (host != null && host.startsWith("{google:baseURL}")) host = "google.com";
+         if (host != null && host.contains("/")) host = Uri.parse(host).getHost();
+         @DrawableRes int id = drawableFor(host);
+         if (id == 0) return null;
+diff --git a/chrome/browser/ui/android/omnibox/BUILD.gn b/chrome/browser/ui/android/omnibox/BUILD.gn
+index 1e99e666ba2..a61692e9578 100644
+--- a/chrome/browser/ui/android/omnibox/BUILD.gn
++++ b/chrome/browser/ui/android/omnibox/BUILD.gn
+@@ -46,6 +46,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/omnibox/LocationBarEmbedderUiOverrides.java",
+     "java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java",
+     "java/src/org/chromium/chrome/browser/omnibox/LocationBarLayout.java",
++    "java/src/org/chromium/chrome/browser/omnibox/BareEngineCard.java",
+     "java/src/org/chromium/chrome/browser/omnibox/BareEnginePicker.java",
+     "java/src/org/chromium/chrome/browser/omnibox/BareEngineLetterDrawable.java",
+     "java/src/org/chromium/chrome/browser/omnibox/BareSearchOverride.java",
+@@ -398,6 +399,7 @@ android_resources("java_resources") {
+     "java/res/color/fusebox_popover_plus_button_ripple_color.xml",
+     "java/res/color/fusebox_popover_plus_button_ripple_color_incognito.xml",
+     "java/res/drawable-night/search_spark_rainbow.xml",
++    "java/res/drawable/bare_engine_check.xml",
+     "java/res/drawable/action_button_foreground_selector.xml",
+     "java/res/drawable/activation_chip_focus_ring.xml",
+     "java/res/drawable/circle_button_focus_ring.xml",
+diff --git a/chrome/browser/ui/android/omnibox/java/res/drawable/bare_engine_check.xml b/chrome/browser/ui/android/omnibox/java/res/drawable/bare_engine_check.xml
+new file mode 100644
+index 00000000000..27c3e9043a8
+--- /dev/null
++++ b/chrome/browser/ui/android/omnibox/java/res/drawable/bare_engine_check.xml
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M9,16.17L4.83,12l-1.42,1.41L9,19 21,7l-1.41,-1.41z" />
++</vector>
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEngineCard.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEngineCard.java
+new file mode 100644
+index 00000000000..c9351b08654
+--- /dev/null
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEngineCard.java
+@@ -0,0 +1,273 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.omnibox;
++
++import android.app.Activity;
++import android.content.Context;
++import android.graphics.Bitmap;
++import android.graphics.drawable.BitmapDrawable;
++import android.graphics.drawable.Drawable;
++import android.util.TypedValue;
++import android.view.Gravity;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.EditText;
++import android.widget.FrameLayout;
++import android.widget.ImageView;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.search_engines.settings.BareEngineLogos;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvider;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetType;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.components.search_engines.StarterPackId;
++import org.chromium.components.search_engines.TemplateUrl;
++import org.chromium.components.search_engines.TemplateUrlService;
++import org.chromium.ui.base.WindowAndroid;
++
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
++
++/**
++ * The list of search engines the address bar's engine icon opens, as a card from the bottom like
++ * the menu and the extensions. Picking an engine sends the next search to it without changing the
++ * default; picking the default drops an earlier choice.
++ */
++@NullMarked
++public final class BareEngineCard implements BottomSheetContent {
++    private static final BottomSheetType SHEET_TYPE =
++            new BottomSheetType.Builder().setUserInitiated(true).build();
++
++    private static final long KEYBOARD_GONE_MS = 250;
++
++    private final FrameLayout mContainer;
++    private final String mTitle;
++
++    /**
++     * Shows the card and returns whether it did. It does not when there is no sheet to show it in
++     * or no engine to list, and the caller falls back to the plain list.
++     */
++    public static boolean show(
++            Context context, WindowAndroid window, TemplateUrlService service, Object owner) {
++        // A sheet will not open over the keyboard or while the address bar has focus, and the
++        // engine icon is often tapped with the bar open. Let the bar go and put the keyboard away
++        // first, then open the card once they have gone.
++        @Nullable Activity activity = window.getActivity().get();
++        if (activity != null) {
++            View decor = activity.getWindow().getDecorView();
++            @Nullable View focused = activity.getCurrentFocus();
++            boolean typing = focused instanceof EditText;
++            if (typing) focused.clearFocus();
++            if (typing || window.getKeyboardDelegate().isKeyboardShowing(decor)) {
++                window.getKeyboardDelegate().hideKeyboard(decor);
++                decor.postDelayed(
++                        () -> {
++                            if (!present(context, window, service, owner)) {
++                                BareEnginePicker.show(context, service, owner);
++                            }
++                        },
++                        KEYBOARD_GONE_MS);
++                return true;
++            }
++        }
++        return present(context, window, service, owner);
++    }
++
++    private static boolean present(
++            Context context, WindowAndroid window, TemplateUrlService service, Object owner) {
++        BottomSheetController controller = BottomSheetControllerProvider.from(window);
++        if (controller == null) return false;
++        List<TemplateUrl> engines = new ArrayList<>();
++        Set<String> seen = new HashSet<>();
++        for (TemplateUrl tu : service.getTemplateUrls()) {
++            if (tu.getStarterPackId() != StarterPackId.NONE) continue;
++            if (tu.getKeyword().isEmpty() || !seen.add(tu.getShortName())) continue;
++            engines.add(tu);
++        }
++        if (engines.isEmpty()) return false;
++        @Nullable TemplateUrl defaultEngine = service.getDefaultSearchEngineTemplateUrl();
++        @Nullable String chosen = BareSearchOverride.getName();
++        BareEngineCard[] holder = new BareEngineCard[1];
++        LinearLayout column = new LinearLayout(context);
++        column.setOrientation(LinearLayout.VERTICAL);
++        float density = context.getResources().getDisplayMetrics().density;
++        column.setPadding(0, Math.round(4 * density), 0, 0);
++        column.addView(titleView(context, density));
++        for (TemplateUrl tu : engines) {
++            boolean current =
++                    chosen != null
++                            ? tu.getShortName().equals(chosen)
++                            : defaultEngine != null && tu.getURL().equals(defaultEngine.getURL());
++            column.addView(
++                    row(
++                            context,
++                            density,
++                            tu,
++                            current,
++                            v -> {
++                                controller.hideContent(holder[0], true);
++                                if (defaultEngine != null
++                                        && tu.getURL().equals(defaultEngine.getURL())) {
++                                    BareSearchOverride.clear(owner);
++                                } else {
++                                    BareSearchOverride.set(
++                                            owner, tu.getURL(), tu.getShortName());
++                                }
++                            }));
++        }
++        holder[0] = new BareEngineCard(context, column);
++        return controller.requestShowContent(holder[0], true);
++    }
++
++    private BareEngineCard(Context context, View column) {
++        mTitle = context.getString(R.string.bare_engine_once_title);
++        mContainer = new FrameLayout(context);
++        mContainer.addView(
++                column,
++                new FrameLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
++        float density = context.getResources().getDisplayMetrics().density;
++        mContainer.setPadding(0, 0, 0, Math.round(16 * density));
++    }
++
++    private static TextView titleView(Context context, float density) {
++        TextView title = new TextView(context);
++        title.setText(R.string.bare_engine_once_title);
++        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
++        title.setTextColor(SemanticColorUtils.getDefaultTextColor(context));
++        title.setAlpha(0.7f);
++        title.setPadding(Math.round(24 * density), Math.round(8 * density), Math.round(24 * density), Math.round(8 * density));
++        return title;
++    }
++
++    private static View row(
++            Context context,
++            float density,
++            TemplateUrl engine,
++            boolean current,
++            View.OnClickListener onClick) {
++        LinearLayout row = new LinearLayout(context);
++        row.setOrientation(LinearLayout.HORIZONTAL);
++        row.setGravity(Gravity.CENTER_VERTICAL);
++        row.setMinimumHeight(Math.round(56 * density));
++        row.setPadding(Math.round(24 * density), 0, Math.round(24 * density), 0);
++        TypedValue ripple = new TypedValue();
++        if (context.getTheme()
++                .resolveAttribute(android.R.attr.selectableItemBackground, ripple, true)) {
++            row.setBackgroundResource(ripple.resourceId);
++        }
++        row.setClickable(true);
++        row.setFocusable(true);
++        row.setOnClickListener(onClick);
++
++        ImageView logo = new ImageView(context);
++        int size = Math.round(28 * density);
++        logo.setScaleType(ImageView.ScaleType.FIT_CENTER);
++        @Nullable Bitmap bitmap = BareEngineLogos.get(context, engine.getURL());
++        Drawable drawable =
++                bitmap != null
++                        ? new BitmapDrawable(context.getResources(), bitmap)
++                        : new BareEngineLetterDrawable(engine.getShortName());
++        logo.setImageDrawable(drawable);
++        LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(size, size);
++        logoParams.setMarginEnd(Math.round(16 * density));
++        row.addView(logo, logoParams);
++
++        TextView name = new TextView(context);
++        name.setText(engine.getShortName());
++        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
++        name.setTextColor(SemanticColorUtils.getDefaultTextColor(context));
++        row.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
++
++        if (current) {
++            ImageView check = new ImageView(context);
++            check.setImageResource(R.drawable.bare_engine_check);
++            check.setColorFilter(SemanticColorUtils.getDefaultIconColor(context));
++            int checkSize = Math.round(24 * density);
++            row.addView(check, new LinearLayout.LayoutParams(checkSize, checkSize));
++        }
++        return row;
++    }
++
++    @Override
++    public View getContentView() {
++        return mContainer;
++    }
++
++    @Override
++    public @Nullable View getToolbarView() {
++        return null;
++    }
++
++    @Override
++    public int getVerticalScrollOffset() {
++        return 0;
++    }
++
++    @Override
++    public void destroy() {}
++
++    @Override
++    public BottomSheetType getSheetType() {
++        return SHEET_TYPE;
++    }
++
++    @Override
++    public int getPriority() {
++        return ContentPriority.HIGH;
++    }
++
++    @Override
++    public boolean swipeToDismissEnabled() {
++        return true;
++    }
++
++    @Override
++    public boolean showHandlebar() {
++        return true;
++    }
++
++    @Override
++    public int getPeekHeight() {
++        return HeightMode.DISABLED;
++    }
++
++    @Override
++    public float getHalfHeightRatio() {
++        return HeightMode.DISABLED;
++    }
++
++    @Override
++    public float getFullHeightRatio() {
++        return HeightMode.WRAP_CONTENT;
++    }
++
++    @Override
++    public @Nullable String getSheetContentDescription(Context context) {
++        return mTitle;
++    }
++
++    @Override
++    public int getSheetHalfHeightAccessibilityStringId() {
++        return R.string.bare_engine_once_title;
++    }
++
++    @Override
++    public int getSheetFullHeightAccessibilityStringId() {
++        return R.string.bare_engine_once_title;
++    }
++
++    @Override
++    public int getSheetClosedAccessibilityStringId() {
++        return R.string.bare_engine_once_title;
++    }
++}
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
+index aa79d5b48a8..a3519dd744c 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
+@@ -31,6 +31,7 @@ import org.chromium.base.supplier.OneshotSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.omnibox.BareEngineLetterDrawable;
++import org.chromium.chrome.browser.omnibox.BareEngineCard;
+ import org.chromium.chrome.browser.omnibox.BareEnginePicker;
+ import org.chromium.chrome.browser.omnibox.BareSearchOverride;
+ import org.chromium.chrome.browser.omnibox.FuseboxSessionState;
+@@ -97,6 +98,7 @@ public class StatusMediator
+     private final OneshotSupplier<TemplateUrlService> mTemplateUrlServiceSupplier;
+     private final MonotonicObservableSupplier<Profile> mProfileSupplier;
+     private final Context mContext;
++    private final WindowAndroid mWindowAndroid;
+     private final OmniboxResourceProvider mResourceProvider;
+     private final LocationBarDataProvider mLocationBarDataProvider;
+     private final PermissionStatusHandler mPermissionStatusHandler;
+@@ -209,6 +211,7 @@ public class StatusMediator
+             NonNullObservableSupplier<Integer> fuseboxLayoutModeSupplier,
+             Runnable onPlusButtonClicked) {
+         mContext = context;
++        mWindowAndroid = windowAndroid;
+         mResourceProvider = resourceProvider;
+         initBackgroundDrawables(context);
+         mModel = model;
+@@ -943,7 +946,9 @@ public class StatusMediator
+     private void onClickEngineIcon(View view) {
+         TemplateUrlService service = mTemplateUrlServiceSupplier.get();
+         if (service == null) return;
+-        BareEnginePicker.show(mContext, service, this);
++        if (!BareEngineCard.show(mContext, mWindowAndroid, service, this)) {
++            BareEnginePicker.show(mContext, service, this);
++        }
+     }
+ 
+     /** Follows the current tab and page for the site icon slot. */
