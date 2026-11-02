@@ -53,6 +53,11 @@ interface language and the User-Agent. A newer release downloads from `github.co
 `release-assets.githubusercontent.com`. Earlier releases shipped the Chrome Web Store copy, which
 checked `clients2.google.com` instead.
 
+**BareFilter is fetched from GitHub.** Bare adds one list to uBlock Origin,
+`raw.githubusercontent.com/BareBrowser/bare-browser/main/filters/BareFilter.txt`, and uBlock
+Origin fetches it like its other lists. The list asks to be checked about once a day. Switching
+BareFilter off in Extensions removes the list. This is read from the code and was not captured.
+
 **The update check contacts GitHub**, and only after the welcome screen has been completed and an
 update preference stored. It is at most one request a day, to a public release feed. It sends two
 headers, `User-Agent: Bare/<version>` and `Accept: application/atom+xml`, so the request does say
