@@ -104,7 +104,7 @@ patches here are inert. [docs/build-constraints.md](build-constraints.md) has th
 behaviours that came from that file rather than from the code.
 
 The 32-bit build differs in exactly three lines: `target_cpu = "arm"`, the version code
-`802000040` that `tools/version.py gn arm` emits, and `clang_use_default_sample_profile = false`,
+`802000050` that `tools/version.py gn arm` emits, and `clang_use_default_sample_profile = false`,
 which stops GN demanding an AFDO profile this checkout never syncs.
 
 Bare CrashLab is the same build with `bare_diagnostics = true` and
