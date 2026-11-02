@@ -1,0 +1,492 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
+index 4c72b4ff771..a444988c667 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
+@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.app.appmenu;
+ 
+ import static org.chromium.build.NullUtil.assumeNonNull;
+ 
++import android.text.TextUtils;
+ import android.content.Context;
+ import android.graphics.drawable.Drawable;
+ 
+@@ -24,6 +25,7 @@ import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
+ import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
+ import org.chromium.ui.modelutil.PropertyModel;
+ 
++import java.util.Arrays;
+ import java.util.ArrayList;
+ import java.util.HashSet;
+ import java.util.List;
+@@ -272,6 +274,7 @@ public final class BareAppMenuCustomization {
+     public static ModelList apply(
+             Context context, AppMenuItemTheme theme, boolean isIconAtStart, ModelList list) {
+         arrange(list);
++        applyOrder(list);
+         Set<String> hidden = getHidden();
+         List<ListItem> hiddenItems = new ArrayList<>();
+         for (int i = list.size() - 1; i >= 0; i--) {
+@@ -337,9 +340,105 @@ public final class BareAppMenuCustomization {
+         } else if (shouldShowTip()) {
+             list.add(at, tipRow(context, theme, isIconAtStart));
+         }
++        rememberShown(list);
+         return list;
+     }
+ 
++    // The order the items were last shown in, and which run between two dividers each was in. A
++    // move is only allowed inside a run, so a divider never ends up in the wrong place.
++    private static final List<String> sShownKeys = new ArrayList<>();
++    private static final List<Integer> sShownRuns = new ArrayList<>();
++
++    private static String[] savedOrder() {
++        String stored =
++                ChromeSharedPreferences.getInstance()
++                        .readString(ChromePreferenceKeys.BARE_APP_MENU_ORDER, "");
++        return stored == null || stored.isEmpty() ? new String[0] : stored.split(",");
++    }
++
++    private static void rememberShown(ModelList list) {
++        sShownKeys.clear();
++        sShownRuns.clear();
++        int run = 0;
++        for (int i = 0; i < list.size(); i++) {
++            ListItem item = list.get(i);
++            if (item.type == AppMenuItemType.DIVIDER) {
++                run++;
++            } else if (isRowType(item.type)) {
++                String key = keyFor(item.model.get(AppMenuItemProperties.MENU_ITEM_ID));
++                if (key != null) {
++                    sShownKeys.add(key);
++                    sShownRuns.add(run);
++                }
++            }
++        }
++    }
++
++    /** Puts the items of each run in the order the user gave them, leaving the rest in place. */
++    private static void applyOrder(ModelList list) {
++        List<String> order = Arrays.asList(savedOrder());
++        if (order.isEmpty()) return;
++        int start = 0;
++        for (int end = 0; end <= list.size(); end++) {
++            boolean boundary = end == list.size() || list.get(end).type == AppMenuItemType.DIVIDER;
++            if (!boundary) continue;
++            List<Integer> slots = new ArrayList<>();
++            List<ListItem> keyed = new ArrayList<>();
++            for (int i = start; i < end; i++) {
++                ListItem item = list.get(i);
++                if (isRowType(item.type)
++                        && keyFor(item.model.get(AppMenuItemProperties.MENU_ITEM_ID)) != null) {
++                    slots.add(i);
++                    keyed.add(item);
++                }
++            }
++            if (keyed.size() > 1) {
++                List<ListItem> original = new ArrayList<>(keyed);
++                keyed.sort((a, b) -> rankOf(order, a) - rankOf(order, b));
++                for (int k = 0; k < slots.size(); k++) {
++                    if (keyed.get(k) != original.get(k)) list.update(slots.get(k), keyed.get(k));
++                }
++            }
++            start = end + 1;
++        }
++    }
++
++    private static int rankOf(List<String> order, ListItem item) {
++        int index = order.indexOf(keyFor(item.model.get(AppMenuItemProperties.MENU_ITEM_ID)));
++        return index < 0 ? Integer.MAX_VALUE / 2 : index;
++    }
++
++    /** Whether the row with this item id can be dragged: while editing, any item that can hide. */
++    public static boolean canMove(int itemId) {
++        return sEditMode && isHideable(itemId);
++    }
++
++    /**
++     * Saves a move: the item goes before or after another in its run. Returns whether the order
++     * changed, which is not the case across a divider.
++     */
++    public static boolean onRowMoved(int movedItemId, int targetItemId, boolean after) {
++        if (!sEditMode) return false;
++        String moved = keyFor(movedItemId);
++        String target = keyFor(targetItemId);
++        if (moved == null || target == null || moved.equals(target)) return false;
++        int movedAt = sShownKeys.indexOf(moved);
++        int targetAt = sShownKeys.indexOf(target);
++        if (movedAt < 0 || targetAt < 0) return false;
++        if (!sShownRuns.get(movedAt).equals(sShownRuns.get(targetAt))) {
++            return false;
++        }
++        List<String> next = new ArrayList<>(sShownKeys);
++        next.remove(moved);
++        next.add(next.indexOf(target) + (after ? 1 : 0), moved);
++        for (String key : savedOrder()) {
++            if (!next.contains(key)) next.add(key);
++        }
++        ChromeSharedPreferences.getInstance()
++                .writeString(ChromePreferenceKeys.BARE_APP_MENU_ORDER, TextUtils.join(",", next));
++        return true;
++    }
++
+     /**
+      * Puts the short list first, ending with Exit, and everything else below Exit: the shortcut
+      * row, then Add tab to new group, Customize new tab page, Settings and Exit, each group set
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+index a461fb7e3fb..75b494688a7 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+@@ -91,6 +91,16 @@ class AppMenu implements OnKeyListener {
+          * @param isVisible Whether the App Menu is showing.
+          */
+         void onMenuVisibilityChanged(boolean isVisible);
++
++        /** Whether the row with this item id may be dragged to a new place. */
++        default boolean canMoveItem(int itemId) {
++            return false;
++        }
++
++        /** Called when a row is dropped next to another. Returns whether the order changed. */
++        default boolean onItemMoved(int movedItemId, int targetItemId, boolean after) {
++            return false;
++        }
+     }
+ 
+     /** Provides initial sizing information for the app menu. */
+@@ -582,7 +592,19 @@ class AppMenu implements OnKeyListener {
+                             assumeNonNull(mListView),
+                             Math.round(windowHeight * BareMenuSheet.HEIGHT),
+                             BareMenuSheet.toolbarColor(root, context),
+-                            this::dismiss);
++                            this::dismiss,
++                            new BareMenuSheet.MoveHandler() {
++                                @Override
++                                public boolean canMove(int itemId) {
++                                    return mVisibilityDelegate.canMoveItem(itemId);
++                                }
++
++                                @Override
++                                public boolean move(int movedItemId, int targetItemId, boolean after) {
++                                    return mVisibilityDelegate.onItemMoved(
++                                            movedItemId, targetItemId, after);
++                                }
++                            });
+             popupContent = mSheet.getView();
+         }
+         popup.setContentView(popupContent);
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java
+index 6141ba43d24..e39aedb40dc 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java
+@@ -531,6 +531,19 @@ class AppMenuHandlerImpl
+                 itemId, mDelegate.getBundleForMenuItem(model), triggeringMotion);
+     }
+ 
++    @Override
++    public boolean canMoveItem(int itemId) {
++        return mDelegate.canMoveMenuRow(itemId);
++    }
++
++    @Override
++    public boolean onItemMoved(int movedItemId, int targetItemId, boolean after) {
++        if (mAppMenu == null) return false;
++        if (!mDelegate.onMenuRowMoved(movedItemId, targetItemId, after)) return false;
++        reloadMenuItems();
++        return true;
++    }
++
+     @Override
+     public boolean onItemLongClick(PropertyModel model, View view) {
+         if (mAppMenu == null) return false;
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+index 09233ff21f1..2af45014a04 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+@@ -6,7 +6,9 @@ package org.chromium.chrome.browser.ui.appmenu;
+ 
+ import android.animation.ValueAnimator;
+ import android.content.Context;
++import android.graphics.Canvas;
+ import android.graphics.Color;
++import android.graphics.Paint;
+ import android.graphics.drawable.ColorDrawable;
+ import android.graphics.drawable.Drawable;
+ import android.graphics.drawable.GradientDrawable;
+@@ -62,6 +64,14 @@ final class BareMenuSheet {
+     private final Frame mFrame;
+     private @Nullable ValueAnimator mAnimator;
+     private boolean mClosing;
++    private final @Nullable MoveHandler mMoveHandler;
++
++    /** Asks the menu whether a row may move, and tells it where one was dropped. */
++    interface MoveHandler {
++        boolean canMove(int itemId);
++
++        boolean move(int movedItemId, int targetItemId, boolean after);
++    }
+ 
+     /**
+      * @param content The menu's content view; it is moved and dressed, its items are not changed.
+@@ -76,12 +86,14 @@ final class BareMenuSheet {
+             ListView list,
+             int height,
+             @ColorInt int color,
+-            Runnable dismiss) {
++            Runnable dismiss,
++            @Nullable MoveHandler moveHandler) {
+         mContent = content;
+         mList = list;
+         mHeight = height;
+         mCompactY = Math.round(height * COMPACT_HIDDEN);
+         mDismiss = dismiss;
++        mMoveHandler = moveHandler;
+         mFrame = new Frame(context);
+         mScrim = new View(context);
+         mScrim.setBackgroundColor(SCRIM_COLOR);
+@@ -301,10 +313,206 @@ final class BareMenuSheet {
+         private boolean mDragging;
+         private boolean mAbove;
+         private @Nullable VelocityTracker mVelocity;
++        private final Paint mHandlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private @Nullable View mRowChild;
++        private int mRowPosition = -1;
++        private int mRowId;
++        private float mRowDownY;
++        private int mTargetPosition = -1;
++        private boolean mTargetAfter;
+ 
+         Frame(Context context) {
+             super(context);
+             mSlop = ViewConfiguration.get(context).getScaledTouchSlop();
++            mHandlePaint.setColor(0x99888888);
++            if (mMoveHandler != null) mList.setForeground(new RowHandles());
++        }
++
++        // Dragging the rows of the menu while it is being edited.
++
++        private float dp(float value) {
++            return value * getResources().getDisplayMetrics().density;
++        }
++
++        private int idOf(String name) {
++            Context context = getContext();
++            return context.getResources().getIdentifier(name, "id", context.getPackageName());
++        }
++
++        private MVCListAdapter.@Nullable ListItem itemAt(int position) {
++            if (mList.getAdapter() == null || position < 0 || position >= mList.getAdapter().getCount()) {
++                return null;
++            }
++            Object item = mList.getAdapter().getItem(position);
++            return item instanceof MVCListAdapter.ListItem listItem ? listItem : null;
++        }
++
++        private int itemIdAt(int position) {
++            MVCListAdapter.ListItem item = itemAt(position);
++            if (item == null || !item.model.containsKey(AppMenuItemProperties.MENU_ITEM_ID)) {
++                return -1;
++            }
++            return item.model.get(AppMenuItemProperties.MENU_ITEM_ID);
++        }
++
++        /** Whether the menu is being edited, which is when its Done row is there. */
++        private boolean editing() {
++            int done = idOf("bare_menu_done_id");
++            if (done == 0 || mMoveHandler == null || mList.getAdapter() == null) return false;
++            for (int i = 0; i < mList.getAdapter().getCount(); i++) {
++                if (itemIdAt(i) == done) return true;
++            }
++            return false;
++        }
++
++        private boolean movable(int position) {
++            int id = itemIdAt(position);
++            return id != -1 && mMoveHandler != null && mMoveHandler.canMove(id);
++        }
++
++        /** Where a view's top left is in this frame. */
++        private float[] originOf(View view) {
++            float x = 0;
++            float y = 0;
++            View current = view;
++            while (current != null && current != this) {
++                x += current.getLeft() + current.getTranslationX();
++                y += current.getTop() + current.getTranslationY();
++                android.view.ViewParent parent = current.getParent();
++                current = parent instanceof View ? (View) parent : null;
++            }
++            return new float[] {x, y};
++        }
++
++        private boolean beginRowDrag(MotionEvent event) {
++            if (!editing()) return false;
++            for (int i = 0; i < mList.getChildCount(); i++) {
++                View child = mList.getChildAt(i);
++                int position = mList.getFirstVisiblePosition() + i;
++                if (!movable(position)) continue;
++                float[] origin = originOf(child);
++                if (event.getY() < origin[1] || event.getY() > origin[1] + child.getHeight()) {
++                    continue;
++                }
++                float right = origin[0] + child.getWidth();
++                if (event.getX() < right - dp(116) || event.getX() > right - dp(52)) continue;
++                mRowChild = child;
++                mRowPosition = position;
++                mRowId = itemIdAt(position);
++                mRowDownY = event.getY();
++                mTargetPosition = -1;
++                child.setAlpha(0.85f);
++                ActionHaptics.tick(this);
++                return true;
++            }
++            return false;
++        }
++
++        private void updateRowTarget(MotionEvent event) {
++            mTargetPosition = -1;
++            mTargetAfter = false;
++            int lastMovable = -1;
++            for (int i = 0; i < mList.getChildCount(); i++) {
++                int position = mList.getFirstVisiblePosition() + i;
++                if (!movable(position)) continue;
++                lastMovable = position;
++                if (position == mRowPosition) continue;
++                View child = mList.getChildAt(i);
++                float[] origin = originOf(child);
++                if (event.getY() < origin[1] + child.getHeight() / 2f) {
++                    mTargetPosition = position;
++                    return;
++                }
++            }
++            if (lastMovable >= 0 && lastMovable != mRowPosition) {
++                mTargetPosition = lastMovable;
++                mTargetAfter = true;
++            }
++        }
++
++        private boolean handleRowDrag(MotionEvent event) {
++            switch (event.getActionMasked()) {
++                case MotionEvent.ACTION_MOVE:
++                    if (mRowChild != null) mRowChild.setTranslationY(event.getY() - mRowDownY);
++                    updateRowTarget(event);
++                    mList.invalidate();
++                    return true;
++                case MotionEvent.ACTION_UP:
++                    finishRowDrag(true);
++                    return true;
++                case MotionEvent.ACTION_CANCEL:
++                    finishRowDrag(false);
++                    return true;
++                default:
++                    // The finger-down that started the drag arrives here once more.
++                    return true;
++            }
++        }
++
++        private void finishRowDrag(boolean drop) {
++            View child = mRowChild;
++            if (child != null) {
++                child.setTranslationY(0f);
++                child.setAlpha(1f);
++            }
++            int targetId = drop ? itemIdAt(mTargetPosition) : -1;
++            boolean after = mTargetAfter;
++            int movedId = mRowId;
++            mRowChild = null;
++            mRowPosition = -1;
++            mTargetPosition = -1;
++            mList.invalidate();
++            if (targetId != -1 && mMoveHandler != null) {
++                boolean changed = mMoveHandler.move(movedId, targetId, after);
++                if (changed) ActionHaptics.tick(this);
++            }
++        }
++
++        /** Draws the drag handles and the line where a dragged row would land, over the list. */
++        private final class RowHandles extends android.graphics.drawable.Drawable {
++            @Override
++            public void draw(Canvas canvas) {
++                if (!editing()) return;
++                for (int i = 0; i < mList.getChildCount(); i++) {
++                    int position = mList.getFirstVisiblePosition() + i;
++                    if (!movable(position)) continue;
++                    View child = mList.getChildAt(i);
++                    float centerX = child.getLeft() + child.getWidth() - dp(84);
++                    float centerY = child.getTop() + child.getTranslationY() + child.getHeight() / 2f;
++                    for (int line = -1; line <= 1; line++) {
++                        float y = centerY + line * dp(5);
++                        canvas.drawRoundRect(
++                                centerX - dp(8), y - dp(1), centerX + dp(8), y + dp(1), dp(1),
++                                dp(1), mHandlePaint);
++                    }
++                }
++                if (mRowChild != null && mTargetPosition >= 0) {
++                    int index = mTargetPosition - mList.getFirstVisiblePosition();
++                    if (index >= 0 && index < mList.getChildCount()) {
++                        View child = mList.getChildAt(index);
++                        float y = child.getTop() + (mTargetAfter ? child.getHeight() : 0);
++                        Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
++                        line.setColor(0xFF3989FF);
++                        canvas.drawRect(
++                                child.getLeft() + dp(12),
++                                y - dp(1.5f),
++                                child.getLeft() + child.getWidth() - dp(12),
++                                y + dp(1.5f),
++                                line);
++                    }
++                }
++            }
++
++            @Override
++            public void setAlpha(int alpha) {}
++
++            @Override
++            public void setColorFilter(android.graphics.ColorFilter colorFilter) {}
++
++            @Override
++            public int getOpacity() {
++                return android.graphics.PixelFormat.TRANSLUCENT;
++            }
+         }
+ 
+         /** The y in this frame where the sheet's top is now. */
+@@ -325,6 +533,7 @@ final class BareMenuSheet {
+                     mAbove = mDownY < sheetTop();
+                     float handleZone = HANDLE_ZONE_DP * getResources().getDisplayMetrics().density;
+                     boolean onHandle = !mAbove && mDownY < sheetTop() + handleZone;
++                    if (!mAbove && !onHandle && beginRowDrag(event)) return true;
+                     return mAbove || onHandle;
+                 case MotionEvent.ACTION_MOVE:
+                     float dy = event.getY() - mDownY;
+@@ -346,6 +555,7 @@ final class BareMenuSheet {
+         @Override
+         public boolean onTouchEvent(MotionEvent event) {
+             if (mClosing) return true;
++            if (mRowChild != null) return handleRowDrag(event);
+             track(event);
+             switch (event.getActionMasked()) {
+                 case MotionEvent.ACTION_MOVE:
+diff --git a/chrome/browser/ui/android/appmenu/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuPropertiesDelegate.java b/chrome/browser/ui/android/appmenu/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuPropertiesDelegate.java
+index 89bf72f4494..8dbd2ecf641 100644
+--- a/chrome/browser/ui/android/appmenu/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuPropertiesDelegate.java
++++ b/chrome/browser/ui/android/appmenu/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuPropertiesDelegate.java
+@@ -58,6 +58,19 @@ public interface AppMenuPropertiesDelegate {
+         return false;
+     }
+ 
++    /** Whether the row with this item id may be dragged to a new place. Bare's editable menu. */
++    default boolean canMoveMenuRow(int itemId) {
++        return false;
++    }
++
++    /**
++     * Called when a row is dropped next to another. Returns whether the order changed, in which
++     * case the menu is rebuilt from {@link #getMenuItems()}.
++     */
++    default boolean onMenuRowMoved(int movedItemId, int targetItemId, boolean after) {
++        return false;
++    }
++
+     /**
+      * Gets a bundle of (optional) extra data associated with the provided MenuItem.
+      *

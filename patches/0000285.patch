@@ -1,0 +1,230 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+index d97040587a3..fc7745acae2 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+@@ -1004,9 +1004,10 @@ public final class BareVerticalTabsDrawer {
+                 if (mGrid && mRow instanceof FrameLayout card) {
+                     // The picture covers the background, so the ring and the ripple are drawn
+                     // over it.
++                    // The selected card is tinted, as in the full tab switcher.
+                     fill.setColor(
+                             selected
+-                                    ? color(0xFF303137, 0xFFE3E3E8)
++                                    ? color(0xFF2E3A5C, 0xFFD3DEFF)
+                                     : color(0xFF26262B, 0xFFE9E9EE));
+                     card.setBackground(fill);
+                     GradientDrawable ring = new GradientDrawable();
+@@ -1057,8 +1058,6 @@ public final class BareVerticalTabsDrawer {
+                             thumb.setImageBitmap(bitmap);
+                             thumb.post(() -> fitTop(thumb, bitmap));
+                             thumb.setVisibility(View.VISIBLE);
+-                            scrim.setVisibility(View.VISIBLE);
+-                            setTextOnPicture(true);
+                         });
+             }
+ 
+@@ -1104,13 +1103,7 @@ public final class BareVerticalTabsDrawer {
+         rowParams.bottomMargin = dp(4);
+         row.setLayoutParams(rowParams);
+ 
+-        FrameLayout iconBox = new FrameLayout(mActivity);
+-        GradientDrawable iconBg = new GradientDrawable();
+-        iconBg.setCornerRadius(dp(9));
+-        iconBg.setColor(color(0xFF383941, 0xFFD9D9E0));
+-        iconBox.setBackground(iconBg);
+-        iconBox.setClipToOutline(true);
+-        iconBox.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
++        FrameLayout iconBox = roundIconBox(dp(31));
+         ImageView icon = new ImageView(mActivity);
+         icon.setTag("icon");
+         icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+@@ -1168,8 +1161,9 @@ public final class BareVerticalTabsDrawer {
+     }
+ 
+     /**
+-     * One tab as a card, for the grid: the page's picture behind, softened and darkened, with the
+-     * icon and the close button on top and the name below.
++     * One tab as a framed card, for the grid, like the cards of the full tab switcher: a header
++     * with the round site icon, the name and the close button, and the page's picture inside the
++     * frame below it.
+      */
+     private FrameLayout newCard() {
+         FrameLayout card = new FrameLayout(mActivity);
+@@ -1190,32 +1184,8 @@ public final class BareVerticalTabsDrawer {
+                     }
+                 });
+ 
+-        ImageView thumb = new ImageView(mActivity);
+-        thumb.setTag("thumb");
+-        thumb.setScaleType(ImageView.ScaleType.MATRIX);
+-        thumb.setVisibility(View.GONE);
+-        thumb.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+-        card.addView(
+-                thumb,
+-                new FrameLayout.LayoutParams(
+-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+-        View scrim = new View(mActivity);
+-        scrim.setTag("scrim");
+-        scrim.setVisibility(View.GONE);
+-        GradientDrawable shade =
+-                new GradientDrawable(
+-                        GradientDrawable.Orientation.TOP_BOTTOM,
+-                        new int[] {0x14000000, 0x8C000000});
+-        scrim.setBackground(shade);
+-        scrim.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+-        card.addView(
+-                scrim,
+-                new FrameLayout.LayoutParams(
+-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+-
+         LinearLayout content = new LinearLayout(mActivity);
+         content.setOrientation(LinearLayout.VERTICAL);
+-        content.setPadding(dp(10), dp(8), dp(4), dp(10));
+         card.addView(
+                 content,
+                 new FrameLayout.LayoutParams(
+@@ -1224,18 +1194,11 @@ public final class BareVerticalTabsDrawer {
+         LinearLayout top = new LinearLayout(mActivity);
+         top.setOrientation(LinearLayout.HORIZONTAL);
+         top.setGravity(Gravity.CENTER_VERTICAL);
+-        FrameLayout iconBox = new FrameLayout(mActivity);
+-        GradientDrawable iconBg = new GradientDrawable();
+-        iconBg.setCornerRadius(dp(9));
+-        iconBg.setColor(color(0xFF383941, 0xFFD9D9E0));
+-        iconBox.setBackground(iconBg);
+-        iconBox.setClipToOutline(true);
+-        iconBox.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
++        top.setPadding(dp(9), 0, dp(1), 0);
++        FrameLayout iconBox = roundIconBox(dp(20));
+         ImageView icon = new ImageView(mActivity);
+         icon.setTag("icon");
+-        icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+-        int pad = dp(6);
+-        icon.setPadding(pad, pad, pad, pad);
++        icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
+         iconBox.addView(
+                 icon,
+                 new FrameLayout.LayoutParams(
+@@ -1244,52 +1207,94 @@ public final class BareVerticalTabsDrawer {
+         letter.setTag("letter");
+         letter.setGravity(Gravity.CENTER);
+         letter.setTextColor(color(0xFFEEEEEE, 0xFF1B1B1F));
+-        letter.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
++        letter.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+         letter.setTypeface(Typeface.DEFAULT_BOLD);
+         iconBox.addView(
+                 letter,
+                 new FrameLayout.LayoutParams(
+                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+-        top.addView(iconBox, new LinearLayout.LayoutParams(dp(31), dp(31)));
+-        View spacer = new View(mActivity);
+-        top.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
+-        ImageButton close = new ImageButton(mActivity);
+-        close.setTag("close");
+-        close.setImageResource(R.drawable.ic_bare_close);
+-        close.setColorFilter(color(0xFF999BA4, 0xFF6B6B73));
+-        close.setBackgroundColor(Color.TRANSPARENT);
+-        top.addView(close, new LinearLayout.LayoutParams(dp(40), dp(40)));
+-        content.addView(top);
++        top.addView(iconBox, new LinearLayout.LayoutParams(dp(20), dp(20)));
+ 
+         TextView title = new TextView(mActivity);
+         title.setTag("title");
+         title.setTextColor(color(0xFFEEEEEE, 0xFF1B1B1F));
+-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+-        title.setMaxLines(2);
++        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
++        title.setSingleLine(true);
+         title.setEllipsize(TextUtils.TruncateAt.END);
+         title.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+         LinearLayout.LayoutParams titleParams =
++                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
++        titleParams.setMarginStart(dp(7));
++        top.addView(title, titleParams);
++
++        ImageButton close = new ImageButton(mActivity);
++        close.setTag("close");
++        close.setImageResource(R.drawable.ic_bare_close);
++        close.setColorFilter(color(0xFF999BA4, 0xFF6B6B73));
++        close.setBackgroundColor(Color.TRANSPARENT);
++        top.addView(close, new LinearLayout.LayoutParams(dp(36), dp(36)));
++        content.addView(
++                top,
+                 new LinearLayout.LayoutParams(
+-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+-        titleParams.topMargin = dp(4);
+-        titleParams.setMarginEnd(dp(6));
+-        content.addView(title, titleParams);
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
++
++        // The page's picture, inside the frame.
++        FrameLayout picture = new FrameLayout(mActivity);
++        picture.setClipToOutline(true);
++        picture.setOutlineProvider(
++                new ViewOutlineProvider() {
++                    @Override
++                    public void getOutline(View view, Outline outline) {
++                        outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(11));
++                    }
++                });
++        GradientDrawable pictureBg = new GradientDrawable();
++        pictureBg.setColor(color(0xFF1C1C20, 0xFFF4F4F8));
++        picture.setBackground(pictureBg);
++        ImageView thumb = new ImageView(mActivity);
++        thumb.setTag("thumb");
++        thumb.setScaleType(ImageView.ScaleType.MATRIX);
++        thumb.setVisibility(View.GONE);
++        thumb.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
++        picture.addView(
++                thumb,
++                new FrameLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        // Kept so the binding finds them; the framed card needs neither.
++        View scrim = new View(mActivity);
++        scrim.setTag("scrim");
++        scrim.setVisibility(View.GONE);
++        picture.addView(scrim, new FrameLayout.LayoutParams(0, 0));
++        LinearLayout.LayoutParams pictureParams =
++                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(78));
++        pictureParams.setMargins(dp(5), 0, dp(5), dp(5));
++        content.addView(picture, pictureParams);
+         TextView url = new TextView(mActivity);
+         url.setTag("url");
+-        url.setTextColor(color(0xFF999AA2, 0xFF6B6B73));
+-        url.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+-        url.setSingleLine(true);
+-        url.setEllipsize(TextUtils.TruncateAt.END);
+-        url.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+-        LinearLayout.LayoutParams urlParams =
+-                new LinearLayout.LayoutParams(
+-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+-        urlParams.topMargin = dp(3);
+-        urlParams.setMarginEnd(dp(6));
+-        content.addView(url, urlParams);
++        url.setVisibility(View.GONE);
++        content.addView(url, new LinearLayout.LayoutParams(0, 0));
+         return card;
+     }
+ 
++    /** A circle that clips what is drawn in it, for a site icon or its letter. */
++    private FrameLayout roundIconBox(int size) {
++        FrameLayout box = new FrameLayout(mActivity);
++        GradientDrawable background = new GradientDrawable();
++        background.setShape(GradientDrawable.OVAL);
++        background.setColor(color(0xFF383941, 0xFFD9D9E0));
++        box.setBackground(background);
++        box.setOutlineProvider(
++                new ViewOutlineProvider() {
++                    @Override
++                    public void getOutline(View view, Outline outline) {
++                        outline.setOval(0, 0, view.getWidth(), view.getHeight());
++                    }
++                });
++        box.setClipToOutline(true);
++        box.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
++        return box;
++    }
++
+     /** The panel itself, which lets a deliberate swipe toward its edge drag it shut. */
+     private static final class Panel extends LinearLayout {
+         interface Drag {

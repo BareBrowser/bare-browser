@@ -1,0 +1,851 @@
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index fcec1724f88..4c4f9d14796 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -485,6 +485,9 @@ chrome_java_resources = [
+   "java/res/animator/bare_settings_close_enter.xml",
+   "java/res/animator/bare_settings_close_exit.xml",
+   "java/res/drawable/bare_leaf.xml",
++  "java/res/drawable/ic_bare_task_manager.xml",
++  "java/res/drawable/bare_wing_lower.xml",
++  "java/res/drawable/bare_wing_upper.xml",
+   "java/res/drawable/bare_wordmark_on_light.xml",
+   "java/res/drawable/bare_wordmark_on_dark.xml",
+   "java/res/layout/bare_welcome_chooser.xml",
+diff --git a/chrome/android/java/res/drawable/ic_bare_task_manager.xml b/chrome/android/java/res/drawable/ic_bare_task_manager.xml
+new file mode 100644
+index 00000000000..4ad82c2fe34
+--- /dev/null
++++ b/chrome/android/java/res/drawable/ic_bare_task_manager.xml
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24"
++    android:tint="?attr/colorControlNormal">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M15,9H9v6h6V9zM13,13h-2v-2h2V13zM21,11V9h-2V7c0,-1.1 -0.9,-2 -2,-2h-2V3h-2v2h-2V3H9v2H7C5.9,5 5,5.9 5,7v2H3v2h2v2H3v2h2v2c0,1.1 0.9,2 2,2h2v2h2v-2h2v2h2v-2h2c1.1,0 2,-0.9 2,-2v-2h2v-2h-2v-2H21zM17,17H7V7h10V17z"/>
++</vector>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index 4ded16bca13..852a6d48a6d 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -251,6 +251,7 @@ import org.chromium.chrome.browser.ui.signin.StartupSigninStateCheckController;
+ import org.chromium.chrome.browser.ui.system.StatusBarColorController;
+ import org.chromium.chrome.browser.webapps.AppInstallMenuHandler;
+ import org.chromium.components.bookmarks.BookmarkId;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+ import org.chromium.components.browser_ui.modaldialog.AppModalPresenter;
+ import org.chromium.components.browser_ui.util.motion.MotionEventInfo;
+ import org.chromium.components.browser_ui.widget.MenuOrKeyboardActionController;
+@@ -3375,8 +3376,15 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+         }
+ 
+         if (id == R.id.task_manager && TaskManager.isEnabled()) {
+-            TaskManager taskManager = TaskManagerFactory.createTaskManager();
+-            taskManager.launch(ContextUtils.getApplicationContext());
++            // Bare shows the task manager as a card from the bottom of the screen.
++            BottomSheetController sheetController =
++                    mRootUiCoordinator == null ? null : mRootUiCoordinator.getBottomSheetController();
++            if (sheetController != null) {
++                TaskManagerFactory.createTaskManager().showCard(this, sheetController);
++            } else {
++                TaskManager taskManager = TaskManagerFactory.createTaskManager();
++                taskManager.launch(ContextUtils.getApplicationContext());
++            }
+             if (fromMenu) {
+                 RecordUserAction.record("MobileMenuTaskManager");
+             }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java
+index f5c1816d4b4..4c5d1a714b3 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java
+@@ -69,7 +69,8 @@ public class BareToolbarActionCatalogue implements Destroyable {
+             Runnable search,
+             Runnable back,
+             Runnable forward,
+-            Runnable verticalTabs) {
++            Runnable verticalTabs,
++            Runnable taskManager) {
+         registerPlain(
+                 registry,
+                 ActionId.FIND_IN_PAGE,
+@@ -102,6 +103,12 @@ public class BareToolbarActionCatalogue implements Destroyable {
+                 R.drawable.ic_bare_vertical_tabs,
+                 R.string.bare_toolbar_action_vertical_tabs,
+                 verticalTabs);
++        registerPlain(
++                registry,
++                ActionId.TASK_MANAGER,
++                R.drawable.ic_bare_task_manager,
++                R.string.menu_task_manager,
++                taskManager);
+         adapt(source, tabProvider, registry, context, ActionId.SHARE, AdaptiveToolbarButtonVariant.SHARE);
+         adapt(
+                 source,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java
+index 48fdeaa4662..426cf6344a7 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java
+@@ -56,6 +56,8 @@ public final class BareToolbarActionUi {
+                 return R.string.bare_toolbar_action_forward;
+             case ActionId.VERTICAL_TABS:
+                 return R.string.bare_toolbar_action_vertical_tabs;
++            case ActionId.TASK_MANAGER:
++                return R.string.menu_task_manager;
+             default:
+                 return R.string.bare_toolbar_action_tab_count;
+         }
+@@ -90,6 +92,8 @@ public final class BareToolbarActionUi {
+                 return R.drawable.arrow_forward_24px;
+             case ActionId.VERTICAL_TABS:
+                 return R.drawable.ic_bare_vertical_tabs;
++            case ActionId.TASK_MANAGER:
++                return R.drawable.ic_bare_task_manager;
+             default:
+                 return R.drawable.btn_tabswitcher_modern;
+         }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/MoreToolsItemBuilder.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/MoreToolsItemBuilder.java
+index 91b71ae48ec..8f9adb07ffe 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/MoreToolsItemBuilder.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/MoreToolsItemBuilder.java
+@@ -116,7 +116,6 @@ public class MoreToolsItemBuilder {
+                 || shouldShowTabLayoutToggleItem()
+                 || shouldShowNtpCustomizations(currentTab)
+                 || mPageInfoVisibilitySupplier.get()
+-                || TaskManager.isEnabled()
+                 || shouldShowDevToolsItem(currentTab)) {
+             return true;
+         }
+@@ -237,9 +236,9 @@ public class MoreToolsItemBuilder {
+                         mAppMenuItemTheme,
+                         R.id.task_manager,
+                         R.string.menu_task_manager,
+-                        Resources.ID_NULL,
++                        R.drawable.ic_bare_task_manager,
+                         mIsMenuIconAtStart),
+-                /* showIcon= */ false);
++                /* showIcon= */ true);
+     }
+ 
+     /**
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+index 42e3f1cca00..5e22450bb99 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+@@ -312,6 +312,17 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+         return getMenuGroup() == MenuGroup.PAGE_MENU && BareAppMenuCustomization.onRowClicked(model);
+     }
+ 
++    @Override
++    public boolean canMoveMenuRow(int itemId) {
++        return getMenuGroup() == MenuGroup.PAGE_MENU && BareAppMenuCustomization.canMove(itemId);
++    }
++
++    @Override
++    public boolean onMenuRowMoved(int movedItemId, int targetItemId, boolean after) {
++        return getMenuGroup() == MenuGroup.PAGE_MENU
++                && BareAppMenuCustomization.onRowMoved(movedItemId, targetItemId, after);
++    }
++
+     @Override
+     public boolean onMenuRowLongPressed(PropertyModel model) {
+         return getMenuGroup() == MenuGroup.PAGE_MENU
+@@ -513,6 +524,9 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+             modelList.add(buildReaderModeItem(currentTab, shouldShowIconBeforeItem));
+         }
+ 
++        // Task manager, Bare's card of what the browser is running.
++        if (TaskManager.isEnabled()) modelList.add(mMoreToolsItemBuilder.buildTaskManagerItem());
++
+         // Open with ...
+         if (shouldShowOpenWithItem(currentTab)) {
+             modelList.add(buildOpenWithItem(currentTab, shouldShowIconBeforeItem));
+@@ -1256,10 +1270,6 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+                         submenuItems.add(buildPageInfoItem(currentTab, /* showIcon= */ false));
+                     }
+ 
+-                    if (TaskManager.isEnabled()) {
+-                        submenuItems.add(mMoreToolsItemBuilder.buildTaskManagerItem());
+-                    }
+-
+                     if (mMoreToolsItemBuilder.shouldShowDevToolsItem(currentTab)) {
+                         submenuItems.add(mMoreToolsItemBuilder.buildDevToolsItem());
+                     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
+index 1416374dd7a..9ef118cdb37 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
+@@ -1206,7 +1206,8 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+                                                     () -> mTabContentManagerSupplier.get());
+                                 }
+                                 mBareVerticalTabsDrawer.toggle();
+-                            });
++                            },
++                            () -> handleMenuOrKeyboardAction(R.id.task_manager, false));
+         }
+     }
+ 
+diff --git a/chrome/browser/task_manager/android/BUILD.gn b/chrome/browser/task_manager/android/BUILD.gn
+index 95de0181c0d..c44299ca90f 100644
+--- a/chrome/browser/task_manager/android/BUILD.gn
++++ b/chrome/browser/task_manager/android/BUILD.gn
+@@ -30,6 +30,7 @@ android_library("java") {
+   deps = [
+     "//base:base_java",
+     "//chrome/browser/flags:java",
++    "//components/browser_ui/bottomsheet/android:java",
+   ]
+ }
+ 
+diff --git a/chrome/browser/task_manager/android/java/src/org/chromium/chrome/browser/task_manager/TaskManager.java b/chrome/browser/task_manager/android/java/src/org/chromium/chrome/browser/task_manager/TaskManager.java
+index ffb1677de0a..aac7f6f3a3f 100644
+--- a/chrome/browser/task_manager/android/java/src/org/chromium/chrome/browser/task_manager/TaskManager.java
++++ b/chrome/browser/task_manager/android/java/src/org/chromium/chrome/browser/task_manager/TaskManager.java
+@@ -4,6 +4,7 @@
+ 
+ package org.chromium.chrome.browser.task_manager;
+ 
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+ import android.content.Context;
+ 
+ import org.chromium.base.DeviceInfo;
+@@ -22,11 +23,13 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ public interface TaskManager {
+     /** Returns whether the task manager feature is enabled. */
+     static boolean isEnabled() {
+-        // Use of `isDesktop()` here is approved in https://crbug.com/525590366
+-        return DeviceInfo.isDesktop()
+-                || ChromeFeatureList.isEnabled(ChromeFeatureList.TASK_MANAGER_CLANK);
++        // Bare offers the task manager on every phone, as a card.
++        return true;
+     }
+ 
+     /** Launches the task manager. */
+     void launch(Context context);
++
++    /** Shows the task manager as a card from the bottom of the screen. */
++    void showCard(Context context, BottomSheetController sheetController);
+ }
+diff --git a/chrome/browser/task_manager/internal/android/BUILD.gn b/chrome/browser/task_manager/internal/android/BUILD.gn
+index 7653cc07004..27bda8a8014 100644
+--- a/chrome/browser/task_manager/internal/android/BUILD.gn
++++ b/chrome/browser/task_manager/internal/android/BUILD.gn
+@@ -18,6 +18,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/task_manager/TaskManagerImpl.java",
+     "java/src/org/chromium/chrome/browser/task_manager/TaskManagerObserver.java",
+     "java/src/org/chromium/chrome/browser/task_manager/TaskManagerServiceBridge.java",
++    "java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java",
+     "java/src/org/chromium/chrome/browser/task_manager/ui/PropertyStringifier.java",
+     "java/src/org/chromium/chrome/browser/task_manager/ui/TaskManagerActivity.java",
+     "java/src/org/chromium/chrome/browser/task_manager/ui/TaskManagerCoordinator.java",
+@@ -33,6 +34,7 @@ android_library("java") {
+     "//chrome/android:chrome_java",
+     "//chrome/browser/flags:java",
+     "//chrome/browser/task_manager/android:java",
++    "//components/browser_ui/bottomsheet/android:java",
+     "//components/browser_ui/styles/android:java",
+     "//components/browser_ui/widget/android:java",
+     "//third_party/androidx:androidx_annotation_annotation_java",
+@@ -56,6 +58,7 @@ android_library("java") {
+ 
+ android_resources("java_resources") {
+   sources = [
++    "java/res/drawable/ic_task_manager_chip.xml",
+     "java/res/drawable/task_card_background.xml",
+     "java/res/drawable/task_header_divider.xml",
+     "java/res/layout/task_header.xml",
+diff --git a/chrome/browser/task_manager/internal/android/java/res/drawable/ic_task_manager_chip.xml b/chrome/browser/task_manager/internal/android/java/res/drawable/ic_task_manager_chip.xml
+new file mode 100644
+index 00000000000..d620651651f
+--- /dev/null
++++ b/chrome/browser/task_manager/internal/android/java/res/drawable/ic_task_manager_chip.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M15,9H9v6h6V9zM13,13h-2v-2h2V13zM21,11V9h-2V7c0,-1.1 -0.9,-2 -2,-2h-2V3h-2v2h-2V3H9v2H7C5.9,5 5,5.9 5,7v2H3v2h2v2H3v2h2v2c0,1.1 0.9,2 2,2h2v2h2v-2h2v2h2v-2h2c1.1,0 2,-0.9 2,-2v-2h2v-2h-2v-2H21zM17,17H7V7h10V17z"/>
++</vector>
+diff --git a/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/TaskManagerImpl.java b/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/TaskManagerImpl.java
+index 5934959c410..a11c942d5d0 100644
+--- a/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/TaskManagerImpl.java
++++ b/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/TaskManagerImpl.java
+@@ -4,6 +4,8 @@
+ 
+ package org.chromium.chrome.browser.task_manager;
+ 
++import org.chromium.chrome.browser.task_manager.ui.BareTaskManagerCard;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+ import android.content.Context;
+ import android.content.Intent;
+ 
+@@ -15,6 +17,11 @@ public class TaskManagerImpl implements TaskManager {
+ 
+     TaskManagerImpl() {}
+ 
++    @Override
++    public void showCard(Context context, BottomSheetController sheetController) {
++        BareTaskManagerCard.show(context, sheetController);
++    }
++
+     @Override
+     public void launch(Context context) {
+         Log.i(TAG, "launch");
+diff --git a/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java b/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java
+new file mode 100644
+index 00000000000..e694a6c5883
+--- /dev/null
++++ b/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java
+@@ -0,0 +1,496 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.task_manager.ui;
++
++import android.content.Context;
++import android.graphics.Typeface;
++import android.graphics.drawable.GradientDrawable;
++import android.text.TextUtils;
++import android.text.format.Formatter;
++import android.util.TypedValue;
++import android.view.Gravity;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.ImageView;
++import android.widget.LinearLayout;
++import android.widget.ScrollView;
++import android.widget.TextView;
++import android.widget.Toast;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.task_manager.RefreshType;
++import org.chromium.chrome.browser.task_manager.TaskManagerObserver;
++import org.chromium.chrome.browser.task_manager.TaskManagerServiceBridge;
++import org.chromium.chrome.browser.task_manager.TaskType;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
++import org.chromium.components.browser_ui.bottomsheet.BottomSheetType;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.LinkedHashMap;
++import java.util.Locale;
++import java.util.Map;
++
++/**
++ * The task manager as a card from the bottom of the screen. It lists what the browser is running,
++ * with memory and processor use, and opens a row to show its process number and network use and to
++ * end it. The numbers are the ones the browser's own task manager keeps; this only draws them.
++ */
++@NullMarked
++public final class BareTaskManagerCard implements BottomSheetContent, TaskManagerObserver {
++    private static final int REFRESH_MS = 2000;
++    private static final int LIST_MAX_DP = 340;
++    private static final int RED = 0xFFC62828;
++
++    private static final class Task {
++        final long mId;
++        final int mType;
++        final boolean mKillable;
++        String mTitle = "";
++        long mMemory;
++        double mCpu;
++        long mNetwork;
++        long mProcessId;
++
++        Task(long id, int type, boolean killable) {
++            mId = id;
++            mType = type;
++            mKillable = killable;
++        }
++    }
++
++    /** A scroll view that stops growing at a set height, so the card never fills the screen. */
++    private static final class CappedScrollView extends ScrollView {
++        private final int mCap;
++
++        CappedScrollView(Context context, int cap) {
++            super(context);
++            mCap = cap;
++        }
++
++        @Override
++        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
++            super.onMeasure(
++                    widthMeasureSpec, MeasureSpec.makeMeasureSpec(mCap, MeasureSpec.AT_MOST));
++        }
++    }
++
++    private static final BottomSheetType SHEET_TYPE =
++            new BottomSheetType.Builder().setUserInitiated(true).build();
++
++    private final Context mContext;
++    private final TaskManagerServiceBridge mBridge = new TaskManagerServiceBridge();
++    private final Map<Long, Task> mTasks = new LinkedHashMap<>();
++    private final LinearLayout mRoot;
++    private final TextView mSummary;
++    private final LinearLayout mRows;
++    private final TextView mMemoryChip;
++    private final TextView mCpuChip;
++    private boolean mSortByMemory = true;
++    private long mExpandedId = -1;
++    private TaskManagerServiceBridge.@Nullable ObserverHandle mHandle;
++
++    /** Shows the card on the given sheet controller. */
++    public static void show(Context context, BottomSheetController controller) {
++        controller.requestShowContent(new BareTaskManagerCard(context), true);
++    }
++
++    private BareTaskManagerCard(Context context) {
++        mContext = context;
++        mRoot = new LinearLayout(context);
++        mRoot.setOrientation(LinearLayout.VERTICAL);
++        mRoot.setPadding(0, dp(6), 0, dp(18));
++
++        LinearLayout heading = new LinearLayout(context);
++        heading.setOrientation(LinearLayout.HORIZONTAL);
++        heading.setGravity(Gravity.CENTER_VERTICAL);
++        heading.setPadding(dp(20), 0, dp(20), 0);
++        ImageView chip = new ImageView(context);
++        chip.setImageResource(R.drawable.ic_task_manager_chip);
++        chip.setColorFilter(SemanticColorUtils.getDefaultIconColorAccent1(context));
++        LinearLayout.LayoutParams chipParams = new LinearLayout.LayoutParams(dp(22), dp(22));
++        chipParams.setMarginEnd(dp(10));
++        heading.addView(chip, chipParams);
++        heading.addView(
++                text("Task manager", 17, true, SemanticColorUtils.getDefaultTextColor(context)));
++        mRoot.addView(heading);
++        mSummary = text("", 12, false, SemanticColorUtils.getDefaultTextColorSecondary(context));
++        mSummary.setPadding(dp(20), dp(2), dp(20), dp(8));
++        mRoot.addView(mSummary);
++
++        LinearLayout chips = new LinearLayout(context);
++        chips.setOrientation(LinearLayout.HORIZONTAL);
++        chips.setPadding(dp(20), 0, dp(20), dp(6));
++        mMemoryChip = chip("Memory");
++        mCpuChip = chip("CPU");
++        mMemoryChip.setOnClickListener(v -> setSort(true));
++        mCpuChip.setOnClickListener(v -> setSort(false));
++        chips.addView(mMemoryChip);
++        LinearLayout.LayoutParams cpuParams = new LinearLayout.LayoutParams(-2, -2);
++        cpuParams.setMarginStart(dp(6));
++        chips.addView(mCpuChip, cpuParams);
++        mRoot.addView(chips);
++
++        mRows = new LinearLayout(context);
++        mRows.setOrientation(LinearLayout.VERTICAL);
++        mRows.setPadding(dp(10), 0, dp(10), 0);
++        CappedScrollView scroll = new CappedScrollView(context, dp(LIST_MAX_DP));
++        scroll.addView(mRows);
++        mRoot.addView(scroll);
++        styleChips();
++
++        // The numbers come only while the card is on screen.
++        mRoot.addOnAttachStateChangeListener(
++                new View.OnAttachStateChangeListener() {
++                    @Override
++                    public void onViewAttachedToWindow(View view) {
++                        start();
++                    }
++
++                    @Override
++                    public void onViewDetachedFromWindow(View view) {
++                        stop();
++                    }
++                });
++    }
++
++    // The numbers.
++
++    private void start() {
++        if (mHandle != null) return;
++        mHandle =
++                mBridge.addObserver(
++                        this,
++                        REFRESH_MS,
++                        RefreshType.MEMORY_FOOTPRINT | RefreshType.CPU | RefreshType.NETWORK_USAGE);
++    }
++
++    private void stop() {
++        if (mHandle == null) return;
++        mBridge.removeObserver(mHandle);
++        mHandle = null;
++    }
++
++    private Task track(long id) {
++        Task task = mTasks.get(id);
++        if (task == null) {
++            task = new Task(id, mBridge.getType(id), mBridge.isTaskKillable(id));
++            mTasks.put(id, task);
++        }
++        task.mTitle = mBridge.getTitle(id);
++        // Negative until the first measurement arrives.
++        task.mMemory = Math.max(0, mBridge.getMemoryFootprintUsage(id));
++        double cpu = mBridge.getPlatformIndependentCpuUsage(id);
++        // Native reports NaN until it has two samples to compare.
++        task.mCpu = Double.isNaN(cpu) ? 0 : cpu;
++        task.mNetwork = mBridge.getNetworkUsage(id);
++        task.mProcessId = mBridge.getProcessId(id);
++        return task;
++    }
++
++    @Override
++    public void onTaskAdded(long id) {
++        track(id);
++        render();
++    }
++
++    @Override
++    public void onTaskToBeRemoved(long id) {
++        mTasks.remove(id);
++        if (mExpandedId == id) mExpandedId = -1;
++        render();
++    }
++
++    @Override
++    public void onTasksRefreshed(long[] taskIds) {
++        for (long id : taskIds) track(id);
++        render();
++    }
++
++    @Override
++    public void onTasksRefreshedWithBackgroundCalculations(long[] taskIds) {}
++
++    @Override
++    public void onTaskUnresponsive(long id) {}
++
++    // The card.
++
++    private void setSort(boolean byMemory) {
++        mSortByMemory = byMemory;
++        styleChips();
++        render();
++    }
++
++    private void render() {
++        ArrayList<Task> list = new ArrayList<>(mTasks.values());
++        long total = 0;
++        for (Task task : list) total += task.mMemory;
++        Collections.sort(
++                list,
++                (a, b) ->
++                        mSortByMemory
++                                ? Long.compare(b.mMemory, a.mMemory)
++                                : Double.compare(b.mCpu, a.mCpu));
++        mSummary.setText(
++                Formatter.formatShortFileSize(mContext, total)
++                        + " in use, "
++                        + list.size()
++                        + (list.size() == 1 ? " task" : " tasks"));
++        mRows.removeAllViews();
++        for (Task task : list) mRows.addView(row(task));
++    }
++
++    private View row(Task task) {
++        boolean open = task.mId == mExpandedId;
++        LinearLayout row = new LinearLayout(mContext);
++        row.setOrientation(LinearLayout.VERTICAL);
++        row.setPadding(dp(10), dp(8), dp(10), dp(8));
++        if (open) {
++            GradientDrawable background = new GradientDrawable();
++            background.setCornerRadius(dp(12));
++            background.setColor(SemanticColorUtils.getCardBackgroundColor(mContext));
++            row.setBackground(background);
++        }
++
++        LinearLayout top = new LinearLayout(mContext);
++        top.setOrientation(LinearLayout.HORIZONTAL);
++        top.setGravity(Gravity.CENTER_VERTICAL);
++        top.setMinimumHeight(dp(36));
++        LinearLayout names = new LinearLayout(mContext);
++        names.setOrientation(LinearLayout.VERTICAL);
++        TextView name =
++                text(displayName(task), 14, false, SemanticColorUtils.getDefaultTextColor(mContext));
++        name.setSingleLine(true);
++        name.setEllipsize(TextUtils.TruncateAt.END);
++        names.addView(name);
++        names.addView(
++                text(kind(task), 12, false, SemanticColorUtils.getDefaultTextColorSecondary(mContext)));
++        top.addView(names, new LinearLayout.LayoutParams(0, -2, 1f));
++
++        LinearLayout numbers = new LinearLayout(mContext);
++        numbers.setOrientation(LinearLayout.VERTICAL);
++        numbers.setGravity(Gravity.END);
++        String memory = Formatter.formatShortFileSize(mContext, task.mMemory);
++        String cpu = String.format(Locale.US, "%.1f%% CPU", task.mCpu);
++        numbers.addView(
++                text(
++                        mSortByMemory ? memory : cpu,
++                        13,
++                        false,
++                        SemanticColorUtils.getDefaultTextColor(mContext)));
++        numbers.addView(
++                text(
++                        mSortByMemory ? cpu : memory,
++                        11,
++                        false,
++                        SemanticColorUtils.getDefaultTextColorSecondary(mContext)));
++        top.addView(numbers);
++        row.addView(top);
++
++        if (open) {
++            LinearLayout more = new LinearLayout(mContext);
++            more.setOrientation(LinearLayout.HORIZONTAL);
++            more.setGravity(Gravity.CENTER_VERTICAL);
++            more.setPadding(0, dp(8), 0, 0);
++            TextView facts =
++                    text(
++                            "Process " + task.mProcessId
++                                    + "\nNetwork "
++                                    + Formatter.formatShortFileSize(mContext, task.mNetwork),
++                            12,
++                            false,
++                            SemanticColorUtils.getDefaultTextColorSecondary(mContext));
++            more.addView(facts, new LinearLayout.LayoutParams(0, -2, 1f));
++            if (task.mKillable) {
++                TextView end = text("End", 13, true, 0xFFFFFFFF);
++                end.setGravity(Gravity.CENTER);
++                end.setPadding(dp(20), dp(8), dp(20), dp(8));
++                GradientDrawable pill = new GradientDrawable();
++                pill.setColor(RED);
++                pill.setCornerRadius(dp(40));
++                end.setBackground(pill);
++                end.setOnClickListener(v -> end(task));
++                more.addView(end);
++            } else {
++                more.addView(
++                        text(
++                                "Needed by "
++                                        + appName(),
++                                12,
++                                false,
++                                SemanticColorUtils.getDefaultTextColorSecondary(mContext)));
++            }
++            row.addView(more);
++        }
++        row.setOnClickListener(
++                v -> {
++                    mExpandedId = open ? -1 : task.mId;
++                    render();
++                });
++        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
++        params.bottomMargin = dp(2);
++        row.setLayoutParams(params);
++        return row;
++    }
++
++    private void end(Task task) {
++        String name = displayName(task);
++        mBridge.killTask(task.mId);
++        mExpandedId = -1;
++        Toast.makeText(mContext, "Ended " + name, Toast.LENGTH_SHORT).show();
++    }
++
++    private String displayName(Task task) {
++        String title = task.mTitle;
++        if (task.mType == TaskType.BROWSER) return appName();
++        if (task.mType == TaskType.GPU) return "Graphics";
++        if (title.toLowerCase(Locale.US).contains("spare")) return "Spare renderer";
++        for (String prefix : new String[] {"Tab: ", "Extension: ", "Background Page: "}) {
++            if (title.startsWith(prefix)) return title.substring(prefix.length());
++        }
++        return title;
++    }
++
++    private String kind(Task task) {
++        String title = task.mTitle.toLowerCase(Locale.US);
++        switch (task.mType) {
++            case TaskType.BROWSER:
++                return "Browser";
++            case TaskType.GPU:
++                return "Graphics process";
++            case TaskType.UTILITY:
++                return "Utility process";
++            case TaskType.EXTENSION:
++                return "Extension";
++            case TaskType.RENDERER:
++                if (title.contains("spare")) return "Ready for the next tab";
++                return title.startsWith("tab:") ? "Tab" : "Page process";
++            default:
++                return "Process";
++        }
++    }
++
++    private TextView chip(String label) {
++        TextView chip = text(label, 12, false, 0);
++        chip.setPadding(dp(14), dp(6), dp(14), dp(6));
++        return chip;
++    }
++
++    private void styleChips() {
++        style(mMemoryChip, mSortByMemory);
++        style(mCpuChip, !mSortByMemory);
++    }
++
++    private void style(TextView chip, boolean on) {
++        GradientDrawable background = new GradientDrawable();
++        background.setCornerRadius(dp(40));
++        background.setColor(
++                on
++                        ? SemanticColorUtils.getFilledButtonBgColor(mContext)
++                        : SemanticColorUtils.getCardBackgroundColor(mContext));
++        chip.setBackground(background);
++        chip.setTextColor(
++                on
++                        ? SemanticColorUtils.getDefaultIconColorOnAccent1(mContext)
++                        : SemanticColorUtils.getDefaultTextColor(mContext));
++    }
++
++    private TextView text(String value, float sp, boolean bold, int color) {
++        TextView view = new TextView(mContext);
++        view.setText(value);
++        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
++        view.setTextColor(color);
++        if (bold) view.setTypeface(Typeface.DEFAULT_BOLD);
++        return view;
++    }
++
++    private String appName() {
++        return mContext.getApplicationInfo().loadLabel(mContext.getPackageManager()).toString();
++    }
++
++    private int dp(float value) {
++        return Math.round(value * mContext.getResources().getDisplayMetrics().density);
++    }
++
++    // BottomSheetContent
++
++    @Override
++    public View getContentView() {
++        return mRoot;
++    }
++
++    @Override
++    public @Nullable View getToolbarView() {
++        return null;
++    }
++
++    @Override
++    public int getVerticalScrollOffset() {
++        return 0;
++    }
++
++    @Override
++    public void destroy() {
++        stop();
++    }
++
++    @Override
++    public BottomSheetType getSheetType() {
++        return SHEET_TYPE;
++    }
++
++    @Override
++    public int getPriority() {
++        return ContentPriority.HIGH;
++    }
++
++    @Override
++    public boolean swipeToDismissEnabled() {
++        return true;
++    }
++
++    @Override
++    public boolean showHandlebar() {
++        return true;
++    }
++
++    @Override
++    public int getPeekHeight() {
++        return HeightMode.DISABLED;
++    }
++
++    @Override
++    public float getHalfHeightRatio() {
++        return HeightMode.DISABLED;
++    }
++
++    @Override
++    public float getFullHeightRatio() {
++        return HeightMode.WRAP_CONTENT;
++    }
++
++    @Override
++    public @Nullable String getSheetContentDescription(Context context) {
++        return "Task manager";
++    }
++
++    @Override
++    public int getSheetHalfHeightAccessibilityStringId() {
++        return R.string.menu_task_manager;
++    }
++
++    @Override
++    public int getSheetFullHeightAccessibilityStringId() {
++        return R.string.menu_task_manager;
++    }
++
++    @Override
++    public int getSheetClosedAccessibilityStringId() {
++        return R.string.menu_task_manager;
++    }
++}
+diff --git a/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionId.java b/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionId.java
+index d61ab558334..470a69f3068 100644
+--- a/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionId.java
++++ b/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionId.java
+@@ -31,6 +31,7 @@ import java.lang.annotation.Target;
+     ActionId.SEARCH,
+     ActionId.FORWARD_BUTTON,
+     ActionId.VERTICAL_TABS,
++    ActionId.TASK_MANAGER,
+ })
+ @Retention(RetentionPolicy.SOURCE)
+ @Target(ElementType.TYPE_USE)
+@@ -52,4 +53,5 @@ public @interface ActionId {
+     int SEARCH = 12;
+     int FORWARD_BUTTON = 13;
+     int VERTICAL_TABS = 14;
++    int TASK_MANAGER = 15;
+ }
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
+index e1bc4905b4e..7c2963d85ef 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
+@@ -113,6 +113,7 @@ public final class BareToolbarDefaults {
+         ActionId.SEARCH,
+         ActionId.BACK_BUTTON,
+         ActionId.FORWARD_BUTTON,
++        ActionId.TASK_MANAGER,
+         // Last so the order the others were offered in, and the tie-break that follows it, are
+         // what they were. It is where the fourth slot starts.
+         ActionId.TAB_SWITCHER,
+@@ -170,6 +171,7 @@ public final class BareToolbarDefaults {
+             case ActionId.SEARCH:
+             case ActionId.FORWARD_BUTTON:
+             case ActionId.VERTICAL_TABS:
++            case ActionId.TASK_MANAGER:
+                 return true;
+             default:
+                 return false;

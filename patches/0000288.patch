@@ -1,0 +1,148 @@
+diff --git a/chrome/browser/extensions/bare_filter_subscriber.cc b/chrome/browser/extensions/bare_filter_subscriber.cc
+index 00bd0105200..db92b895c11 100644
+--- a/chrome/browser/extensions/bare_filter_subscriber.cc
++++ b/chrome/browser/extensions/bare_filter_subscriber.cc
+@@ -26,47 +26,91 @@ namespace {
+ 
+ constexpr char kUBlockOriginId[] = "fkgkibajhfbepljeaefdnfnegdcjomkh";
+ 
+-// Where uBlock Origin fetches BareFilter from.
+-constexpr char kBareFilterUrl[] = "https://raw.githubusercontent.com/BareBrowser/bare-browser/main/filters/BareFilter.txt";
++// Where uBlock Origin used to fetch BareFilter from. Test builds subscribed to
++// it, so it is removed again if it is found.
++constexpr char kOldBareFilterUrl[] = "https://raw.githubusercontent.com/BareBrowser/bare-browser/main/filters/BareFilter.txt";
+ 
+ // The on and off switch shown on the extensions page. On unless turned off.
+ constexpr char kEnabledPref[] = "Chrome.Bare.BareFilterEnabled";
+ 
+-// Runs inside the background page of uBlock Origin once its filters are ready,
+-// and does what the import box of its lists page does: it adds or removes the
+-// list through uBlock's own functions, then has it rebuild its lists. Its
+-// saved copy of the available lists is only dropped by that rebuild, so a list
+-// written into its storage from outside is never seen.
++// The rules, kept in uBlock Origin's own My filters between two marker lines so
++// that whatever the user wrote there is left as it is.
++constexpr char kRules[] = R"BF(! Reddit: the full-screen get-the-app sheet and the scroll lock it sets on the page
++reddit.com##div[id^="configured-xpromo"]
++reddit.com##body:has(div[id^="configured-xpromo"]):style(overflow: auto !important)
++! Reddit: the Open App button in the header
++reddit.com###xpromo-small-header
++! Facebook: the Get Facebook for Android banner at the top
++m.facebook.com##div[style*="pointer-events: none"][style*="background"]:has-text(/Get Facebook for Android/)
++! Facebook: the Open app bar at the bottom of the feed
++m.facebook.com##div[data-mcomponent="MContainer"]:has(> div[data-mcomponent="MContainer"] > div[role="button"]):has-text(/^Open app$/)
++! Facebook: the Open app button in the Reels header
++m.facebook.com##div[role="button"][aria-label="Open app"]
++! Facebook: with the button gone, the Reels header icons move to the right edge
++m.facebook.com##div[aria-label="Navigate to your Reels profile"]:style(margin-left: calc(100vw - 44px) !important)
++m.facebook.com##div[aria-label="Search"][role="button"]:has(+ div[aria-label="Navigate to your Reels profile"]):style(margin-left: calc(100vw - 92px) !important)
++! YouTube: the Open App button in the header; the search and menu icons then sit at the right edge
++m.youtube.com##.mobile-topbar-header-sign-in-button:has(a[aria-label="Open App"]))BF";
++
++// Runs inside the background page of uBlock Origin once its filters are ready.
++// It rewrites the block between the markers in My filters, adds or removes
++// that block as the switch says, and has uBlock Origin rebuild its lists.
+ constexpr char kScript[] = R"(
+ (function() {
+-  var url = '%URL%';
++  var rules = '%RULES%';
+   var want = %WANT%;
++  var begin = '! BareFilter begin';
++  var end = '! BareFilter end';
+   var tries = 0;
+   var timer = setInterval(function() {
+     var ub = window['µBlock'];
+     if (++tries > 120) { clearInterval(timer); return; }
+     if (!ub || !ub.readyToFilter) { return; }
+     clearInterval(timer);
+-    var imported = ub.userSettings.importedLists.indexOf(url) !== -1;
+-    var selected = ub.selectedFilterLists.indexOf(url) !== -1;
+-    var known = !!ub.availableFilterLists[url];
+-    if (want) {
+-      if (!imported || !selected) { ub.applyFilterListSelection({ toImport: url }); }
+-      if (!imported || !selected || !known) { ub.loadFilterLists(); }
+-    } else if (imported || selected || known) {
+-      ub.applyFilterListSelection({ toRemove: [url] });
+-      ub.loadFilterLists();
+-    }
++    ub.loadUserFilters().then(function(saved) {
++      var text = (saved && saved.content) || '';
++      var a = text.indexOf(begin);
++      var b = text.indexOf(end);
++      var rest = text;
++      if (a !== -1 && b > a) {
++        rest = text.slice(0, a) + text.slice(b + end.length);
++      }
++      rest = rest.trim();
++      var next = want ? (rest ? rest + '\n\n' : '') + begin + '\n' + rules + '\n' + end : rest;
++      var old = '%OLDURL%';
++      var oldImported = ub.userSettings.importedLists.indexOf(old) !== -1 ||
++          ub.selectedFilterLists.indexOf(old) !== -1 ||
++          !!ub.availableFilterLists[old];
++      if (next === text.trim() && !oldImported) { return; }
++      if (oldImported) { ub.applyFilterListSelection({ toRemove: [old] }); }
++      if (want) {
++        ub.applyFilterListSelection({ toSelect: [ub.userFiltersPath], merge: true });
++      }
++      ub.saveUserFilters(next).then(function() { ub.loadFilterLists(); });
++    });
+   }, 500);
+ })();
+ )";
+ 
++std::string Escaped(const std::string& text) {
++  std::string out;
++  for (char c : text) {
++    if (c == '\\') out += "\\\\";
++    else if (c == '\'') out += "\\'";
++    else if (c == '\n') out += "\\n";
++    else out += c;
++  }
++  return out;
++}
++
+ std::string BuildScript(bool want) {
+   std::string script = kScript;
+-  size_t at = script.find("%URL%");
+-  script.replace(at, 5, kBareFilterUrl);
++  size_t at = script.find("%RULES%");
++  script.replace(at, 7, Escaped(kRules));
+   at = script.find("%WANT%");
+   script.replace(at, 6, want ? "true" : "false");
++  at = script.find("%OLDURL%");
++  script.replace(at, 8, kOldBareFilterUrl);
+   return script;
+ }
+ 
+diff --git a/chrome/browser/extensions/bare_filter_subscriber.h b/chrome/browser/extensions/bare_filter_subscriber.h
+index 68d0c941c29..ec5747f93af 100644
+--- a/chrome/browser/extensions/bare_filter_subscriber.h
++++ b/chrome/browser/extensions/bare_filter_subscriber.h
+@@ -9,10 +9,10 @@ class Profile;
+ 
+ namespace extensions {
+ 
+-// Keeps uBlock Origin subscribed to BareFilter, the small list Bare hosts for
+-// pages that get in the way. Once uBlock Origin has started, the list is
+-// imported through its own functions, or removed again when the user has turned
+-// BareFilter off. Safe to call once per profile at startup.
++// Keeps BareFilter, the small set of rules for pages that push you to an app,
++// in uBlock Origin's My filters, or takes it out again when the user has turned
++// BareFilter off. The rules are built into Bare and nothing is fetched. Runs
++// once uBlock Origin has started. Safe to call once per profile at startup.
+ void StartBareFilterSubscriber(Profile* profile);
+ 
+ }  // namespace extensions
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java
+index e5bc5141a76..ee4f439e498 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java
+@@ -95,7 +95,7 @@ class ExtensionsMenuSheetContent implements BottomSheetContent {
+ 
+         TextView description = new TextView(context);
+         description.setText(
+-                "Hides app banners and pop-ups on a few sites, and updates itself. "
++                "Hides app banners and pop-ups on a few sites. "
+                         + "A change applies the next time Bare starts.");
+         description.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+         description.setTextColor(SemanticColorUtils.getDefaultTextColorSecondary(context));

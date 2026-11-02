@@ -1,0 +1,613 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index 852a6d48a6d..85a537e5c74 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -3376,15 +3376,8 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+         }
+ 
+         if (id == R.id.task_manager && TaskManager.isEnabled()) {
+-            // Bare shows the task manager as a card from the bottom of the screen.
+-            BottomSheetController sheetController =
+-                    mRootUiCoordinator == null ? null : mRootUiCoordinator.getBottomSheetController();
+-            if (sheetController != null) {
+-                TaskManagerFactory.createTaskManager().showCard(this, sheetController);
+-            } else {
+-                TaskManager taskManager = TaskManagerFactory.createTaskManager();
+-                taskManager.launch(ContextUtils.getApplicationContext());
+-            }
++            // Bare shows the task manager as a card that rises from behind the bottom toolbar.
++            TaskManagerFactory.createTaskManager().showCard(getWindow().getDecorView());
+             if (fromMenu) {
+                 RecordUserAction.record("MobileMenuTaskManager");
+             }
+diff --git a/chrome/browser/task_manager/android/java/src/org/chromium/chrome/browser/task_manager/TaskManager.java b/chrome/browser/task_manager/android/java/src/org/chromium/chrome/browser/task_manager/TaskManager.java
+index aac7f6f3a3f..2f33cc2cfe2 100644
+--- a/chrome/browser/task_manager/android/java/src/org/chromium/chrome/browser/task_manager/TaskManager.java
++++ b/chrome/browser/task_manager/android/java/src/org/chromium/chrome/browser/task_manager/TaskManager.java
+@@ -4,7 +4,7 @@
+ 
+ package org.chromium.chrome.browser.task_manager;
+ 
+-import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
++import android.view.View;
+ import android.content.Context;
+ 
+ import org.chromium.base.DeviceInfo;
+@@ -30,6 +30,6 @@ public interface TaskManager {
+     /** Launches the task manager. */
+     void launch(Context context);
+ 
+-    /** Shows the task manager as a card from the bottom of the screen. */
+-    void showCard(Context context, BottomSheetController sheetController);
++    /** Shows the task manager as a card that rises from behind the bottom toolbar. */
++    void showCard(View root);
+ }
+diff --git a/chrome/browser/task_manager/internal/android/BUILD.gn b/chrome/browser/task_manager/internal/android/BUILD.gn
+index 27bda8a8014..34c0b81f041 100644
+--- a/chrome/browser/task_manager/internal/android/BUILD.gn
++++ b/chrome/browser/task_manager/internal/android/BUILD.gn
+@@ -20,6 +20,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/task_manager/TaskManagerServiceBridge.java",
+     "java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java",
+     "java/src/org/chromium/chrome/browser/task_manager/ui/PropertyStringifier.java",
++    "java/src/org/chromium/chrome/browser/task_manager/ui/RiseSheet.java",
+     "java/src/org/chromium/chrome/browser/task_manager/ui/TaskManagerActivity.java",
+     "java/src/org/chromium/chrome/browser/task_manager/ui/TaskManagerCoordinator.java",
+     "java/src/org/chromium/chrome/browser/task_manager/ui/TaskManagerMediator.java",
+diff --git a/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/TaskManagerImpl.java b/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/TaskManagerImpl.java
+index a11c942d5d0..8eca5de6ca5 100644
+--- a/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/TaskManagerImpl.java
++++ b/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/TaskManagerImpl.java
+@@ -5,9 +5,9 @@
+ package org.chromium.chrome.browser.task_manager;
+ 
+ import org.chromium.chrome.browser.task_manager.ui.BareTaskManagerCard;
+-import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+ import android.content.Context;
+ import android.content.Intent;
++import android.view.View;
+ 
+ import org.chromium.base.Log;
+ import org.chromium.chrome.browser.task_manager.ui.TaskManagerActivity;
+@@ -18,8 +18,8 @@ public class TaskManagerImpl implements TaskManager {
+     TaskManagerImpl() {}
+ 
+     @Override
+-    public void showCard(Context context, BottomSheetController sheetController) {
+-        BareTaskManagerCard.show(context, sheetController);
++    public void showCard(View root) {
++        BareTaskManagerCard.show(root);
+     }
+ 
+     @Override
+diff --git a/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java b/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java
+index e694a6c5883..43650d7f17c 100644
+--- a/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java
++++ b/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java
+@@ -25,9 +25,6 @@ import org.chromium.chrome.browser.task_manager.RefreshType;
+ import org.chromium.chrome.browser.task_manager.TaskManagerObserver;
+ import org.chromium.chrome.browser.task_manager.TaskManagerServiceBridge;
+ import org.chromium.chrome.browser.task_manager.TaskType;
+-import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
+-import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+-import org.chromium.components.browser_ui.bottomsheet.BottomSheetType;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ 
+ import java.util.ArrayList;
+@@ -42,9 +39,8 @@ import java.util.Map;
+  * end it. The numbers are the ones the browser's own task manager keeps; this only draws them.
+  */
+ @NullMarked
+-public final class BareTaskManagerCard implements BottomSheetContent, TaskManagerObserver {
++public final class BareTaskManagerCard implements TaskManagerObserver {
+     private static final int REFRESH_MS = 2000;
+-    private static final int LIST_MAX_DP = 340;
+     private static final int RED = 0xFFC62828;
+ 
+     private static final class Task {
+@@ -64,25 +60,6 @@ public final class BareTaskManagerCard implements BottomSheetContent, TaskManage
+         }
+     }
+ 
+-    /** A scroll view that stops growing at a set height, so the card never fills the screen. */
+-    private static final class CappedScrollView extends ScrollView {
+-        private final int mCap;
+-
+-        CappedScrollView(Context context, int cap) {
+-            super(context);
+-            mCap = cap;
+-        }
+-
+-        @Override
+-        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+-            super.onMeasure(
+-                    widthMeasureSpec, MeasureSpec.makeMeasureSpec(mCap, MeasureSpec.AT_MOST));
+-        }
+-    }
+-
+-    private static final BottomSheetType SHEET_TYPE =
+-            new BottomSheetType.Builder().setUserInitiated(true).build();
+-
+     private final Context mContext;
+     private final TaskManagerServiceBridge mBridge = new TaskManagerServiceBridge();
+     private final Map<Long, Task> mTasks = new LinkedHashMap<>();
+@@ -91,13 +68,15 @@ public final class BareTaskManagerCard implements BottomSheetContent, TaskManage
+     private final LinearLayout mRows;
+     private final TextView mMemoryChip;
+     private final TextView mCpuChip;
++    private final ScrollView mScroll;
+     private boolean mSortByMemory = true;
+     private long mExpandedId = -1;
+     private TaskManagerServiceBridge.@Nullable ObserverHandle mHandle;
+ 
+-    /** Shows the card on the given sheet controller. */
+-    public static void show(Context context, BottomSheetController controller) {
+-        controller.requestShowContent(new BareTaskManagerCard(context), true);
++    /** Shows the card, rising from behind the bottom toolbar. */
++    public static void show(View root) {
++        BareTaskManagerCard card = new BareTaskManagerCard(root.getContext());
++        RiseSheet.show(root, card.mRoot, card.mScroll);
+     }
+ 
+     private BareTaskManagerCard(Context context) {
+@@ -139,9 +118,9 @@ public final class BareTaskManagerCard implements BottomSheetContent, TaskManage
+         mRows = new LinearLayout(context);
+         mRows.setOrientation(LinearLayout.VERTICAL);
+         mRows.setPadding(dp(10), 0, dp(10), 0);
+-        CappedScrollView scroll = new CappedScrollView(context, dp(LIST_MAX_DP));
+-        scroll.addView(mRows);
+-        mRoot.addView(scroll);
++        mScroll = new ScrollView(context);
++        mScroll.addView(mRows);
++        mRoot.addView(mScroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+         styleChips();
+ 
+         // The numbers come only while the card is on screen.
+@@ -416,81 +395,4 @@ public final class BareTaskManagerCard implements BottomSheetContent, TaskManage
+     private int dp(float value) {
+         return Math.round(value * mContext.getResources().getDisplayMetrics().density);
+     }
+-
+-    // BottomSheetContent
+-
+-    @Override
+-    public View getContentView() {
+-        return mRoot;
+-    }
+-
+-    @Override
+-    public @Nullable View getToolbarView() {
+-        return null;
+-    }
+-
+-    @Override
+-    public int getVerticalScrollOffset() {
+-        return 0;
+-    }
+-
+-    @Override
+-    public void destroy() {
+-        stop();
+-    }
+-
+-    @Override
+-    public BottomSheetType getSheetType() {
+-        return SHEET_TYPE;
+-    }
+-
+-    @Override
+-    public int getPriority() {
+-        return ContentPriority.HIGH;
+-    }
+-
+-    @Override
+-    public boolean swipeToDismissEnabled() {
+-        return true;
+-    }
+-
+-    @Override
+-    public boolean showHandlebar() {
+-        return true;
+-    }
+-
+-    @Override
+-    public int getPeekHeight() {
+-        return HeightMode.DISABLED;
+-    }
+-
+-    @Override
+-    public float getHalfHeightRatio() {
+-        return HeightMode.DISABLED;
+-    }
+-
+-    @Override
+-    public float getFullHeightRatio() {
+-        return HeightMode.WRAP_CONTENT;
+-    }
+-
+-    @Override
+-    public @Nullable String getSheetContentDescription(Context context) {
+-        return "Task manager";
+-    }
+-
+-    @Override
+-    public int getSheetHalfHeightAccessibilityStringId() {
+-        return R.string.menu_task_manager;
+-    }
+-
+-    @Override
+-    public int getSheetFullHeightAccessibilityStringId() {
+-        return R.string.menu_task_manager;
+-    }
+-
+-    @Override
+-    public int getSheetClosedAccessibilityStringId() {
+-        return R.string.menu_task_manager;
+-    }
+ }
+diff --git a/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/RiseSheet.java b/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/RiseSheet.java
+new file mode 100644
+index 00000000000..b3dc36fa2de
+--- /dev/null
++++ b/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/RiseSheet.java
+@@ -0,0 +1,360 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.task_manager.ui;
++
++import android.animation.Animator;
++import android.animation.AnimatorListenerAdapter;
++import android.animation.ValueAnimator;
++import android.content.Context;
++import android.graphics.Color;
++import android.graphics.Rect;
++import android.graphics.drawable.ColorDrawable;
++import android.graphics.drawable.Drawable;
++import android.graphics.drawable.GradientDrawable;
++import android.view.Gravity;
++import android.view.MotionEvent;
++import android.view.VelocityTracker;
++import android.view.View;
++import android.view.ViewConfiguration;
++import android.view.ViewGroup;
++import android.view.animation.Interpolator;
++import android.widget.FrameLayout;
++import android.widget.LinearLayout;
++import android.widget.PopupWindow;
++
++import androidx.annotation.ColorInt;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.ui.interpolators.Interpolators;
++
++/**
++ * A card that comes up from behind the bottom toolbar, the way the three-dot menu does, in the
++ * toolbar's colour. It opens part way, can be dragged or scrolled up to nearly the full height and
++ * dragged down to close. The toolbar stays in front of it, undimmed.
++ */
++@NullMarked
++final class RiseSheet {
++    private static final float HEIGHT = 0.92f;
++    private static final float COMPACT_HIDDEN = 0.46f;
++    private static final long SETTLE_MS = 300;
++    private static final long CLOSE_MS = 220;
++    private static final float FLING_DP_PER_SECOND = 900f;
++    private static final float HANDLE_ZONE_DP = 28f;
++    private static final float CLOSE_DRAG_DP = 48f;
++    private static final float CORNER_DP = 24f;
++    private static final int SCRIM_COLOR = 0x66000000;
++
++    private final PopupWindow mPopup;
++    private final Frame mFrame;
++    private final View mScrim;
++    private final LinearLayout mCard;
++    private final View mScroll;
++    private final int mHeight;
++    private final int mCompactY;
++    private @Nullable ValueAnimator mAnimator;
++    private boolean mClosing;
++
++    /**
++     * Shows {@code content} as the card. {@code scroll} is the part of it that scrolls, so a drag
++     * on it moves the card only when it should.
++     */
++    static void show(View root, View content, View scroll) {
++        Context context = root.getContext();
++        Rect frame = new Rect();
++        root.getWindowVisibleDisplayFrame(frame);
++        int bottom = toolbarTop(root, frame.bottom);
++        int windowHeight = Math.max(1, bottom - frame.top);
++        RiseSheet sheet =
++                new RiseSheet(
++                        context,
++                        content,
++                        scroll,
++                        Math.round(windowHeight * HEIGHT),
++                        toolbarColor(root, context),
++                        frame.width(),
++                        windowHeight);
++        sheet.mPopup.showAtLocation(root, Gravity.NO_GRAVITY, frame.left, frame.top);
++        sheet.mFrame.post(
++                () ->
++                        sheet.animateTo(
++                                sheet.mCompactY,
++                                SETTLE_MS,
++                                Interpolators.EMPHASIZED_DECELERATE,
++                                null));
++    }
++
++    private RiseSheet(
++            Context context,
++            View content,
++            View scroll,
++            int height,
++            @ColorInt int color,
++            int width,
++            int windowHeight) {
++        mHeight = height;
++        mCompactY = Math.round(height * COMPACT_HIDDEN);
++        mScroll = scroll;
++        float density = context.getResources().getDisplayMetrics().density;
++
++        mCard = new LinearLayout(context);
++        mCard.setOrientation(LinearLayout.VERTICAL);
++        float corner = CORNER_DP * density;
++        GradientDrawable shape = new GradientDrawable();
++        shape.setColor(color);
++        shape.setCornerRadii(new float[] {corner, corner, corner, corner, 0, 0, 0, 0});
++        mCard.setBackground(shape);
++        GradientDrawable bar = new GradientDrawable();
++        bar.setCornerRadius(2 * density);
++        bar.setColor(SemanticColorUtils.getDefaultIconColor(context));
++        bar.setAlpha(110);
++        View handle = new View(context);
++        handle.setBackground(bar);
++        handle.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
++        LinearLayout.LayoutParams handleParams =
++                new LinearLayout.LayoutParams(Math.round(38 * density), Math.round(4 * density));
++        handleParams.gravity = Gravity.CENTER_HORIZONTAL;
++        handleParams.topMargin = Math.round(10 * density);
++        handleParams.bottomMargin = Math.round(10 * density);
++        mCard.addView(handle, handleParams);
++        mCard.addView(
++                content,
++                new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
++
++        mFrame = new Frame(context);
++        mScrim = new View(context);
++        mScrim.setBackgroundColor(SCRIM_COLOR);
++        mScrim.setAlpha(0f);
++        mFrame.addView(
++                mScrim,
++                new FrameLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        mFrame.addView(
++                mCard,
++                new FrameLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, height, Gravity.BOTTOM));
++        moveTo(height);
++
++        mPopup = new PopupWindow(mFrame, width, windowHeight);
++        mPopup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
++        mPopup.setFocusable(true);
++        mPopup.setOutsideTouchable(true);
++        mPopup.setAnimationStyle(0);
++        mPopup.setClippingEnabled(false);
++    }
++
++    /** The screen y of the top of the bottom toolbar, else {@code fallback}. */
++    private static int toolbarTop(View root, int fallback) {
++        int[] at = new int[2];
++        View address = find(root, "control_container");
++        if (address != null && address.isShown() && address.getHeight() > 0) {
++            address.getLocationOnScreen(at);
++            if (at[1] > root.getHeight() / 2) return at[1];
++        }
++        View row = find(root, "bottom_app_bar_container");
++        if (row != null && row.isShown() && row.getHeight() > 0) {
++            View slot = find(row, "bottom_container_slot");
++            View edge = slot != null && slot.isShown() && slot.getHeight() > 0 ? slot : row;
++            edge.getLocationOnScreen(at);
++            return at[1];
++        }
++        return fallback;
++    }
++
++    private static @ColorInt int toolbarColor(View root, Context context) {
++        View address = find(root, "control_container");
++        View bar = address != null && address.isShown() ? address : null;
++        int[] at = new int[2];
++        if (bar != null) {
++            bar.getLocationOnScreen(at);
++            if (at[1] <= root.getHeight() / 2) bar = null;
++        }
++        if (bar == null) bar = find(root, "bottom_app_bar_container");
++        Integer color = bar == null ? null : plainColor(bar, 3);
++        return color != null ? color : SemanticColorUtils.getColorSurfaceContainerHigh(context);
++    }
++
++    private static @Nullable Integer plainColor(View view, int depth) {
++        Drawable background = view.getBackground();
++        if (view.getVisibility() == View.VISIBLE
++                && background instanceof ColorDrawable plain
++                && Color.alpha(plain.getColor()) == 255) {
++            return plain.getColor();
++        }
++        if (depth == 0 || !(view instanceof ViewGroup group)) return null;
++        for (int i = 0; i < group.getChildCount(); i++) {
++            Integer color = plainColor(group.getChildAt(i), depth - 1);
++            if (color != null) return color;
++        }
++        return null;
++    }
++
++    private static @Nullable View find(View root, String name) {
++        int id = root.getResources().getIdentifier(name, "id", root.getContext().getPackageName());
++        return id == 0 ? null : root.findViewById(id);
++    }
++
++    /** Puts the card at {@code y} below its top position and dims the page to match. */
++    private void moveTo(float y) {
++        mCard.setTranslationY(y);
++        float shown = (mHeight - y) / Math.max(1f, mHeight - mCompactY);
++        mScrim.setAlpha(Math.max(0f, Math.min(1f, shown)));
++    }
++
++    private void animateTo(
++            float y, long duration, Interpolator interpolator, @Nullable Runnable after) {
++        stop();
++        ValueAnimator animator = ValueAnimator.ofFloat(mCard.getTranslationY(), y);
++        animator.setDuration(duration);
++        animator.setInterpolator(interpolator);
++        animator.addUpdateListener(a -> moveTo((float) a.getAnimatedValue()));
++        if (after != null) {
++            animator.addListener(
++                    new AnimatorListenerAdapter() {
++                        @Override
++                        public void onAnimationEnd(Animator animation) {
++                            after.run();
++                        }
++                    });
++        }
++        mAnimator = animator;
++        animator.start();
++    }
++
++    private void stop() {
++        if (mAnimator != null) mAnimator.cancel();
++        mAnimator = null;
++    }
++
++    private void close() {
++        if (mClosing) return;
++        mClosing = true;
++        animateTo(mHeight, CLOSE_MS, Interpolators.EMPHASIZED_ACCELERATE, mPopup::dismiss);
++    }
++
++    /** Down closes from half or full height, up opens all the way, a small drag puts it back. */
++    private void release(float startY, float velocity) {
++        float y = mCard.getTranslationY();
++        float density = mFrame.getResources().getDisplayMetrics().density;
++        float fling = FLING_DP_PER_SECOND * density;
++        float moved = y - startY;
++        if (velocity > fling || (velocity >= -fling && moved > CLOSE_DRAG_DP * density)) {
++            close();
++        } else if (velocity < -fling || moved < -CLOSE_DRAG_DP * density) {
++            animateTo(0, SETTLE_MS, Interpolators.EMPHASIZED_DECELERATE, null);
++        } else {
++            animateTo(
++                    startY < mCompactY / 2f ? 0 : mCompactY,
++                    SETTLE_MS,
++                    Interpolators.EMPHASIZED_DECELERATE,
++                    null);
++        }
++    }
++
++    /**
++     * Takes a gesture from the list when it should move the card: up while the card is half open,
++     * down while the list is at its top, and any drag on the handle. A tap above the card closes
++     * it.
++     */
++    private final class Frame extends FrameLayout {
++        private final int mSlop;
++        private float mDownY;
++        private float mStartY;
++        private boolean mDragging;
++        private boolean mAbove;
++        private @Nullable VelocityTracker mVelocity;
++
++        Frame(Context context) {
++            super(context);
++            mSlop = ViewConfiguration.get(context).getScaledTouchSlop();
++        }
++
++        private float cardTop() {
++            return mCard.getTop() + mCard.getTranslationY();
++        }
++
++        @Override
++        public boolean onInterceptTouchEvent(MotionEvent event) {
++            if (mClosing) return true;
++            track(event);
++            switch (event.getActionMasked()) {
++                case MotionEvent.ACTION_DOWN:
++                    stop();
++                    mDownY = event.getY();
++                    mStartY = mCard.getTranslationY();
++                    mDragging = false;
++                    mAbove = mDownY < cardTop();
++                    float zone = HANDLE_ZONE_DP * getResources().getDisplayMetrics().density;
++                    boolean onHandle = !mAbove && mDownY < cardTop() + zone;
++                    return mAbove || onHandle;
++                case MotionEvent.ACTION_MOVE:
++                    float dy = event.getY() - mDownY;
++                    if (Math.abs(dy) <= mSlop) return false;
++                    boolean halfOpen = mStartY > 1;
++                    boolean listAtTop = !mScroll.canScrollVertically(-1);
++                    if ((halfOpen && dy < 0) || (dy > 0 && listAtTop)) {
++                        mDragging = true;
++                        mDownY = event.getY();
++                        mStartY = mCard.getTranslationY();
++                        return true;
++                    }
++                    return false;
++                default:
++                    return false;
++            }
++        }
++
++        @Override
++        public boolean onTouchEvent(MotionEvent event) {
++            if (mClosing) return true;
++            track(event);
++            switch (event.getActionMasked()) {
++                case MotionEvent.ACTION_MOVE:
++                    float dy = event.getY() - mDownY;
++                    if (!mDragging && !mAbove && Math.abs(dy) > mSlop) {
++                        mDragging = true;
++                        mDownY = event.getY();
++                        dy = 0;
++                    }
++                    if (mDragging) moveTo(Math.max(0, Math.min(mHeight, mStartY + dy)));
++                    return true;
++                case MotionEvent.ACTION_UP:
++                    if (mDragging) {
++                        float velocity = 0;
++                        if (mVelocity != null) {
++                            mVelocity.computeCurrentVelocity(1000);
++                            velocity = mVelocity.getYVelocity();
++                        }
++                        release(mStartY, velocity);
++                    } else if (mAbove) {
++                        close();
++                    }
++                    clearVelocity();
++                    return true;
++                case MotionEvent.ACTION_CANCEL:
++                    if (mDragging) release(mStartY, 0);
++                    clearVelocity();
++                    return true;
++                default:
++                    return true;
++            }
++        }
++
++        private void track(MotionEvent event) {
++            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) clearVelocity();
++            if (mVelocity == null) mVelocity = VelocityTracker.obtain();
++            mVelocity.addMovement(event);
++        }
++
++        private void clearVelocity() {
++            if (mVelocity != null) {
++                mVelocity.recycle();
++                mVelocity = null;
++            }
++        }
++    }
++}

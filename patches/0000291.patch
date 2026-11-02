@@ -1,0 +1,310 @@
+diff --git a/chrome/browser/task_manager/internal/android/BUILD.gn b/chrome/browser/task_manager/internal/android/BUILD.gn
+index 34c0b81f041..27bda8a8014 100644
+--- a/chrome/browser/task_manager/internal/android/BUILD.gn
++++ b/chrome/browser/task_manager/internal/android/BUILD.gn
+@@ -20,7 +20,6 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/task_manager/TaskManagerServiceBridge.java",
+     "java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java",
+     "java/src/org/chromium/chrome/browser/task_manager/ui/PropertyStringifier.java",
+-    "java/src/org/chromium/chrome/browser/task_manager/ui/RiseSheet.java",
+     "java/src/org/chromium/chrome/browser/task_manager/ui/TaskManagerActivity.java",
+     "java/src/org/chromium/chrome/browser/task_manager/ui/TaskManagerCoordinator.java",
+     "java/src/org/chromium/chrome/browser/task_manager/ui/TaskManagerMediator.java",
+diff --git a/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java b/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java
+index 43650d7f17c..b25058f46c7 100644
+--- a/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java
++++ b/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java
+@@ -26,6 +26,7 @@ import org.chromium.chrome.browser.task_manager.TaskManagerObserver;
+ import org.chromium.chrome.browser.task_manager.TaskManagerServiceBridge;
+ import org.chromium.chrome.browser.task_manager.TaskType;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.components.browser_ui.widget.RiseSheet;
+ 
+ import java.util.ArrayList;
+ import java.util.Collections;
+@@ -76,7 +77,7 @@ public final class BareTaskManagerCard implements TaskManagerObserver {
+     /** Shows the card, rising from behind the bottom toolbar. */
+     public static void show(View root) {
+         BareTaskManagerCard card = new BareTaskManagerCard(root.getContext());
+-        RiseSheet.show(root, card.mRoot, card.mScroll);
++        RiseSheet.show(root, card.mRoot, card.mScroll, null);
+     }
+ 
+     private BareTaskManagerCard(Context context) {
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+index 75b494688a7..0fd111328c7 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+@@ -20,6 +20,7 @@ import android.os.Build;
+ import android.os.SystemClock;
+ import android.view.Gravity;
+ import android.view.KeyEvent;
++import android.view.MotionEvent;
+ import android.view.LayoutInflater;
+ import android.view.Surface;
+ import android.view.View;
+@@ -606,6 +607,24 @@ class AppMenu implements OnKeyListener {
+                                 }
+                             });
+             popupContent = mSheet.getView();
++            // A tap outside the sheet, on the toolbar or the menu button, folds it away rather
++            // than dropping it.
++            BareMenuSheet sheet = mSheet;
++            popup.setTouchInterceptor(
++                    (view, event) -> {
++                        boolean outside =
++                                event.getActionMasked() == MotionEvent.ACTION_OUTSIDE
++                                        || (event.getActionMasked() == MotionEvent.ACTION_DOWN
++                                                && (event.getX() < 0
++                                                        || event.getY() < 0
++                                                        || event.getX() > view.getWidth()
++                                                        || event.getY() > view.getHeight()));
++                        if (outside) {
++                            sheet.foldAway();
++                            return true;
++                        }
++                        return false;
++                    });
+         }
+         popup.setContentView(popupContent);
+ 
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+index 2af45014a04..7314cafedbe 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+@@ -110,6 +110,11 @@ final class BareMenuSheet {
+         moveTo(height);
+     }
+ 
++    /** Folds the sheet away with its closing animation, as a drag down does. */
++    void foldAway() {
++        close();
++    }
++
+     /** The view to show in the menu's window. */
+     View getView() {
+         return mFrame;
+diff --git a/components/browser_ui/widget/android/BUILD.gn b/components/browser_ui/widget/android/BUILD.gn
+index cb6d0390e4d..9ecd136f9f1 100644
+--- a/components/browser_ui/widget/android/BUILD.gn
++++ b/components/browser_ui/widget/android/BUILD.gn
+@@ -21,6 +21,7 @@ android_library("java") {
+     "java/src/org/chromium/components/browser_ui/widget/DateDividedAdapter.java",
+     "java/src/org/chromium/components/browser_ui/widget/DualControlLayout.java",
+     "java/src/org/chromium/components/browser_ui/widget/FadingEdgeScrollView.java",
++    "java/src/org/chromium/components/browser_ui/widget/RiseSheet.java",
+     "java/src/org/chromium/components/browser_ui/widget/FadingShadow.java",
+     "java/src/org/chromium/components/browser_ui/widget/FadingShadowView.java",
+     "java/src/org/chromium/components/browser_ui/widget/FullscreenAlertDialog.java",
+diff --git a/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/RiseSheet.java b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
+similarity index 86%
+rename from chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/RiseSheet.java
+rename to components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
+index b3dc36fa2de..32e3233f97b 100644
+--- a/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/RiseSheet.java
++++ b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
+@@ -2,7 +2,7 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+-package org.chromium.chrome.browser.task_manager.ui;
++package org.chromium.components.browser_ui.widget;
+ 
+ import android.animation.Animator;
+ import android.animation.AnimatorListenerAdapter;
+@@ -37,7 +37,9 @@ import org.chromium.ui.interpolators.Interpolators;
+  * dragged down to close. The toolbar stays in front of it, undimmed.
+  */
+ @NullMarked
+-final class RiseSheet {
++public final class RiseSheet {
++    private static @Nullable RiseSheet sActive;
++
+     private static final float HEIGHT = 0.92f;
+     private static final float COMPACT_HIDDEN = 0.46f;
+     private static final long SETTLE_MS = 300;
+@@ -57,12 +59,26 @@ final class RiseSheet {
+     private final int mCompactY;
+     private @Nullable ValueAnimator mAnimator;
+     private boolean mClosing;
++    private @Nullable Runnable mOnDismissed;
++
++    /** Whether a card is up, including one that is folding away. */
++    public static boolean isOpen() {
++        return sActive != null;
++    }
++
++    /** Folds the card away with its closing animation, if one is up. */
++    public static void closeActive() {
++        if (sActive != null) sActive.close();
++    }
+ 
+     /**
+-     * Shows {@code content} as the card. {@code scroll} is the part of it that scrolls, so a drag
+-     * on it moves the card only when it should.
++     * Shows {@code content} as the card and returns whether it did; it does not while another card
++     * is up. {@code scroll} is the part of it that scrolls, so a drag on it moves the card only when
++     * it should. {@code onDismissed} runs once the card has gone.
+      */
+-    static void show(View root, View content, View scroll) {
++    public static boolean show(
++            View root, View content, View scroll, @Nullable Runnable onDismissed) {
++        if (sActive != null) return false;
+         Context context = root.getContext();
+         Rect frame = new Rect();
+         root.getWindowVisibleDisplayFrame(frame);
+@@ -77,6 +93,13 @@ final class RiseSheet {
+                         toolbarColor(root, context),
+                         frame.width(),
+                         windowHeight);
++        sheet.mOnDismissed = onDismissed;
++        sActive = sheet;
++        sheet.mPopup.setOnDismissListener(
++                () -> {
++                    sActive = null;
++                    if (sheet.mOnDismissed != null) sheet.mOnDismissed.run();
++                });
+         sheet.mPopup.showAtLocation(root, Gravity.NO_GRAVITY, frame.left, frame.top);
+         sheet.mFrame.post(
+                 () ->
+@@ -85,6 +108,7 @@ final class RiseSheet {
+                                 SETTLE_MS,
+                                 Interpolators.EMPHASIZED_DECELERATE,
+                                 null));
++        return true;
+     }
+ 
+     private RiseSheet(
+@@ -120,6 +144,7 @@ final class RiseSheet {
+         handleParams.topMargin = Math.round(10 * density);
+         handleParams.bottomMargin = Math.round(10 * density);
+         mCard.addView(handle, handleParams);
++        if (content.getParent() instanceof ViewGroup parent) parent.removeView(content);
+         mCard.addView(
+                 content,
+                 new LinearLayout.LayoutParams(
+@@ -145,6 +170,22 @@ final class RiseSheet {
+         mPopup.setOutsideTouchable(true);
+         mPopup.setAnimationStyle(0);
+         mPopup.setClippingEnabled(false);
++        // A touch outside the card, which is the toolbar, folds it away rather than dropping it.
++        mPopup.setTouchInterceptor(
++                (view, event) -> {
++                    boolean outside =
++                            event.getActionMasked() == MotionEvent.ACTION_OUTSIDE
++                                    || (event.getActionMasked() == MotionEvent.ACTION_DOWN
++                                            && (event.getX() < 0
++                                                    || event.getY() < 0
++                                                    || event.getX() > view.getWidth()
++                                                    || event.getY() > view.getHeight()));
++                    if (outside) {
++                        close();
++                        return true;
++                    }
++                    return false;
++                });
+     }
+ 
+     /** The screen y of the top of the bottom toolbar, else {@code fallback}. */
+diff --git a/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoDialog.java b/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoDialog.java
+index 57258c07087..40384856d02 100644
+--- a/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoDialog.java
++++ b/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoDialog.java
+@@ -27,6 +27,7 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+ import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
++import org.chromium.components.browser_ui.widget.RiseSheet;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.components.browser_ui.widget.FadingEdgeScrollView;
+ import org.chromium.ui.interpolators.Interpolators;
+@@ -55,6 +56,7 @@ public class PageInfoDialog {
+     private final @Nullable BottomSheetController mSheetController;
+     private final @Nullable PageInfoSheetContent mSheetContent;
+     private @Nullable BottomSheetObserver mSheetObserver;
++    private boolean mRiseSheetShown;
+     private boolean mSheetClosedNotified;
+     private final ModalDialogManager mManager;
+     private final ModalDialogProperties.Controller mController;
+@@ -154,8 +156,23 @@ public class PageInfoDialog {
+                                     assumeNonNull(null), DialogDismissalCause.UNKNOWN);
+                         }
+                     };
+-            mSheetController.addObserver(mSheetObserver);
+-            mSheetController.requestShowContent(mSheetContent, true);
++            android.app.Activity activity = org.chromium.base.ContextUtils.activityFromContext(mScrollView.getContext());
++            if (activity != null
++                    && RiseSheet.show(
++                            activity.getWindow().getDecorView(),
++                            mScrollView,
++                            mScrollView,
++                            () -> {
++                                if (mSheetClosedNotified) return;
++                                mSheetClosedNotified = true;
++                                mController.onDismiss(
++                                        assumeNonNull(null), DialogDismissalCause.UNKNOWN);
++                            })) {
++                mRiseSheetShown = true;
++            } else {
++                mSheetController.addObserver(mSheetObserver);
++                mSheetController.requestShowContent(mSheetContent, true);
++            }
+         } else if (mSheetDialog != null) {
+             mSheetDialog.show();
+         } else {
+@@ -171,7 +188,9 @@ public class PageInfoDialog {
+      */
+     public void dismiss(boolean animated) {
+         mDismissWithoutAnimation = !animated;
+-        if (mSheetController != null && mSheetContent != null) {
++        if (mRiseSheetShown) {
++            RiseSheet.closeActive();
++        } else if (mSheetController != null && mSheetContent != null) {
+             mSheetController.hideContent(mSheetContent, animated);
+         } else if (mSheetDialog != null) {
+             mSheetDialog.dismiss();
+@@ -291,7 +310,7 @@ public class PageInfoDialog {
+                     }
+ 
+                     background.setCornerRadii(radii);
+-                    background.setColor(SemanticColorUtils.getDefaultBgColor(getContext()));
++                    background.setColor(SemanticColorUtils.getColorSurface(getContext()));
+                     setBackground(background);
+                 }
+             }
+diff --git a/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoSheetContent.java b/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoSheetContent.java
+index 44af0634622..ccfd5a781a9 100644
+--- a/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoSheetContent.java
++++ b/components/page_info/android/java/src/org/chromium/components/page_info/PageInfoSheetContent.java
+@@ -5,6 +5,7 @@
+ package org.chromium.components.page_info;
+ 
+ import android.content.Context;
++import android.graphics.drawable.GradientDrawable;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.FrameLayout;
+@@ -13,6 +14,7 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
+ import org.chromium.components.browser_ui.bottomsheet.BottomSheetType;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.components.browser_ui.widget.FadingEdgeScrollView;
+ 
+ /**
+@@ -39,6 +41,15 @@ class PageInfoSheetContent implements BottomSheetContent {
+                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+         float density = context.getResources().getDisplayMetrics().density;
+         mContainer.setPadding(0, 0, 0, Math.round(BOTTOM_PADDING_DP * density));
++        // The same tone as the extensions card and the menu, not the page background.
++        int radiusId =
++                context.getResources()
++                        .getIdentifier("bottom_sheet_corner_radius", "dimen", context.getPackageName());
++        float radius = radiusId == 0 ? 0 : context.getResources().getDimension(radiusId);
++        GradientDrawable background = new GradientDrawable();
++        background.setColor(SemanticColorUtils.getColorSurfaceContainerHigh(context));
++        background.setCornerRadii(new float[] {radius, radius, radius, radius, 0, 0, 0, 0});
++        mContainer.setBackground(background);
+     }
+ 
+     /** Hands the scroll view back once the card has gone. */

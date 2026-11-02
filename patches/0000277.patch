@@ -1,0 +1,36 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+index fa67b7094d4..d97040587a3 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+@@ -837,13 +837,24 @@ public final class BareVerticalTabsDrawer {
+             mScrollToSelected = false;
+             LinearLayoutManager layoutManager = mLayoutManager;
+             if (layoutManager != null && !tabs.isEmpty()) {
+-                if (layoutManager.getStackFromEnd()
+-                        || (layoutManager instanceof GridLayoutManager
+-                                && !AddressBarPreference.isToolbarConfiguredToShowOnTop())) {
+-                    // Starts at the bottom, with the newest tab beside the address bar.
+-                    layoutManager.scrollToPositionWithOffset(tabs.size() - 1, 0);
+-                } else if (selected != null && tabs.indexOf(selected) >= 0) {
+-                    layoutManager.scrollToPositionWithOffset(tabs.indexOf(selected), dp(60));
++                int position = selected == null ? -1 : tabs.indexOf(selected);
++                if (position < 0) {
++                    boolean fromBottom =
++                            layoutManager.getStackFromEnd()
++                                    || (layoutManager instanceof GridLayoutManager
++                                            && !AddressBarPreference
++                                                    .isToolbarConfiguredToShowOnTop());
++                    if (fromBottom) layoutManager.scrollToPositionWithOffset(tabs.size() - 1, 0);
++                } else {
++                    // Opens on the tab being viewed, about halfway down, however many are open.
++                    RecyclerView list = mList;
++                    if (list != null) {
++                        list.post(
++                                () ->
++                                        layoutManager.scrollToPositionWithOffset(
++                                                position,
++                                                Math.max(0, list.getHeight() / 2 - dp(120))));
++                    }
+                 }
+             }
+         }

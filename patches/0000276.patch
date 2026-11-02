@@ -1,0 +1,179 @@
+diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
+index f3037971b85..4c8473ce8fc 100644
+--- a/chrome/browser/extensions/BUILD.gn
++++ b/chrome/browser/extensions/BUILD.gn
+@@ -354,6 +354,8 @@ source_set("extensions") {
+     "bare_bundled_extension_recovery.h",
+     "bare_bundled_extensions_loader.cc",
+     "bare_bundled_extensions_loader.h",
++    "bare_filter_subscriber.cc",
++    "bare_filter_subscriber.h",
+     "bare_extension_importance.cc",
+     "bare_extension_importance.h",
+     "external_provider_impl.cc",
+diff --git a/chrome/browser/extensions/bare_filter_subscriber.cc b/chrome/browser/extensions/bare_filter_subscriber.cc
+new file mode 100644
+index 00000000000..00bd0105200
+--- /dev/null
++++ b/chrome/browser/extensions/bare_filter_subscriber.cc
+@@ -0,0 +1,114 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/extensions/bare_filter_subscriber.h"
++
++#include <string>
++
++#include "base/functional/callback_helpers.h"
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
++#include "base/strings/strcat.h"
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/preferences/android/chrome_shared_preferences.h"
++#include "chrome/browser/profiles/profile.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/common/isolated_world_ids.h"
++#include "extensions/browser/extension_host.h"
++#include "extensions/browser/extension_host_registry.h"
++#include "extensions/common/mojom/view_type.mojom.h"
++
++namespace extensions {
++
++namespace {
++
++constexpr char kUBlockOriginId[] = "fkgkibajhfbepljeaefdnfnegdcjomkh";
++
++// Where uBlock Origin fetches BareFilter from.
++constexpr char kBareFilterUrl[] = "https://raw.githubusercontent.com/BareBrowser/bare-browser/main/filters/BareFilter.txt";
++
++// The on and off switch shown on the extensions page. On unless turned off.
++constexpr char kEnabledPref[] = "Chrome.Bare.BareFilterEnabled";
++
++// Runs inside the background page of uBlock Origin once its filters are ready,
++// and does what the import box of its lists page does: it adds or removes the
++// list through uBlock's own functions, then has it rebuild its lists. Its
++// saved copy of the available lists is only dropped by that rebuild, so a list
++// written into its storage from outside is never seen.
++constexpr char kScript[] = R"(
++(function() {
++  var url = '%URL%';
++  var want = %WANT%;
++  var tries = 0;
++  var timer = setInterval(function() {
++    var ub = window['µBlock'];
++    if (++tries > 120) { clearInterval(timer); return; }
++    if (!ub || !ub.readyToFilter) { return; }
++    clearInterval(timer);
++    var imported = ub.userSettings.importedLists.indexOf(url) !== -1;
++    var selected = ub.selectedFilterLists.indexOf(url) !== -1;
++    var known = !!ub.availableFilterLists[url];
++    if (want) {
++      if (!imported || !selected) { ub.applyFilterListSelection({ toImport: url }); }
++      if (!imported || !selected || !known) { ub.loadFilterLists(); }
++    } else if (imported || selected || known) {
++      ub.applyFilterListSelection({ toRemove: [url] });
++      ub.loadFilterLists();
++    }
++  }, 500);
++})();
++)";
++
++std::string BuildScript(bool want) {
++  std::string script = kScript;
++  size_t at = script.find("%URL%");
++  script.replace(at, 5, kBareFilterUrl);
++  at = script.find("%WANT%");
++  script.replace(at, 6, want ? "true" : "false");
++  return script;
++}
++
++class BareFilterSubscriber : public ExtensionHostRegistry::Observer {
++ public:
++  explicit BareFilterSubscriber(Profile* profile) {
++    observation_.Observe(ExtensionHostRegistry::Get(profile));
++  }
++
++  BareFilterSubscriber(const BareFilterSubscriber&) = delete;
++  BareFilterSubscriber& operator=(const BareFilterSubscriber&) = delete;
++
++ private:
++  // ExtensionHostRegistry::Observer:
++  void OnExtensionHostCompletedFirstLoad(content::BrowserContext* context,
++                                         ExtensionHost* host) override {
++    if (host->extension_id() != kUBlockOriginId ||
++        host->extension_host_type() !=
++            mojom::ViewType::kExtensionBackgroundPage) {
++      return;
++    }
++    base::android::SharedPreferencesManager shared_prefs =
++        android::shared_preferences::GetChromeSharedPreferences();
++    const bool want = shared_prefs.ReadBoolean(kEnabledPref, true);
++    // uBlock Origin is shipped as its author signs it and keeps its code in
++    // its own page, so the page is the only place to reach it. The method is
++    // the one that runs script in the page's own world; its name is a test
++    // helper's, and there is no other way into that world from here.
++    host->host_contents()->GetPrimaryMainFrame()->ExecuteJavaScriptForTests(
++        base::UTF8ToUTF16(BuildScript(want)), base::NullCallback(),
++        content::ISOLATED_WORLD_ID_GLOBAL);
++  }
++
++  base::ScopedObservation<ExtensionHostRegistry,
++                          ExtensionHostRegistry::Observer>
++      observation_{this};
++};
++
++}  // namespace
++
++void StartBareFilterSubscriber(Profile* profile) {
++  new BareFilterSubscriber(profile);  // Owns itself.
++}
++
++}  // namespace extensions
+diff --git a/chrome/browser/extensions/bare_filter_subscriber.h b/chrome/browser/extensions/bare_filter_subscriber.h
+new file mode 100644
+index 00000000000..68d0c941c29
+--- /dev/null
++++ b/chrome/browser/extensions/bare_filter_subscriber.h
+@@ -0,0 +1,20 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_EXTENSIONS_BARE_FILTER_SUBSCRIBER_H_
++#define CHROME_BROWSER_EXTENSIONS_BARE_FILTER_SUBSCRIBER_H_
++
++class Profile;
++
++namespace extensions {
++
++// Keeps uBlock Origin subscribed to BareFilter, the small list Bare hosts for
++// pages that get in the way. Once uBlock Origin has started, the list is
++// imported through its own functions, or removed again when the user has turned
++// BareFilter off. Safe to call once per profile at startup.
++void StartBareFilterSubscriber(Profile* profile);
++
++}  // namespace extensions
++
++#endif  // CHROME_BROWSER_EXTENSIONS_BARE_FILTER_SUBSCRIBER_H_
+diff --git a/chrome/browser/extensions/external_provider_impl.cc b/chrome/browser/extensions/external_provider_impl.cc
+index 4dbcd43a9e5..402e2e9227b 100644
+--- a/chrome/browser/extensions/external_provider_impl.cc
++++ b/chrome/browser/extensions/external_provider_impl.cc
+@@ -7,6 +7,7 @@
+ #include "chrome/browser/extensions/bare_bundled_extension_recovery.h"
+ #include "chrome/browser/extensions/bare_extension_importance.h"
+ #include "chrome/browser/extensions/bare_bundled_extensions_loader.h"
++#include "chrome/browser/extensions/bare_filter_subscriber.h"
+ 
+ #include <stddef.h>
+ 
+@@ -962,6 +963,7 @@ void ExternalProviderImpl::CreateExternalProviders(
+   ApplyBundledExtensionCarryOver(profile);
+   RememberBundledExtensionsLoader(profile, bare_loader);
+   StartBundledExtensionRecovery(profile, bare_loader);
++  StartBareFilterSubscriber(profile);
+   StartExtensionImportanceKeeper(profile);
+ #endif
+ 

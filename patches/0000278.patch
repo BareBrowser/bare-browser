@@ -1,0 +1,147 @@
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 7b877ecfce5..77c42d3baee 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -444,6 +444,9 @@ public final class ChromePreferenceKeys {
+     /** Toolbar setting: the menu button on the left end of the bottom bar and the first button on the right. */
+     public static final String BARE_MENU_ON_LEFT = "Bare.Toolbar.MenuOnLeft";
+ 
++    /** Whether uBlock Origin is subscribed to BareFilter, the list Bare hosts. On unless turned off. */
++    public static final String BARE_FILTER_ENABLED = "Chrome.Bare.BareFilterEnabled";
++
+     /** Whether page translation through Google is on. Off until the user turns it on. */
+     public static final String BARE_PAGE_TRANSLATION = "Bare.Translate.PageTranslation";
+     public static final String BARE_TRANSLATE_OWN_SERVER = "Bare.Translate.OwnServer";
+@@ -1442,6 +1445,7 @@ public final class ChromePreferenceKeys {
+                 BARE_NEW_ICON_IN_USE,
+                 BARE_MINIMAL_LAYOUT,
+                 BARE_MENU_ON_LEFT,
++                BARE_FILTER_ENABLED,
+                 BARE_AMOLED_WHEN_SYSTEM_DARK,
+                 WEBSTORE_DESKTOP_SITE_CLEARED,
+                 WEBSTORE_DESKTOP_SITE_SEEDED,
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java
+index ab1665cc679..e5bc5141a76 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java
+@@ -5,14 +5,23 @@
+ package org.chromium.chrome.browser.toolbar.extensions;
+ 
+ import android.content.Context;
++import android.graphics.Typeface;
++import android.util.TypedValue;
++import android.view.Gravity;
+ import android.view.View;
+ import android.view.ViewGroup;
+-import android.widget.FrameLayout;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
++import com.google.android.material.materialswitch.MaterialSwitch;
+ 
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
+ import org.chromium.components.browser_ui.bottomsheet.BottomSheetType;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ 
+ /** The extensions menu shown as a card from the bottom of the screen, like the share card. */
+ @NullMarked
+@@ -21,17 +30,22 @@ class ExtensionsMenuSheetContent implements BottomSheetContent {
+             new BottomSheetType.Builder().setUserInitiated(true).build();
+     private static final int BOTTOM_PADDING_DP = 16;
+ 
+-    private final FrameLayout mContainer;
++    private final LinearLayout mContainer;
+ 
+     /**
+      * @param menuView the menu's own view, moved into the card for as long as it is shown.
+      */
+     ExtensionsMenuSheetContent(Context context, View menuView) {
+-        mContainer = new FrameLayout(context);
++        mContainer = new LinearLayout(context);
++        mContainer.setOrientation(LinearLayout.VERTICAL);
+         if (menuView.getParent() instanceof ViewGroup parent) parent.removeView(menuView);
+         mContainer.addView(
+                 menuView,
+-                new FrameLayout.LayoutParams(
++                new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
++        mContainer.addView(
++                createBareFilterRow(context),
++                new LinearLayout.LayoutParams(
+                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+         // The card has its own background, corners and handle; the pop-up's panel would draw a
+         // second card inside it.
+@@ -45,6 +59,69 @@ class ExtensionsMenuSheetContent implements BottomSheetContent {
+         mContainer.setPadding(0, 0, 0, Math.round(BOTTOM_PADDING_DP * density));
+     }
+ 
++    /**
++     * The BareFilter switch. The list is read by uBlock Origin when it starts, so a change is picked
++     * up the next time Bare starts.
++     */
++    private static View createBareFilterRow(Context context) {
++        float density = context.getResources().getDisplayMetrics().density;
++        int sidePadding = Math.round(20 * density);
++        int verticalPadding = Math.round(12 * density);
++
++        LinearLayout row = new LinearLayout(context);
++        row.setOrientation(LinearLayout.HORIZONTAL);
++        row.setGravity(Gravity.CENTER_VERTICAL);
++        row.setPadding(sidePadding, verticalPadding, sidePadding, verticalPadding);
++
++        LinearLayout text = new LinearLayout(context);
++        text.setOrientation(LinearLayout.VERTICAL);
++
++        LinearLayout titleLine = new LinearLayout(context);
++        titleLine.setOrientation(LinearLayout.HORIZONTAL);
++        titleLine.setGravity(Gravity.CENTER_VERTICAL);
++        TextView title = new TextView(context);
++        title.setText("BareFilter");
++        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
++        title.setTypeface(Typeface.DEFAULT_BOLD);
++        title.setTextColor(SemanticColorUtils.getDefaultTextColor(context));
++        titleLine.addView(title);
++        TextView beta = new TextView(context);
++        beta.setText("beta");
++        beta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
++        beta.setTextColor(SemanticColorUtils.getDefaultIconColorAccent1(context));
++        beta.setPadding(Math.round(8 * density), 0, 0, 0);
++        titleLine.addView(beta);
++        text.addView(titleLine);
++
++        TextView description = new TextView(context);
++        description.setText(
++                "Hides app banners and pop-ups on a few sites, and updates itself. "
++                        + "A change applies the next time Bare starts.");
++        description.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
++        description.setTextColor(SemanticColorUtils.getDefaultTextColorSecondary(context));
++        text.addView(description);
++        row.addView(
++                text,
++                new LinearLayout.LayoutParams(
++                        0, ViewGroup.LayoutParams.WRAP_CONTENT, /* weight= */ 1f));
++
++        MaterialSwitch toggle = new MaterialSwitch(context);
++        toggle.setChecked(
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_FILTER_ENABLED, true));
++        toggle.setOnCheckedChangeListener(
++                (button, checked) ->
++                        ChromeSharedPreferences.getInstance()
++                                .writeBoolean(ChromePreferenceKeys.BARE_FILTER_ENABLED, checked));
++        toggle.setContentDescription("BareFilter");
++        LinearLayout.LayoutParams toggleParams =
++                new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        toggleParams.setMarginStart(Math.round(12 * density));
++        row.addView(toggle, toggleParams);
++        return row;
++    }
++
+     /** Hands the menu's view back once the card has gone. */
+     void release() {
+         mContainer.removeAllViews();

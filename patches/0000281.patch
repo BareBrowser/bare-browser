@@ -1,0 +1,354 @@
+diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/java/res/xml/main_preferences.xml
+index edb65d693b2..66ec8cec726 100644
+--- a/chrome/android/java/res/xml/main_preferences.xml
++++ b/chrome/android/java/res/xml/main_preferences.xml
+@@ -181,6 +181,12 @@ found in the LICENSE file.
+         android:key="bare_app_icon"
+         android:order="33"
+         android:title="@string/bare_app_icon_title"/>
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_smooth_scrolling"
++        android:order="32"
++        android:persistent="false"
++        android:title="@string/bare_smooth_scrolling_title"
++        android:summary="@string/bare_smooth_scrolling_summary"/>
+     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+         android:key="bare_glass"
+         android:order="33"
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 8f648fa9af7..24aa1f20013 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -133,6 +133,9 @@ found in the LICENSE file.
+     <string name="bare_settings_cat_browsing_summary" translatable="false">Search, tabs, downloads, media and haptics</string>
+     <string name="bare_media_haptics_title" translatable="false">Media &amp; Haptics</string>
+     <string name="bare_haptics_title" translatable="false">Haptic feedback</string>
++    <string name="bare_smooth_scrolling_title" translatable="false">Smooth scrolling</string>
++    <string name="bare_smooth_scrolling_restart_message" translatable="false">Restart Bare to change scrolling.</string>
++    <string name="bare_smooth_scrolling_summary" translatable="false">A flick stops where your finger says, like a native app, and does not run on for pages. Turning it off applies the next time Bare starts</string>
+     <string name="bare_glass_title" translatable="false">Frosted glass</string>
+     <string name="bare_glass_summary" translatable="false">Translucent, blurred panels, starting with the tabs drawer</string>
+     <string name="bare_incognito_mode" translatable="false">Incognito mode</string>
+@@ -176,9 +179,13 @@ found in the LICENSE file.
+     <string name="bare_whats_new_title" translatable="false">Updated</string>
+     <string name="bare_whats_new_link" translatable="false">See what\'s new</string>
+     <string name="bare_whats_new_continue" translatable="false">Continue</string>
+-    <string name="bare_whats_new_menu_left" translatable="false">Translate pages with your own server</string>
+-    <string name="bare_whats_new_toolbar" translatable="false">Translation stays on while you stay on the site</string>
+-    <string name="bare_whats_new_new_tab" translatable="false">The address bar now moves with the keyboard</string>
++    <string name="bare_whats_new_smooth" translatable="false">Smooth scrolling that feels native</string>
++    <string name="bare_whats_new_menu_order" translatable="false">Rearrange the items in your menu</string>
++    <string name="bare_whats_new_barefilter" translatable="false">BareFilter hides app banners (beta)</string>
++    <string name="bare_whats_new_task_manager" translatable="false">Task manager</string>
++    <string name="bare_whats_new_toolbar_readable" translatable="false">A readable toolbar in the minimal bar</string>
++    <string name="bare_whats_new_storage" translatable="false">A new Bare storage page</string>
++    <string name="bare_whats_new_sidebar_button" translatable="false">A more responsive sidebar button</string>
+     <string name="bare_whats_new_security" translatable="false">Built on Chromium %1$s</string>
+     <string name="bare_whats_new_more" translatable="false">And many more features and fixes</string>
+     <string name="bare_welcome_restart" translatable="false">Back to beginning</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
+index bb224c9a49f..bbe2bf0c600 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
+@@ -138,7 +138,8 @@ public final class BareSettingsLayout {
+                                             "search_engine",
+                                             "tabs",
+                                             "media",
+-                                            "downloads")),
++                                            "downloads",
++                                            "bare_smooth_scrolling")),
+                             new Group(
+                                     R.string.bare_settings_group_tools,
+                                     new Entry(
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+index e155cc720c5..c9e95b5f2fd 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+@@ -23,6 +23,7 @@ import android.view.View;
+ import android.widget.FrameLayout;
+ import android.widget.ImageView;
+ 
++import androidx.appcompat.app.AlertDialog;
+ import androidx.lifecycle.Lifecycle;
+ import androidx.preference.ListPreference;
+ import androidx.activity.OnBackPressedCallback;
+@@ -45,6 +46,7 @@ import org.chromium.build.annotations.Initializer;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.lifetime.ApplicationLifetime;
+ import org.chromium.chrome.browser.appearance.settings.AppearanceSettingsFragment;
+ import org.chromium.chrome.browser.night_mode.NightModeUtils;
+ import org.chromium.chrome.browser.autofill.settings.SettingsNavigationHelper;
+@@ -139,6 +141,8 @@ public class MainSettings extends ChromeBaseSettingsFragment
+     public static final String PREF_BARE_OPEN_LINKS_IN_APPS = "bare_open_links_in_apps";
+     public static final String PREF_BARE_APP_ICON = "bare_app_icon";
+     private static final String PREF_BARE_GLASS = "bare_glass";
++    private static final String PREF_BARE_SMOOTH_SCROLLING = "bare_smooth_scrolling";
++    private static @Nullable Boolean sRunningSmoothScrolling;
+     private static final String PREF_BARE_THEME = "bare_ui_theme";
+     private static final String PREF_BARE_SHORTCUT = "bare_toolbar_shortcut";
+     private static final String PREF_BARE_TOOLBAR = "bare_toolbar";
+@@ -491,6 +495,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
+         setUpOpenLinksInAppsRow();
+         setUpAppIconRow();
+         setUpGlassRow();
++        setUpSmoothScrollingRow();
+ 
+         cachePreferences();
+         updateAutofillPreferences();
+@@ -1066,6 +1071,38 @@ public class MainSettings extends ChromeBaseSettingsFragment
+                 });
+     }
+ 
++    /** The switch for smooth scrolling. On unless the user turned it off. */
++    private void setUpSmoothScrollingRow() {
++        ChromeSwitchPreference row =
++                (ChromeSwitchPreference) findPreference(PREF_BARE_SMOOTH_SCROLLING);
++        if (row == null) return;
++        boolean saved =
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_SMOOTH_SCROLLING, true);
++        // What the running browser uses is what the setting said when Bare started, which is what
++        // it says the first time this page opens, before it can be changed here.
++        if (sRunningSmoothScrolling == null) sRunningSmoothScrolling = saved;
++        row.setChecked(saved);
++        row.setOnPreferenceChangeListener(
++                (pref, newValue) -> {
++                    ChromeSharedPreferences.getInstance()
++                            .writeBoolean(
++                                    ChromePreferenceKeys.BARE_SMOOTH_SCROLLING, (boolean) newValue);
++                    if ((boolean) newValue != sRunningSmoothScrolling) {
++                        new AlertDialog.Builder(
++                                        requireContext(), R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                                .setMessage(R.string.bare_smooth_scrolling_restart_message)
++                                .setPositiveButton(
++                                        R.string.bare_user_agent_restart,
++                                        (dialog, which) ->
++                                                ApplicationLifetime.terminate(/* restart= */ true))
++                                .setNegativeButton(R.string.bare_user_agent_later, null)
++                                .show();
++                    }
++                    return true;
++                });
++    }
++
+     /** The switch for frosted glass. On unless the user turned it off. */
+     private void setUpGlassRow() {
+         ChromeSwitchPreference row = (ChromeSwitchPreference) findPreference(PREF_BARE_GLASS);
+diff --git a/chrome/browser/chrome_browser_field_trials.cc b/chrome/browser/chrome_browser_field_trials.cc
+index a3341be4e13..9d37bb745e2 100644
+--- a/chrome/browser/chrome_browser_field_trials.cc
++++ b/chrome/browser/chrome_browser_field_trials.cc
+@@ -26,6 +26,8 @@
+ #include "components/metrics/metrics_pref_names.h"
+ #include "components/metrics/persistent_histograms.h"
+ #include "components/site_isolation/features.h"
++#include "chrome/browser/preferences/android/chrome_shared_preferences.h"
++#include "ui/events/gesture_detection/smooth_scrolling.h"
+ #include "components/variations/feature_overrides.h"
+ #include "components/version_info/version_info.h"
+ #include "third_party/blink/public/common/features.h"
+@@ -128,6 +130,17 @@ void ChromeBrowserFieldTrials::RegisterFeatureOverrides(
+   variations::FeatureOverrides feature_overrides(*feature_list);
+ 
+ #if BUILDFLAG(IS_ANDROID)
++  // Bare: smooth scrolling is on unless the user turned it off in Settings,
++  // Browsing. The browser decides here, and the feature list carries the answer
++  // to every process, including the one that reads the touches.
++  {
++    base::android::SharedPreferencesManager prefs =
++        android::shared_preferences::GetChromeSharedPreferences();
++    const bool smooth = prefs.ReadBoolean("Chrome.Bare.SmoothScrolling", true);
++    if (!smooth) {
++      feature_overrides.DisableFeature(ui::kBareSmoothScrolling);
++    }
++  }
+ #if BUILDFLAG(IS_DESKTOP_ANDROID)
+   // Nota bene: Anything here is expected to be short-lived, unless deemed too
+   // risky to launch to non-desktop platforms. New features being added here
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 77c42d3baee..965b4d9942d 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -447,6 +447,12 @@ public final class ChromePreferenceKeys {
+     /** Whether uBlock Origin is subscribed to BareFilter, the list Bare hosts. On unless turned off. */
+     public static final String BARE_FILTER_ENABLED = "Chrome.Bare.BareFilterEnabled";
+ 
++    /** Whether flicks follow the finger like a native list: capped speed, no boosting. On unless off. */
++    public static final String BARE_SMOOTH_SCROLLING = "Chrome.Bare.SmoothScrolling";
++
++    /** The order the user gave the menu items, as their names joined by commas. */
++    public static final String BARE_APP_MENU_ORDER = "Chrome.Bare.AppMenuOrder";
++
+     /** Whether page translation through Google is on. Off until the user turns it on. */
+     public static final String BARE_PAGE_TRANSLATION = "Bare.Translate.PageTranslation";
+     public static final String BARE_TRANSLATE_OWN_SERVER = "Bare.Translate.OwnServer";
+@@ -1446,6 +1452,8 @@ public final class ChromePreferenceKeys {
+                 BARE_MINIMAL_LAYOUT,
+                 BARE_MENU_ON_LEFT,
+                 BARE_FILTER_ENABLED,
++                BARE_SMOOTH_SCROLLING,
++                BARE_APP_MENU_ORDER,
+                 BARE_AMOLED_WHEN_SYSTEM_DARK,
+                 WEBSTORE_DESKTOP_SITE_CLEARED,
+                 WEBSTORE_DESKTOP_SITE_SEEDED,
+diff --git a/content/browser/renderer_host/input/fling_scheduler_android.cc b/content/browser/renderer_host/input/fling_scheduler_android.cc
+index 796b8d683d0..c79bfffa2f4 100644
+--- a/content/browser/renderer_host/input/fling_scheduler_android.cc
++++ b/content/browser/renderer_host/input/fling_scheduler_android.cc
+@@ -2,6 +2,7 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
++#include "ui/events/gesture_detection/smooth_scrolling.h"
+ #include "content/browser/renderer_host/input/fling_scheduler_android.h"
+ 
+ #include "base/feature_list.h"
+@@ -66,6 +67,11 @@ bool FlingSchedulerAndroid::ProgressFlingOnFlingStart() {
+ }
+ 
+ bool FlingSchedulerAndroid::ShouldUseMobileFlingCurve() {
++  // Bare: smooth scrolling flings with the curve a native Android list uses,
++  // which the desktop curve this build turns on does not.
++  if (ui::IsSmoothScrollingEnabled()) {
++    return true;
++  }
+   if (base::FeatureList::IsEnabled(features::kDesktopFlingCurveOnAndroid)) {
+     return false;
+   }
+diff --git a/ui/events/BUILD.gn b/ui/events/BUILD.gn
+index 6c72373bc8f..82ca07dd9a5 100644
+--- a/ui/events/BUILD.gn
++++ b/ui/events/BUILD.gn
+@@ -541,6 +541,8 @@ component("gesture_detection") {
+     "gesture_detection/gesture_touch_uma_histogram.cc",
+     "gesture_detection/gesture_touch_uma_histogram.h",
+     "gesture_detection/scale_gesture_detector.cc",
++    "gesture_detection/smooth_scrolling.cc",
++    "gesture_detection/smooth_scrolling.h",
+     "gesture_detection/scale_gesture_detector.h",
+     "gesture_detection/scale_gesture_listeners.cc",
+     "gesture_detection/scale_gesture_listeners.h",
+diff --git a/ui/events/blink/fling_booster.cc b/ui/events/blink/fling_booster.cc
+index 6e1945a7426..61c396a3312 100644
+--- a/ui/events/blink/fling_booster.cc
++++ b/ui/events/blink/fling_booster.cc
+@@ -2,6 +2,7 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
++#include "ui/events/gesture_detection/smooth_scrolling.h"
+ #include "ui/events/blink/fling_booster.h"
+ 
+ #include "base/trace_event/trace_event.h"
+@@ -37,7 +38,7 @@ gfx::Vector2dF FlingBooster::GetVelocityForFlingStart(
+   TRACE_EVENT2("input", "FlingBooster::GetVelocityForFlingStart", "vx",
+                velocity.x(), "vy", velocity.y());
+ 
+-  if (ShouldBoostFling(fling_start)) {
++  if (ShouldBoostFling(fling_start) && !IsSmoothScrollingEnabled()) {
+     velocity += previous_fling_starting_velocity_;
+     TRACE_EVENT_INSTANT("input", "Boosted", "vx", velocity.x(), "vy",
+                         velocity.y());
+diff --git a/ui/events/gesture_detection/gesture_detector.cc b/ui/events/gesture_detection/gesture_detector.cc
+index dd6a293e613..5630ff967a4 100644
+--- a/ui/events/gesture_detection/gesture_detector.cc
++++ b/ui/events/gesture_detection/gesture_detector.cc
+@@ -2,6 +2,7 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
++#include "ui/events/gesture_detection/smooth_scrolling.h"
+ #include "ui/events/gesture_detection/gesture_detector.h"
+ 
+ #include <stddef.h>
+@@ -231,7 +232,8 @@ bool GestureDetector::OnTouchEvent(const MotionEvent& ev,
+ 
+       // Check the dot product of current velocities.
+       // If the pointer that left was opposing another velocity vector, clear.
+-      velocity_tracker_.ComputeCurrentVelocity(1000, max_fling_velocity_);
++      velocity_tracker_.ComputeCurrentVelocity(
++            1000, LimitFlingVelocity(max_fling_velocity_));
+       const int up_index = ev.GetActionIndex();
+       const int id1 = ev.GetPointerId(up_index);
+       const float vx1 = velocity_tracker_.GetXVelocity(id1);
+@@ -423,7 +425,8 @@ bool GestureDetector::OnTouchEvent(const MotionEvent& ev,
+           // A fling must travel the minimum tap distance.
+           current_single_tap_repeat_count_ = 0;
+           const int pointer_id = ev.GetPointerId(0);
+-          velocity_tracker_.ComputeCurrentVelocity(1000, max_fling_velocity_);
++          velocity_tracker_.ComputeCurrentVelocity(
++            1000, LimitFlingVelocity(max_fling_velocity_));
+           const float velocity_y = velocity_tracker_.GetYVelocity(pointer_id);
+           const float velocity_x = velocity_tracker_.GetXVelocity(pointer_id);
+ 
+diff --git a/ui/events/gesture_detection/smooth_scrolling.cc b/ui/events/gesture_detection/smooth_scrolling.cc
+new file mode 100644
+index 00000000000..f0325a0209a
+--- /dev/null
++++ b/ui/events/gesture_detection/smooth_scrolling.cc
+@@ -0,0 +1,29 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "ui/events/gesture_detection/smooth_scrolling.h"
++
++#include <algorithm>
++
++namespace ui {
++
++BASE_FEATURE(kBareSmoothScrolling, base::FEATURE_ENABLED_BY_DEFAULT);
++
++namespace {
++
++constexpr float kSmoothMaxFlingVelocityDips = 3500.f;
++
++}  // namespace
++
++bool IsSmoothScrollingEnabled() {
++  return base::FeatureList::IsEnabled(kBareSmoothScrolling);
++}
++
++float LimitFlingVelocity(float max_velocity) {
++  return IsSmoothScrollingEnabled()
++             ? std::min(max_velocity, kSmoothMaxFlingVelocityDips)
++             : max_velocity;
++}
++
++}  // namespace ui
+diff --git a/ui/events/gesture_detection/smooth_scrolling.h b/ui/events/gesture_detection/smooth_scrolling.h
+new file mode 100644
+index 00000000000..4418db95d22
+--- /dev/null
++++ b/ui/events/gesture_detection/smooth_scrolling.h
+@@ -0,0 +1,28 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef UI_EVENTS_GESTURE_DETECTION_SMOOTH_SCROLLING_H_
++#define UI_EVENTS_GESTURE_DETECTION_SMOOTH_SCROLLING_H_
++
++#include "base/feature_list.h"
++#include "ui/events/gesture_detection/gesture_detection_export.h"
++
++namespace ui {
++
++// Smooth scrolling makes a flick behave like one in a native Android list: it
++// cannot start faster than a set speed, it glides on the curve a native list
++// uses, and a flick while the page is still moving does not add its speed to
++// the one before. It is on unless the user turned it off in Settings; the
++// browser decides that at startup and every process is told the same.
++GESTURE_DETECTION_EXPORT BASE_DECLARE_FEATURE(kBareSmoothScrolling);
++
++GESTURE_DETECTION_EXPORT bool IsSmoothScrollingEnabled();
++
++// The fastest a flick may start, in dips per second. With smooth scrolling on
++// this is the lower of `max_velocity` and a fixed limit.
++GESTURE_DETECTION_EXPORT float LimitFlingVelocity(float max_velocity);
++
++}  // namespace ui
++
++#endif  // UI_EVENTS_GESTURE_DETECTION_SMOOTH_SCROLLING_H_

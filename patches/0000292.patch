@@ -1,0 +1,184 @@
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
+index 03548ca4bc3..a8f3b84a4af 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
+@@ -7,6 +7,8 @@ package org.chromium.chrome.browser.toolbar.extensions;
+ import android.app.Activity;
+ import android.content.Context;
+ import android.content.res.ColorStateList;
++import org.chromium.base.ContextUtils;
++import android.widget.ScrollView;
+ import android.graphics.Rect;
+ import android.os.Handler;
+ import android.os.Looper;
+@@ -42,6 +44,7 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
+ import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+ import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvider;
+ import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
++import org.chromium.components.browser_ui.widget.RiseSheet;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.components.feature_engagement.EventConstants;
+ import org.chromium.components.feature_engagement.FeatureConstants;
+@@ -115,6 +118,7 @@ public class ExtensionsMenuCoordinator
+ 
+     // The menu opens as a bottom card where the window has a bottom sheet, else as the pop-up.
+     private @Nullable ExtensionsMenuSheetContent mSheetContent;
++    private boolean mRiseSheetShown;
+     private @Nullable BottomSheetController mSheetController;
+     private final BottomSheetObserver mSheetObserver =
+             new BottomSheetObserver() {
+@@ -305,14 +309,29 @@ public class ExtensionsMenuCoordinator
+             mExtensionsMenuButton.showMenu();
+             return;
+         }
+-        mSheetController = controller;
+         mSheetContent = new ExtensionsMenuSheetContent(mContext, mContentView);
+-        controller.addObserver(mSheetObserver);
+         mIsMenuOpen = true;
++        // Bare: the card rises from behind the toolbar, like the menu.
++        android.app.Activity activity = ContextUtils.activityFromContext(mContext);
++        if (activity != null) {
++            ScrollView scroll = new ScrollView(mContext);
++            scroll.addView(mSheetContent.getContentView());
++            if (RiseSheet.show(
++                    activity.getWindow().getDecorView(), scroll, scroll, this::onSheetGone)) {
++                mRiseSheetShown = true;
++                return;
++            }
++        }
++        mSheetController = controller;
++        controller.addObserver(mSheetObserver);
+         controller.requestShowContent(mSheetContent, /* animate= */ true);
+     }
+ 
+     private void dismissMenu() {
++        if (mRiseSheetShown) {
++            RiseSheet.closeActive();
++            return;
++        }
+         if (mSheetContent != null && mSheetController != null) {
+             mSheetController.hideContent(mSheetContent, /* animate= */ true);
+             return;
+@@ -325,6 +344,7 @@ public class ExtensionsMenuCoordinator
+         ExtensionsMenuSheetContent content = mSheetContent;
+         if (content == null) return;
+         mSheetContent = null;
++        mRiseSheetShown = false;
+         if (mSheetController != null) {
+             mSheetController.removeObserver(mSheetObserver);
+             mSheetController = null;
+diff --git a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
+index 32e3233f97b..42f09236fa2 100644
+--- a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
++++ b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
+@@ -8,6 +8,11 @@ import android.animation.Animator;
+ import android.animation.AnimatorListenerAdapter;
+ import android.animation.ValueAnimator;
+ import android.content.Context;
++import android.widget.TextView;
++import android.widget.ImageView;
++import android.content.res.ColorStateList;
++import android.graphics.Canvas;
++import android.graphics.Bitmap;
+ import android.graphics.Color;
+ import android.graphics.Rect;
+ import android.graphics.drawable.ColorDrawable;
+@@ -145,6 +150,7 @@ public final class RiseSheet {
+         handleParams.bottomMargin = Math.round(10 * density);
+         mCard.addView(handle, handleParams);
+         if (content.getParent() instanceof ViewGroup parent) parent.removeView(content);
++        adapt(content, isLight(color) ? 0xFF1B1B1F : 0xFFE6E6EA, 10);
+         mCard.addView(
+                 content,
+                 new LinearLayout.LayoutParams(
+@@ -206,32 +212,70 @@ public final class RiseSheet {
+         return fallback;
+     }
+ 
++    /**
++     * The colour the bottom toolbar is drawn in, read by drawing the bar itself, so the card is the
++     * colour the user sees whatever the theme says.
++     */
+     private static @ColorInt int toolbarColor(View root, Context context) {
+-        View address = find(root, "control_container");
+-        View bar = address != null && address.isShown() ? address : null;
+         int[] at = new int[2];
+-        if (bar != null) {
+-            bar.getLocationOnScreen(at);
+-            if (at[1] <= root.getHeight() / 2) bar = null;
++        View address = find(root, "control_container");
++        if (address != null && address.isShown()) {
++            address.getLocationOnScreen(at);
++            if (at[1] > root.getHeight() / 2) {
++                Integer color = sample(address);
++                if (color != null) return color;
++            }
++        }
++        View row = find(root, "bottom_app_bar_container");
++        if (row != null && row.isShown()) {
++            Integer color = sample(row);
++            if (color != null) return color;
+         }
+-        if (bar == null) bar = find(root, "bottom_app_bar_container");
+-        Integer color = bar == null ? null : plainColor(bar, 3);
+-        return color != null ? color : SemanticColorUtils.getColorSurfaceContainerHigh(context);
++        return SemanticColorUtils.getColorSurfaceContainerHigh(context);
+     }
+ 
+-    private static @Nullable Integer plainColor(View view, int depth) {
+-        Drawable background = view.getBackground();
+-        if (view.getVisibility() == View.VISIBLE
+-                && background instanceof ColorDrawable plain
+-                && Color.alpha(plain.getColor()) == 255) {
+-            return plain.getColor();
+-        }
+-        if (depth == 0 || !(view instanceof ViewGroup group)) return null;
+-        for (int i = 0; i < group.getChildCount(); i++) {
+-            Integer color = plainColor(group.getChildAt(i), depth - 1);
+-            if (color != null) return color;
++    /** The colour at the left edge of {@code bar}, outside the address field, or null. */
++    private static @Nullable Integer sample(View bar) {
++        if (bar.getWidth() <= 0 || bar.getHeight() <= 0) return null;
++        float density = bar.getResources().getDisplayMetrics().density;
++        Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
++        Canvas canvas = new Canvas(bitmap);
++        canvas.translate(-2 * density, -bar.getHeight() / 2f);
++        bar.draw(canvas);
++        int pixel = bitmap.getPixel(0, 0);
++        bitmap.recycle();
++        return Color.alpha(pixel) == 255 ? pixel : null;
++    }
++
++    private static boolean isLight(@ColorInt int color) {
++        return (0.299 * Color.red(color) + 0.587 * Color.green(color) + 0.114 * Color.blue(color))
++                > 150;
++    }
++
++    /**
++     * Makes the card contents follow the card: their own plain backgrounds go, and text and icon
++     * tints that follow the app theme take the colour that reads on the card.
++     */
++    private static void adapt(View view, @ColorInt int text, int depth) {
++        if (view.getBackground() instanceof ColorDrawable) view.setBackground(null);
++        if (view instanceof TextView label && label.getBackground() == null) {
++            int current = label.getCurrentTextColor();
++            int spread =
++                    Math.max(Color.red(current), Math.max(Color.green(current), Color.blue(current)))
++                            - Math.min(
++                                    Color.red(current),
++                                    Math.min(Color.green(current), Color.blue(current)));
++            if (spread < 48) {
++                float sp =
++                        label.getTextSize()
++                                / label.getResources().getDisplayMetrics().scaledDensity;
++                label.setTextColor(sp > 13.5f ? text : (text & 0x00FFFFFF) | 0xB3000000);
++            }
++        } else if (view instanceof ImageView icon && icon.getImageTintList() != null) {
++            icon.setImageTintList(ColorStateList.valueOf(text));
+         }
+-        return null;
++        if (depth == 0 || !(view instanceof ViewGroup group)) return;
++        for (int i = 0; i < group.getChildCount(); i++) adapt(group.getChildAt(i), text, depth - 1);
+     }
+ 
+     private static @Nullable View find(View root, String name) {

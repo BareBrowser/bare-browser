@@ -1,0 +1,111 @@
+diff --git a/chrome/browser/tab_ui/android/java/src/org/chromium/chrome/browser/tab_ui/TabListFaviconProvider.java b/chrome/browser/tab_ui/android/java/src/org/chromium/chrome/browser/tab_ui/TabListFaviconProvider.java
+index 2ae0f9ff053..9ec4595dd2b 100644
+--- a/chrome/browser/tab_ui/android/java/src/org/chromium/chrome/browser/tab_ui/TabListFaviconProvider.java
++++ b/chrome/browser/tab_ui/android/java/src/org/chromium/chrome/browser/tab_ui/TabListFaviconProvider.java
+@@ -729,10 +729,8 @@ public class TabListFaviconProvider {
+ 
+     private static Drawable processBitmapNoBackground(
+             Context context, Bitmap bitmap, int size, int cornerRadius) {
+-        return ViewUtils.createRoundedBitmapDrawable(
+-                context.getResources(),
+-                Bitmap.createScaledBitmap(bitmap, size, size, true),
+-                cornerRadius);
++        return ViewUtils.createCircularBitmapDrawable(
++                context.getResources(), Bitmap.createScaledBitmap(bitmap, size, size, true));
+     }
+ 
+     private static Drawable processBitmapWithBackground(
+diff --git a/chrome/browser/ui/android/favicon/java/src/org/chromium/chrome/browser/ui/favicon/FaviconUtils.java b/chrome/browser/ui/android/favicon/java/src/org/chromium/chrome/browser/ui/favicon/FaviconUtils.java
+index cf0713c3b88..49ac9e9a1db 100644
+--- a/chrome/browser/ui/android/favicon/java/src/org/chromium/chrome/browser/ui/favicon/FaviconUtils.java
++++ b/chrome/browser/ui/android/favicon/java/src/org/chromium/chrome/browser/ui/favicon/FaviconUtils.java
+@@ -89,10 +89,7 @@ public class FaviconUtils {
+      */
+     public static RoundedBitmapDrawable createRoundedBitmapDrawable(
+             Resources resources, Bitmap icon) {
+-        return ViewUtils.createRoundedBitmapDrawable(
+-                resources,
+-                icon,
+-                resources.getDimensionPixelSize(R.dimen.default_favicon_corner_radius));
++        return ViewUtils.createCircularBitmapDrawable(resources, icon);
+     }
+ 
+     /**
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
+index a3519dd744c..1a6f6a5722c 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
+@@ -80,6 +80,7 @@ import org.chromium.content_public.browser.NavigationController;
+ import org.chromium.content_public.browser.NavigationEntry;
+ import org.chromium.content_public.browser.WebContents;
+ import org.chromium.ui.base.DeviceFormFactor;
++import org.chromium.ui.base.ViewUtils;
+ import org.chromium.ui.base.WindowAndroid;
+ import org.chromium.ui.modelutil.PropertyModel;
+ import org.chromium.url.GURL;
+@@ -137,7 +138,9 @@ public class StatusMediator
+                 public void onFaviconUpdated(
+                         Tab tab, @Nullable Bitmap icon, @Nullable GURL iconUrl) {
+                     if (icon == null || !tab.getUrl().equals(mSiteFaviconUrl)) return;
+-                    mSiteFavicon = new BitmapDrawable(mContext.getResources(), icon);
++                    mSiteFavicon =
++                            ViewUtils.createCircularBitmapDrawable(
++                                    mContext.getResources(), icon);
+                     mSiteFaviconPending = false;
+                     showSiteFavicon();
+                 }
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusView.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusView.java
+index 3b25ff32374..5a105194dac 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusView.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusView.java
+@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.omnibox.status;
+ 
+ import android.content.Context;
+ import android.content.res.Resources;
++import android.graphics.Outline;
+ import android.graphics.Rect;
+ import android.graphics.drawable.Drawable;
+ import android.graphics.drawable.RotateDrawable;
+@@ -14,6 +15,7 @@ import android.view.MotionEvent;
+ import android.view.TouchDelegate;
+ import android.view.View;
+ import android.view.ViewGroup;
++import android.view.ViewOutlineProvider;
+ import android.view.ViewStub;
+ import android.view.accessibility.AccessibilityNodeInfo;
+ import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction;
+@@ -116,6 +118,15 @@ public class StatusView extends LinearLayout {
+ 
+         mIconView = findViewById(R.id.location_bar_status_icon);
+         mSiteFaviconView = findViewById(R.id.location_bar_site_favicon);
++        // Whatever drawable arrives, the site icon is shown as a circle.
++        mSiteFaviconView.setOutlineProvider(
++                new ViewOutlineProvider() {
++                    @Override
++                    public void getOutline(View view, Outline outline) {
++                        outline.setOval(0, 0, view.getWidth(), view.getHeight());
++                    }
++                });
++        mSiteFaviconView.setClipToOutline(true);
+         mStatusIconView = findViewById(R.id.location_bar_status_icon_view);
+         mVerboseStatusTextView = findViewById(R.id.location_bar_verbose_status);
+         mSeparatorView = findViewById(R.id.location_bar_verbose_status_separator);
+diff --git a/ui/android/java/src/org/chromium/ui/base/ViewUtils.java b/ui/android/java/src/org/chromium/ui/base/ViewUtils.java
+index a80e3dc9128..3f2d239b1db 100644
+--- a/ui/android/java/src/org/chromium/ui/base/ViewUtils.java
++++ b/ui/android/java/src/org/chromium/ui/base/ViewUtils.java
+@@ -267,6 +267,14 @@ public final class ViewUtils {
+         }
+     }
+ 
++    /** Returns a drawable that shows the bitmap cropped to a circle, as a site icon. */
++    public static RoundedBitmapDrawable createCircularBitmapDrawable(
++            Resources resources, Bitmap icon) {
++        RoundedBitmapDrawable circular = RoundedBitmapDrawableFactory.create(resources, icon);
++        circular.setCircular(true);
++        return circular;
++    }
++
+     /**
+      * Creates a {@link RoundedBitmapDrawable} using the provided {@link Bitmap} and cornerRadius.
+      *

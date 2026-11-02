@@ -1,0 +1,95 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java
+index 761fe1d06a2..f5c1816d4b4 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java
+@@ -23,7 +23,6 @@ import org.chromium.chrome.browser.ui.actions.ActionId;
+ import org.chromium.chrome.browser.ui.actions.ActionProperties;
+ import org.chromium.chrome.browser.ui.actions.ActionRegistry;
+ import org.chromium.chrome.browser.ui.actions.ActionUtils;
+-import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.ui.modelutil.PropertyModel;
+ 
+ import java.util.ArrayList;
+@@ -100,9 +99,7 @@ public class BareToolbarActionCatalogue implements Destroyable {
+         registerPlain(
+                 registry,
+                 ActionId.VERTICAL_TABS,
+-                BottomBarConfigUtils.isSidebarOnRight(context)
+-                        ? R.drawable.ic_bare_vertical_tabs_right
+-                        : R.drawable.ic_bare_vertical_tabs,
++                R.drawable.ic_bare_vertical_tabs,
+                 R.string.bare_toolbar_action_vertical_tabs,
+                 verticalTabs);
+         adapt(source, tabProvider, registry, context, ActionId.SHARE, AdaptiveToolbarButtonVariant.SHARE);
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
+index 579ce610835..6c1652093c6 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
+@@ -10,6 +10,7 @@ import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewGroup;
++import android.widget.ImageView;
+ 
+ import androidx.annotation.ColorInt;
+ 
+@@ -30,6 +31,7 @@ import org.chromium.chrome.browser.ui.actions.ActionProperties;
+ import org.chromium.chrome.browser.ui.actions.ActionRegistry;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarButtonManager.ActionConfig;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarHostManager.Host;
++import org.chromium.components.browser_ui.util.TextResolver;
+ import org.chromium.components.embedder_support.util.UrlUtilities;
+ import org.chromium.ui.modaldialog.ModalDialogManager;
+ import org.chromium.ui.modelutil.PropertyKey;
+@@ -130,6 +132,9 @@ public class BottomBarCoordinator
+         mActionRegistry = actionRegistry;
+         applySidebarIcon();
+         mMcp = PropertyModelChangeProcessor.create(mModel, mView, BottomBarViewBinder::bind);
++        mView.addOnLayoutChangeListener(
++                (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) ->
++                        applySidebarIcon());
+ 
+         // What a sideways drag along the bar does. Built here because it needs the window, and
+         // handed to the view because the view is what the finger is on.
+@@ -283,21 +288,30 @@ public class BottomBarCoordinator
+      * drawn into when the new action needs a different one.
+      */
+     /**
+-     * Draws the sidebar button's icon facing the side the sidebar opens from: the panel on the
+-     * right when the sidebar is on the right.
++     * Faces the sidebar button toward the side it opens from: the icon is drawn for the left, and
++     * flipped when the button sits in the right half of the bar.
+      */
+     private void applySidebarIcon() {
+         PropertyModel model = mActionRegistry.get(ActionId.VERTICAL_TABS).get();
+         if (model == null) return;
+-        Context context = mView.getContext();
+-        String name =
+-                BottomBarConfigUtils.isSidebarOnRight(context)
+-                        ? "ic_bare_vertical_tabs_right"
+-                        : "ic_bare_vertical_tabs";
+-        int icon =
+-                context.getResources().getIdentifier(name, "drawable", context.getPackageName());
+-        if (icon != 0 && model.get(ActionProperties.ICON_ID) != icon) {
+-            model.set(ActionProperties.ICON_ID, icon);
++        TextResolver resolver = model.get(ActionProperties.CONTENT_DESCRIPTION_RESOLVER);
++        if (resolver == null) return;
++        CharSequence label = resolver.resolve(mView.getContext());
++        int[] barLocation = new int[2];
++        mView.getLocationOnScreen(barLocation);
++        flipSidebarIcon(mView, label, barLocation[0] + mView.getWidth() / 2);
++    }
++
++    private static void flipSidebarIcon(View view, CharSequence label, int barCenterX) {
++        if (view instanceof ImageView && label.equals(view.getContentDescription())) {
++            int[] location = new int[2];
++            view.getLocationOnScreen(location);
++            int center = location[0] + view.getWidth() / 2;
++            view.setScaleX(center > barCenterX ? -1f : 1f);
++        }
++        if (!(view instanceof ViewGroup group)) return;
++        for (int i = 0; i < group.getChildCount(); i++) {
++            flipSidebarIcon(group.getChildAt(i), label, barCenterX);
+         }
+     }
+ 
