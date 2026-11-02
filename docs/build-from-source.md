@@ -107,6 +107,10 @@ The 32-bit build differs in exactly three lines: `target_cpu = "arm"`, the versi
 `802000040` that `tools/version.py gn arm` emits, and `clang_use_default_sample_profile = false`,
 which stops GN demanding an AFDO profile this checkout never syncs.
 
+Bare CrashLab is the same build with `bare_diagnostics = true` and
+`chrome_public_manifest_package = "org.barebrowser.crashlab"`, with its own version codes. See
+[docs/crashlab.md](crashlab.md).
+
 ```bash
 mkdir -p out/Bare
 $EDITOR out/Bare/args.gn          # paste the block above
