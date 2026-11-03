@@ -1,0 +1,342 @@
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+index 28ebd0c7d71..50f83fb41b2 100644
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -3158,6 +3158,7 @@ if (_is_default_toolchain) {
+       "java/src/org/chromium/chrome/browser/backup/DictPrefBackupSerializer.java",
+       "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
+       "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
++      "java/src/org/chromium/chrome/browser/bare/BareUboUpdate.java",
+       "java/src/org/chromium/chrome/browser/browserservices/digitalgoods/SiteIsolator.java",
+       "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappBridge.java",
+       "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappGeolocationBridge.java",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index e841cbadf32..8f5100f7ed8 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -248,6 +248,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BarePressedMedia.java",
+   "java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java",
+   "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
++  "java/src/org/chromium/chrome/browser/bare/BareUboUpdate.java",
+   "java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java",
+diff --git a/chrome/android/java/res/xml/bare_extensions_preferences.xml b/chrome/android/java/res/xml/bare_extensions_preferences.xml
+index 31b0e2c30f1..4b6033481a3 100644
+--- a/chrome/android/java/res/xml/bare_extensions_preferences.xml
++++ b/chrome/android/java/res/xml/bare_extensions_preferences.xml
+@@ -19,4 +19,17 @@ found in the LICENSE file.
+         android:title="@string/bare_keep_extensions_title"
+         android:summary="@string/bare_keep_extensions_summary" />
+ 
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_ubo_auto_update"
++        android:order="2"
++        android:persistent="false"
++        android:title="@string/bare_ubo_update_title"
++        android:summary="@string/bare_ubo_update_summary" />
++
++    <Preference
++        android:key="bare_ubo_check_now"
++        android:order="3"
++        android:persistent="false"
++        android:title="@string/bare_ubo_check_title" />
++
+ </PreferenceScreen>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUboUpdate.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUboUpdate.java
+new file mode 100644
+index 00000000000..c72e167f36b
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUboUpdate.java
+@@ -0,0 +1,43 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import org.jni_zero.CalledByNative;
++import org.jni_zero.JniType;
++import org.jni_zero.NativeMethods;
++
++import org.chromium.base.Callback;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.profiles.Profile;
++
++/**
++ * Asks the extension updater to look for a newer uBlock Origin now.
++ *
++ * <p>The updater already checks every few hours by itself. This is the check the user asks for, and
++ * it goes ahead even if the scheduled checks are turned off.
++ */
++@NullMarked
++public final class BareUboUpdate {
++    private BareUboUpdate() {}
++
++    /**
++     * Checks for an update and passes the result to {@code callback} once the check has finished
++     * and any update has been installed. The result is the installed version before and after,
++     * separated by a bar. Both are empty if uBlock Origin is not installed.
++     */
++    public static void checkNow(Profile profile, Callback<String> callback) {
++        BareUboUpdateJni.get().checkNow(profile, callback);
++    }
++
++    @CalledByNative
++    private static void onResult(Callback<String> callback, @JniType("std::string") String result) {
++        callback.onResult(result);
++    }
++
++    @NativeMethods
++    interface Natives {
++        void checkNow(Profile profile, Callback<String> callback);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java
+index 4ff8664bd29..cd837ea42e7 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java
+@@ -8,6 +8,7 @@ import android.content.Context;
+ import android.os.Bundle;
+ 
+ import androidx.preference.ListPreference;
++import androidx.preference.Preference;
+ 
+ import org.chromium.base.supplier.MonotonicObservableSupplier;
+ import org.chromium.base.supplier.ObservableSuppliers;
+@@ -15,6 +16,7 @@ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.BareUboUpdate;
+ import org.chromium.chrome.browser.preferences.Pref;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
+ import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
+@@ -33,6 +35,8 @@ public class BareExtensionsSettingsFragment extends ChromeBaseSettingsFragment {
+ 
+     public static final String PREF_KEEP_RUNNING = "bare_keep_extensions_running";
+     public static final String PREF_PRESENTATION = "bare_extension_presentation";
++    public static final String PREF_UBO_AUTO_UPDATE = "bare_ubo_auto_update";
++    public static final String PREF_UBO_CHECK_NOW = "bare_ubo_check_now";
+ 
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+             ObservableSuppliers.createMonotonic();
+@@ -75,6 +79,41 @@ public class BareExtensionsSettingsFragment extends ChromeBaseSettingsFragment {
+                             .setBoolean(Pref.BARE_KEEP_EXTENSIONS_ALIVE, (boolean) newValue);
+                     return true;
+                 });
++
++        ChromeSwitchPreference uboAutoUpdate = findPreference(PREF_UBO_AUTO_UPDATE);
++        assert uboAutoUpdate != null;
++        uboAutoUpdate.setChecked(UserPrefs.get(getProfile()).getBoolean(Pref.BARE_UBO_AUTO_UPDATE));
++        uboAutoUpdate.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    UserPrefs.get(getProfile())
++                            .setBoolean(Pref.BARE_UBO_AUTO_UPDATE, (boolean) newValue);
++                    return true;
++                });
++
++        Preference checkNow = findPreference(PREF_UBO_CHECK_NOW);
++        assert checkNow != null;
++        checkNow.setOnPreferenceClickListener(
++                preference -> {
++                    preference.setEnabled(false);
++                    preference.setSummary(R.string.bare_ubo_checking);
++                    BareUboUpdate.checkNow(
++                            getProfile(),
++                            result -> {
++                                preference.setEnabled(true);
++                                preference.setSummary(checkResultText(result));
++                            });
++                    return true;
++                });
++    }
++
++    /** The sentence for a check's result, which is the version before and after, split by a bar. */
++    private String checkResultText(String result) {
++        String[] versions = result.split("\\|", -1);
++        String before = versions.length > 0 ? versions[0] : "";
++        String after = versions.length > 1 ? versions[1] : "";
++        if (before.isEmpty()) return getString(R.string.bare_ubo_not_installed);
++        if (before.equals(after)) return getString(R.string.bare_ubo_up_to_date, after);
++        return getString(R.string.bare_ubo_updated, before, after);
+     }
+ 
+     private String presentationLabel(int presentation) {
+diff --git a/chrome/browser/extensions/updater/extension_updater.cc b/chrome/browser/extensions/updater/extension_updater.cc
+index b538f65c4a3..c9db1365d8a 100644
+--- a/chrome/browser/extensions/updater/extension_updater.cc
++++ b/chrome/browser/extensions/updater/extension_updater.cc
+@@ -50,6 +50,7 @@
+ #include "extensions/browser/pending_extension_info.h"
+ #include "extensions/browser/pending_extension_manager.h"
+ #include "extensions/browser/pref_names.h"
++#include "chrome/common/pref_names.h"
+ #include "extensions/browser/updater/extension_cache.h"
+ #include "extensions/browser/updater/extension_update_data.h"
+ #include "extensions/buildflags/buildflags.h"
+@@ -479,6 +480,13 @@ void ExtensionUpdater::CheckNow(CheckParams params) {
+     for (const auto& e : registry_->GenerateInstalledExtensionsSet()) {
+       ids_to_update.insert(e->id());
+     }
++
++    // Bare: uBlock Origin is left out of the scheduled checks when the user
++    // has turned its updates off. A check the user asks for names it in
++    // `params.ids` and does not come through here.
++    if (prefs_ && !prefs_->GetBoolean(prefs::kBareUboAutoUpdate)) {
++      ids_to_update.erase("fkgkibajhfbepljeaefdnfnegdcjomkh");
++    }
+   }
+ 
+   // Filter out extensions that can't or shouldn't be updated.
+diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
+index f2b5b349e46..c59f85e0f9b 100644
+--- a/chrome/browser/prefs/browser_prefs.cc
++++ b/chrome/browser/prefs/browser_prefs.cc
+@@ -2372,6 +2372,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
+ #if BUILDFLAG(IS_ANDROID)
+   registry->RegisterBooleanPref(prefs::kBackgroundMediaPlayback, false);
+   registry->RegisterBooleanPref(prefs::kBareKeepExtensionsAlive, true);
++  registry->RegisterBooleanPref(prefs::kBareUboAutoUpdate, true);
+   registry->RegisterIntegerPref(prefs::kClearOnExitTypes, 0);
+   registry->RegisterBooleanPref(prefs::kClearOnExitPending, false);
+ #endif  // BUILDFLAG(IS_ANDROID)
+diff --git a/chrome/browser/ui/android/BUILD.gn b/chrome/browser/ui/android/BUILD.gn
+index a8d61cb0fd0..b674476413b 100644
+--- a/chrome/browser/ui/android/BUILD.gn
++++ b/chrome/browser/ui/android/BUILD.gn
+@@ -65,6 +65,7 @@ if (is_android) {
+       "bare_media_registry.cc",
+       "bare_media_registry.h",
+       "bare_script_bridge.cc",
++      "bare_ubo_update.cc",
+       "context_menu_helper.cc",
+       "context_menu_helper.h",
+       "extension_tab_context_menu_bridge.cc",
+diff --git a/chrome/browser/ui/android/bare_ubo_update.cc b/chrome/browser/ui/android/bare_ubo_update.cc
+new file mode 100644
+index 00000000000..2d366b2e73d
+--- /dev/null
++++ b/chrome/browser/ui/android/bare_ubo_update.cc
+@@ -0,0 +1,72 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <list>
++#include <string>
++#include <utility>
++
++#include "base/android/jni_android.h"
++#include "base/android/scoped_java_ref.h"
++#include "base/functional/bind.h"
++#include "base/memory/weak_ptr.h"
++#include "chrome/browser/extensions/updater/extension_updater.h"
++#include "chrome/browser/profiles/profile.h"
++#include "extensions/browser/extension_registry.h"
++#include "extensions/common/extension.h"
++
++// Must come after all headers that specialize FromJniType() / ToJniType().
++#include "chrome/android/chrome_jni_headers/BareUboUpdate_jni.h"
++
++namespace {
++
++// The id uBlock Origin has when it is installed from its author's own CRX.
++constexpr char kUboId[] = "fkgkibajhfbepljeaefdnfnegdcjomkh";
++
++std::string InstalledVersion(Profile* profile) {
++  const extensions::Extension* extension =
++      extensions::ExtensionRegistry::Get(profile)->GetInstalledExtension(kUboId);
++  return extension ? extension->GetVersionForDisplay() : std::string();
++}
++
++void Report(base::android::ScopedJavaGlobalRef<jobject> callback,
++            std::string before,
++            base::WeakPtr<Profile> profile) {
++  // Once the check is over the profile may be gone; the version is then taken
++  // to be unchanged.
++  std::string after = profile ? InstalledVersion(profile.get()) : before;
++  Java_BareUboUpdate_onResult(base::android::AttachCurrentThread(), callback,
++                              before + "|" + after);
++}
++
++}  // namespace
++
++static void JNI_BareUboUpdate_CheckNow(
++    JNIEnv* env,
++    const base::android::JavaRef<jobject>& jprofile,
++    const base::android::JavaRef<jobject>& jcallback) {
++  Profile* profile = Profile::FromJavaObject(jprofile);
++  base::android::ScopedJavaGlobalRef<jobject> callback(jcallback);
++  if (!profile) {
++    Java_BareUboUpdate_onResult(env, callback, "|");
++    return;
++  }
++
++  std::string before = InstalledVersion(profile);
++  extensions::ExtensionUpdater* updater =
++      extensions::ExtensionUpdater::Get(profile);
++  if (before.empty() || !updater || !updater->enabled()) {
++    Java_BareUboUpdate_onResult(env, callback, before + "|" + before);
++    return;
++  }
++
++  extensions::ExtensionUpdater::CheckParams params;
++  params.ids = std::list<extensions::ExtensionId>{kUboId};
++  params.install_immediately = true;
++  params.fetch_priority = extensions::DownloadFetchPriority::kForeground;
++  params.callback = base::BindOnce(&Report, callback, before,
++                                   profile->GetWeakPtr());
++  updater->CheckNow(std::move(params));
++}
++
++DEFINE_JNI(BareUboUpdate)
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index c4517214db7..7d5764f9ed6 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4486,6 +4486,27 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_KEEP_EXTENSIONS_SUMMARY" desc="Summary of the setting that keeps extensions running in the background. Says what it does and that it costs some memory and battery.">
+         Make it less likely that Android stops extensions while you are in another app, and load them again if it does. Uses a little more memory and battery.
+       </message>
++      <message name="IDS_BARE_UBO_UPDATE_TITLE" desc="Setting that keeps uBlock Origin up to date. [CHAR_LIMIT=48]">
++        Keep uBlock Origin up to date
++      </message>
++      <message name="IDS_BARE_UBO_UPDATE_SUMMARY" desc="Summary of the setting that keeps uBlock Origin up to date. Says it is checked about every five hours.">
++        Check for a newer uBlock Origin release about every five hours and install it without asking.
++      </message>
++      <message name="IDS_BARE_UBO_CHECK_TITLE" desc="Button that checks for a new version of uBlock Origin now. [CHAR_LIMIT=48]">
++        Check for uBlock Origin updates
++      </message>
++      <message name="IDS_BARE_UBO_CHECKING" desc="Shown while the check for a new uBlock Origin runs. [CHAR_LIMIT=40]">
++        Checking…
++      </message>
++      <message name="IDS_BARE_UBO_UP_TO_DATE" desc="Result of the check: no newer version was found. The version is the one installed.">
++        Version <ph name="VERSION">%1$s<ex>1.75.2</ex></ph>. No newer version found.
++      </message>
++      <message name="IDS_BARE_UBO_UPDATED" desc="Result of the check: uBlock Origin was updated from one version to another.">
++        Updated from <ph name="OLD_VERSION">%1$s<ex>1.75.0</ex></ph> to <ph name="NEW_VERSION">%2$s<ex>1.75.2</ex></ph>.
++      </message>
++      <message name="IDS_BARE_UBO_NOT_INSTALLED" desc="Result of the check: uBlock Origin is not installed. [CHAR_LIMIT=60]">
++        uBlock Origin is not installed.
++      </message>
+       <message name="IDS_BARE_MINIMAL_LAYOUT_TITLE" desc="Setting that removes the bottom button bar and leaves only the address bar. [CHAR_LIMIT=40]">
+         Minimal address bar
+       </message>
+diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
+index 8d1cf882053..294bdd65b33 100644
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -356,6 +356,11 @@ inline constexpr char kBackgroundMediaPlayback[] =
+ // class.
+ inline constexpr char kBareKeepExtensionsAlive[] = "bare.keep_extensions_alive";
+ 
++// Bare Browser: whether the extension updater keeps uBlock Origin up to date.
++// On by default. A check the user asks for ignores it. Exposed to Java through
++// the generated Pref class.
++inline constexpr char kBareUboAutoUpdate[] = "bare.ubo_auto_update";
++
+ // Bare Browser: which browsing data the Exit item in the app menu clears, as a
+ // bitmask of BrowsingDataType values. Zero, the default, clears nothing and
+ // makes Exit close the browser and no more. Exposed to Java through the
