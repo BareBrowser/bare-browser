@@ -1,0 +1,27 @@
+diff --git a/ui/gl/gl_switches.cc b/ui/gl/gl_switches.cc
+index 8b942e0c71e5b8e3a0bb8984bada140edfe5cdeb..1cd2b7d66848b27f752a4ade4abd92abddde1831 100644
+--- a/ui/gl/gl_switches.cc
++++ b/ui/gl/gl_switches.cc
+@@ -311,13 +311,21 @@ BASE_FEATURE(kSkipVulkanBlocklist,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ bool IsDefaultANGLEVulkan() {
+-  // Force on if DefaultANGLEVulkan feature is enabled from command line.
+   base::FeatureList* feature_list = base::FeatureList::GetInstance();
++  // Bare: the desktop Android block in chrome_browser_field_trials.cc turns
++  // this feature on with no field trial attached, so it counts as a command
++  // line override here and used to skip every device check below. Phones with
++  // an old Vulkan driver then got an ANGLE display that cannot create a
++  // context, and the browser stopped after three GPU process failures. On
++  // Android the checks always run.
++#if !BUILDFLAG(IS_ANDROID)
++  // Force on if DefaultANGLEVulkan feature is enabled from command line.
+   if (feature_list && feature_list->IsFeatureOverriddenFromCommandLine(
+                           features::kDefaultANGLEVulkan.name,
+                           base::FeatureList::OVERRIDE_ENABLE_FEATURE)) {
+     return true;
+   }
++#endif  // !BUILDFLAG(IS_ANDROID)
+ 
+   // The platform checks below gather Vulkan system info before consulting the
+   // feature so that ineligible devices never join a DefaultANGLEVulkan field
