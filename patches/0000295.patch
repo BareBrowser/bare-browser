@@ -1,0 +1,31 @@
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
+index 734864978e7..5c634338167 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
+@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
+ 
+ import android.content.Context;
+ import android.graphics.Canvas;
++import android.graphics.Matrix;
+ import android.graphics.Paint;
+ import android.graphics.RectF;
+ import android.os.Handler;
+@@ -789,9 +790,16 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+      */
+     public boolean isOnCard(float rawX, float rawY) {
+         if (mCardColor == 0 || !isShown() || !updateCardRect()) return false;
++        // The list is flipped when the address bar is at the bottom, so its screen location is
++        // the corner of the flipped frame. Take the point back through the view's own matrix.
++        if (!(getParent() instanceof View)) return false;
+         int[] at = new int[2];
+-        getLocationOnScreen(at);
+-        return mCardRect.contains(rawX - at[0], rawY - at[1]);
++        ((View) getParent()).getLocationOnScreen(at);
++        Matrix inverse = new Matrix();
++        if (!getMatrix().invert(inverse)) return false;
++        float[] point = {rawX - at[0] - getLeft(), rawY - at[1] - getTop()};
++        inverse.mapPoints(point);
++        return mCardRect.contains(point[0], point[1]);
+     }
+ 
+     /** Bare: whether a touch lands on the empty space above the card, not on a row. */
