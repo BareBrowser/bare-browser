@@ -89,10 +89,10 @@ index 00000000000..34eb122a18a
 +    </group>
 +</vector>
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ManageSpaceActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ManageSpaceActivity.java
-index 2f0c2498d8d..15704acea11 100644
+index 2f0c2498d8d..92512e3c039 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ManageSpaceActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ManageSpaceActivity.java
-@@ -6,22 +6,33 @@ package org.chromium.chrome.browser.site_settings;
+@@ -6,22 +6,37 @@ package org.chromium.chrome.browser.site_settings;
  
  import static org.chromium.build.NullUtil.assumeNonNull;
  
@@ -100,12 +100,15 @@ index 2f0c2498d8d..15704acea11 100644
 +import android.animation.ValueAnimator;
  import android.annotation.SuppressLint;
  import android.app.ActivityManager;
++import android.app.Dialog;
  import android.content.Context;
 -import android.content.DialogInterface;
  import android.content.pm.ActivityInfo;
  import android.content.pm.PackageManager.NameNotFoundException;
  import android.content.res.Resources;
++import android.graphics.Color;
 +import android.graphics.Typeface;
++import android.graphics.drawable.ColorDrawable;
 +import android.graphics.drawable.GradientDrawable;
  import android.os.Bundle;
  import android.text.TextUtils;
@@ -115,6 +118,9 @@ index 2f0c2498d8d..15704acea11 100644
  import android.view.View;
 -import android.widget.Button;
 +import android.view.ViewGroup;
++import android.view.ViewTreeObserver;
++import android.view.Window;
++import android.view.animation.DecelerateInterpolator;
 +import android.widget.FrameLayout;
 +import android.widget.ImageView;
 +import android.widget.LinearLayout;
@@ -124,12 +130,10 @@ index 2f0c2498d8d..15704acea11 100644
  
  import androidx.annotation.VisibleForTesting;
 -import androidx.appcompat.app.AlertDialog;
-+
-+import com.google.android.material.bottomsheet.BottomSheetDialog;
  
  import org.chromium.base.Log;
  import org.chromium.base.metrics.RecordUserAction;
-@@ -49,28 +60,37 @@ import org.chromium.components.browser_ui.site_settings.SiteSettingsCategory;
+@@ -49,28 +64,37 @@ import org.chromium.components.browser_ui.site_settings.SiteSettingsCategory;
  import org.chromium.components.browser_ui.site_settings.Website;
  import org.chromium.components.browser_ui.site_settings.Website.StoredDataClearedCallback;
  import org.chromium.components.browser_ui.site_settings.WebsitePermissionsFetcher;
@@ -171,13 +175,13 @@ index 2f0c2498d8d..15704acea11 100644
 +    private TextView mFreeUpButton;
 +    private TextView mManageLink;
 +    private TextView mClearAllButton;
-+    private @Nullable BottomSheetDialog mClearAllDialog;
++    private @Nullable Dialog mClearAllDialog;
 +    private long mRareBytes;
 +    private boolean mFreeingUp;
  
      private static boolean sActivityNotExportedChecked;
  
-@@ -78,37 +98,39 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
+@@ -78,37 +102,39 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
      private @Nullable ChromeSiteSettingsDelegate mChromeSiteSettingsDelegate;
      private @Nullable BrowsingDataModel mBrowsingDataModel;
  
@@ -240,7 +244,7 @@ index 2f0c2498d8d..15704acea11 100644
          super.onCreate(savedInstanceState);
  
          BrowserParts parts =
-@@ -120,9 +142,8 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
+@@ -120,9 +146,8 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
  
                      @Override
                      public void onStartupFailure(@Nullable Exception failureCause) {
@@ -252,7 +256,7 @@ index 2f0c2498d8d..15704acea11 100644
                      }
                  };
  
-@@ -139,8 +160,8 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
+@@ -139,8 +164,8 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
  
          // If the native library crashes and kills the browser process, there is no guarantee
          // java-side the pref will be written before the process dies. We want to make sure we
@@ -263,7 +267,7 @@ index 2f0c2498d8d..15704acea11 100644
          ChromeSharedPreferences.getInstance()
                  .writeStringSync(
                          ChromePreferenceKeys.SETTINGS_WEBSITE_FAILED_BUILD_VERSION, productVersion);
-@@ -151,16 +172,17 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
+@@ -151,16 +176,17 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
          } catch (Exception e) {
              // We don't want to exit, as the user should still be able to clear all browsing data.
              Log.e(TAG, "Unable to load native library.", e);
@@ -285,7 +289,7 @@ index 2f0c2498d8d..15704acea11 100644
          RecordUserAction.record("Android.ManageSpace");
  
          // The BrowsingDataModel is fetched at the end of the native initialization to ensure all
-@@ -212,15 +234,233 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
+@@ -212,15 +238,233 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
      }
  
      @VisibleForTesting
@@ -429,8 +433,8 @@ index 2f0c2498d8d..15704acea11 100644
 +        params.bottomMargin = dp(10);
 +        card.setLayoutParams(params);
 +        return card;
-+    }
-+
+     }
+ 
 +    private GradientDrawable pill(int color) {
 +        GradientDrawable background = new GradientDrawable();
 +        background.setColor(color);
@@ -517,14 +521,14 @@ index 2f0c2498d8d..15704acea11 100644
 +
 +        row.setMinimumHeight(dp(28));
 +        return row;
-     }
- 
++    }
++
 +    // The numbers.
 +
      /** This refreshes the storage numbers by fetching all site permissions. */
      private void refreshStorageNumbers() {
          Profile profile = ProfileManager.getLastUsedRegularProfile();
-@@ -231,108 +471,157 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
+@@ -231,108 +475,189 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
                  new SizeCalculator());
      }
  
@@ -540,12 +544,8 @@ index 2f0c2498d8d..15704acea11 100644
 +        mRareBytes = rareBytes;
 +        mRareSizeText.setText(Formatter.formatFileSize(this, rareBytes));
 +        showSites(sites);
-     }
- 
--    /** Called after we finish clearing unimportant data. Re-enables our buttons. */
--    private void clearUnimportantDataDone() {
--        mClearUnimportantButton.setEnabled(true);
--        mManageSiteDataButton.setEnabled(true);
++    }
++
 +    private void freeUpSpace() {
 +        if (mFreeingUp) return;
 +        if (mRareBytes <= 0) {
@@ -557,6 +557,33 @@ index 2f0c2498d8d..15704acea11 100644
 +        mFreeUpButton.setAlpha(0.5f);
 +        mSummaryText.setText(R.string.storage_management_computing_size);
 +        new UnimportantSiteDataClearer(mRareBytes).clearData();
++    }
++
++    private void freeUpDone(long freedBytes) {
++        mFreeingUp = false;
++        mFreeUpButton.setEnabled(true);
++        mFreeUpButton.setAlpha(1f);
++        Toast.makeText(
++                        this,
++                        "Freed " + Formatter.formatFileSize(this, freedBytes),
++                        Toast.LENGTH_SHORT)
++                .show();
++        refreshStorageNumbers();
+     }
+ 
+-    /** Called after we finish clearing unimportant data. Re-enables our buttons. */
+-    private void clearUnimportantDataDone() {
+-        mClearUnimportantButton.setEnabled(true);
+-        mManageSiteDataButton.setEnabled(true);
++    private void openSiteList() {
++        Bundle initialArguments = new Bundle();
++        initialArguments.putString(
++                SingleCategorySettings.EXTRA_CATEGORY,
++                SiteSettingsCategory.preferenceKey(SiteSettingsCategory.Type.USE_STORAGE));
++        initialArguments.putString(
++                SingleCategorySettings.EXTRA_TITLE, getString(R.string.website_settings_storage));
++        SettingsNavigation settingsNavigation = SettingsNavigationFactory.createSettingsNavigation();
++        settingsNavigation.startSettings(this, AllSiteSettings.class, initialArguments);
      }
  
 -    @Override
@@ -567,12 +594,84 @@ index 2f0c2498d8d..15704acea11 100644
 -                builder.setPositiveButton(
 -                        R.string.ok,
 -                        new DialogInterface.OnClickListener() {
--                            @Override
++    /** The reset, behind a card from the bottom that says what it takes away. */
++    private void showClearAllSheet() {
++        if (mClearAllDialog != null && mClearAllDialog.isShowing()) return;
++        final ActivityManager activityManager =
++                (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
++        // A plain dialog at the bottom rather than BottomSheetDialog: R8 strips
++        // BottomSheetBehavior, which that dialog's layout only names in a string.
++        Dialog dialog = new Dialog(this);
++        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
++        LinearLayout content = new LinearLayout(this);
++        content.setOrientation(LinearLayout.VERTICAL);
++        content.setPadding(dp(20), dp(16), dp(20), dp(24));
++        GradientDrawable sheet = new GradientDrawable();
++        sheet.setColor(SemanticColorUtils.getSheetBgColor(this));
++        float corner = dp(28);
++        sheet.setCornerRadii(new float[] {corner, corner, corner, corner, 0, 0, 0, 0});
++        content.setBackground(sheet);
++        content.addView(text("Clear all data?", 18, true, SemanticColorUtils.getDefaultTextColor(this)));
++        TextView message =
++                text(
++                        "This removes bookmarks, history, saved logins and settings, and signs you"
++                                + " out of every site. It can't be undone.",
++                        13,
++                        false,
++                        SemanticColorUtils.getDefaultTextColorSecondary(this));
++        message.setPadding(0, dp(8), 0, dp(16));
++        content.addView(message);
++
++        LinearLayout buttons = new LinearLayout(this);
++        buttons.setOrientation(LinearLayout.HORIZONTAL);
++        buttons.setGravity(Gravity.END);
++        TextView cancel =
++                text("Cancel", 14, false, SemanticColorUtils.getDefaultTextColor(this));
++        cancel.setPadding(dp(18), dp(10), dp(18), dp(10));
++        cancel.setOnClickListener(v -> dialog.dismiss());
++        buttons.addView(cancel);
++        TextView confirm = text("Clear all data", 14, true, 0xFFFFFFFF);
++        confirm.setPadding(dp(18), dp(10), dp(18), dp(10));
++        confirm.setBackground(pill(0xFFD85A30));
++        confirm.setOnClickListener(
++                v -> {
++                    SearchActivityPreferencesManager.resetCachedValues();
++                    SiteChannelsManager.getInstance().deleteAllSiteChannels();
++                    activityManager.clearApplicationUserData();
++                });
++        LinearLayout.LayoutParams confirmParams = new LinearLayout.LayoutParams(-2, -2);
++        confirmParams.setMarginStart(dp(10));
++        buttons.addView(confirm, confirmParams);
++        content.addView(buttons);
++
++        dialog.setContentView(content);
++        Window window = dialog.getWindow();
++        if (window != null) {
++            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
++            window.setLayout(
++                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++            window.setGravity(Gravity.BOTTOM);
++            // Fades the dim in and out; the card itself slides up below.
++            window.setWindowAnimations(android.R.style.Animation_Toast);
++        }
++        content.getViewTreeObserver()
++                .addOnPreDrawListener(
++                        new ViewTreeObserver.OnPreDrawListener() {
+                             @Override
 -                            public void onClick(DialogInterface dialog, int id) {
 -                                mUnimportantDialog = null;
 -                                clearUnimportantData();
--                            }
--                        });
++                            public boolean onPreDraw() {
++                                content.getViewTreeObserver().removeOnPreDrawListener(this);
++                                content.setTranslationY(content.getHeight());
++                                content.animate()
++                                        .translationY(0)
++                                        .setDuration(250)
++                                        .setInterpolator(new DecelerateInterpolator())
++                                        .start();
++                                return true;
+                             }
+                         });
 -                builder.setNegativeButton(R.string.cancel, null);
 -                builder.setTitle(R.string.storage_delete_site_storage_title);
 -                builder.setMessage(R.string.storage_management_clear_unimportant_dialog_text);
@@ -609,75 +708,11 @@ index 2f0c2498d8d..15704acea11 100644
 -            builder.setMessage(R.string.storage_management_reset_app_dialog_text);
 -            builder.create().show();
 -        }
-+    private void freeUpDone(long freedBytes) {
-+        mFreeingUp = false;
-+        mFreeUpButton.setEnabled(true);
-+        mFreeUpButton.setAlpha(1f);
-+        Toast.makeText(
-+                        this,
-+                        "Freed " + Formatter.formatFileSize(this, freedBytes),
-+                        Toast.LENGTH_SHORT)
-+                .show();
-+        refreshStorageNumbers();
-     }
- 
+-    }
+-
 -    private void onSiteStorageSizeCalculated(long totalSize, long unimportantSize) {
 -        mSiteDataSizeText.setText(Formatter.formatFileSize(this, totalSize));
 -        mUnimportantSiteDataSizeText.setText(Formatter.formatFileSize(this, unimportantSize));
-+    private void openSiteList() {
-+        Bundle initialArguments = new Bundle();
-+        initialArguments.putString(
-+                SingleCategorySettings.EXTRA_CATEGORY,
-+                SiteSettingsCategory.preferenceKey(SiteSettingsCategory.Type.USE_STORAGE));
-+        initialArguments.putString(
-+                SingleCategorySettings.EXTRA_TITLE, getString(R.string.website_settings_storage));
-+        SettingsNavigation settingsNavigation = SettingsNavigationFactory.createSettingsNavigation();
-+        settingsNavigation.startSettings(this, AllSiteSettings.class, initialArguments);
-+    }
-+
-+    /** The reset, behind a card from the bottom that says what it takes away. */
-+    private void showClearAllSheet() {
-+        if (mClearAllDialog != null && mClearAllDialog.isShowing()) return;
-+        final ActivityManager activityManager =
-+                (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
-+        BottomSheetDialog dialog = new BottomSheetDialog(this);
-+        LinearLayout content = new LinearLayout(this);
-+        content.setOrientation(LinearLayout.VERTICAL);
-+        content.setPadding(dp(20), dp(16), dp(20), dp(24));
-+        content.addView(text("Clear all data?", 18, true, SemanticColorUtils.getDefaultTextColor(this)));
-+        TextView message =
-+                text(
-+                        "This removes bookmarks, history, saved logins and settings, and signs you"
-+                                + " out of every site. It can't be undone.",
-+                        13,
-+                        false,
-+                        SemanticColorUtils.getDefaultTextColorSecondary(this));
-+        message.setPadding(0, dp(8), 0, dp(16));
-+        content.addView(message);
-+
-+        LinearLayout buttons = new LinearLayout(this);
-+        buttons.setOrientation(LinearLayout.HORIZONTAL);
-+        buttons.setGravity(Gravity.END);
-+        TextView cancel =
-+                text("Cancel", 14, false, SemanticColorUtils.getDefaultTextColor(this));
-+        cancel.setPadding(dp(18), dp(10), dp(18), dp(10));
-+        cancel.setOnClickListener(v -> dialog.dismiss());
-+        buttons.addView(cancel);
-+        TextView confirm = text("Clear all data", 14, true, 0xFFFFFFFF);
-+        confirm.setPadding(dp(18), dp(10), dp(18), dp(10));
-+        confirm.setBackground(pill(0xFFD85A30));
-+        confirm.setOnClickListener(
-+                v -> {
-+                    SearchActivityPreferencesManager.resetCachedValues();
-+                    SiteChannelsManager.getInstance().deleteAllSiteChannels();
-+                    activityManager.clearApplicationUserData();
-+                });
-+        LinearLayout.LayoutParams confirmParams = new LinearLayout.LayoutParams(-2, -2);
-+        confirmParams.setMarginStart(dp(10));
-+        buttons.addView(confirm, confirmParams);
-+        content.addView(buttons);
-+
-+        dialog.setContentView(content);
 +        mClearAllDialog = dialog;
 +        dialog.show();
      }
@@ -709,18 +744,18 @@ index 2f0c2498d8d..15704acea11 100644
 +                Long before = byName.get(name);
 +                byName.put(name, (before == null ? 0L : before) + bytes);
 +                if (isRarelyUsed(site)) rareBytes += bytes;
-+            }
-+            List<SiteUsage> usage = new ArrayList<>();
-+            for (java.util.Map.Entry<String, Long> entry : byName.entrySet()) {
-+                usage.add(new SiteUsage(entry.getKey(), entry.getKey(), entry.getValue()));
              }
 -            onSiteStorageSizeCalculated(
 -                    siteStorageSize, siteStorageSize - importantSiteStorageTotal);
++            List<SiteUsage> usage = new ArrayList<>();
++            for (java.util.Map.Entry<String, Long> entry : byName.entrySet()) {
++                usage.add(new SiteUsage(entry.getKey(), entry.getKey(), entry.getValue()));
++            }
 +            Collections.sort(usage, (a, b) -> Long.compare(b.mBytes, a.mBytes));
 +            onSiteStorageCalculated(usage, rareBytes);
-         }
-     }
- 
++        }
++    }
++
 +    /** The name of a site as people say it: no scheme and no leading www. */
 +    private static String plainName(String origin) {
 +        String extension = "chrome-extension://";
@@ -737,7 +772,7 @@ index 2f0c2498d8d..15704acea11 100644
 +        // An extension id on its own, without the scheme in front.
 +        if (name.matches("[a-p]{32}")) {
 +            return name.equals("fkgkibajhfbepljeaefdnfnegdcjomkh") ? "uBlock Data" : "Extension data";
-+        }
+         }
 +        return name;
 +    }
 +
@@ -746,8 +781,8 @@ index 2f0c2498d8d..15704acea11 100644
 +            return !site.isDomainImportant();
 +        }
 +        return site.getLocalStorageInfo() == null || !site.getLocalStorageInfo().isDomainImportant();
-+    }
-+
+     }
+ 
      private class UnimportantSiteDataClearer
              implements WebsitePermissionsFetcher.WebsitePermissionsCallback,
                      StoredDataClearedCallback {
@@ -764,7 +799,7 @@ index 2f0c2498d8d..15704acea11 100644
  
          /**
           * We fetch all the websites and clear all the non-important data. This happens
-@@ -352,36 +641,22 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
+@@ -352,36 +677,22 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
          public void onStoredDataCleared() {
              mNumSitesClearing--;
              if (mNumSitesClearing <= 0) {

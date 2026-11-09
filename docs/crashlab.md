@@ -18,4 +18,4 @@ are not in the app's logcat.
 
 Every GitHub release has a CrashLab APK for each ABI. The Play build does not have one.
 
-Version codes for 2.0.1: 802000117 for arm64, 802000112 for 32-bit ARM.
+Version codes for 2.0.2: 802000217 for arm64, 802000212 for 32-bit ARM.

@@ -1,3 +1,29 @@
+diff --git a/content/browser/gpu/gpu_data_manager_impl_private.cc b/content/browser/gpu/gpu_data_manager_impl_private.cc
+index 0f7c49eee08..43eb372ef28 100644
+--- a/content/browser/gpu/gpu_data_manager_impl_private.cc
++++ b/content/browser/gpu/gpu_data_manager_impl_private.cc
+@@ -85,6 +85,7 @@
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ #include "base/android/application_status_listener.h"
++#include "base/android/device_info.h"
+ #endif
+ #if BUILDFLAG(IS_OZONE)
+ #include "ui/ozone/public/ozone_platform.h"
+@@ -436,8 +437,12 @@ GpuDataManagerImplPrivate::GpuDataManagerImplPrivate(GpuDataManagerImpl* owner)
+ #if BUILDFLAG(IS_MAC)
+       supports_gpu_mode_hardware_gl_(false),
+ #elif BUILDFLAG(IS_ANDROID)
++      // Bare is built as desktop Android, which turns kSkipVulkanBlocklist on
++      // for every install. A phone still needs GL to fall back to when Vulkan
++      // fails to start, or the browser has no GPU mode left and exits.
+       supports_gpu_mode_hardware_gl_(
+-          !base::FeatureList::IsEnabled(features::kSkipVulkanBlocklist)),
++          !base::FeatureList::IsEnabled(features::kSkipVulkanBlocklist) ||
++          !base::android::device_info::is_desktop()),
+ #else
+       supports_gpu_mode_hardware_gl_(true),
+ #endif
 diff --git a/ui/gl/gl_switches.cc b/ui/gl/gl_switches.cc
 index 3af41bf1f8b..93ea89ffb53 100644
 --- a/ui/gl/gl_switches.cc

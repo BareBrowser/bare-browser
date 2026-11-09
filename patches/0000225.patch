@@ -54,7 +54,7 @@ index 00000000000..fce1a7b7bd6
 +
 +</FrameLayout>
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-index 26bc20acc44..81bb9a57eb6 100644
+index 26bc20acc44..5fa6cb1576f 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 @@ -114,6 +114,7 @@ import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchMetrics;
@@ -84,7 +84,7 @@ index 26bc20acc44..81bb9a57eb6 100644
          }
      }
  
-@@ -5972,15 +5978,35 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -5972,15 +5978,41 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
          }
          Profile profile = getCurrentTabModel().getProfile();
          if (profile == null) return;
@@ -106,11 +106,15 @@ index 26bc20acc44..81bb9a57eb6 100644
 +    /**
 +     * Finishes a clear that an exit or a leave from an earlier run left pending, once the tabs are
 +     * there to close: shows nothing but the cover until the restored tabs are gone.
++     *
++     * <p>On a cold start onStart can come before the profile is ready, and the new tab needs it.
++     * The cover stays up and onDeferredStartup calls this again.
 +     */
 +    private void finishInterruptedClear() {
 +        if (!BareClearVeil.isPending()
 +                || BareClearVeil.isRunning()
-+                || !areTabModelsInitialized()) {
++                || !areTabModelsInitialized()
++                || getProfileProviderSupplier().get() == null) {
 +            return;
 +        }
 +        boolean closeTabs = BareClearOnExit.isCloseTabs();
@@ -120,14 +124,16 @@ index 26bc20acc44..81bb9a57eb6 100644
 +
 +    /** Opens a fresh tab if every tab was closed, then lets the cover go. */
 +    private void finishClear(boolean closedTabs) {
++        // Unmarked first, so that if opening the tab throws, the next start does not retry it and
++        // crash the same way.
++        BareClearVeil.end();
 +        if (closedTabs && !isActivityFinishingOrDestroyed()) {
 +            getTabCreator(/* incognito= */ false).launchNtp(TabLaunchType.FROM_CHROME_UI);
 +        }
-+        BareClearVeil.end();
      }
  
      @Override
-@@ -6017,6 +6043,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -6017,6 +6049,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
          try (TraceEvent e = TraceEvent.scoped("ChromeTabbedActivity.onResume")) {
              super.onResume();
              mStartedOtherScreen = false;

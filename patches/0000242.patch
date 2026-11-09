@@ -19,7 +19,7 @@ index 7504a733cc1..a27b6ed3af6 100644
      "//components/browser_ui/widget/android:java",
      "//components/embedder_support/android:content_view_java",
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
-index ac280685c0d..f4ac0499e81 100644
+index ac280685c0d..513f7b72e3a 100644
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
 @@ -37,6 +37,10 @@ import org.chromium.chrome.browser.ui.extensions.ExtensionsToolbarBridge;
@@ -60,7 +60,18 @@ index ac280685c0d..f4ac0499e81 100644
      private boolean mIsMenuOpen;
      private final boolean mIsWebApp;
      private final Runnable mClearOmniboxFocus;
-@@ -284,10 +299,46 @@ public class ExtensionsMenuCoordinator
+@@ -203,6 +218,10 @@ public class ExtensionsMenuCoordinator
+                                     < CLICK_TO_DISMISS_THRESHOLD_MS) {
+                         return;
+                     }
++                    // Bare: a tab that is not loaded yet, such as a restored or discarded one,
++                    // has no page for the menu to describe.
++                    Tab tab = mCurrentTabSupplier.get();
++                    if (tab == null || tab.getWebContents() == null) return;
+                     mClearOmniboxFocus.run();
+                     TrackerFactory.getTrackerForProfile(mProfile)
+                             .notifyEvent(EventConstants.EXTENSIONS_MENU_BUTTON_CLICKED);
+@@ -284,10 +303,46 @@ public class ExtensionsMenuCoordinator
                          mExtensionModels,
                          mMainPageModel,
                          mSitePermissionsPageModel,
@@ -111,7 +122,7 @@ index ac280685c0d..f4ac0499e81 100644
      }
  
      /**
-@@ -324,9 +375,7 @@ public class ExtensionsMenuCoordinator
+@@ -324,9 +379,7 @@ public class ExtensionsMenuCoordinator
      }
  
      private void setupMainPageModel() {
@@ -122,7 +133,7 @@ index ac280685c0d..f4ac0499e81 100644
          mMainPageModel.set(
                  ExtensionsMenuProperties.DISCOVER_EXTENSIONS_CLICK_LISTENER,
                  (view) -> {
-@@ -443,8 +492,7 @@ public class ExtensionsMenuCoordinator
+@@ -443,8 +496,7 @@ public class ExtensionsMenuCoordinator
                      }
                  });
          mSitePermissionsPageModel.set(
@@ -132,7 +143,7 @@ index ac280685c0d..f4ac0499e81 100644
          mSitePermissionsPageModel.set(
                  SitePermissionsPageProperties.MANAGE_EXTENSION_CLICK_LISTENER,
                  (view) -> {
-@@ -535,11 +583,15 @@ public class ExtensionsMenuCoordinator
+@@ -535,11 +587,15 @@ public class ExtensionsMenuCoordinator
  
      @Override
      public void closeExtensionsMenuIfOpen() {
@@ -280,3 +291,142 @@ index 00000000000..ab1665cc679
 +        return R.string.extensions_menu_title;
 +    }
 +}
+diff --git a/chrome/browser/ui/extensions/extensions_menu_view_model.cc b/chrome/browser/ui/extensions/extensions_menu_view_model.cc
+index 07f8519e90a..3f9d9398a9b 100644
+--- a/chrome/browser/ui/extensions/extensions_menu_view_model.cc
++++ b/chrome/browser/ui/extensions/extensions_menu_view_model.cc
+@@ -592,6 +592,9 @@ void ExtensionsMenuViewModel::UpdateSiteAccess(
+     const url::Origin& target_origin,
+     PermissionsManager::UserSiteAccess site_access) {
+   content::WebContents* web_contents = GetActiveWebContents();
++  if (!web_contents) {
++    return;
++  }
+ 
+   LogSiteAccessUpdate(site_access);
+ 
+@@ -610,6 +613,9 @@ void ExtensionsMenuViewModel::UpdateSiteAccess(
+ void ExtensionsMenuViewModel::AllowHostAccessRequest(
+     const extensions::ExtensionId& extension_id) {
+   content::WebContents* web_contents = GetActiveWebContents();
++  if (!web_contents) {
++    return;
++  }
+   extensions::ExtensionActionRunner* action_runner =
+       extensions::ExtensionActionRunner::GetForWebContents(web_contents);
+   if (!action_runner) {
+@@ -630,6 +636,9 @@ void ExtensionsMenuViewModel::AllowHostAccessRequest(
+ void ExtensionsMenuViewModel::DismissHostAccessRequest(
+     const extensions::ExtensionId& extension_id) {
+   content::WebContents* web_contents = GetActiveWebContents();
++  if (!web_contents) {
++    return;
++  }
+   auto* permissions_manager = PermissionsManager::Get(browser_->GetProfile());
+   CHECK(permissions_manager);
+   int tab_id = extensions::ExtensionTabUtil::GetTabId(web_contents);
+@@ -653,6 +662,9 @@ void ExtensionsMenuViewModel::GrantSiteAccess(
+     const extensions::ExtensionId& extension_id,
+     const url::Origin& target_origin) {
+   content::WebContents* web_contents = GetActiveWebContents();
++  if (!web_contents) {
++    return;
++  }
+   auto* profile = browser_->GetProfile();
+   const extensions::Extension* extension = GetExtension(*profile, extension_id);
+ 
+@@ -716,6 +728,9 @@ void ExtensionsMenuViewModel::RevokeSiteAccess(
+     const extensions::ExtensionId& extension_id,
+     const url::Origin& target_origin) {
+   content::WebContents* web_contents = GetActiveWebContents();
++  if (!web_contents) {
++    return;
++  }
+   auto* profile = browser_->GetProfile();
+   const extensions::Extension* extension = GetExtension(*profile, extension_id);
+ 
+@@ -784,6 +799,9 @@ void ExtensionsMenuViewModel::ExecuteAction(
+ void ExtensionsMenuViewModel::UpdateSiteSetting(
+     extensions::PermissionsManager::UserSiteSetting site_setting) {
+   content::WebContents* web_contents = GetActiveWebContents();
++  if (!web_contents) {
++    return;
++  }
+   const url::Origin& origin =
+       web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin();
+ 
+@@ -801,12 +819,18 @@ void ExtensionsMenuViewModel::UpdateSiteSetting(
+ 
+ void ExtensionsMenuViewModel::ReloadWebContents() {
+   content::WebContents* web_contents = GetActiveWebContents();
++  if (!web_contents) {
++    return;
++  }
+   web_contents->GetController().Reload(content::ReloadType::NORMAL, false);
+ }
+ 
+ bool ExtensionsMenuViewModel::CanShowSitePermissionsPage(
+     const extensions::ExtensionId& extension_id) {
+   content::WebContents* web_contents = GetActiveWebContents();
++  if (!web_contents) {
++    return false;
++  }
+   Profile* profile = browser_->GetProfile();
+   ExtensionActionViewModel* action_model = GetActionViewModel(extension_id);
+   CHECK(action_model);
+@@ -904,6 +928,9 @@ ExtensionsMenuViewModel::GetExtensionSitePermissionsState(
+   const extensions::Extension* extension = action_model->GetExtension();
+   CHECK(extension);
+   content::WebContents* web_contents = GetActiveWebContents();
++  if (!web_contents) {
++    return ExtensionSitePermissionsState();
++  }
+   const GURL& url = web_contents->GetLastCommittedURL();
+ 
+   // Extension's site permissions can only be computed when site access can be
+@@ -985,13 +1012,18 @@ ExtensionsMenuViewModel::GetMenuEntryState(
+   entry_state.action_button =
+       GetActionButtonState(extension_id, action_icon_size);
+   entry_state.context_menu_button = GetContextMenuButtonState(action_model);
++  entry_state.is_enterprise = extensions::ExtensionSystem::Get(profile)
++                                  ->management_policy()
++                                  ->HasEnterpriseForcedAccess(*extension);
++  // A tab that is not loaded has no site, so the site access controls stay
++  // hidden.
++  if (!web_contents) {
++    return entry_state;
++  }
+   entry_state.site_access_toggle = GetSiteAccessToggleState(
+       *extension, *profile, *toolbar_model_, *web_contents);
+   entry_state.site_permissions_button = GetSitePermissionsButtonState(
+       *extension, *profile, *toolbar_model_, *web_contents);
+-  entry_state.is_enterprise = extensions::ExtensionSystem::Get(profile)
+-                                  ->management_policy()
+-                                  ->HasEnterpriseForcedAccess(*extension);
+   entry_state.origin =
+       web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin();
+ 
+@@ -1014,6 +1046,11 @@ ExtensionsMenuViewModel::GetMenuEntryState(
+ ExtensionsMenuViewModel::OptionalSection
+ ExtensionsMenuViewModel::GetOptionalSection() {
+   content::WebContents* web_contents = GetActiveWebContents();
++  // On Android the active tab can be one that is not loaded yet, with no
++  // WebContents.
++  if (!web_contents) {
++    return ExtensionsMenuViewModel::OptionalSection::kNone;
++  }
+   auto reload_required = [web_contents]() {
+     return extensions::TabHelper::FromWebContents(web_contents)
+         ->IsReloadRequired();
+@@ -1205,8 +1242,9 @@ void ExtensionsMenuViewModel::OnHostAccessRequestDismissedByUser(
+   // Ignore request dismissal if web contents have navigated to a different
+   // origin from where the request originated, as navigation listeners will
+   // handle menu updates.
+-  if (GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin() !=
+-      origin) {
++  content::WebContents* web_contents = GetActiveWebContents();
++  if (!web_contents ||
++      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin() != origin) {
+     return;
+   }
+ 
