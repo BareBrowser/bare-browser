@@ -8,10 +8,10 @@ the build environment, and the docs are tracked. Build output and APKs stay loca
 ## Matched snapshot
 
 - Snapshot platform: `AndroidDesktop_arm64`
-- Commit position: `refs/branch-heads/8078@{#583}`
-- Branched from: `refs/heads/main@{#1706539}`
-- Chromium commit: `2f9a11097447f226133bc1a31c787291a5eeab98`
-- Chromium version: `156.0.8078.73`
+- Commit position: `refs/branch-heads/8103_38@{#3}`
+- Branched from: `refs/heads/main@{#1717349}`
+- Chromium commit: `800628ad1ca1fd0c51e3b43b5b2bca081e81c3f6`
+- Chromium version: `157.0.8103.46`
 
 ## Builder commands
 

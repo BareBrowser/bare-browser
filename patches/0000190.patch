@@ -1,37 +1,37 @@
-From d2c407b54f34a4a06e516d155f8bb1181e44aded Mon Sep 17 00:00:00 2001
+From 3dba147f5a111318f2389a84ac8a1c858ee2bf6d Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
-Date: Thu, 22 Oct 2026 16:29:27 +0000
+Date: Sun, 8 Nov 2026 06:43:37 +0000
 Subject: [PATCH] Patch 0000190
 
 ---
- chrome/android/chrome_java_resources.gni           |    4 
- chrome/android/chrome_java_sources.gni             |    1 
- .../android/java/res/drawable/bare_menu_close.xml  |   16 ++
- chrome/android/java/res/drawable/bare_menu_tap.xml |   18 ++
- .../res/drawable/bare_toolbar_preview_card.xml     |   13 +
- .../res/drawable/bare_toolbar_preview_pill.xml     |   12 +
- .../java/res/layout/bare_toolbar_preview.xml       |  171 +++++++++++++-----
- .../java/res/layout/bare_welcome_page_browsing.xml |    7 +
- .../java/res/layout/bare_welcome_page_toolbar.xml  |    4 
- chrome/android/java/res/values/ids.xml             |    1 
- .../res_chromium_base/values/channel_constants.xml |   16 +-
- .../chrome/browser/app/ChromeActivity.java         |    2 
- .../app/appmenu/BareAppMenuCustomization.java      |  163 ++++++++++++++++-
- .../chrome/browser/bare/BareWelcomeOverlay.java    |   70 +++++++
- .../bare/settings/BareToolbarPreviewBinder.java    |  113 ++++++++++++
- .../settings/BareToolbarPreviewPreference.java     |   77 +-------
- .../browser/download/DownloadController.java       |    3 
- .../feedback/HelpAndFeedbackLauncherImpl.java      |   64 +------
- .../tabbed_mode/IncognitoMenuItemViewBinder.java   |   13 +
- chrome/android/junit/BUILD.gn                      |    2 
- .../appmenu/BareAppMenuCustomizationUnitTest.java  |  191 ++++++++++++++++++++
- .../bare/BareWelcomeDownloadChoicesUnitTest.java   |   75 ++++++++
- .../settings/BareToolbarPreviewBinderUnitTest.java |  124 +++++++++++++
- .../DownloadControllerHandoffUnitTest.java         |   26 +++
- .../feedback/HelpAndFeedbackLauncherTest.java      |   42 ++++
- .../download/settings/DownloadSettings.java        |    9 +
- .../ui/android/strings/android_chrome_strings.grd  |   15 +-
- 27 files changed, 1047 insertions(+), 205 deletions(-)
+ chrome/android/chrome_java_resources.gni      |   4 +
+ chrome/android/chrome_java_sources.gni        |   1 +
+ .../java/res/drawable/bare_menu_close.xml     |  16 ++
+ .../java/res/drawable/bare_menu_tap.xml       |  18 ++
+ .../drawable/bare_toolbar_preview_card.xml    |  13 ++
+ .../drawable/bare_toolbar_preview_pill.xml    |  12 ++
+ .../java/res/layout/bare_toolbar_preview.xml  | 171 +++++++++++-----
+ .../res/layout/bare_welcome_page_browsing.xml |   7 +
+ .../res/layout/bare_welcome_page_toolbar.xml  |   4 +
+ chrome/android/java/res/values/ids.xml        |   1 +
+ .../values/channel_constants.xml              |  16 +-
+ .../chrome/browser/app/ChromeActivity.java    |   2 +-
+ .../app/appmenu/BareAppMenuCustomization.java | 163 +++++++++++++--
+ .../browser/bare/BareWelcomeOverlay.java      |  70 ++++++-
+ .../settings/BareToolbarPreviewBinder.java    | 113 +++++++++++
+ .../BareToolbarPreviewPreference.java         |  77 ++-----
+ .../browser/download/DownloadController.java  |   3 +-
+ .../feedback/HelpAndFeedbackLauncherImpl.java |  64 +-----
+ .../IncognitoMenuItemViewBinder.java          |  13 +-
+ chrome/android/junit/BUILD.gn                 |   2 +
+ .../BareAppMenuCustomizationUnitTest.java     | 191 +++++++++++++++++-
+ .../BareWelcomeDownloadChoicesUnitTest.java   |  75 +++++++
+ .../BareToolbarPreviewBinderUnitTest.java     | 124 ++++++++++++
+ .../DownloadControllerHandoffUnitTest.java    |  26 +++
+ .../feedback/HelpAndFeedbackLauncherTest.java |  45 +++++
+ .../download/settings/DownloadSettings.java   |   9 +
+ .../strings/android_chrome_strings.grd        |  15 +-
+ 27 files changed, 1050 insertions(+), 205 deletions(-)
  create mode 100644 chrome/android/java/res/drawable/bare_menu_close.xml
  create mode 100644 chrome/android/java/res/drawable/bare_menu_tap.xml
  create mode 100644 chrome/android/java/res/drawable/bare_toolbar_preview_card.xml
@@ -41,10 +41,10 @@ Subject: [PATCH] Patch 0000190
  create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinderUnitTest.java
 
 diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
-index 3dae327fad1..cf93ef9689b 100644
+index 9cb5602abcd..3594a2910ea 100644
 --- a/chrome/android/chrome_java_resources.gni
 +++ b/chrome/android/chrome_java_resources.gni
-@@ -469,6 +469,8 @@ chrome_java_resources = [
+@@ -452,6 +452,8 @@ chrome_java_resources = [
    "java/res/drawable/bare_welcome_button_soft.xml",
    "java/res/drawable/bare_welcome_dot.xml",
    "java/res/drawable/bare_welcome_dot_active.xml",
@@ -53,7 +53,7 @@ index 3dae327fad1..cf93ef9689b 100644
    "java/res/drawable/bare_welcome_group_bg.xml",
    "java/res/drawable/bare_welcome_seg_thumb.xml",
    "java/res/drawable/bare_welcome_seg_track.xml",
-@@ -692,8 +694,10 @@ chrome_java_resources = [
+@@ -672,8 +674,10 @@ chrome_java_resources = [
    "java/res/xml/ad_services_config.xml",
    "java/res/xml/appearance_preferences.xml",
    "java/res/xml/bare_clear_on_exit_preferences.xml",
@@ -65,10 +65,10 @@ index 3dae327fad1..cf93ef9689b 100644
    "java/res/xml/bare_extensions_preferences.xml",
    "java/res/xml/bare_push_preferences.xml",
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
-index 8a6d2537889..06db7ca4c7a 100644
+index d9a7cf467c1..d65a9f56b32 100644
 --- a/chrome/android/chrome_java_sources.gni
 +++ b/chrome/android/chrome_java_sources.gni
-@@ -246,6 +246,7 @@ chrome_java_sources = [
+@@ -245,6 +245,7 @@ chrome_java_sources = [
    "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
    "java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java",
    "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java",
@@ -388,10 +388,10 @@ index 0d6a081b8bf..04888323c65 100644
              android:layout_width="match_parent"
              android:layout_height="wrap_content"
 diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
-index 58e68f61ded..9e74756480c 100644
+index c925870527c..6f80807e8ca 100644
 --- a/chrome/android/java/res/values/ids.xml
 +++ b/chrome/android/java/res/values/ids.xml
-@@ -279,6 +279,7 @@ found in the LICENSE file.
+@@ -301,6 +301,7 @@ found in the LICENSE file.
      <item type="id" name="recent_tabs_header_menu_id" />
      <item type="id" name="recent_tabs_menu_id" />
      <item type="id" name="bare_menu_tip_id" />
@@ -442,10 +442,10 @@ index 96dc3f97854..3ddf71710d2 100644
      <string name="bare_welcome_hint_background_media" translatable="false">Keep audio playing when you switch apps or lock the screen</string>
      <string name="bare_welcome_opt_notifications" translatable="false">Allow notifications</string>
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
-index f0c977a49bc..90401e128aa 100644
+index abcf7eb5408..a5d36e16973 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
-@@ -3110,7 +3110,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+@@ -3117,7 +3117,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
              } else {
                  getTabCreator(getTabModelSelector().isIncognitoSelected())
                          .launchUrl(
@@ -1238,7 +1238,7 @@ index b2efe1f4727..4f5a35bfdc2 100644
 -    }
  }
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/IncognitoMenuItemViewBinder.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/IncognitoMenuItemViewBinder.java
-index 8a8cf1a71be..eddb3d138cf 100644
+index e6c70f2b56b..270deaa1858 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/IncognitoMenuItemViewBinder.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/IncognitoMenuItemViewBinder.java
 @@ -4,6 +4,7 @@
@@ -1246,10 +1246,10 @@ index 8a8cf1a71be..eddb3d138cf 100644
  package org.chromium.chrome.browser.tabbed_mode;
  
 +import android.graphics.drawable.Drawable;
+ import android.text.TextUtils;
  import android.view.View;
  import android.widget.ImageView;
- 
-@@ -36,7 +37,17 @@ class IncognitoMenuItemViewBinder {
+@@ -38,7 +39,17 @@ class IncognitoMenuItemViewBinder {
              if (model.get(AppMenuItemProperties.MANAGED)) {
                  image.setImageResource(R.drawable.ic_domain);
                  image.setVisibility(View.VISIBLE);
@@ -1269,10 +1269,10 @@ index 8a8cf1a71be..eddb3d138cf 100644
              }
          } else if (key == AppMenuItemProperties.TITLE) {
 diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
-index 22a83d9d389..f55e7d186f6 100644
+index 5ee5546b707..672c3bfb924 100644
 --- a/chrome/android/junit/BUILD.gn
 +++ b/chrome/android/junit/BUILD.gn
-@@ -446,7 +446,9 @@ if (is_android) {
+@@ -447,7 +447,9 @@ if (is_android) {
        "src/org/chromium/chrome/browser/bare/BareMediaProbeUnitTest.java",
        "src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocolUnitTest.java",
        "src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsUnitTest.java",
@@ -1758,7 +1758,7 @@ index fa1323d35dd..024f93f7f0f 100644
 +    }
  }
 diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/feedback/HelpAndFeedbackLauncherTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/feedback/HelpAndFeedbackLauncherTest.java
-index f37df9f1de0..ccd574aa89b 100644
+index 9f77c8f80cc..9af9485d8a9 100644
 --- a/chrome/android/junit/src/org/chromium/chrome/browser/feedback/HelpAndFeedbackLauncherTest.java
 +++ b/chrome/android/junit/src/org/chromium/chrome/browser/feedback/HelpAndFeedbackLauncherTest.java
 @@ -4,12 +4,14 @@
@@ -1784,14 +1784,24 @@ index f37df9f1de0..ccd574aa89b 100644
  import org.mockito.Mock;
  import org.mockito.junit.MockitoJUnit;
  import org.mockito.junit.MockitoRule;
-@@ -80,4 +83,43 @@ public class HelpAndFeedbackLauncherTest {
+@@ -39,6 +42,9 @@ public class HelpAndFeedbackLauncherTest {
+ 
+     private Activity mActivity;
+ 
++    // Bare: the project-page tests stub and verify the activity, so they keep a mock.
++    @Mock private Activity mBareActivity;
++
+     @Before
+     public void setUp() {
+         mActivity = Robolectric.buildActivity(Activity.class).get();
+@@ -83,4 +89,43 @@ public class HelpAndFeedbackLauncherTest {
  
          verify(mDelegate, never()).showFeedback(any(), any());
      }
 +
 +    private Intent launchedIntent() {
 +        ArgumentCaptor<Intent> intent = ArgumentCaptor.forClass(Intent.class);
-+        verify(mActivity).startActivity(intent.capture());
++        verify(mBareActivity).startActivity(intent.capture());
 +        return intent.getValue();
 +    }
 +
@@ -1806,25 +1816,25 @@ index f37df9f1de0..ccd574aa89b 100644
 +
 +    @Test
 +    public void testHelpOpensTheProjectPage() {
-+        when(mActivity.getPackageName()).thenReturn("org.barebrowser");
-+        HelpAndFeedbackLauncherImpl.getForProfile(mProfile).show(mActivity, "context", "url");
++        when(mBareActivity.getPackageName()).thenReturn("org.barebrowser");
++        HelpAndFeedbackLauncherImpl.getForProfile(mProfile).show(mBareActivity, "context", "url");
 +        assertOpenedTheProjectPage();
 +    }
 +
 +    @Test
 +    public void testHelpForAUrlOpensTheProjectPage() {
-+        when(mActivity.getPackageName()).thenReturn("org.barebrowser");
++        when(mBareActivity.getPackageName()).thenReturn("org.barebrowser");
 +        HelpAndFeedbackLauncherImpl.getForProfile(mProfile)
-+                .showHelpAndFeedbackForUrl(mActivity, "https://example.com/", "UserAction");
++                .showHelpAndFeedbackForUrl(mBareActivity, "https://example.com/", "UserAction");
 +        assertOpenedTheProjectPage();
 +    }
 +
 +    @Test
 +    public void testFeedbackOpensTheProjectPage() {
-+        when(mActivity.getPackageName()).thenReturn("org.barebrowser");
++        when(mBareActivity.getPackageName()).thenReturn("org.barebrowser");
 +        when(mFeedbackPolicyManager.isUserFeedbackAllowed()).thenReturn(true);
 +        HelpAndFeedbackLauncherImpl.getForProfile(mProfile)
-+                .showFeedback(mActivity, "url", "category");
++                .showFeedback(mBareActivity, "url", "category");
 +        assertOpenedTheProjectPage();
 +    }
  }
@@ -1856,10 +1866,10 @@ index 5fe2c66d03c..f31563e320d 100644
          }
  
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index 4fc2fc7b148..6f43c8599a0 100644
+index 99d9cc13d0a..cc63d7bbf94 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -2226,7 +2226,7 @@ Your Google account may have other forms of browsing history like searches and a
+@@ -2256,7 +2256,7 @@ Your Google account may have other forms of browsing history like searches and a
          Share sign-in with the app
        </message>
        <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_SIGN_IN_SUMMARY" desc="Summary of the setting that sends cookies to the external download manager. Says what is always sent, what this adds, and that Incognito is excluded.">
@@ -1868,7 +1878,7 @@ index 4fc2fc7b148..6f43c8599a0 100644
        </message>
        <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_FAILED" desc="Toast shown when no app could be opened to take a download.">
          Could not open the download manager
-@@ -4525,14 +4525,17 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4564,14 +4564,17 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
        <message name="IDS_BARE_INCOGNITO_HAPTIC_SUMMARY" desc="Explains the haptic option. It follows the phone's touch feedback setting.">
          A short vibration when you switch into Incognito, on phones that support it and have touch feedback on.
        </message>
@@ -1890,7 +1900,7 @@ index 4fc2fc7b148..6f43c8599a0 100644
        </message>
        <message name="IDS_BARE_MENU_HIDDEN_HEADING" desc="Heading in edit mode above the menu items that are currently hidden. [CHAR_LIMIT=24]">
          Hidden
-@@ -4541,7 +4544,7 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4580,7 +4583,7 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
          Security options
        </message>
        <message name="IDS_BARE_SECURITY_ABOUT" desc="Explains the security options screen: each is a setting the browser already has, with a plain name.">
@@ -1899,6 +1909,3 @@ index 4fc2fc7b148..6f43c8599a0 100644
        </message>
        <message name="IDS_BARE_SECURITY_HTTPS_TITLE" desc="Security option: use https for every site. [CHAR_LIMIT=48]">
          Secure connections only
--- 
-2.34.1
-

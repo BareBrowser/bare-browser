@@ -1,5 +1,5 @@
 diff --git a/content/public/android/java/src/org/chromium/content/browser/input/ImeAdapterImpl.java b/content/public/android/java/src/org/chromium/content/browser/input/ImeAdapterImpl.java
-index 2dbfc4e7a52..51ae409d730 100644
+index 2f2732eb6d3..99c30b47ad4 100644
 --- a/content/public/android/java/src/org/chromium/content/browser/input/ImeAdapterImpl.java
 +++ b/content/public/android/java/src/org/chromium/content/browser/input/ImeAdapterImpl.java
 @@ -55,6 +55,8 @@ import org.jni_zero.JNINamespace;
@@ -11,19 +11,22 @@ index 2dbfc4e7a52..51ae409d730 100644
  import org.chromium.base.ContextUtils;
  import org.chromium.base.Log;
  import org.chromium.base.TraceEvent;
-@@ -1091,7 +1093,10 @@ public class ImeAdapterImpl
-     public void onWindowFocusChanged(boolean gainFocus) {
-         if (DEBUG_LOGS) Log.i(TAG, "onWindowFocusChanged: gainFocus [%b]", gainFocus);
- 
--        if (!gainFocus) resetAndHideKeyboard();
-+        // The autofill list is a popup window that takes focus from this one. Resetting
-+        // here closes the keyboard and makes the list flash, so keep the input state
-+        // while the app is still in front.
-+        if (!gainFocus && !isFocusLostToPopup()) resetAndHideKeyboard();
-         if (gainFocus
-                 && isValid()
-                 && ContentFeatureMap.isEnabled(
-@@ -1104,6 +1109,13 @@ public class ImeAdapterImpl
+@@ -1108,10 +1110,13 @@ public class ImeAdapterImpl
+                 if (isValid()) {
+                     requestTextInputStateUpdate();
+                 }
+-            } else {
++            } else if (!isFocusLostToPopup()) {
+                 // Due to crbug.com/560321831, we should not hide keyboard when the window loses
+                 // focus. This is to prevent issues that the keyboard dialog disappears when users
+                 // switch languages.
++                // The autofill list is a popup window that takes focus from this one. Resetting
++                // here makes the list flash, so keep the input state while the app is still in
++                // front.
+                 reset();
+             }
+         }
+@@ -1121,6 +1126,13 @@ public class ImeAdapterImpl
          }
      }
  

@@ -1,25 +1,25 @@
-From 2ec63007c507ee6eb6ab2eb702fb9fea2420f0e3 Mon Sep 17 00:00:00 2001
+From cc7bef577e753671bceeb60a6026150848b4a9a0 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
-Date: Thu, 22 Oct 2026 01:42:25 +0000
+Date: Sun, 8 Nov 2026 06:43:24 +0000
 Subject: [PATCH] Patch 0000176
 
 ---
- chrome/android/chrome_java_resources.gni           |    1 
- chrome/android/chrome_java_sources.gni             |    4 
- chrome/android/java/AndroidManifest.xml            |   19 +
- .../android/java/res/xml/bare_push_preferences.xml |   20 +
- chrome/android/java/res/xml/main_preferences.xml   |    5 
- .../bare/settings/BarePushSettingsFragment.java    |   93 ++++++
- .../browser/init/ProcessInitializationHandler.java |    5 
- .../browser/services/gcm/BarePushDistributor.java  |  336 ++++++++++++++++++++
- .../browser/services/gcm/BarePushReceiver.java     |   54 +++
- .../browser/services/gcm/BarePushSubscriber.java   |   51 +++
- chrome/android/junit/BUILD.gn                      |    1 
- .../services/gcm/BarePushDistributorUnitTest.java  |  178 +++++++++++
- .../browser/preferences/ChromePreferenceKeys.java  |    9 +
- .../ui/android/strings/android_chrome_strings.grd  |   12 +
- .../instance_id/InstanceIDWithSubtype.java         |   28 ++
- components/push_messaging/push_messaging_utils.cc  |   11 +
+ chrome/android/chrome_java_resources.gni      |   1 +
+ chrome/android/chrome_java_sources.gni        |   4 +
+ chrome/android/java/AndroidManifest.xml       |  19 +
+ .../java/res/xml/bare_push_preferences.xml    |  20 ++
+ .../android/java/res/xml/main_preferences.xml |   5 +
+ .../settings/BarePushSettingsFragment.java    |  93 +++++
+ .../init/ProcessInitializationHandler.java    |   5 +
+ .../services/gcm/BarePushDistributor.java     | 336 ++++++++++++++++++
+ .../services/gcm/BarePushReceiver.java        |  54 +++
+ .../services/gcm/BarePushSubscriber.java      |  51 +++
+ chrome/android/junit/BUILD.gn                 |   1 +
+ .../gcm/BarePushDistributorUnitTest.java      | 178 ++++++++++
+ .../preferences/ChromePreferenceKeys.java     |   9 +
+ .../strings/android_chrome_strings.grd        |  12 +
+ .../instance_id/InstanceIDWithSubtype.java    |  28 ++
+ .../push_messaging/push_messaging_utils.cc    |  11 +
  16 files changed, 827 insertions(+)
  create mode 100644 chrome/android/java/res/xml/bare_push_preferences.xml
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BarePushSettingsFragment.java
@@ -29,10 +29,10 @@ Subject: [PATCH] Patch 0000176
  create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/services/gcm/BarePushDistributorUnitTest.java
 
 diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
-index 9ddb66cdb96..8be2f4eec29 100644
+index c73e2825bfb..a2827ca5865 100644
 --- a/chrome/android/chrome_java_resources.gni
 +++ b/chrome/android/chrome_java_resources.gni
-@@ -692,6 +692,7 @@ chrome_java_resources = [
+@@ -672,6 +672,7 @@ chrome_java_resources = [
    "java/res/xml/appearance_preferences.xml",
    "java/res/xml/bare_clear_on_exit_preferences.xml",
    "java/res/xml/bare_extensions_preferences.xml",
@@ -41,10 +41,10 @@ index 9ddb66cdb96..8be2f4eec29 100644
    "java/res/xml/bare_toolbar_preferences.xml",
    "java/res/xml/bookmark_bar_preferences.xml",
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
-index 7aad4967c9f..41cea0da4ef 100644
+index 6b18ba6177b..4d2a0cc6aad 100644
 --- a/chrome/android/chrome_java_sources.gni
 +++ b/chrome/android/chrome_java_sources.gni
-@@ -246,6 +246,7 @@ chrome_java_sources = [
+@@ -245,6 +245,7 @@ chrome_java_sources = [
    "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java",
    "java/src/org/chromium/chrome/browser/bare/settings/BareClearOnExitSettings.java",
    "java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java",
@@ -52,7 +52,7 @@ index 7aad4967c9f..41cea0da4ef 100644
    "java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java",
    "java/src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocol.java",
    "java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettings.java",
-@@ -1103,6 +1104,9 @@ chrome_java_sources = [
+@@ -1101,6 +1102,9 @@ chrome_java_sources = [
    "java/src/org/chromium/chrome/browser/selection/ChromeSelectionDropdownMenuDelegate.java",
    "java/src/org/chromium/chrome/browser/selection/CompositeSelectionActionMenuDelegate.java",
    "java/src/org/chromium/chrome/browser/selection/TextSelectionActionMenuDelegate.java",
@@ -63,7 +63,7 @@ index 7aad4967c9f..41cea0da4ef 100644
    "java/src/org/chromium/chrome/browser/services/gcm/GCMBackgroundServiceImpl.java",
    "java/src/org/chromium/chrome/browser/services/gcm/GCMNativeBackgroundTask.java",
 diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/AndroidManifest.xml
-index 677324d02b0..8804d1b9603 100644
+index b9ae0bd13ff..3b45c83572f 100644
 --- a/chrome/android/java/AndroidManifest.xml
 +++ b/chrome/android/java/AndroidManifest.xml
 @@ -229,6 +229,13 @@ by a child template that "extends" this file.
@@ -80,7 +80,7 @@ index 677324d02b0..8804d1b9603 100644
      <!-- Set android:largeHeap to "true" to allow more than the default
           Java heap limit (32Mb on Nexus S, 48Mb on Xoom). -->
        <application android:name="{% block application_name %}org.chromium.chrome.browser.base.SplitChromeApplication{% endblock %}"
-@@ -1125,6 +1132,18 @@ by a child template that "extends" this file.
+@@ -1122,6 +1129,18 @@ by a child template that "extends" this file.
          <receiver android:name="com.google.firebase.iid.FirebaseInstanceIdReceiver"
              tools:node="remove" />
  
@@ -241,20 +241,20 @@ index 00000000000..a93822fd6b5
 +    }
 +}
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
-index fab17b404fe..5041c69d5e2 100644
+index cd486a6288e..a781f3071a8 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
-@@ -105,7 +105,9 @@ import org.chromium.chrome.browser.sync.SyncErrorNotifier;
- import org.chromium.chrome.browser.tab.state.PersistedTabData;
+@@ -107,7 +107,9 @@ import org.chromium.chrome.browser.tab.state.PersistedTabData;
  import org.chromium.chrome.browser.tab.state.ShoppingPersistedTabData;
  import org.chromium.chrome.browser.tabmodel.TabPersistentStoreImpl;
+ import org.chromium.chrome.browser.tips.TipsPromoHandlerRegistrar;
 +import org.chromium.chrome.browser.services.gcm.BarePushSubscriber;
  import org.chromium.chrome.browser.tracing.settings.UserAgentPresets;
 +import org.chromium.components.gcm_driver.instance_id.InstanceIDWithSubtype;
  import org.chromium.chrome.browser.ui.cars.DrivingRestrictionsManager;
  import org.chromium.chrome.browser.ui.color.ColorProviderBridgeImpl;
  import org.chromium.chrome.browser.ui.enterprise_signals_disclaimer.EnterpriseSignalsDisclaimerAckSyncer;
-@@ -280,6 +282,9 @@ public class ProcessInitializationHandler {
+@@ -282,6 +284,9 @@ public class ProcessInitializationHandler {
  
          DeviceUtils.updateDeviceSpecificUserAgentSwitch(ContextUtils.getApplicationContext());
          UserAgentPresets.appendSwitches();
@@ -724,10 +724,10 @@ index 00000000000..d44b98402c1
 +    }
 +}
 diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
-index 3fc3375778d..1aeca5da774 100644
+index 445625467a8..00cba3b220f 100644
 --- a/chrome/android/junit/BUILD.gn
 +++ b/chrome/android/junit/BUILD.gn
-@@ -439,6 +439,7 @@ if (is_android) {
+@@ -440,6 +440,7 @@ if (is_android) {
        "src/org/chromium/chrome/browser/bare/BareTabSwitcherUnitTest.java",
        "src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java",
        "src/org/chromium/chrome/browser/bare/BareUpdateCheckUnitTest.java",
@@ -920,10 +920,10 @@ index 00000000000..40e20e02ea5
 +    }
 +}
 diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-index 21ea1b53881..07fd64f53f9 100644
+index 45f8b6d2200..922cdf47f9c 100644
 --- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
 +++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-@@ -423,6 +423,13 @@ public final class ChromePreferenceKeys {
+@@ -426,6 +426,13 @@ public final class ChromePreferenceKeys {
       * them has a default, and nothing is translated until the address is set.
       */
      public static final String BARE_TRANSLATE_ENDPOINT = "Bare.Translate.Endpoint";
@@ -937,7 +937,7 @@ index 21ea1b53881..07fd64f53f9 100644
      public static final String BARE_TRANSLATE_API_KEY = "Bare.Translate.ApiKey";
      public static final String BARE_TRANSLATE_TARGET = "Bare.Translate.Target";
      public static final String BARE_TRANSLATE_CONSENT_HOST = "Bare.Translate.ConsentHost";
-@@ -1339,6 +1346,8 @@ public final class ChromePreferenceKeys {
+@@ -1344,6 +1351,8 @@ public final class ChromePreferenceKeys {
                  BARE_USER_AGENT_PRESET,
                  BARE_ADDRESS_BAR_SWIPE_TABS,
                  BARE_EXTENSION_PRESENTATION,
@@ -947,10 +947,10 @@ index 21ea1b53881..07fd64f53f9 100644
                  BARE_TRANSLATE_CONSENT_HOST,
                  BARE_TRANSLATE_ENDPOINT,
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index 24f8a89381b..dac980e32d8 100644
+index 1eab7a4467e..4506c15de4a 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -4378,6 +4378,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4417,6 +4417,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
        <message name="IDS_BARE_VIDEO_NOT_FOUND" desc="Toast shown when the video that was pressed has no file the browser can download.">
          Could not find a file for this video
        </message>
@@ -1048,6 +1048,3 @@ index 688417a4797..fc5bd822275 100644
    const GURL endpoint(GetGcmEndpointForChannel(channel) + subscription_id);
    DCHECK(endpoint.is_valid());
    return endpoint;
--- 
-2.34.1
-

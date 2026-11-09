@@ -1,31 +1,31 @@
-From c6c26732acae32e9ef9a4187277294842fb5a26e Mon Sep 17 00:00:00 2001
+From a02626f75ef00725321f220a2d0807a9abe2a91a Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
-Date: Sun, 6 Sep 2026 21:25:11 +0000
+Date: Sun, 8 Nov 2026 06:42:15 +0000
 Subject: [PATCH] Patch 0000108
 
 ---
- chrome/android/features/tab_ui/BUILD.gn            |    1 
- .../tab_ui/java/res/layout/bare_tab_row_item.xml   |   92 ++++++++++
- .../features/tab_ui/java/res/values/dimens.xml     |    2 
- .../features/tab_ui/java/res/xml/tabs_settings.xml |    3 
- .../tasks/tab_management/BareTabRowViewBinder.java |   94 ++++++++++
- .../tasks/tab_management/BareTabViewMode.java      |   71 ++++++++
- .../tab_management/TabListContainerViewBinder.java |    6 +
- .../tasks/tab_management/TabListCoordinator.java   |   78 ++++++++
- .../tab_management/TabListLayoutDelegate.java      |    4 
- .../tasks/tab_management/TabListMediator.java      |   39 ++++
- .../tasks/tab_management/TabProperties.java        |    6 +
- .../tasks/tab_management/TabSwitcherPaneBase.java  |   14 +
- .../tab_management/TabSwitcherPaneCoordinator.java |   50 +++--
- .../TabSwitcherPaneCoordinatorFactory.java         |    8 +
- .../browser/tasks/tab_management/TabsSettings.java |   45 +++++
- .../BareTabRowViewBinderUnitTest.java              |  187 ++++++++++++++++++++
- .../tab_management/BareTabViewModeUnitTest.java    |   99 +++++++++++
- .../tab_ui/tab_management_java_sources.gni         |    2 
- chrome/android/junit/BUILD.gn                      |    2 
- .../browser/preferences/ChromePreferenceKeys.java  |    7 +
- .../chrome/browser/tab_ui/TabListMode.java         |   13 +
- .../ui/android/strings/android_chrome_strings.grd  |    9 +
+ chrome/android/features/tab_ui/BUILD.gn       |   1 +
+ .../java/res/layout/bare_tab_row_item.xml     |  92 +++++++++
+ .../tab_ui/java/res/values/dimens.xml         |   2 +
+ .../tab_ui/java/res/xml/tabs_settings.xml     |   3 +
+ .../tab_management/BareTabRowViewBinder.java  |  94 +++++++++
+ .../tasks/tab_management/BareTabViewMode.java |  71 +++++++
+ .../TabListContainerViewBinder.java           |   6 +-
+ .../tab_management/TabListCoordinator.java    |  78 +++++++-
+ .../tab_management/TabListLayoutDelegate.java |   4 +-
+ .../tasks/tab_management/TabListMediator.java |  39 ++++
+ .../tasks/tab_management/TabProperties.java   |   6 +
+ .../tab_management/TabSwitcherPaneBase.java   |  14 +-
+ .../TabSwitcherPaneCoordinator.java           |  50 +++--
+ .../TabSwitcherPaneCoordinatorFactory.java    |   8 +-
+ .../tasks/tab_management/TabsSettings.java    |  45 +++++
+ .../BareTabRowViewBinderUnitTest.java         | 187 ++++++++++++++++++
+ .../BareTabViewModeUnitTest.java              |  99 ++++++++++
+ .../tab_ui/tab_management_java_sources.gni    |   2 +
+ chrome/android/junit/BUILD.gn                 |   2 +
+ .../preferences/ChromePreferenceKeys.java     |   7 +
+ .../chrome/browser/tab_ui/TabListMode.java    |  13 +-
+ .../strings/android_chrome_strings.grd        |   9 +
  22 files changed, 803 insertions(+), 29 deletions(-)
  create mode 100644 chrome/android/features/tab_ui/java/res/layout/bare_tab_row_item.xml
  create mode 100644 chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/BareTabRowViewBinder.java
@@ -34,10 +34,10 @@ Subject: [PATCH] Patch 0000108
  create mode 100644 chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/BareTabViewModeUnitTest.java
 
 diff --git a/chrome/android/features/tab_ui/BUILD.gn b/chrome/android/features/tab_ui/BUILD.gn
-index 22eb49872cc..23719c1150d 100644
+index 092a6b98a01..20911ed676c 100644
 --- a/chrome/android/features/tab_ui/BUILD.gn
 +++ b/chrome/android/features/tab_ui/BUILD.gn
-@@ -97,6 +97,7 @@ android_resources("java_resources") {
+@@ -98,6 +98,7 @@ android_resources("java_resources") {
      "java/res/layout/archived_tabs_auto_delete_promo.xml",
      "java/res/layout/archived_tabs_dialog.xml",
      "java/res/layout/archived_tabs_message_card_view.xml",
@@ -144,10 +144,10 @@ index 00000000000..0c0e0c0c063
 +
 +</androidx.constraintlayout.widget.ConstraintLayout>
 diff --git a/chrome/android/features/tab_ui/java/res/values/dimens.xml b/chrome/android/features/tab_ui/java/res/values/dimens.xml
-index 761aaa27799..6e5e12ebdf7 100644
+index f20957b66b2..c5eef9bfd5f 100644
 --- a/chrome/android/features/tab_ui/java/res/values/dimens.xml
 +++ b/chrome/android/features/tab_ui/java/res/values/dimens.xml
-@@ -267,4 +267,6 @@ found in the LICENSE file.
+@@ -271,4 +271,6 @@ found in the LICENSE file.
      <dimen name="tab_search_close_button_size">24dp</dimen>
      <dimen name="tab_search_close_button_size_desktop">20dp</dimen>
      <dimen name="tab_search_close_button_margin_end">8dp</dimen>
@@ -364,10 +364,10 @@ index 53be1f0845a..3e4cc9b7bf1 100644
          assumeNonNull(gridLayoutManager);
          int cardWidth = width / gridLayoutManager.getSpanCount();
 diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListCoordinator.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListCoordinator.java
-index f5fc5b00b20..8fb9bb74314 100644
+index 3e6b4f0b2ed..4c68356c6b3 100644
 --- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListCoordinator.java
 +++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListCoordinator.java
-@@ -233,6 +233,8 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
+@@ -232,6 +232,8 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
                              TabGridViewBinder.onViewRecycled(model, viewHolder.itemView);
                          } else if (mMode == TabListMode.BOTTOM_STRIP) {
                              TabStripViewBinder.onViewRecycled(model, viewHolder.itemView);
@@ -376,7 +376,7 @@ index f5fc5b00b20..8fb9bb74314 100644
                          }
                          super.onViewRecycled(viewHolder);
                      }
-@@ -302,6 +304,24 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
+@@ -301,6 +303,24 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
                                      LayoutInflater.from(activity)
                                              .inflate(R.layout.tab_strip_item, parentView, false),
                      TabStripViewBinder::bind);
@@ -401,8 +401,8 @@ index f5fc5b00b20..8fb9bb74314 100644
          } else {
              throw new IllegalArgumentException(
                      "Attempting to create a tab list UI with invalid mode");
-@@ -335,13 +355,20 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
-                         .setTabClosingSource(TabClosingSource.UNKNOWN)
+@@ -346,13 +366,20 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
+                         .setTabClosingSource(tabClosingSource)
                          .build();
  
 +        // Bare: a row has no thumbnail, so the list is built with no provider at all. The
@@ -423,7 +423,7 @@ index f5fc5b00b20..8fb9bb74314 100644
                          mTabListFaviconProvider,
                          selectionDelegateProvider,
                          tabListItemOnClickListenerProvider,
-@@ -411,6 +438,26 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
+@@ -421,6 +448,26 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
                              }
                          };
                  mRecyclerView.setLayoutManager(layoutManager);
@@ -450,7 +450,7 @@ index f5fc5b00b20..8fb9bb74314 100644
              }
              mMediator.setRecyclerViewItemAnimationToggle(mRecyclerView::setDisableItemAnimations);
          }
-@@ -418,6 +465,9 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
+@@ -428,6 +475,9 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
          if (mMode == TabListMode.GRID) {
              mListLayoutListener =
                      (_, left, _, right, _, _, _, _, _) -> updateGridCardLayout(right - left);
@@ -460,7 +460,7 @@ index f5fc5b00b20..8fb9bb74314 100644
          } else if (mMode == TabListMode.BOTTOM_STRIP) {
              assert onModelTokenChange != null;
              mTabStripSnapshotter =
-@@ -656,6 +706,32 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
+@@ -666,6 +716,32 @@ public class TabListCoordinator implements PriceWelcomeMessageProvider, DestroyO
          }
      }
  
@@ -494,10 +494,10 @@ index f5fc5b00b20..8fb9bb74314 100644
          // Determine and set span count
          final GridLayoutManager layoutManager =
 diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListLayoutDelegate.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListLayoutDelegate.java
-index 1f30ae88ea8..a44f374b103 100644
+index c8857536d42..9c7fcb21caa 100644
 --- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListLayoutDelegate.java
 +++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListLayoutDelegate.java
-@@ -369,7 +369,8 @@ abstract class TabListLayoutDelegate implements TabGroupObserver, TabObserver {
+@@ -353,7 +353,8 @@ abstract class TabListLayoutDelegate implements TabGroupObserver, TabObserver {
      }
  
      /**
@@ -507,7 +507,7 @@ index 1f30ae88ea8..a44f374b103 100644
       *
       * @param updatedTab The {@link Tab} whose URL changed.
       */
-@@ -384,6 +385,7 @@ abstract class TabListLayoutDelegate implements TabGroupObserver, TabObserver {
+@@ -368,6 +369,7 @@ abstract class TabListLayoutDelegate implements TabGroupObserver, TabObserver {
          PropertyModel model = getModelFromTabId(updatedTab.getId());
          if (model == null) return;
  
@@ -516,7 +516,7 @@ index 1f30ae88ea8..a44f374b103 100644
          mMediator.updateFaviconForTab(model, updatedTab, null, null);
      }
 diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListMediator.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListMediator.java
-index cd2ba2cabf5..019896d7362 100644
+index 07ccd191d39..d2bcd2857b0 100644
 --- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListMediator.java
 +++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListMediator.java
 @@ -123,6 +123,7 @@ import org.chromium.components.collaboration.CollaborationService;
@@ -527,7 +527,7 @@ index cd2ba2cabf5..019896d7362 100644
  import org.chromium.components.tab_group_sync.EitherId.EitherGroupId;
  import org.chromium.components.tab_group_sync.LocalTabGroupId;
  import org.chromium.components.tab_group_sync.SavedTabGroup;
-@@ -1281,6 +1282,8 @@ public class TabListMediator implements TabListNotificationHandler {
+@@ -1278,6 +1279,8 @@ public class TabListMediator implements TabListNotificationHandler {
  
          bindTabActionStateProperties(model.get(TabProperties.TAB_ACTION_STATE), tab, model);
  
@@ -536,7 +536,7 @@ index cd2ba2cabf5..019896d7362 100644
          setupPersistedTabDataFetcherForTab(tab, model);
  
          updateFaviconForTab(model, tab, null, null);
-@@ -1827,6 +1830,7 @@ public class TabListMediator implements TabListNotificationHandler {
+@@ -1824,6 +1827,7 @@ public class TabListMediator implements TabListNotificationHandler {
          tabInfo.set(
                  TabProperties.TITLE,
                  getLatestTitleForTabOrGroup(tab, tabInfo, /* useDefault= */ false));
@@ -544,7 +544,7 @@ index cd2ba2cabf5..019896d7362 100644
          @TabAlert int alertState = mTabListLayoutDelegate.getAlertStateForTab(tab);
          tabInfo.set(TabProperties.ALERT_STATE, alertState);
          tabInfo.set(TabProperties.SHOULD_SHOW_PRICE_DROP_TOOLTIP, false);
-@@ -1957,6 +1961,22 @@ public class TabListMediator implements TabListNotificationHandler {
+@@ -1954,6 +1958,22 @@ public class TabListMediator implements TabListNotificationHandler {
          return children.size();
      }
  
@@ -567,7 +567,7 @@ index cd2ba2cabf5..019896d7362 100644
      /**
       * Updates the accessibility content description string resolver for the given tab or group
       * card.
-@@ -2158,6 +2178,25 @@ public class TabListMediator implements TabListNotificationHandler {
+@@ -2155,6 +2175,25 @@ public class TabListMediator implements TabListNotificationHandler {
          model.set(TabProperties.ACTION_BUTTON_DESCRIPTION_TEXT_RESOLVER, descriptionTextResolver);
      }
  
@@ -594,7 +594,7 @@ index cd2ba2cabf5..019896d7362 100644
      private SelectionDelegate<TabListEditorItemSelectionId> getTabSelectionDelegate() {
          return mSelectionDelegateProvider == null
 diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabProperties.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabProperties.java
-index 98578dbe115..5edb58a9f4f 100644
+index 81bfea4080b..24491aff3d0 100644
 --- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabProperties.java
 +++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabProperties.java
 @@ -187,6 +187,11 @@ public class TabProperties {
@@ -618,10 +618,10 @@ index 98578dbe115..5edb58a9f4f 100644
                  CARD_TYPE,
                  CONTENT_DESCRIPTION_TEXT_RESOLVER,
 diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java
-index 21b8404320d..af30a3c4930 100644
+index aedce8d9b13..c9ac321b029 100644
 --- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java
 +++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java
-@@ -317,7 +317,12 @@ public abstract class TabSwitcherPaneBase extends PaneBase
+@@ -318,7 +318,12 @@ public abstract class TabSwitcherPaneBase extends PaneBase
                  || isFullSpaceModeOnAndroidXr;
  
          @Nullable Tab tab = getCurrentTab();
@@ -635,7 +635,7 @@ index 21b8404320d..af30a3c4930 100644
              return FadeHubLayoutAnimationFactory.createFadeInAnimatorProvider(
                      hubContainerView, HUB_LAYOUT_FADE_DURATION_MS, mOnToolbarAlphaChange);
          } else if (isFullSpaceModeOnAndroidXr && getTabListMode() == TabListMode.GRID) {
-@@ -347,7 +352,12 @@ public abstract class TabSwitcherPaneBase extends PaneBase
+@@ -348,7 +353,12 @@ public abstract class TabSwitcherPaneBase extends PaneBase
              HubContainerView hubContainerView) {
          assert !DeviceFormFactor.isNonMultiDisplayContextOnTablet(hubContainerView.getContext());
          Tab tab = getCurrentTab();
@@ -650,7 +650,7 @@ index 21b8404320d..af30a3c4930 100644
                      hubContainerView, HUB_LAYOUT_FADE_DURATION_MS, mOnToolbarAlphaChange);
          }
 diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinator.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinator.java
-index a06bf1af0eb..66504cbafb7 100644
+index f1517bb25ce..310d925fc2b 100644
 --- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinator.java
 +++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinator.java
 @@ -488,26 +488,35 @@ public class TabSwitcherPaneCoordinator implements BackPressHandler {
@@ -717,7 +717,7 @@ index a06bf1af0eb..66504cbafb7 100644
                                      mPinnedTabsCoordinator.onScrolled();
                                  }
                              }
-@@ -1226,6 +1235,7 @@ public class TabSwitcherPaneCoordinator implements BackPressHandler {
+@@ -1225,6 +1234,7 @@ public class TabSwitcherPaneCoordinator implements BackPressHandler {
      }
  
      private void updatePinnedTabsStripOnScroll(boolean shouldShowSearchBox, boolean forced) {
@@ -726,7 +726,7 @@ index a06bf1af0eb..66504cbafb7 100644
          if (shouldShowSearchBox || mPinnedTabsCoordinator.isPinnedTabsBarVisible()) {
              mMediator.maybeTranslatePinnedStrip(shouldShowSearchBox, forced);
 diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinatorFactory.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinatorFactory.java
-index 22306c2cf3d..66fe96b9512 100644
+index b43bb81d04c..7be1e55deb1 100644
 --- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinatorFactory.java
 +++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneCoordinatorFactory.java
 @@ -68,7 +68,7 @@ public class TabSwitcherPaneCoordinatorFactory {
@@ -1134,10 +1134,10 @@ index 00000000000..360a2a3ddd2
 +    }
 +}
 diff --git a/chrome/android/features/tab_ui/tab_management_java_sources.gni b/chrome/android/features/tab_ui/tab_management_java_sources.gni
-index eec90568f0f..8d24b0e114c 100644
+index da789a8917e..f6b8c2efd54 100644
 --- a/chrome/android/features/tab_ui/tab_management_java_sources.gni
 +++ b/chrome/android/features/tab_ui/tab_management_java_sources.gni
-@@ -245,6 +245,8 @@ internal_tab_management_java_sources = [
+@@ -250,6 +250,8 @@ internal_tab_management_java_sources = [
    "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/tab_group_share_notice/TabGroupShareNoticeBottomSheetView.java",
    "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/tab_group_share_notice/TabGroupShareNoticeBottomSheetViewBinder.java",
    "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/vertical_tabs/BaseVerticalTabDropIndicatorDecoration.java",
@@ -1145,12 +1145,12 @@ index eec90568f0f..8d24b0e114c 100644
 +  "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/BareTabViewMode.java",
    "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/vertical_tabs/TabVerticalViewBinder.java",
    "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/vertical_tabs/VerticalExternalViewDragDropReorderStrategy.java",
-   "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/vertical_tabs/VerticalTabDropIndicatorDecoration.java",
+   "//chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/vertical_tabs/VerticalPinnedTabListRecyclerView.java",
 diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
-index 8629bbdb9cd..17e0c6f0880 100644
+index a753ea20b18..a7d8876f607 100644
 --- a/chrome/android/junit/BUILD.gn
 +++ b/chrome/android/junit/BUILD.gn
-@@ -1525,6 +1525,8 @@ if (is_android) {
+@@ -1544,6 +1544,8 @@ if (is_android) {
        "//chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/TabGridDialogMediatorUnitTest.java",
        "//chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/TabGridDialogViewBinderUnitTest.java",
        "//chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/TabGridItemTouchHelperCallbackUnitTest.java",
@@ -1160,10 +1160,10 @@ index 8629bbdb9cd..17e0c6f0880 100644
        "//chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupCreationDialogManagerUnitTest.java",
        "//chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupUiMediatorUnitTest.java",
 diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-index 20f76c629ab..8f28450c0ac 100644
+index 82c5315f633..8a4f443d2bd 100644
 --- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
 +++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-@@ -448,6 +448,12 @@ public final class ChromePreferenceKeys {
+@@ -451,6 +451,12 @@ public final class ChromePreferenceKeys {
       */
      public static final String BARE_OPEN_LINKS_IN_APPS = "Chrome.Bare.OpenLinksInApps";
  
@@ -1176,7 +1176,7 @@ index 20f76c629ab..8f28450c0ac 100644
      public static final String DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER =
              "Chrome.Download.UseExternalDownloadManager";
  
-@@ -1261,6 +1267,7 @@ public final class ChromePreferenceKeys {
+@@ -1266,6 +1272,7 @@ public final class ChromePreferenceKeys {
                  BARE_BUNDLED_AD_BLOCKER_ENABLED,
                  BARE_UPDATE_BADGE,
                  BARE_OPEN_LINKS_IN_APPS,
@@ -1214,10 +1214,10 @@ index bfded7e189f..35fbbe31682 100644
 +    int NUM_ENTRIES = 6;
  }
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index 65b513c7df4..59fda4a1885 100644
+index 73fa0c65df5..a24f23e383a 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -4237,6 +4237,15 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4276,6 +4276,15 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
        <message name="IDS_BARE_OPEN_LINKS_IN_APPS_NEVER" desc="Setting value: links stay in the browser.">
          Never
        </message>

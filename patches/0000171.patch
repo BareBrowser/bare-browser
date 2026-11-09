@@ -1,24 +1,24 @@
-From 77617480ef8abc85b746eda157247685e54734db Mon Sep 17 00:00:00 2001
+From 5c437ee721baaf475df8d167188749de7aa31a1a Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
-Date: Wed, 21 Oct 2026 22:59:17 +0000
+Date: Sun, 8 Nov 2026 06:43:18 +0000
 Subject: [PATCH] Patch 0000171
 
 ---
- .../res_chromium_base/values/channel_constants.xml |    2 
- .../browser/download/DownloadController.java       |  180 ++++++++++++++------
- chrome/android/junit/BUILD.gn                      |    1 
- .../DownloadControllerHandoffUnitTest.java         |   71 ++++++++
- .../download/android/download_controller.cc        |   25 ++-
- .../browser/download/android/download_controller.h |   21 ++
- .../android/java/res/xml/download_preferences.xml  |    6 +
- .../download/settings/DownloadSettings.java        |   18 ++
- .../download/chrome_download_manager_delegate.cc   |  128 +++++++++++++-
- .../download/chrome_download_manager_delegate.h    |    6 +
- .../browser/preferences/ChromePreferenceKeys.java  |    8 +
- .../ui/android/strings/android_chrome_strings.grd  |   11 +
- content/browser/download/download_manager_impl.cc  |    7 +
- .../public/browser/download_manager_delegate.cc    |   10 +
- content/public/browser/download_manager_delegate.h |   10 +
+ .../values/channel_constants.xml              |   2 +-
+ .../browser/download/DownloadController.java  | 180 ++++++++++++------
+ chrome/android/junit/BUILD.gn                 |   1 +
+ .../DownloadControllerHandoffUnitTest.java    |  71 +++++++
+ .../download/android/download_controller.cc   |  25 ++-
+ .../download/android/download_controller.h    |  21 +-
+ .../java/res/xml/download_preferences.xml     |   6 +
+ .../download/settings/DownloadSettings.java   |  18 ++
+ .../chrome_download_manager_delegate.cc       | 128 +++++++++++--
+ .../chrome_download_manager_delegate.h        |   6 +
+ .../preferences/ChromePreferenceKeys.java     |   8 +
+ .../strings/android_chrome_strings.grd        |  11 +-
+ .../browser/download/download_manager_impl.cc |   7 +
+ .../browser/download_manager_delegate.cc      |  10 +
+ .../browser/download_manager_delegate.h       |  10 +
  15 files changed, 421 insertions(+), 83 deletions(-)
  create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/download/DownloadControllerHandoffUnitTest.java
 
@@ -288,17 +288,17 @@ index 8cdbc819aab..c9e0fb869c9 100644
      }
  
 diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
-index 0cdc25907e8..6e507d33fe5 100644
+index b81fbd7fb41..018947e0f17 100644
 --- a/chrome/android/junit/BUILD.gn
 +++ b/chrome/android/junit/BUILD.gn
-@@ -847,6 +847,7 @@ if (is_android) {
+@@ -848,6 +848,7 @@ if (is_android) {
    robolectric_library(
        "chrome_junit_tests_org.chromium.chrome.browser.download") {
      sources = [
 +      "src/org/chromium/chrome/browser/download/DownloadControllerHandoffUnitTest.java",
        "src/org/chromium/chrome/browser/download/DownloadControllerUnitTest.java",
-       "src/org/chromium/chrome/browser/download/DownloadOpenRequestTest.java",
-       "src/org/chromium/chrome/browser/download/DownloadSharedPreferenceEntryTest.java",
+       "src/org/chromium/chrome/browser/download/DownloadForegroundServiceManagerTest.java",
+       "src/org/chromium/chrome/browser/download/DownloadForegroundServiceTest.java",
 diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/download/DownloadControllerHandoffUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/download/DownloadControllerHandoffUnitTest.java
 new file mode 100644
 index 00000000000..fa1323d35dd
@@ -377,7 +377,7 @@ index 00000000000..fa1323d35dd
 +    }
 +}
 diff --git a/chrome/browser/download/android/download_controller.cc b/chrome/browser/download/android/download_controller.cc
-index 1c1a8e341e4..654be685fbd 100644
+index 04af7cab7ff..83cd4724cb7 100644
 --- a/chrome/browser/download/android/download_controller.cc
 +++ b/chrome/browser/download/android/download_controller.cc
 @@ -331,14 +331,33 @@ DownloadController::DownloadController() = default;
@@ -510,7 +510,7 @@ index b452d01e85f..5fe2c66d03c 100644
              ChromeSharedPreferences.getInstance()
                      .writeBoolean(
 diff --git a/chrome/browser/download/chrome_download_manager_delegate.cc b/chrome/browser/download/chrome_download_manager_delegate.cc
-index 6022d7c02fc..7fa9608340a 100644
+index 987dfd91f75..c0dfaba5a12 100644
 --- a/chrome/browser/download/chrome_download_manager_delegate.cc
 +++ b/chrome/browser/download/chrome_download_manager_delegate.cc
 @@ -4,6 +4,14 @@
@@ -528,7 +528,7 @@ index 6022d7c02fc..7fa9608340a 100644
  #include <algorithm>
  #include <memory>
  #include <optional>
-@@ -1228,6 +1236,111 @@ bool ChromeDownloadManagerDelegate::ShouldObfuscateDownload(
+@@ -1242,6 +1250,111 @@ bool ChromeDownloadManagerDelegate::ShouldObfuscateDownload(
    return false;
  }
  
@@ -640,7 +640,7 @@ index 6022d7c02fc..7fa9608340a 100644
  bool ChromeDownloadManagerDelegate::InterceptDownloadIfApplicable(
      const GURL& url,
      const std::string& user_agent,
-@@ -1248,21 +1361,6 @@ bool ChromeDownloadManagerDelegate::InterceptDownloadIfApplicable(
+@@ -1262,21 +1375,6 @@ bool ChromeDownloadManagerDelegate::InterceptDownloadIfApplicable(
      return true;
    }
  
@@ -660,10 +660,10 @@ index 6022d7c02fc..7fa9608340a 100644
 -#endif  // BUILDFLAG(IS_ANDROID)
 -
  #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
-   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
    // For background service downloads we don't want offline pages backend to
 diff --git a/chrome/browser/download/chrome_download_manager_delegate.h b/chrome/browser/download/chrome_download_manager_delegate.h
-index 3f21fa06d58..c41dd010bab 100644
+index 677db611b49..bc3b94bcdc8 100644
 --- a/chrome/browser/download/chrome_download_manager_delegate.h
 +++ b/chrome/browser/download/chrome_download_manager_delegate.h
 @@ -132,6 +132,12 @@ class ChromeDownloadManagerDelegate
@@ -680,10 +680,10 @@ index 3f21fa06d58..c41dd010bab 100644
        const GURL& url,
        const std::string& user_agent,
 diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-index 5485f4ebcf9..8c610c885cb 100644
+index 777935368de..ff78487b47b 100644
 --- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
 +++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-@@ -492,6 +492,13 @@ public final class ChromePreferenceKeys {
+@@ -495,6 +495,13 @@ public final class ChromePreferenceKeys {
      public static final String DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER =
              "Chrome.Download.UseExternalDownloadManager";
  
@@ -697,7 +697,7 @@ index 5485f4ebcf9..8c610c885cb 100644
      public static final String DOWNLOAD_AUTO_RESUMPTION_ATTEMPT_LEFT = "ResumptionAttemptLeft";
      public static final String DOWNLOAD_FOREGROUND_SERVICE_OBSERVERS = "ForegroundServiceObservers";
      public static final String DOWNLOAD_IS_DOWNLOAD_HOME_ENABLED =
-@@ -1311,6 +1318,7 @@ public final class ChromePreferenceKeys {
+@@ -1316,6 +1323,7 @@ public final class ChromePreferenceKeys {
                  BARE_UPDATE_REMINDER,
                  DOWNLOAD_EXTERNAL_MANAGER_PACKAGE,
                  DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER,
@@ -706,10 +706,10 @@ index 5485f4ebcf9..8c610c885cb 100644
                  BARE_USER_AGENT_PRESET,
                  BARE_ADDRESS_BAR_SWIPE_TABS,
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index 116ce0fae97..aa7510ddbae 100644
+index cdc4d5d4fdd..a02b274ba06 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -2222,11 +2222,20 @@ Your Google account may have other forms of browsing history like searches and a
+@@ -2252,11 +2252,20 @@ Your Google account may have other forms of browsing history like searches and a
        <message name="IDS_EXTERNAL_DOWNLOAD_MANAGER_NONE_INSTALLED" desc="Summary shown when no download manager app is installed on the device.">
          No download manager app installed
        </message>
@@ -791,6 +791,3 @@ index a50246a04fd..7f766d74eb2 100644
    // Checks and hands off the downloading to be handled by another system based
    // on mime type. Returns true if the download was intercepted.
    virtual bool InterceptDownloadIfApplicable(
--- 
-2.34.1
-

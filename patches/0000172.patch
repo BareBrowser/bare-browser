@@ -1,20 +1,20 @@
-From 1a2ddd19ddcf6bf84a13f5d0a9749ff0e0d2e6ff Mon Sep 17 00:00:00 2001
+From 5653f2a219b19aa04143743be4430426ba9a6376 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
-Date: Wed, 21 Oct 2026 23:44:18 +0000
+Date: Sun, 8 Nov 2026 06:43:18 +0000
 Subject: [PATCH] Patch 0000172
 
 ---
- .../java/res/xml/bare_extensions_preferences.xml   |    7 +
- .../settings/BareExtensionsSettingsFragment.java   |   34 ++++
- chrome/android/junit/BUILD.gn                      |    1 
- .../bare/BareExtensionPresentationUnitTest.java    |   56 ++++++
- .../browser/preferences/ChromePreferenceKeys.java  |    7 +
- chrome/browser/ui/android/extensions/BUILD.gn      |    2 
- .../extensions/extension_action_popup_contents.cc  |    4 
- .../ui/extensions/BareExtensionPresentation.java   |   48 +++++
- .../extensions/ExtensionActionPopupContents.java   |    9 +
- .../ui/android/strings/android_chrome_strings.grd  |   12 +
- .../toolbar/extensions/ExtensionActionPopup.java   |  179 ++++++++++++++++++--
+ .../res/xml/bare_extensions_preferences.xml   |   7 +-
+ .../BareExtensionsSettingsFragment.java       |  34 ++++
+ chrome/android/junit/BUILD.gn                 |   1 +
+ .../BareExtensionPresentationUnitTest.java    |  56 ++++++
+ .../preferences/ChromePreferenceKeys.java     |   7 +
+ chrome/browser/ui/android/extensions/BUILD.gn |   2 +
+ .../extension_action_popup_contents.cc        |   4 +
+ .../extensions/BareExtensionPresentation.java |  48 +++++
+ .../ExtensionActionPopupContents.java         |   9 +
+ .../strings/android_chrome_strings.grd        |  12 ++
+ .../extensions/ExtensionActionPopup.java      | 179 +++++++++++++++---
  11 files changed, 336 insertions(+), 23 deletions(-)
  create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/BareExtensionPresentationUnitTest.java
  create mode 100644 chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/BareExtensionPresentation.java
@@ -113,12 +113,12 @@ index efaf9ed7b91..0cfe6ecd39d 100644
      public MonotonicObservableSupplier<String> getPageTitle() {
          return mPageTitle;
 diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
-index 6e507d33fe5..bec7f0f1804 100644
+index 018947e0f17..0201e158dc7 100644
 --- a/chrome/android/junit/BUILD.gn
 +++ b/chrome/android/junit/BUILD.gn
-@@ -434,6 +434,7 @@ if (is_android) {
-       "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarAppMenuUpdateBadgeControllerUnitTest.java",
+@@ -435,6 +435,7 @@ if (is_android) {
        "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinatorUnitTest.java",
+       "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarEnabledChangeObserverUnitTest.java",
        "src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapterUnitTest.java",
 +      "src/org/chromium/chrome/browser/bare/BareExtensionPresentationUnitTest.java",
        "src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java",
@@ -187,10 +187,10 @@ index 00000000000..68ede105d96
 +    }
 +}
 diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-index 8c610c885cb..3fee108063a 100644
+index ff78487b47b..7aece0e9cef 100644
 --- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
 +++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-@@ -411,6 +411,12 @@ public final class ChromePreferenceKeys {
+@@ -414,6 +414,12 @@ public final class ChromePreferenceKeys {
       */
      public static final String BARE_ADDRESS_BAR_SWIPE_TABS = "Bare.Toolbar.AddressBarSwipeTabs";
  
@@ -203,7 +203,7 @@ index 8c610c885cb..3fee108063a 100644
      /**
       * De-Googled build: the minimal layout, which leaves out the bottom bar so the address bar is
       * the only strip of controls. Read once when the process starts, so a change applies after a
-@@ -1322,6 +1328,7 @@ public final class ChromePreferenceKeys {
+@@ -1327,6 +1333,7 @@ public final class ChromePreferenceKeys {
                  BARE_USER_AGENT_CUSTOM,
                  BARE_USER_AGENT_PRESET,
                  BARE_ADDRESS_BAR_SWIPE_TABS,
@@ -212,10 +212,10 @@ index 8c610c885cb..3fee108063a 100644
                  BARE_AMOLED_WHEN_SYSTEM_DARK,
                  WEBSTORE_DESKTOP_SITE_CLEARED,
 diff --git a/chrome/browser/ui/android/extensions/BUILD.gn b/chrome/browser/ui/android/extensions/BUILD.gn
-index 9df3612a0ba..a983eec6472 100644
+index eff2b9d25a3..32156e823c7 100644
 --- a/chrome/browser/ui/android/extensions/BUILD.gn
 +++ b/chrome/browser/ui/android/extensions/BUILD.gn
-@@ -107,6 +107,7 @@ android_library("java") {
+@@ -109,6 +109,7 @@ android_library("java") {
      deps += [
        ":java_resources",
        "//chrome/browser/flags:java",
@@ -223,7 +223,7 @@ index 9df3612a0ba..a983eec6472 100644
        "//components/browser_ui/modaldialog/android:java",
        "//components/browser_ui/settings/android:java",
        "//components/browser_ui/site_settings/android:java",
-@@ -119,6 +120,7 @@ android_library("java") {
+@@ -121,6 +122,7 @@ android_library("java") {
        "//ui/android:ui_utils_java",
      ]
      sources += [
@@ -232,10 +232,10 @@ index 9df3612a0ba..a983eec6472 100644
        "java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionContextMenuBridge.java",
        "java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java",
 diff --git a/chrome/browser/ui/android/extensions/extension_action_popup_contents.cc b/chrome/browser/ui/android/extensions/extension_action_popup_contents.cc
-index f04766838b3..b3ebe7747c5 100644
+index d3b2b4b48d3..48b9364ef3d 100644
 --- a/chrome/browser/ui/android/extensions/extension_action_popup_contents.cc
 +++ b/chrome/browser/ui/android/extensions/extension_action_popup_contents.cc
-@@ -142,6 +142,10 @@ void ExtensionActionPopupContents::LoadInitialPage(JNIEnv* env) {
+@@ -153,6 +153,10 @@ void ExtensionActionPopupContents::LoadInitialPage() {
  
  void ExtensionActionPopupContents::SetUpNewMainFrame(
      RenderFrameHost* render_frame_host) {
@@ -301,12 +301,12 @@ index 00000000000..98b7ff9f652
 +    }
 +}
 diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java
-index 2fa4a211434..acffb7ce4c9 100644
+index 980475e9fdc..04c91f07470 100644
 --- a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java
 +++ b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java
-@@ -36,6 +36,15 @@ public class ExtensionActionPopupContents implements Destroyable {
-      */
-     private long mNativeExtensionActionPopupContents;
+@@ -38,6 +38,15 @@ public class ExtensionActionPopupContents implements Destroyable {
+ 
+     private final JniUniquePtr<NativeExtensionActionPopupContents> mNative;
  
 +    /**
 +     * Whether popups fill the screen. When they do, the page takes the size of its view instead
@@ -321,10 +321,10 @@ index 2fa4a211434..acffb7ce4c9 100644
      private final WebContents mWebContents;
  
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index aa7510ddbae..24e34e52851 100644
+index a02b274ba06..5c4906195d8 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -4378,6 +4378,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4417,6 +4417,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
        <message name="IDS_BARE_EXTENSIONS_SETTINGS_TITLE" desc="Title of the settings screen for extensions. [CHAR_LIMIT=32]">
          Extensions
        </message>
@@ -604,6 +604,3 @@ index 157f6a21a91..854083cdaa5 100644
          }
      }
  
--- 
-2.34.1
-

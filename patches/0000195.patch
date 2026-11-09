@@ -1,8 +1,8 @@
 diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
-index cf93ef9689b..de2ad8177dc 100644
+index 3594a2910ea..99208d9a058 100644
 --- a/chrome/android/chrome_java_resources.gni
 +++ b/chrome/android/chrome_java_resources.gni
-@@ -479,6 +479,7 @@ chrome_java_resources = [
+@@ -462,6 +462,7 @@ chrome_java_resources = [
    "java/res/layout/bare_welcome_page_ready.xml",
    "java/res/layout/bare_welcome_page_welcome.xml",
    "java/res/layout/bare_welcome_page_security.xml",
@@ -10,18 +10,6 @@ index cf93ef9689b..de2ad8177dc 100644
    "java/res/layout/bare_welcome_page_toolbar.xml",
    "java/res/layout/bare_welcome_page_yours.xml",
    "java/res/layout/bookmark_activity.xml",
-diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
-index 06db7ca4c7a..7ac9abf06a3 100644
---- a/chrome/android/chrome_java_sources.gni
-+++ b/chrome/android/chrome_java_sources.gni
-@@ -258,6 +258,7 @@ chrome_java_sources = [
-   "java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java",
-   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java",
-   "java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java",
-+  "java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java",
-   "java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java",
-   "java/src/org/chromium/chrome/browser/bare/BareTabSwitcher.java",
-   "java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java",
 diff --git a/chrome/android/java/res/layout/bare_welcome_page_translate.xml b/chrome/android/java/res/layout/bare_welcome_page_translate.xml
 new file mode 100644
 index 00000000000..d93b37039a1
@@ -161,10 +149,10 @@ index 3ddf71710d2..5daddb7c60e 100644
      <string name="bare_welcome_browsing_intro" translatable="false">Choose how downloads, audio and notifications behave.</string>
      <string name="bare_welcome_ready_title" translatable="false">Defaults and updates</string>
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
-index 90401e128aa..83abb094f88 100644
+index a5d36e16973..499866547fd 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
-@@ -104,7 +104,6 @@ import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
+@@ -107,7 +107,6 @@ import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
  import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
  import org.chromium.chrome.browser.back_press.BackPressManager;
  import org.chromium.chrome.browser.bare.BareClearOnExit;
@@ -172,7 +160,7 @@ index 90401e128aa..83abb094f88 100644
  import org.chromium.chrome.browser.back_press.CloseListenerManager;
  import org.chromium.chrome.browser.base.ColdStartTracker;
  import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpener;
-@@ -3324,7 +3323,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+@@ -3408,7 +3407,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
              RecordUserAction.record("MobileMenuTranslate");
              Tracker tracker = TrackerFactory.getTrackerForProfile(currentTab.getProfile());
              tracker.notifyEvent(EventConstants.TRANSLATE_MENU_BUTTON_CLICKED);
@@ -182,7 +170,7 @@ index 90401e128aa..83abb094f88 100644
          }
  
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
-index c0fb2497501..5a3fabf1d79 100644
+index 2abe0ab3143..224eb8eb5b7 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
 @@ -42,7 +42,6 @@ import org.chromium.build.annotations.RequiresNonNull;
@@ -193,7 +181,7 @@ index c0fb2497501..5a3fabf1d79 100644
  import org.chromium.chrome.browser.bookmarks.BookmarkModel;
  import org.chromium.chrome.browser.bookmarks.PowerBookmarkUtils;
  import org.chromium.chrome.browser.commerce.ShoppingServiceFactory;
-@@ -408,9 +407,7 @@ public abstract class AppMenuPropertiesDelegateImpl implements AppMenuProperties
+@@ -409,9 +408,7 @@ public abstract class AppMenuPropertiesDelegateImpl implements AppMenuProperties
                          mContext,
                          mAppMenuItemTheme,
                          R.id.translate_id,
@@ -204,40 +192,6 @@ index c0fb2497501..5a3fabf1d79 100644
                          showIcon ? R.drawable.ic_translate : 0,
                          isMenuIconAtStart()));
      }
-diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java
-new file mode 100644
-index 00000000000..5a9f934b475
---- /dev/null
-+++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java
-@@ -0,0 +1,28 @@
-+// Copyright 2026 The Chromium Authors
-+// Use of this source code is governed by a BSD-style license that can be
-+// found in the LICENSE file.
-+
-+package org.chromium.chrome.browser.bare;
-+
-+import org.chromium.build.annotations.NullMarked;
-+import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
-+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
-+
-+/**
-+ * Whether page translation is on. It is off until the user turns it on, in the welcome or in
-+ * Settings, because translating a page sends its text to Google.
-+ */
-+@NullMarked
-+public final class BarePageTranslation {
-+    private BarePageTranslation() {}
-+
-+    public static boolean isEnabled() {
-+        return ChromeSharedPreferences.getInstance()
-+                .readBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, false);
-+    }
-+
-+    public static void setEnabled(boolean enabled) {
-+        ChromeSharedPreferences.getInstance()
-+                .writeBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, enabled);
-+    }
-+}
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
 index 2a87277bf57..e2cbd874935 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
@@ -536,40 +490,11 @@ index 6301fe0894b..32ddf59e32c 100644
      }
  
      @Override
-diff --git a/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java b/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
-index edaa32e3da5..3b79900c22a 100644
---- a/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
-+++ b/chrome/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
-@@ -5,7 +5,9 @@
- package org.chromium.chrome.browser.translate;
- 
- import org.chromium.build.annotations.NullMarked;
-+import org.chromium.chrome.browser.bare.BarePageTranslation;
- import org.chromium.chrome.browser.tab.Tab;
-+import org.chromium.components.embedder_support.util.UrlUtilities;
- 
- /** Utility classes related to the translate feature. */
- @NullMarked
-@@ -27,8 +29,11 @@ public class TranslateUtils {
-      * @param menuLogging Whether logging should be performed in this check.
-      */
-     public static boolean canTranslateCurrentTab(Tab tab, boolean menuLogging) {
--        // De-Googled build: the item always shows, so it can be found. Without a server it asks
--        // for one. Google's own service needs an API key this build does not have.
--        return !tab.isNativePage() && tab.getWebContents() != null;
-+        // Page translation is the user's choice. Chromium's own key check is not asked, the same
-+        // as for the address bar shortcut, which translates without it.
-+        return BarePageTranslation.isEnabled()
-+                && !tab.isNativePage()
-+                && tab.getWebContents() != null
-+                && UrlUtilities.isHttpOrHttps(tab.getUrl());
-     }
- }
 diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
-index dffc43cda92..e8ca9db6e36 100644
+index 56f7e74d92a..fe905ff73d4 100644
 --- a/chrome/android/junit/BUILD.gn
 +++ b/chrome/android/junit/BUILD.gn
-@@ -436,6 +436,9 @@ if (is_android) {
+@@ -437,6 +437,9 @@ if (is_android) {
        "src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapterUnitTest.java",
        "src/org/chromium/chrome/browser/bare/BareExtensionPresentationUnitTest.java",
        "src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java",
@@ -580,7 +505,7 @@ index dffc43cda92..e8ca9db6e36 100644
        "src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java",
        "src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcherUnitTest.java",
 diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateUnitTest.java
-index d4a37fde73f..9e3f97d0923 100644
+index 1ce49f3e3f6..daabd4469b2 100644
 --- a/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateUnitTest.java
 +++ b/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateUnitTest.java
 @@ -59,6 +59,8 @@ import org.chromium.chrome.browser.multiwindow.MultiWindowModeStateDispatcher;
@@ -592,7 +517,7 @@ index d4a37fde73f..9e3f97d0923 100644
  import org.chromium.chrome.browser.tab.Tab;
  import org.chromium.chrome.browser.tabmodel.TabModel;
  import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-@@ -227,6 +229,45 @@ public class AppMenuPropertiesDelegateUnitTest {
+@@ -229,6 +231,45 @@ public class AppMenuPropertiesDelegateUnitTest {
          doReturn(enabled).when(mCommerceFeatureUtilsJniMock).isShoppingListEligible(anyLong());
      }
  
@@ -1046,10 +971,10 @@ index 00000000000..b691a6ad811
 +    }
 +}
 diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegateUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegateUnitTest.java
-index ed1e1c41210..d0c8a7e30e6 100644
+index 590e124f6d2..2d41ab35c7b 100644
 --- a/chrome/android/junit/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegateUnitTest.java
 +++ b/chrome/android/junit/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegateUnitTest.java
-@@ -486,6 +486,7 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
+@@ -492,6 +492,7 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
  
      @After
      public void tearDown() {
@@ -1057,7 +982,7 @@ index ed1e1c41210..d0c8a7e30e6 100644
          AccessibilityStateTestHelper.setIsKnownScreenReaderEnabledForTesting(false);
          BookmarkUtils.setReadingListSupportedForTesting(null);
          WebappsUtils.setAddToHomeIntentSupportedForTesting(null);
-@@ -2359,6 +2360,9 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
+@@ -2357,6 +2358,9 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
      @Config(qualifiers = "sw320dp")
      @DisableFeatures(ChromeFeatureList.ANDROID_OPEN_INCOGNITO_AS_WINDOW)
      public void testPageMenuItems_Phone_RegularPage_managed_users() {
@@ -1067,7 +992,7 @@ index ed1e1c41210..d0c8a7e30e6 100644
          setUpMocksForPageMenu();
          when(mTab.getUrl()).thenReturn(JUnitTestGURLs.SEARCH_URL);
          doReturn(true)
-@@ -2413,7 +2417,7 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
+@@ -2411,7 +2415,7 @@ public class TabbedAppMenuPropertiesDelegateUnitTest {
                                  item(R.id.divider_line_id),
                                  item(R.id.universal_install)),
                          item(R.id.find_in_page_id),
@@ -1077,10 +1002,10 @@ index ed1e1c41210..d0c8a7e30e6 100644
                          item(
                                  R.id.more_tools_menu_id,
 diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-index 13ee1cabf64..c77365a46db 100644
+index e02125fcd82..d02f4437378 100644
 --- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
 +++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-@@ -441,6 +441,9 @@ public final class ChromePreferenceKeys {
+@@ -444,6 +444,9 @@ public final class ChromePreferenceKeys {
       */
      public static final String BARE_MINIMAL_LAYOUT = "Bare.Appearance.MinimalLayout";
  
@@ -1090,7 +1015,7 @@ index 13ee1cabf64..c77365a46db 100644
      /**
       * De-Googled build: the user agent picked in Developer options, as a preset id, or empty for
       * the default. "custom" takes its string from {@link #BARE_USER_AGENT_CUSTOM}.
-@@ -1395,6 +1398,7 @@ public final class ChromePreferenceKeys {
+@@ -1400,6 +1403,7 @@ public final class ChromePreferenceKeys {
                  BARE_TRANSLATE_CONSENT_HOST,
                  BARE_TRANSLATE_ENDPOINT,
                  BARE_TRANSLATE_TARGET,
@@ -1098,14 +1023,100 @@ index 13ee1cabf64..c77365a46db 100644
                  BARE_MINIMAL_LAYOUT,
                  BARE_AMOLED_WHEN_SYSTEM_DARK,
                  WEBSTORE_DESKTOP_SITE_CLEARED,
+diff --git a/chrome/browser/translate/android/BUILD.gn b/chrome/browser/translate/android/BUILD.gn
+index 1108dcebfa2..98558ec121c 100644
+--- a/chrome/browser/translate/android/BUILD.gn
++++ b/chrome/browser/translate/android/BUILD.gn
+@@ -8,6 +8,7 @@ import("//third_party/jni_zero/jni_zero.gni")
+ android_library("java") {
+   srcjar_deps = [ ":jni_headers" ]
+   sources = [
++    "java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java",
+     "java/src/org/chromium/chrome/browser/translate/AutoTranslateSnackbarController.java",
+     "java/src/org/chromium/chrome/browser/translate/TranslateUtils.java",
+   ]
+@@ -17,8 +18,10 @@ android_library("java") {
+     "//build/android:build_java",
+     "//chrome/app:java_strings_grd",
+     "//chrome/browser/language/android:java",
++    "//chrome/browser/preferences:java",
+     "//chrome/browser/tab:java",
+     "//chrome/browser/ui/messages/android:java",
++    "//components/embedder_support/android:util_java",
+     "//components/translate/content/android:java_resources",
+     "//content/public/android:content_java",
+     "//third_party/androidx:androidx_annotation_annotation_java",
+diff --git a/chrome/browser/translate/android/java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java b/chrome/browser/translate/android/java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java
+new file mode 100644
+index 00000000000..5a9f934b475
+--- /dev/null
++++ b/chrome/browser/translate/android/java/src/org/chromium/chrome/browser/bare/BarePageTranslation.java
+@@ -0,0 +1,28 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++/**
++ * Whether page translation is on. It is off until the user turns it on, in the welcome or in
++ * Settings, because translating a page sends its text to Google.
++ */
++@NullMarked
++public final class BarePageTranslation {
++    private BarePageTranslation() {}
++
++    public static boolean isEnabled() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, false);
++    }
++
++    public static void setEnabled(boolean enabled) {
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_PAGE_TRANSLATION, enabled);
++    }
++}
+diff --git a/chrome/browser/translate/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java b/chrome/browser/translate/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
+index edaa32e3da5..3b79900c22a 100644
+--- a/chrome/browser/translate/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
++++ b/chrome/browser/translate/android/java/src/org/chromium/chrome/browser/translate/TranslateUtils.java
+@@ -5,7 +5,9 @@
+ package org.chromium.chrome.browser.translate;
+ 
+ import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.bare.BarePageTranslation;
+ import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.components.embedder_support.util.UrlUtilities;
+ 
+ /** Utility classes related to the translate feature. */
+ @NullMarked
+@@ -27,8 +29,11 @@ public class TranslateUtils {
+      * @param menuLogging Whether logging should be performed in this check.
+      */
+     public static boolean canTranslateCurrentTab(Tab tab, boolean menuLogging) {
+-        // De-Googled build: the item always shows, so it can be found. Without a server it asks
+-        // for one. Google's own service needs an API key this build does not have.
+-        return !tab.isNativePage() && tab.getWebContents() != null;
++        // Page translation is the user's choice. Chromium's own key check is not asked, the same
++        // as for the address bar shortcut, which translates without it.
++        return BarePageTranslation.isEnabled()
++                && !tab.isNativePage()
++                && tab.getWebContents() != null
++                && UrlUtilities.isHttpOrHttps(tab.getUrl());
+     }
+ }
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
-index a10c0fb702f..fe947f24839 100644
+index 1186744b923..efe4cfa9b4e 100644
 --- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarDefaults.java
 @@ -96,15 +96,12 @@ public final class BareToolbarDefaults {
-      * <p>GLIC and AI Mode are absent for their own reason. They still exist as actions, because
-      * the shared slot they came from is upstream code this build keeps in step with, but they are
-      * Google surfaces that do nothing here and offering them as choices would be offering nothing.
+      * <p>GLIC is absent for its own reason. It still exists as an action, because the shared
+      * slot it came from is upstream code this build keeps in step with, but it is a Google
+      * surface that does nothing here and offering it as a choice would be offering nothing.
 -     *
 -     * <p>Translate is absent too. It needs a Google API key, which this build does not
 -     * have, so the button could be pressed but never translate anything. A slot that
@@ -1120,7 +1131,7 @@ index a10c0fb702f..fe947f24839 100644
          ActionId.FIND_IN_PAGE,
          ActionId.SEARCH,
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java
-index d5c36206470..522e3ca30e5 100644
+index 87dcce60c9c..9a3dd7023a7 100644
 --- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java
 @@ -159,9 +159,9 @@ public class BareToolbarLayoutUnitTest {

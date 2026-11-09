@@ -1,13 +1,13 @@
-From 9aa5ca6d206de7adf3f27ca2b4b86f35437d9718 Mon Sep 17 00:00:00 2001
+From 437f9d29286b4c08d006cb550b510e30f782a8f2 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
-Date: Fri, 21 Aug 2026 07:53:03 +0000
+Date: Sun, 8 Nov 2026 06:41:32 +0000
 Subject: [PATCH] Patch 0000066
 
 ---
  .../browser/ChromeBaseAppCompatActivity.java  |  8 ++++++
  .../browser/ntp/IncognitoNewTabPageView.java  |  8 +++++-
  .../radio_button_group_theme_preference.xml   |  8 ++++++
- .../GlobalNightModeStateController.java       | 24 ++++++++++++++---
+ .../GlobalNightModeStateController.java       | 24 ++++++++++++-----
  .../browser/night_mode/NightModeUtils.java    |  7 +++++
  .../chrome/browser/night_mode/ThemeType.java  |  5 ++--
  .../RadioButtonGroupThemePreference.java      |  9 +++++--
@@ -18,10 +18,10 @@ Subject: [PATCH] Patch 0000066
  .../styles/android/java/res/values/styles.xml | 25 +++++++++++++++++
  .../browser_ui/styles/ChromeColors.java       |  5 +++-
  .../browser_ui/styles/IncognitoColors.java    | 27 +++++++++++++++----
- 14 files changed, 136 insertions(+), 16 deletions(-)
+ 14 files changed, 133 insertions(+), 19 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java
-index d4913144d4f..f9c33399f4f 100644
+index dba5a09b9d7..eb5dd99cf0e 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java
 @@ -58,6 +58,7 @@ import org.chromium.chrome.browser.language.GlobalAppLocaleController;
@@ -32,7 +32,7 @@ index d4913144d4f..f9c33399f4f 100644
  import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
  import org.chromium.chrome.browser.ntp_customization.theme.NtpThemeStateProvider;
  import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
-@@ -607,6 +608,13 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
+@@ -604,6 +605,13 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
              }
          }
  
@@ -92,10 +92,10 @@ index e603b9c8b66..fdfc7f9afe9 100644
  
      <!-- Make the row clickable -->
 diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateController.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateController.java
-index 618b6e951c1..e617cc7e966 100644
+index eb03167de2d..7198d5d47d0 100644
 --- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateController.java
 +++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/GlobalNightModeStateController.java
-@@ -30,6 +30,9 @@ class GlobalNightModeStateController
+@@ -35,6 +35,9 @@ class GlobalNightModeStateController
       * initialized yet.
       */
      private Boolean mNightModeOn;
@@ -103,43 +103,44 @@ index 618b6e951c1..e617cc7e966 100644
 +    // Tracked separately so observers still get told to re-theme when the user switches.
 +    private Boolean mAmoledOn;
  
-     private final SharedPreferences.OnSharedPreferenceChangeListener mPreferenceListener;
- 
-@@ -122,12 +125,25 @@ class GlobalNightModeStateController
+     /** The last observed theme setting. If null, it has not been read yet. */
+     private @ThemeType @Nullable Integer mThemeSetting;
+@@ -132,16 +135,23 @@ class GlobalNightModeStateController
          final boolean newNightModeOn =
                  (theme == ThemeType.SYSTEM_DEFAULT
                                  && SystemNightModeMonitor.getInstance().isSystemNightModeOn())
 -                        || theme == ThemeType.DARK;
--        if (mNightModeOn != null && newNightModeOn == mNightModeOn) return;
+-        if (mNightModeOn == null || newNightModeOn != mNightModeOn) {
 +                        || theme == ThemeType.DARK
 +                        || theme == ThemeType.DARK_AMOLED;
 +        final boolean newAmoledOn = theme == ThemeType.DARK_AMOLED;
-+        if (mNightModeOn != null
-+                && newNightModeOn == mNightModeOn
-+                && mAmoledOn != null
-+                && newAmoledOn == mAmoledOn) {
-+            return;
-+        }
- 
 +        final boolean nightModeChanged = mNightModeOn == null || newNightModeOn != mNightModeOn;
-         mNightModeOn = newNightModeOn;
--        AppCompatDelegate.setDefaultNightMode(
--                mNightModeOn ? AppCompatDelegate.MODE_NIGHT_YES : AppCompatDelegate.MODE_NIGHT_NO);
-+        mAmoledOn = newAmoledOn;
-+        if (nightModeChanged) {
-+            AppCompatDelegate.setDefaultNightMode(
-+                    mNightModeOn
-+                            ? AppCompatDelegate.MODE_NIGHT_YES
-+                            : AppCompatDelegate.MODE_NIGHT_NO);
-+        }
-         for (Observer observer : mObservers) observer.onNightModeStateChanged();
++        final boolean amoledChanged = mAmoledOn == null || newAmoledOn != mAmoledOn;
++        if (nightModeChanged || amoledChanged) {
+             mNightModeOn = newNightModeOn;
+-            AppCompatDelegate.setDefaultNightMode(
+-                    mNightModeOn
+-                            ? AppCompatDelegate.MODE_NIGHT_YES
+-                            : AppCompatDelegate.MODE_NIGHT_NO);
++            mAmoledOn = newAmoledOn;
++            if (nightModeChanged) {
++                AppCompatDelegate.setDefaultNightMode(
++                        mNightModeOn
++                                ? AppCompatDelegate.MODE_NIGHT_YES
++                                : AppCompatDelegate.MODE_NIGHT_NO);
++            }
+             for (Observer observer : mObservers) observer.onNightModeStateChanged();
  
-         NightModeMetrics.recordNightModeState(mNightModeOn);
+-            NightModeMetrics.recordNightModeState(mNightModeOn);
++            if (nightModeChanged) NightModeMetrics.recordNightModeState(mNightModeOn);
+         }
+ 
+         if (themeSettingChanged) {
 diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/NightModeUtils.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/NightModeUtils.java
-index 2b741c2fb07..b9d43447f4b 100644
+index 9dcc83fe911..7cbdb8683c4 100644
 --- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/NightModeUtils.java
 +++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/NightModeUtils.java
-@@ -96,6 +96,11 @@ public class NightModeUtils {
+@@ -100,6 +100,11 @@ public class NightModeUtils {
                  nightMode ? Configuration.UI_MODE_NIGHT_YES : Configuration.UI_MODE_NIGHT_NO;
          config.uiMode = nightModeFlag | (config.uiMode & ~Configuration.UI_MODE_NIGHT_MASK);
          wrapper.applyOverrideConfiguration(config);
@@ -151,7 +152,7 @@ index 2b741c2fb07..b9d43447f4b 100644
          return wrapper;
      }
  
-@@ -124,6 +129,8 @@ public class NightModeUtils {
+@@ -141,6 +146,8 @@ public class NightModeUtils {
          switch (theme) {
              case ThemeType.DARK:
                  return context.getString(R.string.dark_mode);
@@ -161,19 +162,19 @@ index 2b741c2fb07..b9d43447f4b 100644
                  return context.getString(R.string.light_mode);
              case ThemeType.SYSTEM_DEFAULT:
 diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/ThemeType.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/ThemeType.java
-index 8859d747a85..e5ceb14fb4a 100644
+index f6c19b7007e..20179fa4b80 100644
 --- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/ThemeType.java
 +++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/ThemeType.java
-@@ -15,7 +15,7 @@ import java.lang.annotation.RetentionPolicy;
-  * Theme setting variations. This is also used for histograms and should therefore be treated
-  * as append-only. See DarkThemePreferences in tools/metrics/histograms/enums.xml.
+@@ -16,7 +16,7 @@ import java.lang.annotation.RetentionPolicy;
+  * append-only. See DarkThemePreferences in tools/metrics/histograms/enums.xml. Values must also
+  * match ThemeService::BrowserColorScheme (static_assert'ed in theme_service_android.cc).
   */
 -@IntDef({ThemeType.SYSTEM_DEFAULT, ThemeType.LIGHT, ThemeType.DARK})
 +@IntDef({ThemeType.SYSTEM_DEFAULT, ThemeType.LIGHT, ThemeType.DARK, ThemeType.DARK_AMOLED})
  @Retention(RetentionPolicy.SOURCE)
  @NullMarked
  public @interface ThemeType {
-@@ -23,6 +23,7 @@ public @interface ThemeType {
+@@ -24,6 +24,7 @@ public @interface ThemeType {
      int SYSTEM_DEFAULT = 0;
      int LIGHT = 1;
      int DARK = 2;
@@ -215,10 +216,10 @@ index 0d942fff35d..4179debfbf1 100644
                  mCheckboxContainer.setVisibility(View.VISIBLE);
              } else {
 diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
-index ab08ce4bad1..58ac1dac3f0 100644
+index bce64b4d19f..abff7da55dc 100644
 --- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
 +++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
-@@ -35,6 +35,7 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
+@@ -31,6 +31,7 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
      static final String PREF_UI_THEME_PREF = "ui_theme_pref";
      private static final String PREF_UI_THEME_PREF_LIGHT = "ui_theme_pref_light";
      private static final String PREF_UI_THEME_PREF_DARK = "ui_theme_pref_dark";
@@ -226,7 +227,7 @@ index ab08ce4bad1..58ac1dac3f0 100644
  
      private boolean mWebContentsDarkModeEnabled;
  
-@@ -134,6 +135,16 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
+@@ -128,6 +129,16 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
                              2,
                              darkTitle,
                              null);
@@ -244,10 +245,10 @@ index ab08ce4bad1..58ac1dac3f0 100644
  
                  private void addEntryForKey(
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index a4a331ac10c..91b42e87ea1 100644
+index 80a12ce517f..e3efe5b806d 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -3069,6 +3069,9 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -3105,6 +3105,9 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
        <message name="IDS_LIGHT_MODE" desc="Title of button that will change theme of distilled pages to light mode.">
          Light
        </message>
@@ -349,7 +350,7 @@ index ff1da80ecbf..38a325800ef 100644
      }
  
 diff --git a/components/browser_ui/styles/android/java/src/org/chromium/components/browser_ui/styles/IncognitoColors.java b/components/browser_ui/styles/android/java/src/org/chromium/components/browser_ui/styles/IncognitoColors.java
-index 4c7c6db7248..5b959b49b0c 100644
+index ded08a2aa20..3a581d884dd 100644
 --- a/components/browser_ui/styles/android/java/src/org/chromium/components/browser_ui/styles/IncognitoColors.java
 +++ b/components/browser_ui/styles/android/java/src/org/chromium/components/browser_ui/styles/IncognitoColors.java
 @@ -10,6 +10,8 @@ import android.content.res.ColorStateList;

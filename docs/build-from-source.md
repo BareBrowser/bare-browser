@@ -41,7 +41,7 @@ git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git ~/dep
 mkdir -p /work/chromium && cd /work/chromium
 fetch --nohooks android
 cd src
-git checkout 2f9a11097447f226133bc1a31c787291a5eeab98
+git checkout 800628ad1ca1fd0c51e3b43b5b2bca081e81c3f6
 gclient sync -D --force --reset
 ./build/install-build-deps.sh --android
 ```
@@ -90,8 +90,8 @@ enable_openxr = false
 disable_fieldtrial_testing_config = true
 
 chrome_public_manifest_package = "org.barebrowser"
-android_override_version_code = "802000065"
-android_override_version_name = "2.0.0-beta.6"
+android_override_version_code = "802000115"
+android_override_version_name = "2.0.1"
 ```
 
 The last two lines are what `tools/version.py gn arm64` emits at this release (run it to get them, rather
@@ -104,7 +104,7 @@ patches here are inert. [docs/build-constraints.md](build-constraints.md) has th
 behaviours that came from that file rather than from the code.
 
 The 32-bit build differs in exactly three lines: `target_cpu = "arm"`, the version code
-`802000060` that `tools/version.py gn arm` emits, and `clang_use_default_sample_profile = false`,
+`802000110` that `tools/version.py gn arm` emits, and `clang_use_default_sample_profile = false`,
 which stops GN demanding an AFDO profile this checkout never syncs.
 
 Bare CrashLab is the same build with `bare_diagnostics = true` and
@@ -122,7 +122,7 @@ autoninja -C out/Bare chrome_public_apk
 carries a signature only its key can produce. Everything else should match:
 
 ```bash
-tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-2.0.0-beta.6-arm64-v8a.apk
+tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-2.0.1-arm64-v8a.apk
 ```
 
 See [BUILDING.md](../BUILDING.md) for the rest of the workflow, including versioning and how
@@ -139,7 +139,7 @@ person as the file, so on its own it proves nothing about where the file came fr
 **Is it genuinely Bare?** Check who signed it. Nothing signed by any other key is Bare.
 
 ```bash
-apksigner verify --print-certs Bare-2.0.0-beta.6-arm64-v8a.apk
+apksigner verify --print-certs Bare-2.0.1-arm64-v8a.apk
 ```
 
     SHA-256  ae:2a:0e:7f:b7:a1:32:ec:51:7d:26:a8:e7:c8:3d:27
@@ -158,7 +158,7 @@ can produce it, but everything else is. Follow [Build it yourself](#build-it-you
 including the version arguments, then compare:
 
 ```bash
-tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-2.0.0-beta.6-arm64-v8a.apk
+tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-2.0.1-arm64-v8a.apk
 ```
 
 It hashes every entry except the signature, so two builds of the same source agree whoever signed

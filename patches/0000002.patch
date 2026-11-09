@@ -1,21 +1,22 @@
-From 5909c721f63581c96bf5cb18405edb1eda3112e5 Mon Sep 17 00:00:00 2001
+From 8fe25431fb7f0b494d85fa31e46f3ff5808cdb25 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
-Date: Sat, 15 Aug 2026 04:07:03 +0000
+Date: Sun, 8 Nov 2026 06:40:26 +0000
 Subject: [PATCH] Patch 0000002
 
 ---
- .../chrome/browser/ChromeTabbedActivity.java       |   35 +++++++++++++++-----
- .../browser/ChromeTabbedActivityUnitTest.java      |   15 +++++++++
- 2 files changed, 41 insertions(+), 9 deletions(-)
+ .../chrome/browser/ChromeTabbedActivity.java  | 36 +++++++++++++------
+ .../browser/ChromeTabbedActivityUnitTest.java | 15 ++++++++
+ 2 files changed, 41 insertions(+), 10 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-index af106d0a96e..bf234c6067c 100644
+index 10fca9f85ad..ea00081bfa0 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-@@ -4673,17 +4673,15 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -4731,18 +4731,15 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
          } else if (id == R.id.extensions_menu_menu_id) {
              ExtensionsToolbarCoordinator coordinator =
-                     getToolbarManager().getExtensionsToolbarCoordinator();
+                     assumeNonNull(getToolbarManager()).getExtensionsToolbarCoordinator();
+-            assumeNonNull(coordinator);
 -            coordinator.showExtensionsMenu();
 +            if (!showExtensionsMenu(coordinator)) {
 +                // The extensions toolbar is currently only created for Desktop Android. Extension
@@ -37,8 +38,8 @@ index af106d0a96e..bf234c6067c 100644
              RecordUserAction.record("MobileMenuManageExtensions");
              Profile profile = mTabModelProfileSupplier.get();
              if (profile != null) {
-@@ -4860,6 +4858,25 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
-         return true;
+@@ -4955,6 +4952,25 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+         return TabList.INVALID_TAB_INDEX;
      }
  
 +    @VisibleForTesting
@@ -61,23 +62,23 @@ index af106d0a96e..bf234c6067c 100644
 +    }
 +
      private void openForeignSessionTab(String sessionTag, int tabId) {
-         Profile profile = getTabModelSelector().getCurrentModel().getProfile();
-         ForeignSessionHelper helper = new ForeignSessionHelper(profile);
+         Profile profile = assertNonNull(getTabModelSelector().getCurrentModel().getProfile());
+         var activityTab = assertNonNull(getActivityTab());
 diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/ChromeTabbedActivityUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/ChromeTabbedActivityUnitTest.java
-index 2f8206b5658..f3fe9828c69 100644
+index 52d93a11277..82e33e48a6d 100644
 --- a/chrome/android/junit/src/org/chromium/chrome/browser/ChromeTabbedActivityUnitTest.java
 +++ b/chrome/android/junit/src/org/chromium/chrome/browser/ChromeTabbedActivityUnitTest.java
-@@ -46,6 +46,7 @@ import org.chromium.chrome.browser.tabmodel.IncognitoTabHostRegistry;
+@@ -45,6 +45,7 @@ import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
+ import org.chromium.chrome.browser.tabmodel.TabClosingSource;
  import org.chromium.chrome.browser.tabmodel.TabModel;
  import org.chromium.chrome.browser.tabmodel.TabModelSelectorBase;
- import org.chromium.chrome.browser.tasks.tab_management.vertical_tabs.VerticalTabsActionDelegate;
 +import org.chromium.chrome.browser.toolbar.extensions.ExtensionsToolbarCoordinator;
  
- /** Unit tests for {@link ChromeTabbedActivity}. */
- @RunWith(BaseRobolectricTestRunner.class)
-@@ -358,4 +359,18 @@ public class ChromeTabbedActivityUnitTest {
-         activity.onPreCreate();
-         verify(activity).supportRequestWindowFeature(Window.FEATURE_ACTION_MODE_OVERLAY);
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -476,4 +477,18 @@ public class ChromeTabbedActivityUnitTest {
+         assertTrue(activity.onMenuOrKeyboardAction(R.id.select_last_tab, /* fromMenu= */ false));
+         verify(tabModel, never()).setIndex(anyInt(), anyInt());
      }
 +
 +    @Test

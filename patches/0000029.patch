@@ -1,6 +1,6 @@
-From d41d3cbdfb4df05f2f4baaf806c7aeffc118b41a Mon Sep 17 00:00:00 2001
+From 06ee62301e5d3d738258b9f3b47bd2a9b6b045bd Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
-Date: Tue, 18 Aug 2026 06:38:41 +0000
+Date: Sun, 8 Nov 2026 06:40:52 +0000
 Subject: [PATCH] Patch 0000029
 
 ---
@@ -9,19 +9,18 @@ Subject: [PATCH] Patch 0000029
  .../browser/ui/actions/ActionUtils.java       | 10 ++++
  .../bottombar/BottomBarActionEligibility.java | 14 +++++
  .../ui/bottombar/BottomBarCoordinator.java    |  7 +++
- .../ui/bottombar/BottomBarMediator.java       |  9 ++++
+ .../ui/bottombar/BottomBarMediator.java       |  8 +++
  .../browser/ui/bottombar/BottomBarView.java   |  1 +
- 7 files changed, 93 insertions(+)
+ 7 files changed, 92 insertions(+)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
-index c92353d82ed..881421081f8 100644
+index 393d40fcb8e..aa2903c6cef 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
-@@ -2716,6 +2716,57 @@ public class ToolbarManager
-                                 mTabCreatorManager.getTabCreator(
+@@ -2728,6 +2728,57 @@ public class ToolbarManager
                                          tabModelSelector.isIncognitoSelected()));
                      });
-+
+ 
 +            // De-Googled build: the bottom bar's spare slot toggles incognito mode.
 +            //
 +            // Pressing it switches to the incognito tab model and highlights the button;
@@ -72,26 +71,27 @@ index c92353d82ed..881421081f8 100644
 +                                                    : null);
 +                                });
 +            }
-         }
- 
-         if (mActionRegistry != null) {
++
+             mGlicActionCoordinator =
+                     new GlicActionCoordinator(
+                             mActivity,
 diff --git a/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionId.java b/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionId.java
-index b2a847a7c6d..2e0f7a46e55 100644
+index 00af4e2fbb2..eb9e1722cca 100644
 --- a/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionId.java
 +++ b/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionId.java
-@@ -36,4 +36,5 @@ public @interface ActionId {
+@@ -34,4 +34,5 @@ public @interface ActionId {
+     int BACK_BUTTON = 3;
      int NEW_TAB = 4;
      int GLIC = 5;
-     int AI_MODE = 6;
 +    int INCOGNITO = 7;
  }
 diff --git a/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionUtils.java b/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionUtils.java
-index cc43cdbe725..ff8336cbca0 100644
+index ec29729ac05..2f4ee3ef7c8 100644
 --- a/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionUtils.java
 +++ b/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/ActionUtils.java
-@@ -97,6 +97,16 @@ public class ActionUtils {
-                 R.string.accessibility_bottom_bar_ai_mode_button,
-                 R.string.accessibility_bottom_bar_ai_mode_button);
+@@ -88,6 +88,16 @@ public class ActionUtils {
+                 R.string.glic_button_entrypoint_ask_gemini_label,
+                 R.string.glic_button_entrypoint_ask_gemini_label);
  
 +        // De-Googled build: register the incognito button that fills the bottom bar's spare
 +        // slot, left empty when the Ask Gemini button was removed.
@@ -107,13 +107,13 @@ index cc43cdbe725..ff8336cbca0 100644
          registerAction(
                  registry,
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarActionEligibility.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarActionEligibility.java
-index 19cfc34b818..424250c2967 100644
+index 8eb241f2b00..ab507a61217 100644
 --- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarActionEligibility.java
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarActionEligibility.java
-@@ -151,6 +151,20 @@ public class BottomBarActionEligibility {
+@@ -77,6 +77,20 @@ public class BottomBarActionEligibility {
       */
      @ActionId
-     public static int getCandidateExtraAction(@Nullable Profile profile, @Nullable String country) {
+     public static int getCandidateExtraAction(@Nullable Profile profile) {
 +        // De-Googled build: the spare slot opens an incognito tab.
 +        //
 +        // It previously held Ask Gemini, removed in an earlier patch, which left the bottom bar
@@ -127,16 +127,16 @@ index 19cfc34b818..424250c2967 100644
 +    @ActionId
 +    @SuppressWarnings("unused")
 +    private static int getCandidateExtraActionUpstream(
-+            @Nullable Profile profile, @Nullable String country) {
++            @Nullable Profile profile) {
          if (!SHOW_BOTTOM_BAR_EXTRA_ACTION) {
              sCachedCandidateExtraAction = ACTION_NONE;
              return ACTION_NONE;
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
-index bc92e3a45ce..4455938d5ab 100644
+index abae5b65dc7..4df5e9a5793 100644
 --- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
-@@ -152,6 +152,13 @@ public class BottomBarCoordinator implements BottomBar, Destroyable {
-                         ActionButtonBinder::bind,
+@@ -132,6 +132,13 @@ public class BottomBarCoordinator implements BottomBar, Destroyable {
+                         GlicActionButtonBinder::bind,
                          BottomBarProperties.IS_EXTRA_BUTTON_VISIBLE,
                          /* initiallyVisible= */ false));
 +        configs.add(
@@ -150,43 +150,41 @@ index bc92e3a45ce..4455938d5ab 100644
          BottomBarButtonContainer newTabContainer = view.getContainerForAction(ActionId.NEW_TAB);
          assert newTabContainer != null : "New tab container not found";
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
-index 4ee75be381a..dbc766f084f 100644
+index 61a22983553..5c835d97c44 100644
 --- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
-@@ -310,6 +310,7 @@ public class BottomBarMediator
-         if (profile == null) {
-             setButtonVisibility(ActionId.GLIC, false);
-             setButtonVisibility(ActionId.AI_MODE, false);
-+            setButtonVisibility(ActionId.INCOGNITO, false);
+@@ -258,6 +258,7 @@ public class BottomBarMediator
+             mResolvedCandidateExtraAction = null;
+             updateObservers(/* originalProfile= */ null);
+             setButtonVisibility(ActionId.GLIC, /* visible= */ false);
++            setButtonVisibility(ActionId.INCOGNITO, /* visible= */ false);
              return;
          }
  
-@@ -351,9 +352,17 @@ public class BottomBarMediator
+@@ -295,8 +296,15 @@ public class BottomBarMediator
+         Integer candidateExtraAction = mResolvedCandidateExtraAction;
+         if (candidateExtraAction != null && candidateExtraAction == ActionId.GLIC) {
              updateGlicVisibility(originalProfile);
-         } else if (candidateExtraAction != null && candidateExtraAction == ActionId.AI_MODE) {
-             updateAiModeVisibility();
 +        } else if (candidateExtraAction != null && candidateExtraAction == ActionId.INCOGNITO) {
 +            // De-Googled build: the incognito button shares this slot, so it needs asking about
-+            // too. Only GLIC and AI_MODE were considered here, which left the slot empty for any
-+            // other action however correctly it was registered.
++            // too. Only GLIC was considered here, which left the slot empty for any other
++            // action however correctly it was registered.
 +            setButtonVisibility(ActionId.GLIC, /* visible= */ false);
-+            setButtonVisibility(ActionId.AI_MODE, /* visible= */ false);
 +            setButtonVisibility(ActionId.INCOGNITO, /* visible= */ true);
          } else {
              setButtonVisibility(ActionId.GLIC, /* visible= */ false);
-             setButtonVisibility(ActionId.AI_MODE, /* visible= */ false);
 +            setButtonVisibility(ActionId.INCOGNITO, /* visible= */ false);
          }
      }
  
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java
-index b8ce991e847..db777d992ba 100644
+index b2e020a7a54..b22edca12d5 100644
 --- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarView.java
-@@ -310,6 +310,7 @@ public class BottomBarView extends LinearLayout {
+@@ -309,6 +309,7 @@ public class BottomBarView extends LinearLayout {
+             case ActionId.HOME_BUTTON:
                  return mHomeContainer;
              case ActionId.GLIC:
-             case ActionId.AI_MODE:
 +            case ActionId.INCOGNITO:
                  return mExtraContainer;
              case ActionId.NEW_TAB:

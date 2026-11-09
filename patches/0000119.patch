@@ -1,44 +1,44 @@
-From 2dac998a07e77cbd84daaf9fd74e625f0251cdd1 Mon Sep 17 00:00:00 2001
+From fd300e88dd3f3dfa5ef7354312066c31cfe2537b Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
-Date: Wed, 9 Sep 2026 05:06:41 +0000
+Date: Sun, 8 Nov 2026 06:42:26 +0000
 Subject: [PATCH] Patch 0000119
 
 ---
- chrome/browser/chrome_content_browser_client.cc    |    2 +
- .../night_mode/java/res/xml/theme_preferences.xml  |    5 ++
- .../night_mode/settings/ThemeSettingsFragment.java |   23 ++++++++++
- .../ui/android/strings/android_chrome_strings.grd  |    6 +++
- chrome/browser/ui/prefs/pref_watcher.cc            |    1 
- chrome/browser/ui/prefs/prefs_tab_helper.cc        |    2 +
- chrome/common/pref_names.h                         |    8 +++
- .../web_preferences_mojom_traits.cc                |    1 
- .../common/web_preferences/web_preferences.h       |    4 ++
- .../web_preferences/web_preferences_mojom_traits.h |    5 ++
- .../mojom/webpreferences/web_preferences.mojom     |    1 
- third_party/blink/public/web/web_settings.h        |    1 
- .../css/properties/longhands/longhands_custom.cc   |    2 +
- .../renderer/core/css/resolver/style_resolver.cc   |    1 
- .../blink/renderer/core/css/style_engine.cc        |    5 ++
- third_party/blink/renderer/core/css/style_engine.h |    4 ++
- .../renderer/core/exported/web_settings_impl.cc    |    4 ++
- .../renderer/core/exported/web_settings_impl.h     |    1 
- .../blink/renderer/core/exported/web_view_impl.cc  |    2 +
- .../blink/renderer/core/frame/settings.json5       |   10 ++++
- .../renderer/core/paint/paint_auto_dark_mode.h     |    3 +
- .../core/style/computed_style_extra_fields.json5   |   12 +++++
- .../platform/graphics/dark_mode_color_filter.cc    |   16 +++++++
- .../platform/graphics/dark_mode_color_filter.h     |    7 +++
- .../renderer/platform/graphics/dark_mode_filter.cc |   48 ++++++++++++++------
- .../renderer/platform/graphics/dark_mode_filter.h  |   12 ++++-
- .../renderer/platform/graphics/graphics_context.cc |    6 ++-
- .../renderer/platform/graphics/graphics_context.h  |   17 +++++--
- 28 files changed, 184 insertions(+), 25 deletions(-)
+ .../browser/chrome_content_browser_client.cc  |  2 +
+ .../java/res/xml/theme_preferences.xml        |  5 ++
+ .../settings/ThemeSettingsFragment.java       | 23 +++++++++
+ .../strings/android_chrome_strings.grd        |  6 +++
+ chrome/browser/ui/prefs/pref_watcher.cc       |  1 +
+ chrome/browser/ui/prefs/prefs_tab_helper.cc   |  2 +
+ chrome/common/pref_names.h                    |  8 ++++
+ .../web_preferences_mojom_traits.cc           |  1 +
+ .../common/web_preferences/web_preferences.h  |  4 ++
+ .../web_preferences_mojom_traits.h            |  5 ++
+ .../webpreferences/web_preferences.mojom      |  1 +
+ third_party/blink/public/web/web_settings.h   |  1 +
+ .../properties/longhands/longhands_custom.cc  |  2 +
+ .../core/css/resolver/style_resolver.cc       |  1 +
+ .../blink/renderer/core/css/style_engine.cc   |  5 +-
+ .../blink/renderer/core/css/style_engine.h    |  4 ++
+ .../core/exported/web_settings_impl.cc        |  4 ++
+ .../core/exported/web_settings_impl.h         |  1 +
+ .../renderer/core/exported/web_view_impl.cc   |  2 +
+ .../blink/renderer/core/frame/settings.json5  | 10 ++++
+ .../core/paint/paint_auto_dark_mode.h         |  3 +-
+ .../style/computed_style_extra_fields.json5   | 14 ++++++
+ .../graphics/dark_mode_color_filter.cc        | 16 +++++++
+ .../graphics/dark_mode_color_filter.h         |  7 +++
+ .../platform/graphics/dark_mode_filter.cc     | 48 +++++++++++++------
+ .../platform/graphics/dark_mode_filter.h      | 12 +++--
+ .../platform/graphics/graphics_context.cc     |  6 ++-
+ .../platform/graphics/graphics_context.h      | 17 +++++--
+ 28 files changed, 186 insertions(+), 25 deletions(-)
 
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index 9b02e2577d4..69bf23cad31 100644
+index 59c68ac35f1..512a993a352 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -4820,6 +4820,8 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
+@@ -4852,6 +4852,8 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
  #endif
    web_prefs->force_dark_mode_enabled =
        prefs->GetBoolean(prefs::kWebKitForceDarkModeEnabled);
@@ -63,11 +63,11 @@ index 8f0ff05bb21..425778770bc 100644
  </PreferenceScreen>
 \ No newline at end of file
 diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
-index 58ac1dac3f0..4c83e4f7285 100644
+index abff7da55dc..cb2b681c7cd 100644
 --- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
 +++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
-@@ -24,15 +24,19 @@ import org.chromium.chrome.browser.night_mode.WebContentsDarkModeMessageControll
- import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+@@ -20,15 +20,19 @@ import org.chromium.chrome.browser.night_mode.WebContentsDarkModeController;
+ import org.chromium.chrome.browser.night_mode.WebContentsDarkModeMessageController;
  import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
  import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
 +import org.chromium.chrome.browser.preferences.Pref;
@@ -86,7 +86,7 @@ index 58ac1dac3f0..4c83e4f7285 100644
      private static final String PREF_UI_THEME_PREF_LIGHT = "ui_theme_pref_light";
      private static final String PREF_UI_THEME_PREF_DARK = "ui_theme_pref_dark";
      private static final String PREF_UI_THEME_PREF_DARK_AMOLED = "ui_theme_pref_dark_amoled";
-@@ -55,6 +59,24 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
+@@ -50,6 +54,24 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
          radioButtonGroupThemePreference.initialize(
                  NightModeUtils.getThemeSetting(), mWebContentsDarkModeEnabled);
  
@@ -111,19 +111,19 @@ index 58ac1dac3f0..4c83e4f7285 100644
          radioButtonGroupThemePreference.setOnPreferenceChangeListener(
                  (preference, newValue) -> {
                      if (ChromeFeatureList.isEnabled(
-@@ -65,6 +87,7 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
+@@ -60,6 +82,7 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
                                      radioButtonGroupThemePreference.isDarkenWebsitesEnabled();
                              WebContentsDarkModeController.setGlobalUserSettings(
                                      getProfile(), mWebContentsDarkModeEnabled);
 +                            amoledBackgrounds.setEnabled(mWebContentsDarkModeEnabled);
                          }
                      }
-                     int theme = (int) newValue;
+                     NightModeUtils.setThemeSetting((int) newValue);
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index 72e73e52125..29566262fe9 100644
+index 231749fdb88..fc6e06c0071 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -1015,6 +1015,12 @@ For more settings that use data to improve your Chrome experience, go to <ph nam
+@@ -1027,6 +1027,12 @@ For more settings that use data to improve your Chrome experience, go to <ph nam
        <message name="IDS_DARKEN_WEBSITES" desc="Title for the option to apply auto-darken to websites. If a website has opt-out from auto-darken, the content will stay the same.">
          Apply dark theme to sites, when possible
        </message>
@@ -162,7 +162,7 @@ index 87dc1b8b9a6..35003062994 100644
                                 l10n_util::GetStringUTF8(IDS_DEFAULT_ENCODING),
                                 user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
 diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
-index d28b4e7ab42..bd1201d6774 100644
+index 267354ab549..603f6fd8616 100644
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
 @@ -334,6 +334,14 @@ inline constexpr char kWebKitPasswordEchoEnabledTouch[] =
@@ -193,7 +193,7 @@ index 7a7d3e35d47..fcf547114a0 100644
        data.background_media_playback_enabled();
    out->default_minimum_page_scale_factor =
 diff --git a/third_party/blink/public/common/web_preferences/web_preferences.h b/third_party/blink/public/common/web_preferences/web_preferences.h
-index 3da6276cfdd..c6fd60a2693 100644
+index 6cb49e5341c..d03a9c15e53 100644
 --- a/third_party/blink/public/common/web_preferences/web_preferences.h
 +++ b/third_party/blink/public/common/web_preferences/web_preferences.h
 @@ -325,6 +325,10 @@ struct BLINK_COMMON_EXPORT WebPreferences {
@@ -208,10 +208,10 @@ index 3da6276cfdd..c6fd60a2693 100644
    // even while the page is hidden, and does not fire visibilitychange. The
    // browser only sets this for sites on its supported list, and only when the
 diff --git a/third_party/blink/public/common/web_preferences/web_preferences_mojom_traits.h b/third_party/blink/public/common/web_preferences/web_preferences_mojom_traits.h
-index 953f6559f92..662c7f921b5 100644
+index bd99ffe64a1..6926b290912 100644
 --- a/third_party/blink/public/common/web_preferences/web_preferences_mojom_traits.h
 +++ b/third_party/blink/public/common/web_preferences/web_preferences_mojom_traits.h
-@@ -699,6 +699,11 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
+@@ -700,6 +700,11 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
      return r.force_dark_mode_enabled;
    }
  
@@ -248,10 +248,10 @@ index a15a371ed13..b5dfa4c2582 100644
    // page is hidden. Set for supported sites only, see Document.
    virtual void SetBackgroundMediaPlaybackEnabled(bool) = 0;
 diff --git a/third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc b/third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc
-index 5be6390da93..7ebf7b43135 100644
+index a776c8e3ebe..57be615d454 100644
 --- a/third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc
 +++ b/third_party/blink/renderer/core/css/properties/longhands/longhands_custom.cc
-@@ -2618,6 +2618,8 @@ void ApplyColorSchemeValue(StyleResolverState& state,
+@@ -2630,6 +2630,8 @@ void ApplyColorSchemeValue(StyleResolverState& state,
    state.StyleBuilder().SetUsedColorScheme(
        flags, document.GetStyleEngine().GetPreferredColorScheme(),
        document.GetStyleEngine().GetForceDarkModeEnabled());
@@ -261,10 +261,10 @@ index 5be6390da93..7ebf7b43135 100644
    if (flags & static_cast<ColorSchemeFlags>(ColorSchemeFlag::kDark)) {
      // Record kColorSchemeDarkSupportedOnRoot if dark is present (though dark
 diff --git a/third_party/blink/renderer/core/css/resolver/style_resolver.cc b/third_party/blink/renderer/core/css/resolver/style_resolver.cc
-index 630f5c962aa..11e53e503d4 100644
+index 7d8a52d982e..c583c15c7ee 100644
 --- a/third_party/blink/renderer/core/css/resolver/style_resolver.cc
 +++ b/third_party/blink/renderer/core/css/resolver/style_resolver.cc
-@@ -2411,6 +2411,7 @@ ComputedStyleBuilder StyleResolver::InitialStyleBuilderForElement() const {
+@@ -2572,6 +2572,7 @@ ComputedStyleBuilder StyleResolver::InitialStyleBuilderForElement() const {
    builder.SetUsedColorScheme(engine.GetPageColorSchemes(),
                               engine.GetPreferredColorScheme(),
                               engine.GetForceDarkModeEnabled());
@@ -273,10 +273,10 @@ index 630f5c962aa..11e53e503d4 100644
    FontDescription document_font_description = builder.GetFontDescription();
    document_font_description.SetLocale(
 diff --git a/third_party/blink/renderer/core/css/style_engine.cc b/third_party/blink/renderer/core/css/style_engine.cc
-index e838a11c8c6..10e079dc4dd 100644
+index 362b1229a47..1886bdbb43c 100644
 --- a/third_party/blink/renderer/core/css/style_engine.cc
 +++ b/third_party/blink/renderer/core/css/style_engine.cc
-@@ -4479,6 +4479,8 @@ void StyleEngine::UpdateColorScheme() {
+@@ -4559,6 +4559,8 @@ void StyleEngine::UpdateColorScheme() {
    preferred_contrast_ = settings->GetPreferredContrast();
    bool old_force_dark_mode_enabled = force_dark_mode_enabled_;
    force_dark_mode_enabled_ = settings->GetForceDarkModeEnabled();
@@ -285,7 +285,7 @@ index e838a11c8c6..10e079dc4dd 100644
    bool media_feature_override_color_scheme = false;
    bool media_feature_override_contrast = false;
  
-@@ -4533,7 +4535,8 @@ void StyleEngine::UpdateColorScheme() {
+@@ -4613,7 +4615,8 @@ void StyleEngine::UpdateColorScheme() {
    if (forced_colors_ != old_forced_colors ||
        preferred_color_scheme_ != old_preferred_color_scheme ||
        preferred_contrast_ != old_preferred_contrast ||
@@ -296,7 +296,7 @@ index e838a11c8c6..10e079dc4dd 100644
    }
  
 diff --git a/third_party/blink/renderer/core/css/style_engine.h b/third_party/blink/renderer/core/css/style_engine.h
-index e46a3aa9ac0..4f4c938f59b 100644
+index 752c72e16c2..224329167ea 100644
 --- a/third_party/blink/renderer/core/css/style_engine.h
 +++ b/third_party/blink/renderer/core/css/style_engine.h
 @@ -781,6 +781,9 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
@@ -309,7 +309,7 @@ index e46a3aa9ac0..4f4c938f59b 100644
    ForcedColors GetForcedColors() const { return forced_colors_; }
    void UpdateColorSchemeBackground(bool color_scheme_changed = false);
    Color ForcedBackgroundColor() const { return forced_background_color_; }
-@@ -1238,6 +1241,7 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
+@@ -1237,6 +1240,7 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
    Color forced_background_color_;
  
    bool force_dark_mode_enabled_{false};
@@ -358,7 +358,7 @@ index 60f576deabe..d4fae3fdefc 100644
        prefs.background_media_playback_enabled);
  
 diff --git a/third_party/blink/renderer/core/frame/settings.json5 b/third_party/blink/renderer/core/frame/settings.json5
-index 94d2d8f5247..f2f53f435a2 100644
+index 86fe37696b0..f94cee0d402 100644
 --- a/third_party/blink/renderer/core/frame/settings.json5
 +++ b/third_party/blink/renderer/core/frame/settings.json5
 @@ -1057,6 +1057,16 @@
@@ -393,10 +393,10 @@ index a21d1472cde..948bdfdb6d3 100644
  
  inline AutoDarkMode PaintAutoDarkMode(DarkModeFilter::ElementRole role,
 diff --git a/third_party/blink/renderer/core/style/computed_style_extra_fields.json5 b/third_party/blink/renderer/core/style/computed_style_extra_fields.json5
-index 31f171c8224..51433f32cdd 100644
+index 96ccb3412f3..dc6ef1ea672 100644
 --- a/third_party/blink/renderer/core/style/computed_style_extra_fields.json5
 +++ b/third_party/blink/renderer/core/style/computed_style_extra_fields.json5
-@@ -1040,6 +1040,18 @@
+@@ -1061,6 +1061,20 @@
        inherited: true,
        invalidate: ["paint"],
      },
@@ -404,8 +404,10 @@ index 31f171c8224..51433f32cdd 100644
 +      // Bare Browser: carries the amoled background setting to the paint code,
 +      // which reaches ComputedStyle but not Settings. Only meaningful together
 +      // with ColorSchemeForced, i.e. on a page Blink is darkening itself.
++      // Kept in a rare group so ComputedStyle does not grow.
 +      name: "AmoledDarkBackgrounds",
 +      field_template: "primitive",
++      field_group: "*",
 +      type_name: "bool",
 +      default_value: "false",
 +      custom_compare: true,
@@ -416,7 +418,7 @@ index 31f171c8224..51433f32cdd 100644
        name: "IsInBlockifyingDisplay",
        field_template: "monotonic_flag",
 diff --git a/third_party/blink/renderer/platform/graphics/dark_mode_color_filter.cc b/third_party/blink/renderer/platform/graphics/dark_mode_color_filter.cc
-index 273317b2480..f3f5ca1bb76 100644
+index 5567a4cbac5..0674c8cc405 100644
 --- a/third_party/blink/renderer/platform/graphics/dark_mode_color_filter.cc
 +++ b/third_party/blink/renderer/platform/graphics/dark_mode_color_filter.cc
 @@ -41,6 +41,22 @@ class LABColorFilter : public DarkModeColorFilter {

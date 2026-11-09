@@ -89,7 +89,7 @@ index 00000000000..34eb122a18a
 +    </group>
 +</vector>
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ManageSpaceActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ManageSpaceActivity.java
-index cf3567a60d7..44784420d6a 100644
+index 2f0c2498d8d..15704acea11 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ManageSpaceActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ManageSpaceActivity.java
 @@ -6,22 +6,33 @@ package org.chromium.chrome.browser.site_settings;
@@ -129,11 +129,12 @@ index cf3567a60d7..44784420d6a 100644
  
  import org.chromium.base.Log;
  import org.chromium.base.metrics.RecordUserAction;
-@@ -49,63 +60,74 @@ import org.chromium.components.browser_ui.site_settings.SiteSettingsCategory;
+@@ -49,28 +60,37 @@ import org.chromium.components.browser_ui.site_settings.SiteSettingsCategory;
  import org.chromium.components.browser_ui.site_settings.Website;
  import org.chromium.components.browser_ui.site_settings.Website.StoredDataClearedCallback;
  import org.chromium.components.browser_ui.site_settings.WebsitePermissionsFetcher;
 +import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.components.browsing_data.content.BrowsingDataModel;
  
 +import java.util.ArrayList;
  import java.util.Collection;
@@ -176,7 +177,9 @@ index cf3567a60d7..44784420d6a 100644
  
      private static boolean sActivityNotExportedChecked;
  
-     private boolean mIsNativeInitialized;
+@@ -78,37 +98,39 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
+     private @Nullable ChromeSiteSettingsDelegate mChromeSiteSettingsDelegate;
+     private @Nullable BrowsingDataModel mBrowsingDataModel;
  
 +    /** One site in the list, with what it stores. */
 +    private static final class SiteUsage {
@@ -237,7 +240,7 @@ index cf3567a60d7..44784420d6a 100644
          super.onCreate(savedInstanceState);
  
          BrowserParts parts =
-@@ -117,9 +139,8 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
+@@ -120,9 +142,8 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
  
                      @Override
                      public void onStartupFailure(@Nullable Exception failureCause) {
@@ -249,7 +252,7 @@ index cf3567a60d7..44784420d6a 100644
                      }
                  };
  
-@@ -136,8 +157,8 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
+@@ -139,8 +160,8 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
  
          // If the native library crashes and kills the browser process, there is no guarantee
          // java-side the pref will be written before the process dies. We want to make sure we
@@ -260,7 +263,7 @@ index cf3567a60d7..44784420d6a 100644
          ChromeSharedPreferences.getInstance()
                  .writeStringSync(
                          ChromePreferenceKeys.SETTINGS_WEBSITE_FAILED_BUILD_VERSION, productVersion);
-@@ -148,16 +169,17 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
+@@ -151,16 +172,17 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
          } catch (Exception e) {
              // We don't want to exit, as the user should still be able to clear all browsing data.
              Log.e(TAG, "Unable to load native library.", e);
@@ -280,9 +283,9 @@ index cf3567a60d7..44784420d6a 100644
 +        mFreeUpButton.setAlpha(1f);
 +        mManageLink.setEnabled(true);
          RecordUserAction.record("Android.ManageSpace");
-         refreshStorageNumbers();
-     }
-@@ -183,15 +205,233 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
+ 
+         // The BrowsingDataModel is fetched at the end of the native initialization to ensure all
+@@ -212,15 +234,233 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
      }
  
      @VisibleForTesting
@@ -469,8 +472,8 @@ index cf3567a60d7..44784420d6a 100644
 +            for (int i = shown; i < sites.size(); i++) other += sites.get(i).mBytes;
 +            mSiteList.addView(row("Other (" + (sites.size() - shown) + ")", other, max));
 +        }
-     }
- 
++    }
++
 +    private View row(String name, long bytes, long max) {
 +        LinearLayout row = new LinearLayout(this);
 +        row.setOrientation(LinearLayout.HORIZONTAL);
@@ -514,14 +517,14 @@ index cf3567a60d7..44784420d6a 100644
 +
 +        row.setMinimumHeight(dp(28));
 +        return row;
-+    }
-+
+     }
+ 
 +    // The numbers.
 +
      /** This refreshes the storage numbers by fetching all site permissions. */
      private void refreshStorageNumbers() {
          Profile profile = ProfileManager.getLastUsedRegularProfile();
-@@ -202,108 +442,157 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
+@@ -231,108 +471,157 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
                  new SizeCalculator());
      }
  
@@ -616,8 +619,11 @@ index cf3567a60d7..44784420d6a 100644
 +                        Toast.LENGTH_SHORT)
 +                .show();
 +        refreshStorageNumbers();
-+    }
-+
+     }
+ 
+-    private void onSiteStorageSizeCalculated(long totalSize, long unimportantSize) {
+-        mSiteDataSizeText.setText(Formatter.formatFileSize(this, totalSize));
+-        mUnimportantSiteDataSizeText.setText(Formatter.formatFileSize(this, unimportantSize));
 +    private void openSiteList() {
 +        Bundle initialArguments = new Bundle();
 +        initialArguments.putString(
@@ -627,11 +633,8 @@ index cf3567a60d7..44784420d6a 100644
 +                SingleCategorySettings.EXTRA_TITLE, getString(R.string.website_settings_storage));
 +        SettingsNavigation settingsNavigation = SettingsNavigationFactory.createSettingsNavigation();
 +        settingsNavigation.startSettings(this, AllSiteSettings.class, initialArguments);
-     }
- 
--    private void onSiteStorageSizeCalculated(long totalSize, long unimportantSize) {
--        mSiteDataSizeText.setText(Formatter.formatFileSize(this, totalSize));
--        mUnimportantSiteDataSizeText.setText(Formatter.formatFileSize(this, unimportantSize));
++    }
++
 +    /** The reset, behind a card from the bottom that says what it takes away. */
 +    private void showClearAllSheet() {
 +        if (mClearAllDialog != null && mClearAllDialog.isShowing()) return;
@@ -761,7 +764,7 @@ index cf3567a60d7..44784420d6a 100644
  
          /**
           * We fetch all the websites and clear all the non-important data. This happens
-@@ -325,38 +614,24 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
+@@ -352,36 +641,22 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity
          public void onStoredDataCleared() {
              mNumSitesClearing--;
              if (mNumSitesClearing <= 0) {
@@ -772,15 +775,13 @@ index cf3567a60d7..44784420d6a 100644
  
          @Override
          public void onWebsitePermissionsAvailable(Collection<Website> sites) {
+             ChromeSiteSettingsDelegate delegate = assumeNonNull(mChromeSiteSettingsDelegate);
 -            long siteStorageLeft = 0;
-             var siteSettingsDelegate =
-                     new ChromeSiteSettingsDelegate(
-                             getApplicationContext(), ProfileManager.getLastUsedRegularProfile());
              for (Website site : sites) {
--                if (siteSettingsDelegate.isBrowsingDataModelFeatureEnabled()) {
+-                if (delegate.isBrowsingDataModelFeatureEnabled()) {
 -                    if (!site.isDomainImportant()) {
 -                        mNumSitesClearing++;
--                        site.clearAllStoredData(siteSettingsDelegate, this);
+-                        site.clearAllStoredData(delegate, this);
 -                    } else {
 -                        siteStorageLeft += site.getTotalUsage();
 -                    }
@@ -788,13 +789,13 @@ index cf3567a60d7..44784420d6a 100644
 -                    if (site.getLocalStorageInfo() == null
 -                            || !site.getLocalStorageInfo().isDomainImportant()) {
 -                        mNumSitesClearing++;
--                        site.clearAllStoredData(siteSettingsDelegate, this);
+-                        site.clearAllStoredData(delegate, this);
 -                    } else {
 -                        siteStorageLeft += site.getTotalUsage();
 -                    }
 +                if (isRarelyUsed(site)) {
 +                    mNumSitesClearing++;
-+                    site.clearAllStoredData(siteSettingsDelegate, this);
++                    site.clearAllStoredData(delegate, this);
                  }
              }
              if (mNumSitesClearing == 0) {

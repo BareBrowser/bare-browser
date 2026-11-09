@@ -1,19 +1,31 @@
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java
-index fdb8c235241..4c6a1bf455e 100644
+index 845e7811de6..e3fd7fbc8c9 100644
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarFocusScrimHandler.java
-@@ -125,6 +125,9 @@ public class LocationBarFocusScrimHandler {
-         @ColorInt Integer scrimColor = null;
-         if (useTransparentScrim) {
-             scrimColor = Color.TRANSPARENT;
-+        } else if (!isTablet) {
-+            // Bare: the page stays readable behind the list, a little dimmed.
-+            scrimColor = ColorUtils.inNightMode(mContext) ? 0x66000000 : 0x40FFFFFF;
-         } else if (useLightColor) {
-             scrimColor = mLightScrimColor;
-         }
+@@ -138,6 +138,9 @@ public class LocationBarFocusScrimHandler {
+ 
+     /** Compute and apply property updates needed for accurate visual representation of scrim. */
+     public void updateScrimVisualState() {
++        boolean isTablet = DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext);
++        // Bare: on a phone the page stays readable behind the list, a little dimmed.
++        @ColorInt int bareScrimColor = ColorUtils.inNightMode(mContext) ? 0x66000000 : 0x40FFFFFF;
+         @ColorInt
+         Integer scrimColor =
+                 switch (computeScrimState()) {
+@@ -148,9 +151,9 @@ public class LocationBarFocusScrimHandler {
+                                             ? BrandedColorScheme.INCOGNITO
+                                             : BrandedColorScheme.APP_DEFAULT);
+                     case ScrimState.TRANSPARENT -> Color.TRANSPARENT;
+-                    case ScrimState.LIGHT_COLOR -> mLightScrimColor;
++                    case ScrimState.LIGHT_COLOR -> bareScrimColor;
+                     // A null color lets the ScrimManager apply its default scrim color.
+-                    case ScrimState.DEFAULT -> null;
++                    case ScrimState.DEFAULT -> isTablet ? null : bareScrimColor;
+                     default -> throw new IllegalStateException("Unhandled scrim state");
+                 };
+         mScrimModel.set(ScrimProperties.BACKGROUND_COLOR, scrimColor);
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
-index de89e361f58..595caf1b57a 100644
+index ffde0bbd728..4071635ec1c 100644
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
 @@ -7,6 +7,9 @@ package org.chromium.chrome.browser.omnibox.suggestions;
@@ -46,7 +58,7 @@ index de89e361f58..595caf1b57a 100644
      private @Px int mBaseBottomPadding;
      private @Px int mBaseTopPadding;
      private final HeaderDecoration mHeaderDecoration;
-@@ -682,6 +691,9 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+@@ -672,6 +681,9 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
  
      @Override
      public boolean dispatchTouchEvent(MotionEvent ev) {
@@ -56,7 +68,7 @@ index de89e361f58..595caf1b57a 100644
          final int eventType = ev.getActionMasked();
          if (eventType == MotionEvent.ACTION_UP || eventType == MotionEvent.ACTION_DOWN) {
              mLayoutScrollListener.onNewGesture();
-@@ -739,6 +751,45 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+@@ -729,6 +741,45 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
       * @param topPadding Top padding in pixels.
       * @param bottomPadding Bottom padding in pixels.
       */

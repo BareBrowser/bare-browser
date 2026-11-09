@@ -1,8 +1,8 @@
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
-index 22f2f17a1db..347c7f18d96 100644
+index 584c44c566c..ba2d92f676f 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
-@@ -3390,6 +3390,8 @@ public class ToolbarManager
+@@ -3416,6 +3416,8 @@ public class ToolbarManager
  
          // Bare: the page shows behind the address bar while it has focus, so the line along the
          // top of the toolbar would show as a white stripe across it.
@@ -12,23 +12,23 @@ index 22f2f17a1db..347c7f18d96 100644
              setToolbarShadowVisibility(View.INVISIBLE);
              mBareFrost.show(mActivity, mCompositorViewHolder, mBottomControlsStacker.getTotalHeight());
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
-index 6d8f3f98f4e..4726c2c2151 100644
+index a390868023f..e9cefa0462d 100644
 --- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
-@@ -238,7 +238,10 @@ public class BottomBarMediator
+@@ -185,7 +185,10 @@ public class BottomBarMediator
+ 
+     private void updateVisibility() {
          boolean isOmniboxFocused = mOmniboxFocusStateSupplier.get();
-         boolean shouldDisableOnNtp =
-                 BottomBarConfigUtils.shouldDisableOnNtp() && currentTabIsRegularNtp;
--        boolean isVisible = !shouldDisableOnNtp && !isOmniboxFocused && !mShouldHideForHub;
+-        boolean isVisible = !isOmniboxFocused && !mShouldHideForHub;
 +        // Bare: the row stays where it is while the address bar has focus. It is under the
 +        // keyboard anyway, and taking it away and putting it back is what made the bar drop and
 +        // jump when the keyboard came and went.
-+        boolean isVisible = !shouldDisableOnNtp && !mShouldHideForHub;
++        boolean isVisible = !mShouldHideForHub;
  
          if (mIsVisible == TriStateUtils.from(isVisible)) return;
  
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarPositionController.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarPositionController.java
-index 77bf949779f..ffee7e307ca 100644
+index c65785a032d..0e9f83e3c79 100644
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarPositionController.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarPositionController.java
 @@ -9,6 +9,7 @@ import android.content.Context;
@@ -243,10 +243,10 @@ index 77bf949779f..ffee7e307ca 100644
          assert height >= 0;
          mControlContainerHeight = height;
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsCoordinator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsCoordinator.java
-index 55ef500b413..7d98c07adab 100644
+index 3d7bb70cb70..4ad40077f5c 100644
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsCoordinator.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsCoordinator.java
-@@ -252,4 +252,9 @@ public class BottomControlsCoordinator implements BackPressHandler {
+@@ -253,4 +253,9 @@ public class BottomControlsCoordinator implements BackPressHandler {
      public ViewResourceAdapter getResourceAdapterForTesting() {
          return mRootFrameLayout.getResourceAdapter();
      }
@@ -257,12 +257,12 @@ index 55ef500b413..7d98c07adab 100644
 +    }
  }
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsMediator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsMediator.java
-index fde4f609eb2..b8f3711a977 100644
+index e4c811fe954..1a30a379eef 100644
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsMediator.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/bottom/BottomControlsMediator.java
-@@ -113,6 +113,12 @@ class BottomControlsMediator
-     /** Whether the soft keyboard is visible. */
-     private boolean mIsKeyboardVisible;
+@@ -128,6 +128,12 @@ class BottomControlsMediator
+ 
+     private boolean mContentViewScrolling;
  
 +    /**
 +     * Bare: the bottom row stays while the address bar has the keyboard, and until the keyboard
@@ -273,7 +273,7 @@ index fde4f609eb2..b8f3711a977 100644
      private @Nullable LayoutStateProvider mLayoutStateProvider;
  
      /**
-@@ -262,6 +268,7 @@ class BottomControlsMediator
+@@ -329,6 +335,7 @@ class BottomControlsMediator
      @Override
      public void keyboardVisibilityChanged(boolean isShowing) {
          mIsKeyboardVisible = isShowing;
@@ -281,7 +281,7 @@ index fde4f609eb2..b8f3711a977 100644
          updateCompositedViewVisibility();
          updateAndroidViewVisibility();
      }
-@@ -322,7 +329,16 @@ class BottomControlsMediator
+@@ -413,7 +420,16 @@ class BottomControlsMediator
      }
  
      boolean isCompositedViewVisible() {
@@ -298,4 +298,4 @@ index fde4f609eb2..b8f3711a977 100644
 +        updateAndroidViewVisibility();
      }
  
-     private boolean isNtpScrollOffEnabled() {
+     private boolean computeIsNtpScrollOffEnabled() {

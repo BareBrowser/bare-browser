@@ -1,6 +1,6 @@
-From 67421c379da15969a515f149e73d91054982e8e5 Mon Sep 17 00:00:00 2001
+From 052b9852eb1e6fa7c74d2f7a1925c739b2b49d8f Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
-Date: Thu, 20 Aug 2026 10:29:58 +0000
+Date: Sun, 8 Nov 2026 06:41:27 +0000
 Subject: [PATCH] Patch 0000062
 
 ---
@@ -10,20 +10,20 @@ Subject: [PATCH] Patch 0000062
  .../browser/bare/BareMediaRegistryBridge.java |  86 ++++++++
  .../contextmenu/ChromeContextMenuItem.java    |   8 +-
  .../ChromeContextMenuPopulator.java           |  43 ++++
+ chrome/browser/android/tab_features.cc        |   4 +
  chrome/browser/ui/android/BUILD.gn            |   7 +
  .../browser/ui/android/bare_media_registry.cc | 196 ++++++++++++++++++
  .../browser/ui/android/bare_media_registry.h  |  78 +++++++
- chrome/browser/ui/tab_helpers.cc              |   4 +
  10 files changed, 423 insertions(+), 2 deletions(-)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java
  create mode 100644 chrome/browser/ui/android/bare_media_registry.cc
  create mode 100644 chrome/browser/ui/android/bare_media_registry.h
 
 diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
-index cb7f8481537..5a3d7f5e59e 100644
+index ddd3d15e16b..a028b3eaaa0 100644
 --- a/chrome/android/BUILD.gn
 +++ b/chrome/android/BUILD.gn
-@@ -3078,6 +3078,7 @@ if (_is_default_toolchain) {
+@@ -3018,6 +3018,7 @@ if (_is_default_toolchain) {
        "java/src/org/chromium/chrome/browser/backup/ChromeBackupAgentImpl.java",
        "java/src/org/chromium/chrome/browser/backup/ChromeBackupWatcher.java",
        "java/src/org/chromium/chrome/browser/backup/DictPrefBackupSerializer.java",
@@ -32,10 +32,10 @@ index cb7f8481537..5a3d7f5e59e 100644
        "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappBridge.java",
        "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappGeolocationBridge.java",
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
-index 9274abb5edc..92531d15da5 100644
+index 0b01ef6d464..4d9baf5c073 100644
 --- a/chrome/android/chrome_java_sources.gni
 +++ b/chrome/android/chrome_java_sources.gni
-@@ -238,6 +238,7 @@ chrome_java_sources = [
+@@ -237,6 +237,7 @@ chrome_java_sources = [
    "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetProperties.java",
    "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetView.java",
    "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetViewBinder.java",
@@ -44,10 +44,10 @@ index 9274abb5edc..92531d15da5 100644
    "java/src/org/chromium/chrome/browser/background_sync/BackgroundSyncBackgroundTask.java",
    "java/src/org/chromium/chrome/browser/background_sync/BackgroundSyncBackgroundTaskScheduler.java",
 diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
-index 51713b52d47..21d823ab713 100644
+index 2b80d4f0288..5763bd9a825 100644
 --- a/chrome/android/java/res/values/ids.xml
 +++ b/chrome/android/java/res/values/ids.xml
-@@ -143,6 +143,7 @@ found in the LICENSE file.
+@@ -165,6 +165,7 @@ found in the LICENSE file.
      <item type="id" name="contextmenu_download_video_frame" />
      <item type="id" name="contextmenu_picture_in_picture" />
      <item type="id" name="contextmenu_save_audio" />
@@ -189,7 +189,7 @@ index d5771c5c0b9..40184c49097 100644
  
      /**
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
-index d4272bcbbad..d883c9f1591 100644
+index 34b0075a08f..cedcd6657d8 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
 @@ -46,6 +46,7 @@ import org.chromium.base.shared_preferences.SharedPreferencesManager;
@@ -200,7 +200,7 @@ index d4272bcbbad..d883c9f1591 100644
  import org.chromium.chrome.browser.bookmarks.BookmarkUtils;
  import org.chromium.chrome.browser.contextmenu.ChromeContextMenuItem.Item;
  import org.chromium.chrome.browser.contextmenu.ContextMenuCoordinator.ContextMenuItemType;
-@@ -928,6 +929,32 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+@@ -926,6 +927,32 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
              }
          }
  
@@ -233,7 +233,7 @@ index d4272bcbbad..d883c9f1591 100644
          if (mParams.getOpenedFromHighlight()) {
              ModelList sharedHighlightingGroup = new ModelList();
              if (mMode == ContextMenuMode.NORMAL) {
-@@ -1180,6 +1207,17 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+@@ -1178,6 +1205,17 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
              } else if (mItemDelegate.startDownload(mParams.getSrcUrl(), /* isLink= */ false)) {
                  mNativeDelegate.startDownload(mParams.getSrcUrl(), /* isMedia= */ true);
              }
@@ -263,8 +263,30 @@ index d4272bcbbad..d883c9f1591 100644
      /** Returns the profile of the current tab via the item delegate. */
      private Profile getProfile() {
          return Profile.fromWebContents(mItemDelegate.getWebContents());
+diff --git a/chrome/browser/android/tab_features.cc b/chrome/browser/android/tab_features.cc
+index b0fdfe5f837..041b228c30d 100644
+--- a/chrome/browser/android/tab_features.cc
++++ b/chrome/browser/android/tab_features.cc
+@@ -110,6 +110,7 @@
+ #include "chrome/browser/task_manager/web_contents_tags.h"
+ #include "chrome/browser/translate/chrome_translate_client.h"
+ #include "chrome/browser/trusted_vault/trusted_vault_encryption_keys_tab_helper.h"
++#include "chrome/browser/ui/android/bare_media_registry.h"
+ #include "chrome/browser/ui/android/context_menu_helper.h"
+ #include "chrome/browser/ui/autofill/autofill_client_provider.h"
+ #include "chrome/browser/ui/autofill/autofill_client_provider_factory.h"
+@@ -737,6 +738,9 @@ TabFeatures::TabFeatures(content::WebContents* web_contents, Profile* profile) {
+       web_contents);
+ 
+   ContextMenuHelper::CreateForWebContents(web_contents);
++  // Bare: records the media this tab fetches, so the context menu can offer a
++  // download for media the page never exposes as an element src.
++  bare::BareMediaRegistry::CreateForWebContents(web_contents);
+ 
+   javascript_dialogs::TabModalDialogManager::CreateForWebContents(
+       web_contents,
 diff --git a/chrome/browser/ui/android/BUILD.gn b/chrome/browser/ui/android/BUILD.gn
-index c26e65db351..f545872877c 100644
+index f53b492c0e4..4df131fcec9 100644
 --- a/chrome/browser/ui/android/BUILD.gn
 +++ b/chrome/browser/ui/android/BUILD.gn
 @@ -59,6 +59,11 @@ if (is_android) {
@@ -574,25 +596,3 @@ index 00000000000..e13e52f943c
 +}  // namespace bare
 +
 +#endif  // CHROME_BROWSER_UI_ANDROID_BARE_MEDIA_REGISTRY_H_
-diff --git a/chrome/browser/ui/tab_helpers.cc b/chrome/browser/ui/tab_helpers.cc
-index f7e2862c79b..b2b0bd59685 100644
---- a/chrome/browser/ui/tab_helpers.cc
-+++ b/chrome/browser/ui/tab_helpers.cc
-@@ -147,6 +147,7 @@
- #include "chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h"
- #include "chrome/browser/facilitated_payments/ui/chrome_facilitated_payments_client.h"
- #include "chrome/browser/flags/android/chrome_feature_list.h"
-+#include "chrome/browser/ui/android/bare_media_registry.h"
- #include "chrome/browser/ui/android/context_menu_helper.h"
- #include "chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_android.h"
- #include "components/content_capture/common/content_capture_features.h"
-@@ -534,6 +535,9 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents,
-                           *web_contents));
-   }
-   ContextMenuHelper::CreateForWebContents(web_contents);
-+  // Bare: records the media this tab fetches, so the context menu can offer a
-+  // download for media the page never exposes as an element src.
-+  bare::BareMediaRegistry::CreateForWebContents(web_contents);
- 
-   javascript_dialogs::TabModalDialogManager::CreateForWebContents(
-       web_contents,
