@@ -1,17 +1,3 @@
-From a13fa8d9e12207bafb7060d974b62fb2d2d76fd1 Mon Sep 17 00:00:00 2001
-From: Bare <git@barebrowser.org>
-Date: Sun, 8 Nov 2026 07:09:43 +0000
-Subject: [PATCH] Patch 0000151
-
----
- .../extension_info_generator.cc               |  7 +++++
- .../bare_bundled_extensions_loader.cc         | 30 +++++++++++++++++++
- .../bare_bundled_extensions_loader.h          | 17 +++++++++++
- .../extensions/external_provider_impl.cc      |  1 +
- .../extension_install_dialog_view_android.cc  | 13 +++++++-
- .../ExtensionInstallDialogBridge.java         | 16 ++++++++++
- 6 files changed, 83 insertions(+), 1 deletion(-)
-
 diff --git a/chrome/browser/extensions/api/developer_private/extension_info_generator.cc b/chrome/browser/extensions/api/developer_private/extension_info_generator.cc
 index d4ef0e322ba..5fe3b931f45 100644
 --- a/chrome/browser/extensions/api/developer_private/extension_info_generator.cc
@@ -169,10 +155,54 @@ index 8ef02536acc..5527d0cf632 100644
  
  }  // namespace extensions
 diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionInstallDialogBridge.java b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionInstallDialogBridge.java
-index d034064eb5c..5f09da10524 100644
+index d034064eb5c..cc4d9e7c7d5 100644
 --- a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionInstallDialogBridge.java
 +++ b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionInstallDialogBridge.java
-@@ -125,6 +125,22 @@ public class ExtensionInstallDialogBridge implements ModalDialogProperties.Contr
+@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.ui.extensions;
+ 
+ import static org.chromium.build.NullUtil.assumeNonNull;
+ 
++import android.app.Activity;
+ import android.content.Context;
+ import android.graphics.Bitmap;
+ import android.graphics.drawable.BitmapDrawable;
+@@ -33,6 +34,7 @@ import org.jni_zero.NativeMethods;
+ 
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.components.browser_ui.widget.RiseSheet;
+ import org.chromium.ui.UiUtils;
+ import org.chromium.ui.base.WindowAndroid;
+ import org.chromium.ui.modaldialog.DialogDismissalCause;
+@@ -70,11 +72,27 @@ public class ExtensionInstallDialogBridge implements ModalDialogProperties.Contr
+                 new PropertyModel.Builder(ModalDialogProperties.ALL_KEYS)
+                         .with(ModalDialogProperties.CONTROLLER, this)
+                         .with(ModalDialogProperties.FILTER_TOUCH_FOR_SECURITY, true)
++                        .with(ModalDialogProperties.TOUCH_FILTERED_CALLBACK, this::onTouchFiltered)
+                         .with(
+                                 ModalDialogProperties.BUTTON_TAP_PROTECTION_PERIOD_MS,
+                                 UiUtils.PROMPT_INPUT_PROTECTION_SHORT_DELAY_MS);
+     }
+ 
++    /**
++     * A tap on a button was dropped because another app draws over part of the screen. Without a
++     * word the button just seems dead, so say why. The message takes no touches, so the dialog
++     * stays usable once the overlay is gone.
++     */
++    private void onTouchFiltered() {
++        if (!(mContext instanceof Activity activity)) return;
++        RiseSheet.showMessage(
++                activity.getWindow().getDecorView(),
++                mContext.getString(R.string.bare_overlay_blocked_tap),
++                /* actionLabel= */ null,
++                /* onAction= */ null,
++                /* onDismissed= */ null);
++    }
++
+     /**
+      * Create an instance of the {@link ExtensionInstallDialogBridge}
+      *
+@@ -125,6 +143,22 @@ public class ExtensionInstallDialogBridge implements ModalDialogProperties.Contr
          }
      }
  

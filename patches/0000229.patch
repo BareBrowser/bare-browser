@@ -1,5 +1,5 @@
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
-index e5764938e5b..ad32071625e 100644
+index 97dc101149d..6d762bbb337 100644
 --- a/chrome/android/chrome_java_sources.gni
 +++ b/chrome/android/chrome_java_sources.gni
 @@ -261,6 +261,7 @@ chrome_java_sources = [
@@ -12,10 +12,10 @@ index e5764938e5b..ad32071625e 100644
    "java/src/org/chromium/chrome/browser/bare/BareLauncherIcon.java",
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareFrostBackdrop.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareFrostBackdrop.java
 new file mode 100644
-index 00000000000..b3d037281d0
+index 00000000000..d4e9fd5b375
 --- /dev/null
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareFrostBackdrop.java
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,195 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -42,6 +42,7 @@ index 00000000000..b3d037281d0
 +import org.chromium.build.annotations.Nullable;
 +import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 +import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.components.browser_ui.widget.scrim.ScrimView;
 +
 +/**
 + * A lightly blurred still of the page, shown behind the address bar while it has focus and
@@ -56,7 +57,8 @@ index 00000000000..b3d037281d0
 +    private static final int DOWNSCALE = 3;
 +    private static final long FADE_IN_MS = 220;
 +    private static final long FADE_OUT_MS = 160;
-+
++    // Frames to wait for the scrim when the copy is ready before it.
++    private static final int SCRIM_TRIES = 2;
 +
 +    private @Nullable ImageView mView;
 +    private int mToken;
@@ -120,7 +122,7 @@ index 00000000000..b3d037281d0
 +                        window.recycle();
 +                        out = behind;
 +                    }
-+                    attach(activity, page, out, width, height);
++                    attach(activity, page, out, width, height, token, 0);
 +                };
 +        try {
 +            PixelCopy.request(activity.getWindow(), source, window, done, handler);
@@ -150,8 +152,25 @@ index 00000000000..b3d037281d0
 +        return null;
 +    }
 +
-+    private void attach(Activity activity, View page, Bitmap bitmap, int width, int height) {
++    private void attach(
++            Activity activity, View page, Bitmap bitmap, int width, int height, int token, int tries) {
++        if (token != mToken || !(page.getParent() instanceof ViewGroup)) {
++            bitmap.recycle();
++            return;
++        }
 +        ViewGroup parent = (ViewGroup) page.getParent();
++        // The copy goes right under the scrim, so the dim covers it and the suggestion list stays
++        // above both. Without a scrim there is nothing to put it under; wait a frame or two for it
++        // and otherwise show no frost this time.
++        View scrim = findScrim(parent);
++        if (scrim == null) {
++            if (tries < SCRIM_TRIES) {
++                page.post(() -> attach(activity, page, bitmap, width, height, token, tries + 1));
++            } else {
++                bitmap.recycle();
++            }
++            return;
++        }
 +        ImageView view = new ImageView(activity);
 +        view.setImageBitmap(bitmap);
 +        view.setScaleType(ImageView.ScaleType.FIT_XY);
@@ -162,17 +181,17 @@ index 00000000000..b3d037281d0
 +        view.setTranslationX(page.getX());
 +        view.setTranslationY(page.getY());
 +        view.setAlpha(0f);
-+        parent.addView(view, parent.indexOfChild(page) + 1, new ViewGroup.LayoutParams(width, height));
-+        // The scrim goes over the copy, so the dim and the fade are the same as without it.
-+        for (int i = 0; i < parent.getChildCount(); i++) {
-+            View child = parent.getChildAt(i);
-+            if (child != view && child.getClass().getSimpleName().equals("ScrimView")) {
-+                child.bringToFront();
-+                break;
-+            }
-+        }
++        parent.addView(view, parent.indexOfChild(scrim), new ViewGroup.LayoutParams(width, height));
 +        view.animate().alpha(1f).setDuration(FADE_IN_MS).start();
 +        mView = view;
++    }
++
++    private static @Nullable View findScrim(ViewGroup parent) {
++        for (int i = 0; i < parent.getChildCount(); i++) {
++            View child = parent.getChildAt(i);
++            if (child instanceof ScrimView) return child;
++        }
++        return null;
 +    }
 +
 +    /** Fades the copy out and removes it. Safe to call when there is none. */
@@ -193,7 +212,7 @@ index 00000000000..b3d037281d0
 +    }
 +}
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
-index c886e8bc6f8..584c44c566c 100644
+index 867c436b4ac..a906d24b624 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
 @@ -73,6 +73,7 @@ import org.chromium.chrome.browser.back_press.BackPressManager;
@@ -204,7 +223,7 @@ index c886e8bc6f8..584c44c566c 100644
  import org.chromium.chrome.browser.bare.BareTabSwitcher;
  import org.chromium.chrome.browser.bare.BareUpdateCheck;
  import org.chromium.chrome.browser.bookmarks.BookmarkModel;
-@@ -418,6 +419,7 @@ public class ToolbarManager
+@@ -419,6 +420,7 @@ public class ToolbarManager
      private final WindowAndroid mWindowAndroid;
      private final AppMenuDelegate mAppMenuDelegate;
      private final CompositorViewHolder mCompositorViewHolder;
@@ -212,7 +231,7 @@ index c886e8bc6f8..584c44c566c 100644
      private final BottomControlsStacker mBottomControlsStacker;
      private final TopControlsStacker mTopControlsStacker;
      private final BrowserControlsSizer mBrowserControlsSizer;
-@@ -3416,8 +3418,10 @@ public class ToolbarManager
+@@ -3429,8 +3431,10 @@ public class ToolbarManager
          // top of the toolbar would show as a white stripe across it.
          if (hasFocus) {
              setToolbarShadowVisibility(View.INVISIBLE);

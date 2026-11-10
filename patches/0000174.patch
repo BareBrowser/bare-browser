@@ -1,40 +1,3 @@
-From 29c89a175dab587f7c285717803e1998b19b8935 Mon Sep 17 00:00:00 2001
-From: Bare <git@barebrowser.org>
-Date: Sun, 8 Nov 2026 06:43:22 +0000
-Subject: [PATCH] Patch 0000174
-
----
- chrome/android/BUILD.gn                       |   1 +
- chrome/android/chrome_java_resources.gni      |   1 +
- chrome/android/chrome_java_sources.gni        |   5 +
- .../res/xml/bare_translate_preferences.xml    |  30 +++
- .../android/java/res/xml/main_preferences.xml |   5 +
- .../chrome/browser/app/ChromeActivity.java    |   3 +-
- .../AppMenuPropertiesDelegateImpl.java        |   5 +-
- .../chrome/browser/bare/BareScriptBridge.java |  59 +++++
- .../bare/translate/BarePageTranslator.java    | 241 ++++++++++++++++++
- .../bare/translate/BareTranslateProtocol.java | 155 +++++++++++
- .../bare/translate/BareTranslateSettings.java | 110 ++++++++
- .../BareTranslateSettingsFragment.java        | 161 ++++++++++++
- chrome/android/junit/BUILD.gn                 |   2 +
- .../BareTranslateProtocolUnitTest.java        | 151 +++++++++++
- .../BareTranslateSettingsUnitTest.java        |  77 ++++++
- .../preferences/ChromePreferenceKeys.java     |  14 +
- .../browser/translate/TranslateUtils.java     |   5 +-
- chrome/browser/ui/android/BUILD.gn            |   1 +
- .../browser/ui/android/bare_script_bridge.cc  |  61 +++++
- .../strings/android_chrome_strings.grd        |  57 +++++
- 20 files changed, 1141 insertions(+), 3 deletions(-)
- create mode 100644 chrome/android/java/res/xml/bare_translate_preferences.xml
- create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java
- create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BarePageTranslator.java
- create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocol.java
- create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettings.java
- create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsFragment.java
- create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/translate/BareTranslateProtocolUnitTest.java
- create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/translate/BareTranslateSettingsUnitTest.java
- create mode 100644 chrome/browser/ui/android/bare_script_bridge.cc
-
 diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
 index a028b3eaaa0..922cf8002d1 100644
 --- a/chrome/android/BUILD.gn
@@ -133,7 +96,7 @@ index 5763b6762cb..66ee27559e2 100644
          android:fragment="org.chromium.chrome.browser.bare.settings.BareExtensionsSettingsFragment"
          android:key="bare_extensions"
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
-index 37593a4d0fe..abcf7eb5408 100644
+index 0c70268ab0d..9c94747d640 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
 @@ -107,6 +107,7 @@ import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
@@ -144,7 +107,7 @@ index 37593a4d0fe..abcf7eb5408 100644
  import org.chromium.chrome.browser.back_press.CloseListenerManager;
  import org.chromium.chrome.browser.base.ColdStartTracker;
  import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpener;
-@@ -3407,7 +3408,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+@@ -3408,7 +3409,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
              RecordUserAction.record("MobileMenuTranslate");
              Tracker tracker = TrackerFactory.getTrackerForProfile(currentTab.getProfile());
              tracker.notifyEvent(EventConstants.TRANSLATE_MENU_BUTTON_CLICKED);
@@ -154,7 +117,7 @@ index 37593a4d0fe..abcf7eb5408 100644
          }
  
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
-index 224eb8eb5b7..2abe0ab3143 100644
+index 5e0889cd644..6920c748105 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
 @@ -42,6 +42,7 @@ import org.chromium.build.annotations.RequiresNonNull;
@@ -1186,12 +1149,12 @@ index 00000000000..11c930edb45
 +    }
 +}
 diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-index 7aece0e9cef..45f8b6d2200 100644
+index 8dd8d3d29ef..97f0aad9a0f 100644
 --- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
 +++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-@@ -420,6 +420,16 @@ public final class ChromePreferenceKeys {
+@@ -427,6 +427,16 @@ public final class ChromePreferenceKeys {
       */
-     public static final String BARE_EXTENSION_PRESENTATION = "Bare.Extensions.Presentation";
+     public static final String BARE_QUICK_CRX = "Bare.Extensions.QuickCrx";
  
 +    /**
 +     * De-Googled build: the address of the translation server the user entered, their API key for
@@ -1206,10 +1169,10 @@ index 7aece0e9cef..45f8b6d2200 100644
      /**
       * De-Googled build: the minimal layout, which leaves out the bottom bar so the address bar is
       * the only strip of controls. Read once when the process starts, so a change applies after a
-@@ -1334,6 +1344,10 @@ public final class ChromePreferenceKeys {
-                 BARE_USER_AGENT_PRESET,
+@@ -1342,6 +1352,10 @@ public final class ChromePreferenceKeys {
                  BARE_ADDRESS_BAR_SWIPE_TABS,
                  BARE_EXTENSION_PRESENTATION,
+                 BARE_QUICK_CRX,
 +                BARE_TRANSLATE_API_KEY,
 +                BARE_TRANSLATE_CONSENT_HOST,
 +                BARE_TRANSLATE_ENDPOINT,
@@ -1321,7 +1284,7 @@ index 00000000000..e91952294d8
 +
 +DEFINE_JNI(BareScriptBridge)
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index 5c4906195d8..bfe3bf50701 100644
+index 14644e2cf9d..85fd66b392c 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 @@ -4414,6 +4414,63 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d

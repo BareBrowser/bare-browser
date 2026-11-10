@@ -1,20 +1,3 @@
-From 241c9664c2fb57e9f6521631bfb76bf77514a6bc Mon Sep 17 00:00:00 2001
-From: Bare <git@barebrowser.org>
-Date: Sun, 8 Nov 2026 06:43:13 +0000
-Subject: [PATCH] Patch 0000165
-
----
- .../browser/ChromeBaseAppCompatActivity.java  |  6 ++--
- .../GlobalNightModeStateControllerTest.java   | 23 ++++++++++++
- .../night_mode/NightModeUtilsTest.java        | 36 +++++++++++++++++++
- .../preferences/ChromePreferenceKeys.java     |  7 ++++
- .../java/res/xml/theme_preferences.xml        |  5 +++
- .../GlobalNightModeStateController.java       |  8 +++--
- .../browser/night_mode/NightModeUtils.java    | 18 +++++++++-
- .../settings/ThemeSettingsFragment.java       | 23 +++++++++++-
- .../strings/android_chrome_strings.grd        |  6 ++++
- 9 files changed, 125 insertions(+), 7 deletions(-)
-
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java
 index b0cc1c0a632..6381753260b 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeBaseAppCompatActivity.java
@@ -265,7 +248,7 @@ index 7cbdb8683c4..2d09e23ca78 100644
       * The current theme setting, reflecting either the user setting or the default if the user has
       * not explicitly set a preference.
 diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
-index cb2b681c7cd..23decd0f72d 100644
+index cb2b681c7cd..44bd1dac1b9 100644
 --- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
 +++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
 @@ -4,6 +4,8 @@
@@ -293,7 +276,24 @@ index cb2b681c7cd..23decd0f72d 100644
      private static final String PREF_UI_THEME_PREF_LIGHT = "ui_theme_pref_light";
      private static final String PREF_UI_THEME_PREF_DARK = "ui_theme_pref_dark";
      private static final String PREF_UI_THEME_PREF_DARK_AMOLED = "ui_theme_pref_dark_amoled";
-@@ -72,6 +76,21 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
+@@ -55,14 +59,13 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
+                 NightModeUtils.getThemeSetting(), mWebContentsDarkModeEnabled);
+ 
+         // Bare Browser: the deeper background treatment for sites the browser darkens
+-        // itself. It only means anything while the darken setting above is on, so it follows
+-        // that checkbox rather than standing on its own.
++        // itself, whether by the darken setting above or one site at a time from the menu.
+         ChromeSwitchPreference amoledBackgrounds = findPreference(PREF_AMOLED_DARK_BACKGROUNDS);
+         assert amoledBackgrounds != null;
+         amoledBackgrounds.setChecked(
+                 UserPrefs.get(getProfile())
+                         .getBoolean(Pref.WEB_KIT_AMOLED_DARK_BACKGROUNDS_ENABLED));
+-        amoledBackgrounds.setEnabled(mWebContentsDarkModeEnabled);
++        amoledBackgrounds.setEnabled(true);
+         amoledBackgrounds.setOnPreferenceChangeListener(
+                 (preference, newValue) -> {
+                     UserPrefs.get(getProfile())
+@@ -72,6 +75,21 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
                      return true;
                  });
  
@@ -315,8 +315,12 @@ index cb2b681c7cd..23decd0f72d 100644
          radioButtonGroupThemePreference.setOnPreferenceChangeListener(
                  (preference, newValue) -> {
                      if (ChromeFeatureList.isEnabled(
-@@ -85,7 +104,9 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
-                             amoledBackgrounds.setEnabled(mWebContentsDarkModeEnabled);
+@@ -82,10 +100,12 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
+                                     radioButtonGroupThemePreference.isDarkenWebsitesEnabled();
+                             WebContentsDarkModeController.setGlobalUserSettings(
+                                     getProfile(), mWebContentsDarkModeEnabled);
+-                            amoledBackgrounds.setEnabled(mWebContentsDarkModeEnabled);
++                            amoledBackgrounds.setEnabled(true);
                          }
                      }
 -                    NightModeUtils.setThemeSetting((int) newValue);

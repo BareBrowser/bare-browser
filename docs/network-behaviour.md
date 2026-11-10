@@ -53,9 +53,12 @@ interface language and the User-Agent. A newer release downloads from `github.co
 `release-assets.githubusercontent.com`. Earlier releases shipped the Chrome Web Store copy, which
 checked `clients2.google.com` instead.
 
-**BareFilter makes no request.** Its rules are built into Bare and written into uBlock Origin's
-My filters when uBlock Origin starts. Fetching the list from GitHub is planned for later and is
-not in this release.
+**BareFilter makes one request a day while it is on.** uBlock Origin fetches
+`https://raw.githubusercontent.com/BareBrowser/bare-browser/main/filters/BareFilter.txt` and keeps
+that copy as a filter list. The first fetch happens when BareFilter is switched on or first
+subscribed. The request is the plain list download uBlock Origin makes for any filter list. Switching
+BareFilter off takes effect from the next start; after that nothing is requested and the copy is
+removed. Bare carries no built-in copy of the list.
 
 **The update check contacts GitHub**, and only after the welcome screen has been completed and an
 update preference stored. It is at most one request a day, to a public release feed. It sends two

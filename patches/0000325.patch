@@ -1,0 +1,264 @@
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 5783081a5c7..805b5205784 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -238,6 +238,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetProperties.java",
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetView.java",
+   "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetViewBinder.java",
++  "java/src/org/chromium/chrome/browser/bare/BareImmersive.java",
+   "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
+   "java/src/org/chromium/chrome/browser/bare/BareCrxDownloadWatcher.java",
+   "java/src/org/chromium/chrome/browser/bare/BareMediaCandidates.java",
+diff --git a/chrome/android/java/res/values/bare_menu_strings.xml b/chrome/android/java/res/values/bare_menu_strings.xml
+index c4cf4348dd5..2cdf552e7b3 100644
+--- a/chrome/android/java/res/values/bare_menu_strings.xml
++++ b/chrome/android/java/res/values/bare_menu_strings.xml
+@@ -8,4 +8,5 @@ found in the LICENSE file.
+ <resources>
+     <string name="bare_tab_view_show_list" translatable="false">Show as list</string>
+     <string name="bare_tab_view_show_grid" translatable="false">Show as grid</string>
++    <string name="bare_menu_immersive" translatable="false">Immersive</string>
+ </resources>
+diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
+index 5b4fa8bcc01..49600660e4c 100644
+--- a/chrome/android/java/res/values/ids.xml
++++ b/chrome/android/java/res/values/ids.xml
+@@ -286,6 +286,8 @@ found in the LICENSE file.
+     <item type="id" name="pin_tab_menu_id" />
+     <item type="id" name="preferences_id" />
+     <item type="id" name="bare_exit_id" />
++    <item type="id" name="bare_immersive_id" />
++    <item type="id" name="bare_immersive_check_id" />
+     <item type="id" name="bare_tab_view_toggle_id" />
+     <item type="id" name="qr_code_menu_id" />
+     <item type="id" name="quick_delete_divider_line_id" />
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index d690745b5ae..0822a224ed7 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -83,6 +83,7 @@ import org.chromium.chrome.browser.ActivityUtils;
+ import org.chromium.chrome.browser.ChromeActivitySessionTracker;
+ import org.chromium.chrome.browser.ChromeApplicationImpl;
+ import org.chromium.chrome.browser.ChromeKeyboardVisibilityDelegate;
++import org.chromium.chrome.browser.ChromeTabbedActivity;
+ import org.chromium.chrome.browser.ChromeWindow;
+ import org.chromium.chrome.browser.ConfirmQuitHelper;
+ import org.chromium.chrome.browser.DeferredStartupHandler;
+@@ -108,6 +109,7 @@ import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
+ import org.chromium.chrome.browser.back_press.BackPressManager;
+ import org.chromium.chrome.browser.bare.BareClearOnExit;
+ import org.chromium.chrome.browser.bare.BareClearVeil;
++import org.chromium.chrome.browser.bare.BareImmersive;
+ import org.chromium.chrome.browser.bare.BarePageTranslation;
+ import org.chromium.chrome.browser.bare.translate.BarePageTranslator;
+ import org.chromium.chrome.browser.back_press.CloseListenerManager;
+@@ -569,6 +571,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+                         getIntentRequestTracker(),
+                         getInsetObserver());
+         window.setKeyboardShortcutsDelegate(this);
++        if (this instanceof ChromeTabbedActivity) BareImmersive.attachCutoutMode(this, window);
+         return window;
+     }
+ 
+@@ -1307,6 +1310,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+     @Override
+     public void onWindowFocusChanged(boolean hasFocus) {
+         super.onWindowFocusChanged(hasFocus);
++        if (hasFocus) BareImmersive.reapply(this);
+ 
+         Clipboard.getInstance().onWindowFocusChanged(hasFocus);
+ 
+@@ -3071,6 +3075,11 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+ 
+         @BrowserProfileType int type = Profile.getBrowserProfileTypeFromProfile(currentProfile);
+ 
++        if (id == R.id.bare_immersive_id || id == R.id.bare_immersive_check_id) {
++            BareImmersive.toggle(this, getFullscreenManager());
++            return true;
++        }
++
+         if (id == R.id.bare_exit_id) {
+             // Deletes whatever Clear on exit names, then closes. The callback always runs, so an
+             // empty selection simply closes. Incognito needs no part in this: its profile is
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
+index 528c5c8b27f..1de5de561ec 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
+@@ -83,6 +83,7 @@ public final class BareAppMenuCustomization {
+         "add_to_home_screen",
+         "request_desktop_site",
+         "dark_pages",
++        "immersive",
+         "developer_tools",
+         "help",
+         "lens",
+@@ -145,6 +146,7 @@ public final class BareAppMenuCustomization {
+         R.id.universal_install,
+         R.id.request_desktop_site_id,
+         R.id.auto_dark_web_contents_id,
++        R.id.bare_immersive_id,
+         R.id.dev_tools,
+         R.id.help_id,
+         R.id.lens_overlay_menu_id,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareImmersive.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareImmersive.java
+new file mode 100644
+index 00000000000..bf265a3eef1
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareImmersive.java
+@@ -0,0 +1,104 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.app.Activity;
++import android.view.View;
++import android.view.Window;
++import android.view.WindowManager.LayoutParams;
++
++import androidx.core.view.WindowCompat;
++import androidx.core.view.WindowInsetsCompat;
++import androidx.core.view.WindowInsetsControllerCompat;
++
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableNonNullObservableSupplier;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.display_cutout.ActivityDisplayCutoutModeSupplier;
++import org.chromium.chrome.browser.fullscreen.FullscreenManager;
++import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.ui.base.WindowAndroid;
++
++import java.util.Collections;
++import java.util.Map;
++import java.util.Set;
++import java.util.WeakHashMap;
++
++/**
++ * Immersive in the three-dot menu: hides the status bar, and the page and the toolbar take its
++ * place. A swipe down from the top edge shows the bar for a moment. Off again when the menu item is
++ * tapped or Bare restarts, so the state lives in this process only.
++ */
++@NullMarked
++public final class BareImmersive {
++    private static boolean sOn;
++    private static final Set<FullscreenManager> sWatched =
++            Collections.newSetFromMap(new WeakHashMap<>());
++    private static final Map<Activity, SettableNonNullObservableSupplier<Integer>> sCutoutModes =
++            new WeakHashMap<>();
++
++    private BareImmersive() {}
++
++    public static boolean isOn() {
++        return sOn;
++    }
++
++    public static void toggle(Activity activity, FullscreenManager fullscreenManager) {
++        sOn = !sOn;
++        apply(activity);
++        // Leaving a fullscreen video shows every system bar again.
++        if (sWatched.add(fullscreenManager)) {
++            fullscreenManager.addObserver(
++                    new FullscreenManager.Observer() {
++                        @Override
++                        public void onExitFullscreen(Tab tab) {
++                            View decor = activity.getWindow().getDecorView();
++                            decor.post(() -> reapply(activity));
++                        }
++                    });
++        }
++    }
++
++    /** Hides the bar again if Android or Chromium brought it back while Immersive is on. */
++    public static void reapply(Activity activity) {
++        if (sOn) apply(activity);
++    }
++
++    private static void apply(Activity activity) {
++        // Installed web apps share this process but keep their own status bar.
++        if (!sCutoutModes.containsKey(activity)) return;
++        Window window = activity.getWindow();
++        WindowInsetsControllerCompat controller =
++                WindowCompat.getInsetsController(window, window.getDecorView());
++        if (sOn) {
++            controller.setSystemBarsBehavior(
++                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
++            controller.hide(WindowInsetsCompat.Type.statusBars());
++        } else {
++            controller.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_DEFAULT);
++            controller.show(WindowInsetsCompat.Type.statusBars());
++        }
++        SettableNonNullObservableSupplier<Integer> cutoutMode = sCutoutModes.get(activity);
++        if (cutoutMode != null) {
++            cutoutMode.set(
++                    sOn
++                            ? LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
++                            : LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT);
++        }
++    }
++
++    /**
++     * Pages that don't ask to draw under the camera keep the window in the default cutout mode,
++     * where Chromium pads the top by the camera cutout: with the status bar hidden that is a band
++     * as tall as the bar. While Immersive is on, the browser asks for the whole screen instead.
++     */
++    public static void attachCutoutMode(Activity activity, WindowAndroid window) {
++        SettableNonNullObservableSupplier<Integer> cutoutMode =
++                ObservableSuppliers.createNonNull(
++                        LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT);
++        sCutoutModes.put(activity, cutoutMode);
++        ActivityDisplayCutoutModeSupplier.attach(window.getUnownedUserDataHost(), cutoutMode);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+index e380d69a873..3651597d7e7 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+@@ -35,6 +35,7 @@ import org.chromium.chrome.browser.RecentlyClosedEntriesManager;
+ import org.chromium.chrome.browser.app.appmenu.AppMenuItemUtils;
+ import org.chromium.chrome.browser.app.appmenu.AppMenuPropertiesDelegateImpl;
+ import org.chromium.chrome.browser.app.appmenu.BareAppMenuCustomization;
++import org.chromium.chrome.browser.bare.BareImmersive;
+ import org.chromium.chrome.browser.bookmarks.BookmarkImageFetcher;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+ import org.chromium.chrome.browser.device.DeviceConditions;
+@@ -561,6 +562,8 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+             modelList.add(buildAutoDarkItem(currentTab, isNativePage, shouldShowIconBeforeItem));
+         }
+ 
++        modelList.add(buildImmersiveItem(shouldShowIconBeforeItem));
++
+         // Paint Preview
+         if (mSaveAndShareItemBuilder.shouldShowPaintPreview(isNativePage, currentTab)) {
+             modelList.add(mSaveAndShareItemBuilder.buildPaintPreviewItem(shouldShowIconBeforeItem));
+@@ -771,6 +774,8 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+             modelList.add(buildAutoDarkItem(currentTab, isNativePage, shouldShowIconBeforeItem));
+         }
+ 
++        modelList.add(buildImmersiveItem(shouldShowIconBeforeItem));
++
+         // Get Image Descriptions
+         if (shouldShowGetImageDescriptionsItem(currentTab)) {
+             modelList.add(buildGetImageDescriptionsItem(currentTab));
+@@ -1440,6 +1445,20 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+                         isMenuIconAtStart()));
+     }
+ 
++    private ListItem buildImmersiveItem(boolean showIcon) {
++        return new ListItem(
++                AppMenuHandler.AppMenuItemType.TITLE_BUTTON,
++                AppMenuItemUtils.buildModelForMenuItemWithCheckbox(
++                        mContext,
++                        getAppMenuItemTheme(),
++                        R.id.bare_immersive_id,
++                        R.string.bare_menu_immersive,
++                        showIcon ? R.drawable.ic_fullscreen_enter : Resources.ID_NULL,
++                        R.id.bare_immersive_check_id,
++                        BareImmersive.isOn(),
++                        isMenuIconAtStart()));
++    }
++
+     private ListItem buildExitItem() {
+         return new ListItem(
+                 AppMenuHandler.AppMenuItemType.STANDARD,

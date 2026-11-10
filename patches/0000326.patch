@@ -1,0 +1,466 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+index fc7745acae2..aac7978b655 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+@@ -12,6 +12,7 @@ import android.app.Dialog;
+ import android.content.Context;
+ import android.content.res.Configuration;
+ import android.graphics.Bitmap;
++import android.graphics.Canvas;
+ import android.graphics.Color;
+ import android.graphics.Typeface;
+ import android.graphics.drawable.ColorDrawable;
+@@ -49,8 +50,12 @@ import androidx.activity.ComponentActivity;
+ import androidx.activity.OnBackPressedCallback;
+ import androidx.annotation.ColorInt;
+ import androidx.core.graphics.Insets;
++import androidx.core.view.ViewCompat;
+ import androidx.core.view.WindowInsetsCompat;
++import androidx.recyclerview.widget.DefaultItemAnimator;
++import androidx.recyclerview.widget.DiffUtil;
+ import androidx.recyclerview.widget.GridLayoutManager;
++import androidx.recyclerview.widget.ItemTouchHelper;
+ import androidx.recyclerview.widget.LinearLayoutManager;
+ import androidx.recyclerview.widget.RecyclerView;
+ 
+@@ -97,6 +102,13 @@ public final class BareVerticalTabsDrawer {
+     private static final float PAGE_SHIFT_DP = 30f;
+     private static final float GLASS_BLUR_DP = 22f;
+     private static final float GLASS_SCRIM = 0.45f;
++    // Swiping a card away from the drawer's edge closes its tab.
++    private static final float SWIPE_CLOSE_FRACTION = 0.4f;
++    private static final float SWIPE_CLOSE_MIN_DP = 56f;
++    private static final float SWIPE_FLING_DP_PER_S = 500f;
++    private static final float SWIPE_START_RATIO = 1.5f;
++    private static final long SLIDE_MS = 220;
++    private static final long FADE_MS = 140;
+ 
+     private final Activity mActivity;
+     private final Supplier<@Nullable TabModelSelector> mSelectorSupplier;
+@@ -130,6 +142,10 @@ public final class BareVerticalTabsDrawer {
+     /** 1 when the panel comes from the left edge, -1 from the right. */
+     private int mSide = 1;
+     private @Nullable ImageButton mToggle;
++    private @Nullable TabItemAnimator mItemAnimator;
++    // The next fill of the list replaces it without animation: on open, a view switch and a
++    // switch between the normal and the Incognito tabs.
++    private boolean mSnapNext;
+ 
+     private final TabModelObserver mModelObserver =
+             new TabModelObserver() {
+@@ -165,7 +181,11 @@ public final class BareVerticalTabsDrawer {
+                 }
+             };
+ 
+-    private final Callback<TabModel> mModelSwitched = model -> refreshSoon();
++    private final Callback<TabModel> mModelSwitched =
++            model -> {
++                mSnapNext = true;
++                refreshSoon();
++            };
+ 
+     public BareVerticalTabsDrawer(
+             Activity activity,
+@@ -217,6 +237,7 @@ public final class BareVerticalTabsDrawer {
+         applyListPlacement();
+         updateSide();
+         mScrollToSelected = true;
++        mSnapNext = true;
+         refresh();
+         // The window's insets are read directly: a parent in the activity may already have used
+         // them up by the time they would reach this view.
+@@ -374,7 +395,13 @@ public final class BareVerticalTabsDrawer {
+         list.setClipToPadding(false);
+         list.setPadding(dp(9), 0, dp(9), dp(8));
+         list.setOverScrollMode(View.OVER_SCROLL_NEVER);
+-        list.setItemAnimator(null);
++        TabItemAnimator itemAnimator = new TabItemAnimator();
++        list.setItemAnimator(itemAnimator);
++        mItemAnimator = itemAnimator;
++        SwipeGate gate = new SwipeGate();
++        // Before the helper, so the gate has seen the touch when the helper asks it.
++        list.addOnItemTouchListener(gate);
++        new ItemTouchHelper(new SwipeCallback(gate)).attachToRecyclerView(list);
+         TabAdapter adapter = new TabAdapter();
+         adapter.setHasStableIds(true);
+         list.setAdapter(adapter);
+@@ -563,6 +590,7 @@ public final class BareVerticalTabsDrawer {
+         // The rows and the cards are different views, so every one is made again.
+         list.setAdapter(adapter);
+         mScrollToSelected = true;
++        mSnapNext = true;
+         refresh();
+     }
+ 
+@@ -832,7 +860,8 @@ public final class BareVerticalTabsDrawer {
+         @Nullable Tab selected = null;
+         int index = model.index();
+         if (index >= 0 && index < model.getCount()) selected = model.getTabAt(index);
+-        adapter.submit(tabs, selected == null ? -1 : selected.getId());
++        adapter.submit(tabs, selected == null ? -1 : selected.getId(), !mSnapNext);
++        mSnapNext = false;
+         if (mScrollToSelected) {
+             mScrollToSelected = false;
+             LinearLayoutManager layoutManager = mLayoutManager;
+@@ -880,6 +909,31 @@ public final class BareVerticalTabsDrawer {
+         close();
+     }
+ 
++    /**
++     * Closes a tab from its card: the card leaves the list now, with the rest closing the gap,
++     * and the tab closes the way the close button always closed it, with undo.
++     */
++    private void removeCard(Tab tab, boolean bySwipe) {
++        if (tab.isClosing() || tab.isDestroyed()) return;
++        TabAdapter adapter = mAdapter;
++        TabItemAnimator animator = mItemAnimator;
++        if (adapter != null && animator != null) {
++            if (bySwipe) {
++                animator.forSwipe();
++            } else {
++                animator.forButton();
++            }
++            adapter.removeLocal(tab);
++        }
++        closeTab(tab);
++        // A close the user cancels in a dialog brings the card back from the model.
++        refreshSoon();
++    }
++
++    void removeCardForTesting(Tab tab) {
++        removeCard(tab, true);
++    }
++
+     private void closeTab(Tab tab) {
+         TabModel model = currentModel();
+         if (model == null || tab.isClosing() || tab.isDestroyed()) return;
+@@ -909,14 +963,276 @@ public final class BareVerticalTabsDrawer {
+ 
+     // Views for the rows.
+ 
++    /** A rebind after a change, with no animation of its own. */
++    private static final Object REBIND = new Object();
++
++    /** Tells the list which cards stayed, came and went, by tab. */
++    private static final class IdDiff extends DiffUtil.Callback {
++        private final List<Tab> mOld;
++        private final List<Tab> mNew;
++
++        IdDiff(List<Tab> old, List<Tab> neu) {
++            mOld = old;
++            mNew = neu;
++        }
++
++        @Override
++        public int getOldListSize() {
++            return mOld.size();
++        }
++
++        @Override
++        public int getNewListSize() {
++            return mNew.size();
++        }
++
++        @Override
++        public boolean areItemsTheSame(int oldPosition, int newPosition) {
++            return mOld.get(oldPosition).getId() == mNew.get(newPosition).getId();
++        }
++
++        @Override
++        public boolean areContentsTheSame(int oldPosition, int newPosition) {
++            // What can change inside a card while the drawer is open is its selection, which the
++            // adapter rebinds itself.
++            return true;
++        }
++    }
++
++    /**
++     * Closing the gap a closed card leaves, in step with the card. A swiped card is already off
++     * the drawer, so the others move at once; a card closed with its button fades first.
++     */
++    private static final class TabItemAnimator extends DefaultItemAnimator {
++        TabItemAnimator() {
++            setSupportsChangeAnimations(false);
++            setAddDuration(160);
++            setMoveDuration(SLIDE_MS);
++            setRemoveDuration(FADE_MS);
++        }
++
++        void forSwipe() {
++            setRemoveDuration(0);
++        }
++
++        void forButton() {
++            setRemoveDuration(FADE_MS);
++        }
++    }
++
++    /**
++     * Watches where a touch on the list started, so a swipe is only taken when it is clearly
++     * sideways. The helper alone takes any move that is a little more sideways than up.
++     */
++    private static final class SwipeGate implements RecyclerView.OnItemTouchListener {
++        private float mDownX;
++        private float mDownY;
++        private float mX;
++        private float mY;
++
++        @Override
++        public boolean onInterceptTouchEvent(RecyclerView view, MotionEvent event) {
++            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
++                mDownX = event.getRawX();
++                mDownY = event.getRawY();
++            }
++            mX = event.getRawX();
++            mY = event.getRawY();
++            return false;
++        }
++
++        @Override
++        public void onTouchEvent(RecyclerView view, MotionEvent event) {}
++
++        @Override
++        public void onRequestDisallowInterceptTouchEvent(boolean disallow) {}
++
++        boolean horizontalEnough() {
++            return Math.abs(mX - mDownX) > SWIPE_START_RATIO * Math.abs(mY - mDownY);
++        }
++    }
++
++    /**
++     * A card swiped away from the drawer's edge follows the finger and fades; past the close point
++     * it ticks, and let go there it slides out and its tab closes. A swipe toward the edge is the
++     * drawer's own, which closes the drawer.
++     */
++    private final class SwipeCallback extends ItemTouchHelper.Callback {
++        private final SwipeGate mGate;
++        private boolean mPast;
++        private boolean mSwiping;
++
++        SwipeCallback(SwipeGate gate) {
++            mGate = gate;
++        }
++
++        private int awayFromEdge() {
++            return mSide == 1 ? ItemTouchHelper.RIGHT : ItemTouchHelper.LEFT;
++        }
++
++        @Override
++        public int getMovementFlags(RecyclerView view, RecyclerView.ViewHolder holder) {
++            // A swipe starts only when the move is clearly sideways; once a card is moving it
++            // keeps its direction until it is let go.
++            boolean swipe = mSwiping || mGate.horizontalEnough();
++            return makeMovementFlags(0, swipe ? awayFromEdge() : 0);
++        }
++
++        @Override
++        public boolean isLongPressDragEnabled() {
++            return false;
++        }
++
++        @Override
++        public boolean isItemViewSwipeEnabled() {
++            return true;
++        }
++
++        @Override
++        public boolean onMove(
++                RecyclerView view,
++                RecyclerView.ViewHolder holder,
++                RecyclerView.ViewHolder target) {
++            return false;
++        }
++
++        private float closePoint(View card) {
++            return Math.max(dp(SWIPE_CLOSE_MIN_DP), SWIPE_CLOSE_FRACTION * card.getWidth());
++        }
++
++        @Override
++        public float getSwipeThreshold(RecyclerView.ViewHolder holder) {
++            // The helper measures against the whole list, so the card's own point is turned into
++            // a share of the list.
++            RecyclerView list = mList;
++            int width = list == null ? holder.itemView.getWidth() : list.getWidth();
++            return closePoint(holder.itemView) / Math.max(1, width);
++        }
++
++        @Override
++        public float getSwipeEscapeVelocity(float defaultValue) {
++            return dp(SWIPE_FLING_DP_PER_S);
++        }
++
++        @Override
++        public float getSwipeVelocityThreshold(float defaultValue) {
++            return dp(4000);
++        }
++
++        @Override
++        public long getAnimationDuration(
++                RecyclerView view, int animationType, float animateDx, float animateDy) {
++            return animationType == ItemTouchHelper.ANIMATION_TYPE_SWIPE_SUCCESS ? 160 : 200;
++        }
++
++        @Override
++        public void onSelectedChanged(RecyclerView.@Nullable ViewHolder holder, int actionState) {
++            super.onSelectedChanged(holder, actionState);
++            mPast = false;
++            mSwiping = actionState == ItemTouchHelper.ACTION_STATE_SWIPE;
++            if (mSwiping) {
++                // Keeps the drawer from taking the gesture back if the finger turns toward the
++                // edge.
++                RecyclerView list = mList;
++                if (list != null && list.getParent() != null) {
++                    list.getParent().requestDisallowInterceptTouchEvent(true);
++                }
++            }
++        }
++
++        @Override
++        public void onChildDraw(
++                Canvas canvas,
++                RecyclerView view,
++                RecyclerView.ViewHolder holder,
++                float dX,
++                float dY,
++                int actionState,
++                boolean isCurrentlyActive) {
++            super.onChildDraw(canvas, view, holder, dX, dY, actionState, isCurrentlyActive);
++            if (actionState != ItemTouchHelper.ACTION_STATE_SWIPE) return;
++            View card = holder.itemView;
++            float width = Math.max(1, card.getWidth());
++            card.setAlpha(Math.max(0f, 1f - Math.abs(dX) / width));
++            boolean past = Math.abs(dX) >= closePoint(card);
++            if (isCurrentlyActive && past != mPast) {
++                mPast = past;
++                if (past) ActionHaptics.tick(card);
++            }
++        }
++
++        @Override
++        public void clearView(RecyclerView view, RecyclerView.ViewHolder holder) {
++            super.clearView(view, holder);
++            holder.itemView.setAlpha(1f);
++        }
++
++        @Override
++        public void onSwiped(RecyclerView.ViewHolder holder, int direction) {
++            TabAdapter adapter = mAdapter;
++            if (adapter == null) return;
++            Tab tab = adapter.tabAt(holder.getBindingAdapterPosition());
++            if (tab != null) removeCard(tab, true);
++        }
++    }
++
+     private final class TabAdapter extends RecyclerView.Adapter<TabAdapter.Holder> {
+         private List<Tab> mTabs = new ArrayList<>();
+         private int mSelectedId = -1;
+ 
+-        void submit(List<Tab> tabs, int selectedId) {
++        void submit(List<Tab> tabs, int selectedId, boolean animate) {
++            List<Tab> old = mTabs;
++            int oldSelectedId = mSelectedId;
+             mTabs = tabs;
+             mSelectedId = selectedId;
+-            notifyDataSetChanged();
++            if (!animate || old.isEmpty() || tabs.isEmpty()) {
++                notifyDataSetChanged();
++                return;
++            }
++            DiffUtil.calculateDiff(new IdDiff(old, tabs), /* detectMoves= */ false)
++                    .dispatchUpdatesTo(this);
++            if (oldSelectedId == selectedId) return;
++            // Only the cards that gained or lost the selection are drawn again: a rebind fetches
++            // a card's picture again, which would blank every card for a moment. Done once the
++            // cards have stopped moving, so it does not cut a slide short.
++            Runnable rebind =
++                    () -> {
++                        for (int i = 0; i < mTabs.size(); i++) {
++                            int id = mTabs.get(i).getId();
++                            if (id == oldSelectedId || id == mSelectedId) {
++                                notifyItemChanged(i, REBIND);
++                            }
++                        }
++                    };
++            RecyclerView list = mList;
++            RecyclerView.ItemAnimator animator = list == null ? null : list.getItemAnimator();
++            if (animator != null && animator.isRunning()) {
++                animator.isRunning(rebind::run);
++            } else {
++                rebind.run();
++            }
++        }
++
++        /** Takes the card of {@code tab} out of the list at once. Returns whether it was there. */
++        boolean removeLocal(Tab tab) {
++            int index = mTabs.indexOf(tab);
++            if (index < 0) return false;
++            mTabs = new ArrayList<>(mTabs);
++            mTabs.remove(index);
++            notifyItemRemoved(index);
++            return true;
++        }
++
++        @Nullable Tab tabAt(int position) {
++            return position >= 0 && position < mTabs.size() ? mTabs.get(position) : null;
++        }
++
++        @Override
++        public void onViewRecycled(Holder holder) {
++            // A card swiped away goes back to the pool faded and moved; the next tab must not.
++            holder.itemView.setAlpha(1f);
++            holder.itemView.setTranslationX(0f);
++            holder.itemView.setTranslationY(0f);
+         }
+ 
+         @Override
+@@ -954,6 +1270,9 @@ public final class BareVerticalTabsDrawer {
+             private final @Nullable ImageView mThumb;
+             private final @Nullable View mScrim;
+             private int mBoundTabId = -1;
++            // The row's TalkBack "Close" action, replaced on each bind so a reused row only
++            // offers to close the tab it now shows.
++            private int mCloseActionId = View.NO_ID;
+ 
+             Holder(ViewGroup row) {
+                 super(row);
+@@ -1029,7 +1348,18 @@ public final class BareVerticalTabsDrawer {
+                 mRow.setOnClickListener(v -> selectTab(tab));
+                 mClose.setContentDescription(
+                         mActivity.getString(R.string.bare_vtabs_close_tab, label));
+-                mClose.setOnClickListener(v -> closeTab(tab));
++                mClose.setOnClickListener(v -> removeCard(tab, false));
++                if (mCloseActionId != View.NO_ID) {
++                    ViewCompat.removeAccessibilityAction(mRow, mCloseActionId);
++                }
++                mCloseActionId =
++                        ViewCompat.addAccessibilityAction(
++                                mRow,
++                                mActivity.getString(R.string.bare_vtabs_close_tab, label),
++                                (view, arguments) -> {
++                                    removeCard(tab, false);
++                                    return true;
++                                });
+             }
+ 
+             /** Puts the page's saved picture behind the card's text, softened and darkened. */
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawerUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawerUnitTest.java
+index 10fe0170fdc..5b66bc88bd8 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawerUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawerUnitTest.java
+@@ -184,6 +184,16 @@ public class BareVerticalTabsDrawerUnitTest {
+         assertTrue(mDrawer.isOpen());
+     }
+ 
++    @Test
++    public void testRemovingACardClosesThatTabAndDropsItFromTheList() {
++        RecyclerView list = openAndGetList();
++        int before = list.getAdapter().getItemCount();
++        mDrawer.removeCardForTesting(mFirst);
++        verify(mRemover).closeTabs(any(), eq(true));
++        assertEquals(before - 1, list.getAdapter().getItemCount());
++        assertTrue(mDrawer.isOpen());
++    }
++
+     @Test
+     public void testNewTabOpensANewTabPageAndCloses() {
+         openAndGetList();
