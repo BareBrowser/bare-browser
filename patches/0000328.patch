@@ -1,0 +1,108 @@
+diff --git a/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/BottomControlsStacker.java b/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/BottomControlsStacker.java
+index a3a7106e7f9cc..4c5c871037da4 100644
+--- a/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/BottomControlsStacker.java
++++ b/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/BottomControlsStacker.java
+@@ -378,9 +378,9 @@ public class BottomControlsStacker implements BrowserControlsStateProvider.Obser
+     private void updateBackgroundColorFromLayers() {
+         @ColorInt int newBackgroundColor = 0;
+ 
+-        // Find the bottom-most visible layer that provides a background color
+-        // Iterate through layers in reverse stack order (bottom to top).
+-        for (int i = STACK_ORDER.length - 1; i >= 0; i--) {
++        // Bare: the navigation bar strip sits under the address bar. Use the top-most
++        // visible layer that reports a color (e.g. the bottom toolbar on the home page).
++        for (int i = 0; i < STACK_ORDER.length; i++) {
+             int layerType = STACK_ORDER[i];
+             BottomControlsLayer layer = mLayers.get(layerType);
+ 
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
+index 2a9d64250416d..2d1dec4dc6460 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
+@@ -24,6 +24,7 @@ import org.chromium.chrome.browser.layouts.LayoutStateProvider;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.chrome.browser.ui.native_page.NativePage;
+ import org.chromium.chrome.browser.theme.ThemeColorProvider;
+ import org.chromium.chrome.browser.ui.actions.ActionId;
+ import org.chromium.chrome.browser.ui.actions.ActionProperties;
+@@ -211,8 +212,19 @@ public class BottomBarCoordinator
+ 
+     @Override
+     public @ColorInt int getBackgroundColor() {
+-        return BottomBarUtils.getBottomBarBackgroundColor(
+-                mView.getContext(), mModel.get(BottomBarProperties.COLOR_SCHEME));
++        return getBottomBarBackgroundColorForTab();
++    }
++
++    private @ColorInt int getBottomBarBackgroundColorForTab() {
++        @ColorInt
++        int fallback =
++                BottomBarUtils.getBottomBarBackgroundColor(
++                        mView.getContext(), mModel.get(BottomBarProperties.COLOR_SCHEME));
++        Tab tab = mTabSupplier.get();
++        if (tab == null) return fallback;
++        NativePage nativePage = tab.getNativePage();
++        if (nativePage == null) return fallback;
++        return nativePage.getToolbarSceneLayerBackground(fallback);
+     }
+ 
+     @Override
+diff --git a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinMediator.java b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinMediator.java
+index d982ff929fe5c..70c4cafa29ea4 100644
+--- a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinMediator.java
++++ b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinMediator.java
+@@ -353,13 +353,9 @@ class EdgeToEdgeBottomChinMediator
+         if (mIsKeyboardVisible && mKeyboardInset > 0 && !mKeepForOmnibox) {
+             return LayerVisibility.HIDDEN;
+         }
+-        if (mIsPagedOptedIntoEdgeToEdge || !mDefaultVisibility) {
+-            return LayerVisibility.VISIBLE_IF_OTHERS_VISIBLE;
+-        }
+-
+-        return mModel.get(CAN_SHOW)
+-                ? LayerVisibility.VISIBLE
+-                : LayerVisibility.VISIBLE_IF_OTHERS_VISIBLE;
++        // Bare: the strip only backs another bottom bar, such as the address bar at the bottom.
++        // On its own it would sit as a solid band, so the page shows through the navigation bar.
++        return LayerVisibility.VISIBLE_IF_OTHERS_VISIBLE;
+     }
+ 
+     @Override
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarPositionController.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarPositionController.java
+index a64a05222aa5c..b81c30411a77f 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarPositionController.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarPositionController.java
+@@ -45,6 +45,9 @@ import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.components.browser_ui.styles.ChromeColors;
++import org.chromium.chrome.browser.ui.native_page.NativePage;
++import androidx.annotation.ColorInt;
+ import org.chromium.chrome.browser.toolbar.settings.AddressBarPreference;
+ import org.chromium.chrome.browser.toolbar.top.ToolbarLayout;
+ import org.chromium.chrome.browser.ui.edge_to_edge.TopInsetProvider;
+@@ -342,6 +345,21 @@ public class ToolbarPositionController implements OnSharedPreferenceChangeListen
+                         return mLayerVisibility;
+                     }
+ 
++                    @Override
++                    public @Nullable Integer getBackgroundColor() {
++                        if (mLayerVisibility == LayerVisibility.HIDDEN) return null;
++                        Tab tab = mActiveTabSupplier.get();
++                        if (tab == null) return null;
++                        NativePage nativePage = tab.getNativePage();
++                        if (nativePage == null) return null;
++                        Context context = mControlContainer.getView().getContext();
++                        @ColorInt
++                        int fallback =
++                                ChromeColors.getDefaultThemeColor(
++                                        context, tab.isIncognito());
++                        return nativePage.getToolbarSceneLayerBackground(fallback);
++                    }
++
+                     @Override
+                     public void onBrowserControlsOffsetUpdate(int layerYOffset) {
+                         if (mLayerVisibility != LayerVisibility.HIDDEN) {
