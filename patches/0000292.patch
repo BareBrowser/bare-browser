@@ -1,3 +1,228 @@
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionPopup.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionPopup.java
+index 854083cdaa5..9129c53d933 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionPopup.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionPopup.java
+@@ -8,6 +8,7 @@ import android.app.Activity;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.graphics.Color;
++import android.graphics.Outline;
+ import android.graphics.drawable.ColorDrawable;
+ import android.os.Build;
+ import android.text.TextUtils;
+@@ -15,8 +16,10 @@ import android.view.Gravity;
+ import android.view.KeyEvent;
+ import android.view.View;
+ import android.view.ViewGroup;
++import android.view.ViewOutlineProvider;
+ import android.view.WindowInsets;
+ import android.view.WindowManager;
++import android.widget.FrameLayout;
+ import android.widget.ImageButton;
+ import android.widget.LinearLayout;
+ import android.widget.PopupWindow;
+@@ -36,6 +39,7 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+ import org.chromium.chrome.browser.ui.extensions.BareExtensionPresentation;
+ import org.chromium.chrome.browser.ui.extensions.ExtensionActionPopupContents;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.components.browser_ui.widget.RiseSheet;
+ import org.chromium.components.embedder_support.contextmenu.ContextMenuPopulatorFactory;
+ import org.chromium.components.embedder_support.view.ContentView;
+ import org.chromium.components.thinwebview.ThinWebView;
+@@ -95,6 +99,23 @@ class ExtensionActionPopup implements Destroyable {
+     private final TabModelSelector mTabModelSelector;
+     private final Callback<@Nullable Tab> mCurrentTabObserver;
+ 
++    /** The card opens at a third of the room above the toolbar and drags up to two thirds. */
++    private static final float CARD_OPEN = 1f / 3f;
++
++    private static final float CARD_MAX = 2f / 3f;
++    private static final float CARD_CORNER_DP = 16f;
++
++    /** Whether the page opens on a card rising from behind the toolbar. */
++    private final boolean mCardMode;
++
++    /** The page's frame inside the card, with its top corners rounded. Null unless a card. */
++    private final @Nullable FrameLayout mCardHost;
++
++    private @Nullable RiseSheet mCard;
++    private @Nullable OnDismissListener mCardDismiss;
++    private int mCardTries;
++    private boolean mCardGone;
++
+     /**
+      * Constructs an ExtensionActionPopup.
+      *
+@@ -148,9 +169,21 @@ class ExtensionActionPopup implements Destroyable {
+                     }
+                 };
+ 
+-        mThinWebView =
+-                ThinWebViewFactory.create(
+-                        activity, new ThinWebViewConstraints(), mPopupWindowAndroid);
++        // Inspecting with DevTools opens a window of its own over this one, so it keeps the
++        // popup whatever the setting says.
++        int presentation =
++                inspectWithDevTools
++                        ? BareExtensionPresentation.POPUP
++                        : BareExtensionPresentation.get();
++        mCardMode = presentation == BareExtensionPresentation.CARD;
++        ThinWebViewConstraints constraints = new ThinWebViewConstraints();
++        if (mCardMode) {
++            // A texture rather than a surface, so the page moves with the card and is clipped to
++            // its corners.
++            constraints.supportsOpacity = true;
++            constraints.backgroundColor = SemanticColorUtils.getDefaultBgColor(activity);
++        }
++        mThinWebView = ThinWebViewFactory.create(activity, constraints, mPopupWindowAndroid);
+ 
+         if (contextMenuPopulatorFactory != null) {
+             ThinWebViewContextMenuItemDelegate itemDelegate =
+@@ -166,14 +199,17 @@ class ExtensionActionPopup implements Destroyable {
+                         .setSelectionDropdownMenuDelegate(selectionDropdownMenuDelegate)
+                         .build());
+ 
+-        // Inspecting with DevTools opens a window of its own over this one, so it keeps the
+-        // popup whatever the setting says.
+-        boolean fullScreen = BareExtensionPresentation.isFullScreen() && !inspectWithDevTools;
+-        if (fullScreen) {
++        if (presentation == BareExtensionPresentation.FULL_SCREEN) {
+             mPopupWindow = null;
++            mCardHost = null;
+             mFullScreenWindow = createFullScreenWindow(activity);
++        } else if (mCardMode) {
++            mPopupWindow = null;
++            mFullScreenWindow = null;
++            mCardHost = createCardHost(activity);
+         } else {
+             mFullScreenWindow = null;
++            mCardHost = null;
+             mPopupWindow = createAnchoredWindow(activity, anchorView, inspectWithDevTools);
+         }
+ 
+@@ -284,12 +320,68 @@ class ExtensionActionPopup implements Destroyable {
+ 
+     private @Nullable TextView mFullScreenTitle;
+ 
++    /** The page in a frame whose top corners are rounded, for the card. */
++    private FrameLayout createCardHost(Activity activity) {
++        FrameLayout host = new FrameLayout(activity);
++        host.setBackgroundColor(SemanticColorUtils.getDefaultBgColor(activity));
++        float radius = CARD_CORNER_DP * activity.getResources().getDisplayMetrics().density;
++        host.setOutlineProvider(
++                new ViewOutlineProvider() {
++                    @Override
++                    public void getOutline(View view, Outline outline) {
++                        // Taller than the view, so only the top corners are round.
++                        outline.setRoundRect(
++                                0,
++                                0,
++                                view.getWidth(),
++                                view.getHeight() + Math.round(radius),
++                                radius);
++                    }
++                });
++        host.setClipToOutline(true);
++        host.addView(
++                mThinWebView.getView(),
++                new FrameLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        return host;
++    }
++
++    private void showCard() {
++        if (mCard != null || mCardGone) return;
++        View decor = mActivity.getWindow().getDecorView();
++        RiseSheet card =
++                RiseSheet.showWeb(
++                        decor, assumeNonNull(mCardHost), CARD_OPEN, CARD_MAX, this::onCardGone);
++        if (card != null) {
++            mCard = card;
++            return;
++        }
++        // Another card is still folding away, the Extensions menu for one. Wait for it a moment.
++        if (++mCardTries <= 20) {
++            decor.postDelayed(this::showCard, 50);
++        } else {
++            onCardGone();
++        }
++    }
++
++    private void onCardGone() {
++        mCard = null;
++        if (mCardGone) return;
++        mCardGone = true;
++        if (mCardDismiss != null) mCardDismiss.onDismiss();
++    }
++
+     private boolean isShowing() {
++        if (mCardMode) return mCard != null && mCard.isShowing();
+         if (mFullScreenWindow != null) return mFullScreenWindow.isShowing();
+         return assumeNonNull(mPopupWindow).isShowing();
+     }
+ 
+     private void showWindow() {
++        if (mCardMode) {
++            showCard();
++            return;
++        }
+         if (mFullScreenWindow == null) {
+             assumeNonNull(mPopupWindow).show();
+             return;
+@@ -316,6 +408,15 @@ class ExtensionActionPopup implements Destroyable {
+     }
+ 
+     private void dismissWindow() {
++        if (mCardMode) {
++            RiseSheet card = mCard;
++            if (card != null) {
++                card.fold();
++            } else {
++                onCardGone();
++            }
++            return;
++        }
+         if (mFullScreenWindow != null) mFullScreenWindow.dismiss();
+         if (mPopupWindow != null) mPopupWindow.dismiss();
+     }
+@@ -324,7 +425,16 @@ class ExtensionActionPopup implements Destroyable {
+     @Override
+     public void destroy() {
+         mTabModelSelector.getCurrentTabSupplier().removeObserver(mCurrentTabObserver);
+-        dismissWindow();
++        if (mCardMode) {
++            // The card goes at once, before its page is torn down, and tells nobody.
++            mCardGone = true;
++            mCardTries = Integer.MAX_VALUE / 2;
++            RiseSheet card = mCard;
++            mCard = null;
++            if (card != null) card.dismissNow();
++        } else {
++            dismissWindow();
++        }
+         mThinWebView.destroy();
+         mPopupWindowAndroid.destroy();
+         mContents.destroy();
+@@ -342,6 +452,10 @@ class ExtensionActionPopup implements Destroyable {
+ 
+     /** Adds a listener that will be notified when the popup window is dismissed. */
+     public void addOnDismissListener(OnDismissListener listener) {
++        if (mCardMode) {
++            mCardDismiss = listener;
++            return;
++        }
+         if (mFullScreenWindow != null) {
+             mFullScreenWindow.setOnDismissListener(listener);
+         } else {
+@@ -352,6 +466,8 @@ class ExtensionActionPopup implements Destroyable {
+     private class ContentsDelegate implements ExtensionActionPopupContents.Delegate {
+         @Override
+         public void resizeDueToAutoResize(int width, int height) {
++            // A full-screen or card page is sized by its view, not by what it asks for.
++            if (mPopupWindow == null) return;
+             if (Build.VERSION.SDK_INT >= 34) {
+                 // Disable transition animations for the popup window. On Android, {@link
+                 // onLoaded()} is called first, and then {@link resizeDueToAutoResize()} is called.
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
 index cdb74684dcb..aa93cd346d6 100644
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
@@ -68,13 +293,14 @@ index cdb74684dcb..aa93cd346d6 100644
              mSheetController.removeObserver(mSheetObserver);
              mSheetController = null;
 diff --git a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
-index 32e3233f97b..42f09236fa2 100644
+index 32e3233f97b..69828e65cd4 100644
 --- a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
 +++ b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
-@@ -8,6 +8,11 @@ import android.animation.Animator;
+@@ -8,23 +8,35 @@ import android.animation.Animator;
  import android.animation.AnimatorListenerAdapter;
  import android.animation.ValueAnimator;
  import android.content.Context;
++import android.content.res.Configuration;
 +import android.widget.TextView;
 +import android.widget.ImageView;
 +import android.content.res.ColorStateList;
@@ -83,15 +309,330 @@ index 32e3233f97b..42f09236fa2 100644
  import android.graphics.Color;
  import android.graphics.Rect;
  import android.graphics.drawable.ColorDrawable;
-@@ -145,6 +150,7 @@ public final class RiseSheet {
-         handleParams.bottomMargin = Math.round(10 * density);
+ import android.graphics.drawable.Drawable;
+ import android.graphics.drawable.GradientDrawable;
++import android.os.SystemClock;
+ import android.view.Gravity;
+ import android.view.MotionEvent;
+ import android.view.VelocityTracker;
+ import android.view.View;
+ import android.view.ViewConfiguration;
+ import android.view.ViewGroup;
++import android.view.WindowInsets;
++import android.view.WindowManager;
++import android.util.TypedValue;
+ import android.view.animation.Interpolator;
++import android.widget.Button;
+ import android.widget.FrameLayout;
+ import android.widget.LinearLayout;
+ import android.widget.PopupWindow;
+ 
+ import androidx.annotation.ColorInt;
++import androidx.core.view.WindowInsetsCompat;
+ 
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+@@ -49,14 +61,37 @@ public final class RiseSheet {
+     private static final float CLOSE_DRAG_DP = 48f;
+     private static final float CORNER_DP = 24f;
+     private static final int SCRIM_COLOR = 0x66000000;
++    private static final long MESSAGE_MS = 8000;
++    private static final long BUTTON_GUARD_MS = 500;
++    private static final float HANDLE_SPACE_DP = 24f;
++    private static final float WEB_HANDLE_MARGIN_DP = 16f;
++    private static final float WEB_HANDLE_ZONE_DP = 36f;
++    private static final float KEYBOARD_MIN_DP = 80f;
++
++    /** What the card holds, which decides its size and how it moves. */
++    private enum Mode {
++        /** A list or page of rows, opening half way and dragged up to nearly full height. */
++        LIST,
++        /** A short message, as tall as its text, fully shown, closing by itself. */
++        MESSAGE,
++        /** An extension's page. */
++        WEB
++    }
+ 
+     private final PopupWindow mPopup;
+     private final Frame mFrame;
+     private final View mScrim;
+     private final LinearLayout mCard;
+     private final View mScroll;
+-    private final int mHeight;
+-    private final int mCompactY;
++    private final Mode mMode;
++    private final int mMaxHeight;
++    private final float mHidden;
++    // A page card is shortened while the keyboard is up, so these two can change.
++    private int mHeight;
++    private int mCompactY;
++    private boolean mKeyboard;
++    private float mBeforeKeyboardY;
++    private final Runnable mTimeout = this::close;
+     private @Nullable ValueAnimator mAnimator;
+     private boolean mClosing;
+     private @Nullable Runnable mOnDismissed;
+@@ -92,7 +127,8 @@ public final class RiseSheet {
+                         Math.round(windowHeight * HEIGHT),
+                         toolbarColor(root, context),
+                         frame.width(),
+-                        windowHeight);
++                        windowHeight,
++                        Mode.LIST);
+         sheet.mOnDismissed = onDismissed;
+         sActive = sheet;
+         sheet.mPopup.setOnDismissListener(
+@@ -111,6 +147,186 @@ public final class RiseSheet {
+         return true;
+     }
+ 
++    /**
++     * Shows a short message on a card the height of its text, with a text button when {@code
++     * actionLabel} is given, and returns whether it did; it does not while another card is up. The
++     * page is not dimmed. The card closes on a tap outside it, a drag down, Back, the button (which
++     * runs {@code onAction} first), or by itself after a few seconds. Without a button the card
++     * takes no focus and touches outside it reach what is under it. {@code onDismissed} runs once
++     * the card has gone.
++     */
++    public static boolean showMessage(
++            View root,
++            CharSequence text,
++            @Nullable CharSequence actionLabel,
++            @Nullable Runnable onAction,
++            @Nullable Runnable onDismissed) {
++        if (sActive != null) return false;
++        Context context = root.getContext();
++        float density = context.getResources().getDisplayMetrics().density;
++        Rect frame = new Rect();
++        root.getWindowVisibleDisplayFrame(frame);
++        int bottom = toolbarTop(root, frame.bottom);
++
++        LinearLayout content = new LinearLayout(context);
++        content.setOrientation(LinearLayout.VERTICAL);
++        int side = Math.round(20 * density);
++        content.setPadding(side, 0, side, Math.round((actionLabel == null ? 16 : 6) * density));
++        TextView message = new TextView(context);
++        message.setText(text);
++        message.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
++        message.setTextColor(SemanticColorUtils.getDefaultTextColor(context));
++        content.addView(
++                message,
++                new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
++        Runnable[] closeCard = new Runnable[1];
++        // A card can come up while the user is tapping the page, so its button takes no tap that
++        // starts before the card has been fully up for a moment.
++        long[] buttonReadyAt = {Long.MAX_VALUE};
++        if (actionLabel != null) {
++            Button action = new Button(context, null, android.R.attr.borderlessButtonStyle);
++            action.setText(actionLabel);
++            action.setAllCaps(false);
++            action.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
++            action.setTextColor(SemanticColorUtils.getDefaultControlColorActive(context));
++            action.setOnClickListener(
++                    v -> {
++                        if (onAction != null) onAction.run();
++                        if (closeCard[0] != null) closeCard[0].run();
++                    });
++            boolean[] early = new boolean[1];
++            action.setOnTouchListener(
++                    (v, event) -> {
++                        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
++                            early[0] = event.getEventTime() < buttonReadyAt[0];
++                        }
++                        return early[0];
++                    });
++            LinearLayout.LayoutParams params =
++                    new LinearLayout.LayoutParams(
++                            ViewGroup.LayoutParams.WRAP_CONTENT,
++                            ViewGroup.LayoutParams.WRAP_CONTENT);
++            params.gravity = Gravity.END;
++            params.topMargin = Math.round(4 * density);
++            content.addView(action, params);
++        }
++        content.measure(
++                View.MeasureSpec.makeMeasureSpec(frame.width(), View.MeasureSpec.EXACTLY),
++                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
++        int height = content.getMeasuredHeight() + Math.round(HANDLE_SPACE_DP * density);
++
++        RiseSheet sheet =
++                new RiseSheet(
++                        context,
++                        content,
++                        content,
++                        height,
++                        toolbarColor(root, context),
++                        frame.width(),
++                        height,
++                        Mode.MESSAGE);
++        closeCard[0] = sheet::close;
++        sheet.mOnDismissed = onDismissed;
++        if (actionLabel == null) {
++            sheet.mPopup.setFocusable(false);
++            sheet.mPopup.setOutsideTouchable(false);
++            sheet.mPopup.setTouchInterceptor(null);
++        }
++        sActive = sheet;
++        sheet.mPopup.setOnDismissListener(
++                () -> {
++                    sheet.mFrame.removeCallbacks(sheet.mTimeout);
++                    sActive = null;
++                    if (sheet.mOnDismissed != null) sheet.mOnDismissed.run();
++                });
++        // The popup is only as tall as the card and sits on the toolbar, so the card rises from
++        // behind it and the page above stays as it is.
++        sheet.mPopup.showAtLocation(root, Gravity.NO_GRAVITY, frame.left, bottom - height);
++        sheet.mFrame.post(
++                () ->
++                        sheet.animateTo(
++                                0,
++                                SETTLE_MS,
++                                Interpolators.EMPHASIZED_DECELERATE,
++                                () ->
++                                        buttonReadyAt[0] =
++                                                SystemClock.uptimeMillis() + BUTTON_GUARD_MS));
++        sheet.mFrame.postDelayed(sheet.mTimeout, MESSAGE_MS);
++        return true;
++    }
++
++    /**
++     * Shows {@code page}, a view that scrolls by itself such as a web page, as a card that opens
++     * to {@code openFraction} of the space above the toolbar and can be dragged up to {@code
++     * maxFraction} of it. Only the handle strip at the top of the card moves it down or closes it;
++     * a drag up on the page while the card is not at full height raises it; everything else goes
++     * to the page. The card moves above the keyboard while it is up. Returns the card, or null
++     * while another card is up. {@code onDismissed} runs once the card has gone.
++     */
++    public static @Nullable RiseSheet showWeb(
++            View root,
++            View page,
++            float openFraction,
++            float maxFraction,
++            @Nullable Runnable onDismissed) {
++        if (sActive != null) return null;
++        Context context = root.getContext();
++        Rect frame = new Rect();
++        root.getWindowVisibleDisplayFrame(frame);
++        int bottom = toolbarTop(root, frame.bottom);
++        int windowHeight = Math.max(1, bottom - frame.top);
++        RiseSheet sheet =
++                new RiseSheet(
++                        context,
++                        page,
++                        page,
++                        Math.round(windowHeight * maxFraction),
++                        toolbarColor(root, context),
++                        frame.width(),
++                        windowHeight,
++                        Mode.WEB,
++                        1f - openFraction / maxFraction);
++        sheet.mOnDismissed = onDismissed;
++        sActive = sheet;
++        sheet.mPopup.setOnDismissListener(
++                () -> {
++                    sActive = null;
++                    if (sheet.mOnDismissed != null) sheet.mOnDismissed.run();
++                });
++        // A tap on the toolbar folds the card and also reaches the button under it, so tapping
++        // another extension opens that one, as the popup does.
++        sheet.mPopup.setTouchModal(false);
++        sheet.mPopup.setInputMethodMode(PopupWindow.INPUT_METHOD_NEEDED);
++        sheet.mPopup.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
++        sheet.mPopup.showAtLocation(root, Gravity.NO_GRAVITY, frame.left, frame.top);
++        sheet.mFrame.post(
++                () -> {
++                    sheet.animateTo(
++                            sheet.mCompactY, SETTLE_MS, Interpolators.EMPHASIZED_DECELERATE, null);
++                    sheet.mFrame.requestApplyInsets();
++                });
++        return sheet;
++    }
++
++    /** Folds the card away with its closing animation. */
++    public void fold() {
++        close();
++    }
++
++    /** Takes the card away at once, with no animation. The dismiss callback still runs. */
++    public void dismissNow() {
++        stop();
++        mClosing = true;
++        mFrame.removeCallbacks(mTimeout);
++        mPopup.dismiss();
++    }
++
++    /** Whether this card is up and not folding away. */
++    public boolean isShowing() {
++        return mPopup.isShowing() && !mClosing;
++    }
++
+     private RiseSheet(
+             Context context,
+             View content,
+@@ -118,9 +334,35 @@ public final class RiseSheet {
+             int height,
+             @ColorInt int color,
+             int width,
+-            int windowHeight) {
++            int windowHeight,
++            Mode mode) {
++        this(
++                context,
++                content,
++                scroll,
++                height,
++                color,
++                width,
++                windowHeight,
++                mode,
++                mode == Mode.MESSAGE ? 0f : COMPACT_HIDDEN);
++    }
++
++    private RiseSheet(
++            Context context,
++            View content,
++            View scroll,
++            int height,
++            @ColorInt int color,
++            int width,
++            int windowHeight,
++            Mode mode,
++            float hidden) {
++        mMode = mode;
+         mHeight = height;
+-        mCompactY = Math.round(height * COMPACT_HIDDEN);
++        mMaxHeight = height;
++        mHidden = hidden;
++        mCompactY = Math.round(height * hidden);
+         mScroll = scroll;
+         float density = context.getResources().getDisplayMetrics().density;
+ 
+@@ -141,10 +383,13 @@ public final class RiseSheet {
+         LinearLayout.LayoutParams handleParams =
+                 new LinearLayout.LayoutParams(Math.round(38 * density), Math.round(4 * density));
+         handleParams.gravity = Gravity.CENTER_HORIZONTAL;
+-        handleParams.topMargin = Math.round(10 * density);
+-        handleParams.bottomMargin = Math.round(10 * density);
++        float handleMargin = mode == Mode.WEB ? WEB_HANDLE_MARGIN_DP : 10;
++        handleParams.topMargin = Math.round(handleMargin * density);
++        handleParams.bottomMargin = Math.round(handleMargin * density);
          mCard.addView(handle, handleParams);
          if (content.getParent() instanceof ViewGroup parent) parent.removeView(content);
-+        adapt(content, isLight(color) ? 0xFF1B1B1F : 0xFFE6E6EA, 10);
++        // A page has its own colours; recolouring would reach into it.
++        if (mode != Mode.WEB) adapt(content, isLight(color) ? 0xFF1B1B1F : 0xFFE6E6EA, 10);
          mCard.addView(
                  content,
                  new LinearLayout.LayoutParams(
-@@ -206,32 +212,70 @@ public final class RiseSheet {
+@@ -152,7 +397,7 @@ public final class RiseSheet {
+ 
+         mFrame = new Frame(context);
+         mScrim = new View(context);
+-        mScrim.setBackgroundColor(SCRIM_COLOR);
++        mScrim.setBackgroundColor(mode == Mode.MESSAGE ? Color.TRANSPARENT : SCRIM_COLOR);
+         mScrim.setAlpha(0f);
+         mFrame.addView(
+                 mScrim,
+@@ -206,32 +451,70 @@ public final class RiseSheet {
          return fallback;
      }
  
@@ -113,15 +654,15 @@ index 32e3233f97b..42f09236fa2 100644
 +                Integer color = sample(address);
 +                if (color != null) return color;
 +            }
-+        }
-+        View row = find(root, "bottom_app_bar_container");
-+        if (row != null && row.isShown()) {
-+            Integer color = sample(row);
-+            if (color != null) return color;
          }
 -        if (bar == null) bar = find(root, "bottom_app_bar_container");
 -        Integer color = bar == null ? null : plainColor(bar, 3);
 -        return color != null ? color : SemanticColorUtils.getColorSurfaceContainerHigh(context);
++        View row = find(root, "bottom_app_bar_container");
++        if (row != null && row.isShown()) {
++            Integer color = sample(row);
++            if (color != null) return color;
++        }
 +        return SemanticColorUtils.getColorSurfaceContainerHigh(context);
      }
  
@@ -182,3 +723,150 @@ index 32e3233f97b..42f09236fa2 100644
      }
  
      private static @Nullable View find(View root, String name) {
+@@ -274,15 +557,58 @@ public final class RiseSheet {
+     private void close() {
+         if (mClosing) return;
+         mClosing = true;
++        mFrame.removeCallbacks(mTimeout);
+         animateTo(mHeight, CLOSE_MS, Interpolators.EMPHASIZED_ACCELERATE, mPopup::dismiss);
+     }
+ 
++    /**
++     * Moves a page card above the keyboard, as tall as the room allows up to its full height, and
++     * back to where it was once the keyboard goes.
++     */
++    private void fitKeyboard(int ime) {
++        float density = mFrame.getResources().getDisplayMetrics().density;
++        boolean up = ime > KEYBOARD_MIN_DP * density;
++        if (up == mKeyboard && (!up || mFrame.getPaddingBottom() == ime)) return;
++        mFrame.setPadding(0, 0, 0, up ? ime : 0);
++        int room = Math.max(1, mFrame.getHeight() - (up ? ime : 0));
++        int height = up ? Math.min(mMaxHeight, room) : mMaxHeight;
++        ViewGroup.LayoutParams params = mCard.getLayoutParams();
++        params.height = height;
++        mCard.setLayoutParams(params);
++        mHeight = height;
++        if (up && !mKeyboard) {
++            mKeyboard = true;
++            mBeforeKeyboardY = mCard.getTranslationY();
++            stop();
++            moveTo(0);
++        } else if (up) {
++            moveTo(0);
++        } else {
++            mKeyboard = false;
++            mCompactY = Math.round(mMaxHeight * mHidden);
++            animateTo(
++                    Math.max(0, Math.min(mBeforeKeyboardY, mCompactY)),
++                    SETTLE_MS,
++                    Interpolators.EMPHASIZED_DECELERATE,
++                    null);
++        }
++    }
++
+     /** Down closes from half or full height, up opens all the way, a small drag puts it back. */
+     private void release(float startY, float velocity) {
+         float y = mCard.getTranslationY();
+         float density = mFrame.getResources().getDisplayMetrics().density;
+         float fling = FLING_DP_PER_SECOND * density;
+         float moved = y - startY;
++        if (mMode == Mode.MESSAGE) {
++            // A message is either shown in full or gone.
++            if (velocity > fling || moved > CLOSE_DRAG_DP * density) {
++                close();
++            } else {
++                animateTo(0, SETTLE_MS, Interpolators.EMPHASIZED_DECELERATE, null);
++            }
++            return;
++        }
+         if (velocity > fling || (velocity >= -fling && moved > CLOSE_DRAG_DP * density)) {
+             close();
+         } else if (velocity < -fling || moved < -CLOSE_DRAG_DP * density) {
+@@ -307,11 +633,41 @@ public final class RiseSheet {
+         private float mStartY;
+         private boolean mDragging;
+         private boolean mAbove;
++        private float mDownX;
+         private @Nullable VelocityTracker mVelocity;
++        private final int mOrientation;
++        private final int mWidthDp;
+ 
+         Frame(Context context) {
+             super(context);
+             mSlop = ViewConfiguration.get(context).getScaledTouchSlop();
++            Configuration config = context.getResources().getConfiguration();
++            mOrientation = config.orientation;
++            mWidthDp = config.screenWidthDp;
++        }
++
++        @Override
++        public WindowInsets onApplyWindowInsets(WindowInsets insets) {
++            if (mMode != Mode.WEB) return super.onApplyWindowInsets(insets);
++            // The part of this window the keyboard covers. Zero when the system has already made
++            // the window shorter, so the room is never taken twice.
++            WindowInsetsCompat compat = WindowInsetsCompat.toWindowInsetsCompat(insets, this);
++            int ime =
++                    compat.isVisible(WindowInsetsCompat.Type.ime())
++                            ? compat.getInsets(WindowInsetsCompat.Type.ime()).bottom
++                            : 0;
++            fitKeyboard(ime);
++            return insets;
++        }
++
++        @Override
++        protected void onConfigurationChanged(Configuration config) {
++            super.onConfigurationChanged(config);
++            // A page card folds on rotation, as the popup does on a change of screen size.
++            if (mMode == Mode.WEB
++                    && (config.orientation != mOrientation || config.screenWidthDp != mWidthDp)) {
++                post(RiseSheet.this::close);
++            }
+         }
+ 
+         private float cardTop() {
+@@ -326,16 +682,34 @@ public final class RiseSheet {
+                 case MotionEvent.ACTION_DOWN:
+                     stop();
+                     mDownY = event.getY();
++                    mDownX = event.getX();
+                     mStartY = mCard.getTranslationY();
+                     mDragging = false;
+                     mAbove = mDownY < cardTop();
+-                    float zone = HANDLE_ZONE_DP * getResources().getDisplayMetrics().density;
+-                    boolean onHandle = !mAbove && mDownY < cardTop() + zone;
++                    float zone =
++                            (mMode == Mode.WEB ? WEB_HANDLE_ZONE_DP : HANDLE_ZONE_DP)
++                                    * getResources().getDisplayMetrics().density;
++                    boolean onHandle = !mAbove && !mKeyboard && mDownY < cardTop() + zone;
+                     return mAbove || onHandle;
+                 case MotionEvent.ACTION_MOVE:
+                     float dy = event.getY() - mDownY;
+                     if (Math.abs(dy) <= mSlop) return false;
+                     boolean halfOpen = mStartY > 1;
++                    if (mMode == Mode.WEB) {
++                        // A page cannot say whether it is at its top, so only an upward drag on a
++                        // half open card is taken, and only when it is mostly vertical. The
++                        // handle is the only way down.
++                        if (halfOpen
++                                && dy < 0
++                                && !mKeyboard
++                                && Math.abs(dy) > 1.5f * Math.abs(event.getX() - mDownX)) {
++                            mDragging = true;
++                            mDownY = event.getY();
++                            mStartY = mCard.getTranslationY();
++                            return true;
++                        }
++                        return false;
++                    }
+                     boolean listAtTop = !mScroll.canScrollVertically(-1);
+                     if ((halfOpen && dy < 0) || (dy > 0 && listAtTop)) {
+                         mDragging = true;
+@@ -356,6 +730,8 @@ public final class RiseSheet {
+             switch (event.getActionMasked()) {
+                 case MotionEvent.ACTION_MOVE:
+                     float dy = event.getY() - mDownY;
++                    // A page card stays put while the keyboard is up.
++                    if (mKeyboard) return true;
+                     if (!mDragging && !mAbove && Math.abs(dy) > mSlop) {
+                         mDragging = true;
+                         mDownY = event.getY();

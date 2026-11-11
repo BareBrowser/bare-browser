@@ -38,9 +38,29 @@ index 204eb53a84d..601b79d4907 100644
      <dimen name="location_bar_status_separator_spacer">8dp</dimen>
      <dimen name="location_bar_status_separator_width">1dp</dimen>
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
-index c114660f441..ad7f989f0b0 100644
+index c114660f441..7e29d60f261 100644
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
+@@ -485,8 +485,8 @@ public class StatusMediator
+         // Don't use isNtpVisible() here -- it reports NTP visibility when navigation is already
+         // underway, making the onUrlChanged fail to detect the user is navigating out of the NTP.
+         var url = mLocationBarDataProvider.getCurrentGurl();
+-        boolean isRegularNtpUrl =
+-                OmniboxUrlUtils.isNtpUrl(url) && !mLocationBarDataProvider.isIncognitoBranded();
++        // Bare: the Incognito new tab page keeps its search icon where the regular one has it.
++        boolean isNtpUrl = OmniboxUrlUtils.isNtpUrl(url);
+ 
+         @PageClassification
+         int pageClassification =
+@@ -494,7 +494,7 @@ public class StatusMediator
+         boolean useWideStatusIcon =
+                 PageClassificationUtils.isHubOrTabSearch(pageClassification)
+                         || mUrlHasFocus
+-                        || isRegularNtpUrl;
++                        || isNtpUrl;
+         mModel.set(StatusProperties.USE_WIDE_STATUS_ICON, useWideStatusIcon);
+     }
+ 
 @@ -1034,7 +1034,6 @@ public class StatusMediator
      }
  
@@ -59,6 +79,29 @@ index c114660f441..ad7f989f0b0 100644
          if (!show) {
              mModel.set(StatusProperties.SITE_FAVICON, null);
              return;
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediatorUnitTest.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediatorUnitTest.java
+index aa7df2a1cc6..319d1fb0ec9 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediatorUnitTest.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediatorUnitTest.java
+@@ -601,6 +601,18 @@ public final class StatusMediatorUnitTest {
+         assertTrue(mModel.get(StatusProperties.USE_WIDE_STATUS_ICON));
+     }
+ 
++    @Test
++    public void testWideIconTrue_incognitoNtp() {
++        doReturn(true).when(mLocationBarDataProvider).isIncognitoBranded();
++        doReturn(JUnitTestGURLs.NTP_URL).when(mLocationBarDataProvider).getCurrentGurl();
++        mMediator.onUrlChanged();
++        assertTrue(mModel.get(StatusProperties.USE_WIDE_STATUS_ICON));
++
++        doReturn(JUnitTestGURLs.BLUE_1).when(mLocationBarDataProvider).getCurrentGurl();
++        mMediator.onUrlChanged();
++        assertFalse(mModel.get(StatusProperties.USE_WIDE_STATUS_ICON));
++    }
++
+     @Test
+     public void testWideIconTrue_tabSearchOverlay() {
+         doReturn(PageClassification.ANDROID_TAB_SEARCH_OVERLAY)
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
 index d172cb29687..e152d604efb 100644
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java

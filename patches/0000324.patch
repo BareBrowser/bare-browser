@@ -1,0 +1,93 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/browserservices/trustedwebactivityui/controller/TrustedWebActivityBrowserControlsVisibilityManager.java b/chrome/android/java/src/org/chromium/chrome/browser/browserservices/trustedwebactivityui/controller/TrustedWebActivityBrowserControlsVisibilityManager.java
+index f74906881cd..aadb3c7615f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/browserservices/trustedwebactivityui/controller/TrustedWebActivityBrowserControlsVisibilityManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/browserservices/trustedwebactivityui/controller/TrustedWebActivityBrowserControlsVisibilityManager.java
+@@ -169,6 +169,9 @@ public class TrustedWebActivityBrowserControlsVisibilityManager
+             }
+         }
+ 
++        // Bare: installed apps open without the title bar, in or out of their scope.
++        if (mIntentDataProvider.isWebappOrWebApkActivity()) return BrowserControlsState.HIDDEN;
++
+         // Fallback to browser controls in non-desktop windowing mode (e.g. phone or non-windowed
+         // tablet) when running a minimal-ui WebAPK or shortcut web app, except on desktop devices
+         // (where non-desktop windowing only occurs when fullscreened) or in fullscreen mode.
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/browserservices/ui/SharedActivityCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/browserservices/ui/SharedActivityCoordinator.java
+index 166a366431c..a78407a5ded 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/browserservices/ui/SharedActivityCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/browserservices/ui/SharedActivityCoordinator.java
+@@ -47,6 +47,7 @@ public class SharedActivityCoordinator implements InflationObserver {
+     private final BrowserServicesThemeColorProvider mBrowserServicesThemeColorProvider;
+ 
+     private final @Nullable ImmersiveMode mImmersiveDisplayMode;
++    private final boolean mIsWebapp;
+ 
+     private boolean mUseAppModeUi;
+ 
+@@ -66,6 +67,7 @@ public class SharedActivityCoordinator implements InflationObserver {
+         mStatusBarColorProvider = statusBarColorProvider;
+         mImmersiveModeController = immersiveModeController;
+         mImmersiveDisplayMode = computeImmersiveMode(intentDataProvider);
++        mIsWebapp = intentDataProvider.isWebappOrWebApkActivity();
+         mCustomTabOrientationController = customTabOrientationController;
+         mBrowserServicesThemeColorProvider = browserServicesThemeColorProvider;
+         mUseAppModeUi = appModeUiAllowedFor(mCurrentPageVerifier.getState());
+@@ -112,9 +114,11 @@ public class SharedActivityCoordinator implements InflationObserver {
+ 
+     private void updateUi() {
+         updateImmersiveMode();
+-        mBrowserServicesThemeColorProvider.setUseTabTheme(mUseAppModeUi);
++        // Bare: an installed app's bars keep Bare's colors, not the page's theme color.
++        boolean useTabTheme = mUseAppModeUi && !mIsWebapp;
++        mBrowserServicesThemeColorProvider.setUseTabTheme(useTabTheme);
+         mBrowserControlsVisibilityManager.updateIsInAppMode(mUseAppModeUi);
+-        mStatusBarColorProvider.setUseTabThemeColor(mUseAppModeUi);
++        mStatusBarColorProvider.setUseTabThemeColor(useTabTheme);
+         mCustomTabOrientationController.setCanControlOrientation(mUseAppModeUi);
+     }
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/customtabs/features/CustomTabNavigationBarController.java b/chrome/android/java/src/org/chromium/chrome/browser/customtabs/features/CustomTabNavigationBarController.java
+index 1dddcaf9884..be9d92aa79b 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/customtabs/features/CustomTabNavigationBarController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/customtabs/features/CustomTabNavigationBarController.java
+@@ -14,6 +14,7 @@ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
+ import org.chromium.chrome.browser.customtabs.CustomTabsConnection;
+ import org.chromium.chrome.browser.ui.google_bottom_bar.GoogleBottomBarCoordinator;
++import org.chromium.components.browser_ui.styles.ChromeColors;
+ import org.chromium.ui.UiUtils;
+ import org.chromium.ui.edge_to_edge.EdgeToEdgeSystemBarColorHelper;
+ import org.chromium.ui.util.ColorUtils;
+@@ -86,8 +87,16 @@ public class CustomTabNavigationBarController {
+         }
+ 
+         Integer navigationBarColor = intentDataProvider.getColorProvider().getNavigationBarColor();
++        // Bare: an installed app's gesture bar strip matches its status bar, not a grey default.
++        if (navigationBarColor == null && intentDataProvider.isWebappOrWebApkActivity()) {
++            navigationBarColor =
++                    ChromeColors.getDefaultThemeColor(context, /* isIncognito= */ false);
++        }
+         Integer navigationBarDividerColor =
+                 intentDataProvider.getColorProvider().getNavigationBarDividerColor();
++        if (navigationBarDividerColor == null && intentDataProvider.isWebappOrWebApkActivity()) {
++            navigationBarDividerColor = navigationBarColor;
++        }
+         // TODO(crbug.com/465719853): Pass the CCT Top Bar Color in AGSA intent after Google Bottom Bar is
+         // launched
+         if (GoogleBottomBarCoordinator.isFeatureEnabled()
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappIntentDataProvider.java b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappIntentDataProvider.java
+index 9ebd6335553..f0857e1832a 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappIntentDataProvider.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappIntentDataProvider.java
+@@ -69,8 +69,9 @@ public class WebappIntentDataProvider extends BrowserServicesIntentDataProvider
+             WebappExtras webappExtras,
+             @Nullable WebApkExtras webApkExtras) {
+         mIntent = intent;
+-        mColorProvider = new ColorProviderImpl(toolbarColor, hasCustomToolbarColor);
+-        mDarkColorProvider = new ColorProviderImpl(darkToolbarColor, hasCustomDarkToolbarColor);
++        // Bare: installed apps take Bare's bar colors, not the site's theme color.
++        mColorProvider = new ColorProviderImpl(getDefaultToolbarColor(), false);
++        mDarkColorProvider = new ColorProviderImpl(getDefaultDarkToolbarColor(), false);
+         final Context context =
+                 new ContextThemeWrapper(
+                         ContextUtils.getApplicationContext(), ActivityUtils.getThemeId());

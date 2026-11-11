@@ -1,39 +1,73 @@
-From fd300e88dd3f3dfa5ef7354312066c31cfe2537b Mon Sep 17 00:00:00 2001
-From: Bare <git@barebrowser.org>
-Date: Sun, 8 Nov 2026 06:42:26 +0000
-Subject: [PATCH] Patch 0000119
-
----
- .../browser/chrome_content_browser_client.cc  |  2 +
- .../java/res/xml/theme_preferences.xml        |  5 ++
- .../settings/ThemeSettingsFragment.java       | 23 +++++++++
- .../strings/android_chrome_strings.grd        |  6 +++
- chrome/browser/ui/prefs/pref_watcher.cc       |  1 +
- chrome/browser/ui/prefs/prefs_tab_helper.cc   |  2 +
- chrome/common/pref_names.h                    |  8 ++++
- .../web_preferences_mojom_traits.cc           |  1 +
- .../common/web_preferences/web_preferences.h  |  4 ++
- .../web_preferences_mojom_traits.h            |  5 ++
- .../webpreferences/web_preferences.mojom      |  1 +
- third_party/blink/public/web/web_settings.h   |  1 +
- .../properties/longhands/longhands_custom.cc  |  2 +
- .../core/css/resolver/style_resolver.cc       |  1 +
- .../blink/renderer/core/css/style_engine.cc   |  5 +-
- .../blink/renderer/core/css/style_engine.h    |  4 ++
- .../core/exported/web_settings_impl.cc        |  4 ++
- .../core/exported/web_settings_impl.h         |  1 +
- .../renderer/core/exported/web_view_impl.cc   |  2 +
- .../blink/renderer/core/frame/settings.json5  | 10 ++++
- .../core/paint/paint_auto_dark_mode.h         |  3 +-
- .../style/computed_style_extra_fields.json5   | 14 ++++++
- .../graphics/dark_mode_color_filter.cc        | 16 +++++++
- .../graphics/dark_mode_color_filter.h         |  7 +++
- .../platform/graphics/dark_mode_filter.cc     | 48 +++++++++++++------
- .../platform/graphics/dark_mode_filter.h      | 12 +++--
- .../platform/graphics/graphics_context.cc     |  6 ++-
- .../platform/graphics/graphics_context.h      | 17 +++++--
- 28 files changed, 186 insertions(+), 25 deletions(-)
-
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index 9167f52a01f..5b331517422 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -167,6 +167,7 @@ import org.chromium.chrome.browser.modaldialog.TabModalLifetimeHandler;
+ import org.chromium.chrome.browser.multiwindow.MultiInstanceManager;
+ import org.chromium.chrome.browser.multiwindow.MultiInstanceManagerFactory;
+ import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
++import org.chromium.chrome.browser.night_mode.GlobalNightModeStateProviderHolder;
+ import org.chromium.chrome.browser.night_mode.SystemNightModeMonitor;
+ import org.chromium.chrome.browser.night_mode.WebContentsDarkModeController;
+ import org.chromium.chrome.browser.night_mode.WebContentsDarkModeMessageController;
+@@ -3473,16 +3474,19 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+             // Get values needed to check/enable auto dark for the current site.
+             GURL url = currentTab.getUrl();
+ 
+-            // Flip auto dark state.
+-            boolean isEnabled = WebContentsDarkModeController.isEnabledForUrl(currentProfile, url);
+-            WebContentsDarkModeController.setEnabledForUrl(currentProfile, url, !isEnabled);
++            // Flip auto dark state. Bare: in either theme, and with Darken websites off too.
++            boolean isEnabled = WebContentsDarkModeController.isDarkenedForUrl(currentProfile, url);
++            boolean globalDarkens =
++                    WebContentsDarkModeController.isGlobalUserSettingsEnabled(currentProfile)
++                            && GlobalNightModeStateProviderHolder.getInstance().isInNightMode();
++            WebContentsDarkModeController.setDarkenedForUrl(currentProfile, url, !isEnabled);
+             webContents.notifyRendererPreferenceUpdate();
+ 
+             WebContentsDarkModeController.recordAutoDarkUkm(webContents, !isEnabled);
+ 
+             // Show dialog informing user how to disable the feature globally and give feedback if
+             // disabling through the app menu for the nth time (determined by feature engagement).
+-            if (isEnabled) {
++            if (isEnabled && globalDarkens) {
+                 var modalDialogManager = getModalDialogManager();
+                 assert modalDialogManager != null;
+                 WebContentsDarkModeMessageController.attemptToShowDialog(
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
+index 53e4aa9f572..c251a443f9e 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
+@@ -1121,22 +1121,22 @@ public abstract class AppMenuPropertiesDelegateImpl implements AppMenuProperties
+     @VisibleForTesting(otherwise = VisibleForTesting.PROTECTED)
+     @Contract("null, _-> false")
+     public boolean shouldShowAutoDarkItem(@Nullable Tab currentTab, boolean isNativePage) {
+-        Profile profile = mTabModelSelector.getCurrentModel().getProfile();
+-        assert profile != null;
+         boolean isFlagEnabled =
+                 ChromeFeatureList.isEnabled(
+                         ChromeFeatureList.DARKEN_WEBSITES_CHECKBOX_IN_THEMES_SETTING);
+-        boolean isFeatureEnabled =
+-                WebContentsDarkModeController.isFeatureEnabled(mContext, profile);
+-
+-        return currentTab != null && !isNativePage && isFlagEnabled && isFeatureEnabled;
++        // Bare: on every web page, whatever the theme and the Darken websites setting, so any
++        // site can be darkened on its own.
++        return currentTab != null
++                && !isNativePage
++                && isFlagEnabled
++                && UrlUtilities.isHttpOrHttps(currentTab.getUrl());
+     }
+ 
+     /** Construct the ListItem for the auto darkening menu item. */
+     protected ListItem buildAutoDarkItem(Tab currentTab, boolean isNativePage, boolean showIcon) {
+         assert shouldShowAutoDarkItem(currentTab, isNativePage);
+         boolean isEnabled =
+-                WebContentsDarkModeController.isEnabledForUrl(
++                WebContentsDarkModeController.isDarkenedForUrl(
+                         assumeNonNull(mTabModelSelector.getCurrentModel().getProfile()),
+                         currentTab.getUrl());
+         return new ListItem(
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
 index 59c68ac35f1..512a993a352 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
@@ -62,6 +96,95 @@ index 8f0ff05bb21..425778770bc 100644
 +        android:summary="@string/bare_amoled_dark_backgrounds_summary" />
  </PreferenceScreen>
 \ No newline at end of file
+diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/WebContentsDarkModeController.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/WebContentsDarkModeController.java
+index 2ec6c177f6e..deb7b5cd874 100644
+--- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/WebContentsDarkModeController.java
++++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/WebContentsDarkModeController.java
+@@ -56,6 +56,50 @@ public class WebContentsDarkModeController {
+                     contentSettingValue);
+         }
+ 
++        /**
++         * Bare: whether this page is darkened right now. In the browser's dark theme the global
++         * setting and the site setting decide as before; in the light theme only a site the user
++         * ticked in the menu is darkened.
++         */
++        public boolean isDarkenedForUrl(BrowserContextHandle browserContextHandle, GURL url) {
++            if (GlobalNightModeStateProviderHolder.getInstance().isInNightMode()) {
++                return isEnabledForUrl(browserContextHandle, url);
++            }
++            return !url.isEmpty()
++                    && isEnabledForUrl(browserContextHandle, url)
++                    && hasSiteSetting(browserContextHandle, url);
++        }
++
++        /**
++         * Bare: the user ticked or unticked the menu row for this site. Where the global
++         * behaviour already darkens the site (dark theme with Darken websites on), on is no
++         * setting of its own and off is a block; everywhere else on is an allow of its own and
++         * off removes it.
++         */
++        public void setDarkenedForUrl(
++                BrowserContextHandle browserContextHandle, GURL url, boolean darken) {
++            boolean globalDarkens =
++                    isGlobalUserSettingsEnabled(browserContextHandle)
++                            && GlobalNightModeStateProviderHolder.getInstance().isInNightMode();
++            @ContentSetting int value;
++            if (darken) {
++                value = globalDarkens ? ContentSetting.DEFAULT : ContentSetting.ALLOW;
++            } else {
++                value = globalDarkens ? ContentSetting.BLOCK : ContentSetting.DEFAULT;
++            }
++            WebsitePreferenceBridge.setContentSettingDefaultScope(
++                    browserContextHandle,
++                    ContentSettingsType.AUTO_DARK_WEB_CONTENT,
++                    url,
++                    url,
++                    value);
++        }
++
++        private boolean hasSiteSetting(BrowserContextHandle browserContextHandle, GURL url) {
++            return !WebsitePreferenceBridge.isContentSettingGlobal(
++                    browserContextHandle, ContentSettingsType.AUTO_DARK_WEB_CONTENT, url, url);
++        }
++
+         public void setGlobalUserSettings(
+                 BrowserContextHandle browserContextHandle, boolean enabled) {
+             WebsitePreferenceBridge.setContentSettingEnabled(
+@@ -126,6 +170,17 @@ public class WebContentsDarkModeController {
+         sInstance.setEnabledForUrl(browserContextHandle, url, enabled);
+     }
+ 
++    /** Bare: whether the page at {@code url} is darkened right now, in either theme. */
++    public static boolean isDarkenedForUrl(BrowserContextHandle browserContextHandle, GURL url) {
++        return sInstance.isDarkenedForUrl(browserContextHandle, url);
++    }
++
++    /** Bare: darkens the site at {@code url}, or stops doing so, as the menu row asks. */
++    public static void setDarkenedForUrl(
++            BrowserContextHandle browserContextHandle, GURL url, boolean darken) {
++        sInstance.setDarkenedForUrl(browserContextHandle, url, darken);
++    }
++
+     /**
+      * Enable or disable the global user settings for auto dark mode. If the global settings is
+      * enabled, the web contents will be darkened by default if Chrome is in dark mode.
+diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/WebContentsThemeClient.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/WebContentsThemeClient.java
+index 2845a167de0..662ebf90cca 100644
+--- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/WebContentsThemeClient.java
++++ b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/WebContentsThemeClient.java
+@@ -49,8 +49,8 @@ public class WebContentsThemeClient {
+         Profile profile = Profile.fromWebContents(webContents);
+         if (profile == null) return false;
+ 
+-        return isNightModeEnabled(webContents)
+-                && WebContentsDarkModeController.isEnabledForUrl(
+-                        profile, webContents.getVisibleUrl());
++        // Bare: a site the user darkened from the menu is darkened in the light theme too.
++        return WebContentsDarkModeController.isDarkenedForUrl(
++                profile, webContents.getVisibleUrl());
+     }
+ }
 diff --git a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java b/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
 index abff7da55dc..cb2b681c7cd 100644
 --- a/chrome/browser/ui/android/night_mode/java/src/org/chromium/chrome/browser/night_mode/settings/ThemeSettingsFragment.java
@@ -273,7 +396,7 @@ index 7d8a52d982e..c583c15c7ee 100644
    FontDescription document_font_description = builder.GetFontDescription();
    document_font_description.SetLocale(
 diff --git a/third_party/blink/renderer/core/css/style_engine.cc b/third_party/blink/renderer/core/css/style_engine.cc
-index 362b1229a47..1886bdbb43c 100644
+index 362b1229a47..8d97587a2e1 100644
 --- a/third_party/blink/renderer/core/css/style_engine.cc
 +++ b/third_party/blink/renderer/core/css/style_engine.cc
 @@ -4559,6 +4559,8 @@ void StyleEngine::UpdateColorScheme() {
@@ -295,6 +418,34 @@ index 362b1229a47..1886bdbb43c 100644
      PlatformColorsChanged();
    }
  
+@@ -4709,9 +4712,11 @@ void StyleEngine::UpdateColorSchemeBackground(bool color_scheme_changed) {
+     // https://drafts.csswg.org/css-color-adjust/#color-scheme-effect
+     mojom::blink::ColorScheme root_color_scheme =
+         mojom::blink::ColorScheme::kLight;
++    bool root_forced = false;
+     if (auto* root_element = GetDocument().documentElement()) {
+       if (const ComputedStyle* style = root_element->GetComputedStyle()) {
+         root_color_scheme = style->UsedColorScheme();
++        root_forced = style->ColorSchemeForced();
+         if (RuntimeEnabledFeatures::
+                 AboutBlankPageRespectsDarkModeOnUserActionEnabled()) {
+           root_color_scheme = AdjustAboutBlankColorScheme(root_color_scheme);
+@@ -4720,10 +4725,14 @@ void StyleEngine::UpdateColorSchemeBackground(bool color_scheme_changed) {
+         root_color_scheme = mojom::blink::ColorScheme::kDark;
+       }
+     }
++    // Bare Browser: a page the browser darkens with black backgrounds asked
++    // for gets a black canvas too, not the usual dark grey.
+     color_scheme_background_ =
+         root_color_scheme == mojom::blink::ColorScheme::kLight
+             ? Color::kWhite
+-            : Color(0x12, 0x12, 0x12);
++            : (amoled_dark_backgrounds_enabled_ && root_forced
++                   ? Color::kBlack
++                   : Color(0x12, 0x12, 0x12));
+     if (GetDocument().IsInMainFrame()) {
+       if (root_color_scheme == mojom::blink::ColorScheme::kDark) {
+         use_color_adjust_background =
 diff --git a/third_party/blink/renderer/core/css/style_engine.h b/third_party/blink/renderer/core/css/style_engine.h
 index 752c72e16c2..224329167ea 100644
 --- a/third_party/blink/renderer/core/css/style_engine.h
@@ -357,6 +508,23 @@ index 60f576deabe..d4fae3fdefc 100644
    settings->SetBackgroundMediaPlaybackEnabled(
        prefs.background_media_playback_enabled);
  
+diff --git a/third_party/blink/renderer/core/frame/local_frame_view.cc b/third_party/blink/renderer/core/frame/local_frame_view.cc
+index b716abb7a4a..0ed07b312e0 100644
+--- a/third_party/blink/renderer/core/frame/local_frame_view.cc
++++ b/third_party/blink/renderer/core/frame/local_frame_view.cc
+@@ -2127,8 +2127,11 @@ Color LocalFrameView::DocumentBackgroundColor() {
+   if (background_source->Style().ColorSchemeForced()) {
+     // TODO(https://crbug.com/1351544): The DarkModeFilter operate on SkColor4f,
+     // and DocumentBackgroundColor should return an SkColor4f.
++    // Bare Browser: with black backgrounds on, report the colour that is
++    // painted, so the browser's own surfaces around the page match it.
+     doc_bg = Color::FromSkColor4f(EnsureDarkModeFilter().InvertColorIfNeeded(
+-        doc_bg.toSkColor4f(), DarkModeFilter::ElementRole::kBackground));
++        doc_bg.toSkColor4f(), DarkModeFilter::ElementRole::kBackground,
++        background_source->Style().AmoledDarkBackgrounds()));
+   }
+   if (blend_with_base)
+     return result.Blend(doc_bg);
 diff --git a/third_party/blink/renderer/core/frame/settings.json5 b/third_party/blink/renderer/core/frame/settings.json5
 index 86fe37696b0..f94cee0d402 100644
 --- a/third_party/blink/renderer/core/frame/settings.json5
@@ -392,6 +560,48 @@ index a21d1472cde..948bdfdb6d3 100644
  }
  
  inline AutoDarkMode PaintAutoDarkMode(DarkModeFilter::ElementRole role,
+diff --git a/third_party/blink/renderer/core/style/computed_style.cc b/third_party/blink/renderer/core/style/computed_style.cc
+index e60863bd850..b814f138564 100644
+--- a/third_party/blink/renderer/core/style/computed_style.cc
++++ b/third_party/blink/renderer/core/style/computed_style.cc
+@@ -3243,20 +3243,17 @@ void ComputedStyleBuilder::SetUsedColorScheme(
+   bool has_dark = flags & static_cast<ColorSchemeFlags>(ColorSchemeFlag::kDark);
+   bool has_light =
+       flags & static_cast<ColorSchemeFlags>(ColorSchemeFlag::kLight);
+-  bool has_only = flags & static_cast<ColorSchemeFlags>(ColorSchemeFlag::kOnly);
+   bool dark_scheme =
+       // Dark scheme because the preferred scheme is dark and color-scheme
+       // contains dark.
+       (has_dark && prefers_dark) ||
+       // Dark scheme because the the only recognized color-scheme is dark.
+       (has_dark && !has_light) ||
+-      // Dark scheme because we have a dark color-scheme override for forced
+-      // darkening and no 'only' which opts out.
+-      (force_dark && !has_only) ||
+-      // Typically, forced darkening should be used with a dark preferred
+-      // color-scheme. This is to support the FORCE_DARK_ONLY behavior from
+-      // WebView where this combination is passed to the renderer.
+-      (force_dark && !prefers_dark);
++      // Bare Browser: forced darkening is the user's own choice, so it wins
++      // over a page's 'only light'. A page that asks to stay light is darkened
++      // too. This also covers the FORCE_DARK_ONLY case below, where forced
++      // darkening comes with a light preferred color-scheme.
++      force_dark;
+ 
+   SetDarkColorScheme(dark_scheme);
+ 
+@@ -3269,8 +3266,9 @@ void ComputedStyleBuilder::SetUsedColorScheme(
+       // color-scheme. Typically, forced darkening should be used with a dark
+       // preferred color-scheme. This is to support the FORCE_DARK_ONLY
+       // behavior from WebView where this combination is passed to the
+-      // renderer.
+-      (force_dark && !prefers_dark);
++      // renderer. Bare Browser: a page that is dark by its own color-scheme
++      // is not inverted back to light.
++      (force_dark && !prefers_dark && !(has_dark && !has_light));
+ 
+   SetColorSchemeForced(forced_scheme);
+ 
 diff --git a/third_party/blink/renderer/core/style/computed_style_extra_fields.json5 b/third_party/blink/renderer/core/style/computed_style_extra_fields.json5
 index 96ccb3412f3..dc6ef1ea672 100644
 --- a/third_party/blink/renderer/core/style/computed_style_extra_fields.json5

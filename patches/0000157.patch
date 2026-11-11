@@ -1,30 +1,5 @@
-From 7e0470c373c94b709b416979683ce1f5c871c4a2 Mon Sep 17 00:00:00 2001
-From: Bare <git@barebrowser.org>
-Date: Sun, 8 Nov 2026 06:43:05 +0000
-Subject: [PATCH] Patch 0000157
-
----
- .../developer_private_functions.cc            | 233 +++++++++++++++++-
- .../developer_private_functions.h             |  52 ++++
- .../browser/extensions/extension_service.cc   |   7 +
- .../resources/extensions/manager.html.ts      |   2 +-
- .../browser/resources/extensions/manager.ts   |   7 +
- .../browser/resources/extensions/service.ts   |   4 +
- .../browser/resources/extensions/toolbar.css  |  51 ++--
- .../resources/extensions/toolbar.html.ts      |  30 +--
- .../browser/resources/extensions/toolbar.ts   | 108 ++++----
- .../ui/webui/extensions/extensions_ui.cc      |   6 +
- .../webui/extensions/extensions_ui_prefs.cc   |   9 +-
- .../extensions/api/developer_private.webidl   |   6 +
- .../extension_function_histogram_value.h      |   1 +
- extensions/browser/unpacked_installer.cc      |  21 ++
- extensions/browser/unpacked_installer.h       |  15 ++
- .../histograms/metadata/extensions/enums.xml  |   1 +
- .../definitions/developer_private.d.ts        |   1 +
- 17 files changed, 445 insertions(+), 109 deletions(-)
-
 diff --git a/chrome/browser/extensions/api/developer_private/developer_private_functions.cc b/chrome/browser/extensions/api/developer_private/developer_private_functions.cc
-index de7830e047b..4b8f464353a 100644
+index de7830e047b..cf06f9c5bd1 100644
 --- a/chrome/browser/extensions/api/developer_private/developer_private_functions.cc
 +++ b/chrome/browser/extensions/api/developer_private/developer_private_functions.cc
 @@ -21,6 +21,7 @@
@@ -35,17 +10,18 @@ index de7830e047b..4b8f464353a 100644
  #include "base/task/thread_pool.h"
  #include "chrome/browser/devtools/devtools_window.h"
  #include "chrome/browser/extensions/api/developer_private/developer_private_api.h"
-@@ -31,6 +32,9 @@
+@@ -31,6 +32,10 @@
  #include "chrome/browser/extensions/devtools_util.h"
  #include "chrome/browser/extensions/extension_commands_global_registry.h"
  #include "chrome/browser/extensions/extension_management.h"
 +#if BUILDFLAG(IS_ANDROID)
 +#include "chrome/browser/extensions/bare_bundled_extensions_loader.h"
++#include "chrome/browser/preferences/android/chrome_shared_preferences.h"
 +#endif
  #include "chrome/browser/extensions/extension_service.h"
  #include "chrome/browser/extensions/extension_tab_util.h"
  #include "chrome/browser/extensions/extension_ui_util.h"
-@@ -56,7 +60,9 @@
+@@ -56,7 +61,9 @@
  #include "components/signin/public/base/signin_switches.h"
  #include "components/sync/base/features.h"
  #include "content/public/common/drop_data.h"
@@ -55,7 +31,7 @@ index de7830e047b..4b8f464353a 100644
  #include "extensions/browser/disable_reason.h"
  #include "extensions/browser/extension_file_task_runner.h"
  #include "extensions/browser/extension_prefs.h"
-@@ -361,8 +367,9 @@ base::expected<void, std::string> SetDroppedPath(
+@@ -361,8 +368,9 @@ base::expected<void, std::string> SetDroppedPath(
  // Returns whether the filename perceived to the user ends with the extension.
  // Just using `path` is not enough because it might be a content URI that
  // doesn't have the `display_name` as a suffix.
@@ -67,7 +43,7 @@ index de7830e047b..4b8f464353a 100644
    return file_info.display_name.empty()
               ? file_info.path.MatchesExtension(extension)
               : file_info.display_name.MatchesExtension(extension);
-@@ -940,9 +947,11 @@ ExtensionFunction::ResponseAction DeveloperPrivateLoadUnpackedFunction::Run() {
+@@ -940,9 +948,11 @@ ExtensionFunction::ResponseAction DeveloperPrivateLoadUnpackedFunction::Run() {
      return RespondLater();
    }
  
@@ -81,7 +57,7 @@ index de7830e047b..4b8f464353a 100644
  }
  
  void DeveloperPrivateLoadUnpackedFunction::ShowSelectFileDialog() {
-@@ -989,7 +998,14 @@ void DeveloperPrivateLoadUnpackedFunction::FileSelected(
+@@ -989,7 +999,14 @@ void DeveloperPrivateLoadUnpackedFunction::FileSelected(
  }
  
  void DeveloperPrivateLoadUnpackedFunction::FileSelectionCanceled() {
@@ -97,7 +73,7 @@ index de7830e047b..4b8f464353a 100644
    // This isn't really an error, but we should keep it like this for
    // backward compatibility.
    Finish(Error(kFileSelectionCanceled));
-@@ -1013,12 +1029,39 @@ void DeveloperPrivateLoadUnpackedFunction::StartFileLoad(
+@@ -1013,12 +1030,39 @@ void DeveloperPrivateLoadUnpackedFunction::StartFileLoad(
    installer->set_be_noisy_on_failure(!fail_quietly_);
    installer->set_completion_callback(base::BindOnce(
        &DeveloperPrivateLoadUnpackedFunction::OnLoadComplete, this));
@@ -137,7 +113,7 @@ index de7830e047b..4b8f464353a 100644
  void DeveloperPrivateLoadUnpackedFunction::OnLoadComplete(
      const Extension* extension,
      const base::FilePath& file_path,
-@@ -1027,6 +1070,12 @@ void DeveloperPrivateLoadUnpackedFunction::OnLoadComplete(
+@@ -1027,6 +1071,12 @@ void DeveloperPrivateLoadUnpackedFunction::OnLoadComplete(
      Finish(NoArguments());
      return;
    }
@@ -150,7 +126,7 @@ index de7830e047b..4b8f464353a 100644
  
    if (!populate_error_) {
      Finish(Error(base::UTF16ToUTF8(error)));
-@@ -1056,6 +1105,173 @@ void DeveloperPrivateLoadUnpackedFunction::Finish(
+@@ -1056,6 +1106,198 @@ void DeveloperPrivateLoadUnpackedFunction::Finish(
    Release();  // Balanced in Run().
  }
  
@@ -289,17 +265,35 @@ index de7830e047b..4b8f464353a 100644
 +  }
 +#endif  // BUILDFLAG(IS_ANDROID)
 +
-+  auto prompt = std::make_unique<ExtensionInstallPrompt>(
-+      web_contents, std::make_unique<extensions::InstallPromptData>(
-+                        extensions::InstallPromptData::UNSET_PROMPT_TYPE));
++  // With "Install .crx files without asking" on in Bare's settings, the file
++  // installs once its signature has been checked, with no dialog. Every check
++  // before this point and the installer's own checks still apply.
++#if BUILDFLAG(IS_ANDROID)
++  base::android::SharedPreferencesManager shared_prefs =
++      android::shared_preferences::GetChromeSharedPreferences();
++  quick_ = shared_prefs.ReadBoolean("Bare.Extensions.QuickCrx", false);
++#endif
++  std::unique_ptr<ExtensionInstallPrompt> prompt;
++  if (!quick_) {
++    prompt = std::make_unique<ExtensionInstallPrompt>(
++        web_contents, std::make_unique<extensions::InstallPromptData>(
++                          extensions::InstallPromptData::UNSET_PROMPT_TYPE));
++  }
 +  scoped_refptr<CrxInstaller> crx_installer =
 +      CrxInstaller::Create(browser_context(), std::move(prompt));
++  if (quick_) {
++    // No one to ask, so the permissions it asks for are granted as if the
++    // dialog had been accepted. An id on the malware blocklist is still never
++    // loaded.
++    crx_installer->set_allow_silent_install(true);
++  }
 +  crx_installer->set_error_on_unsupported_requirements(true);
 +  crx_installer->set_off_store_install_allow_reason(
 +      CrxInstaller::OffStoreInstallAllowedFromSettingsPage);
 +  crx_installer->set_install_immediately(true);
 +  crx_installer->AddInstallerCallback(
 +      base::BindOnce(&DeveloperPrivateLoadCrxFunction::OnInstalled, this));
++  installer_ = crx_installer;
 +  // The picked document itself, never deleted: the installer copies it into a
 +  // temporary directory of its own before unpacking.
 +  crx_installer->InstallCrx(path);
@@ -307,6 +301,13 @@ index de7830e047b..4b8f464353a 100644
 +
 +void DeveloperPrivateLoadCrxFunction::OnInstalled(
 +    const std::optional<CrxInstallError>& error) {
++  scoped_refptr<CrxInstaller> installer = std::move(installer_);
++  if (!error && quick_ && installer && installer->extension()) {
++    // The page says what was added, since no dialog did.
++    Finish(WithArguments(
++        base::StrCat({"added:", installer->extension()->name()})));
++    return;
++  }
 +  if (!error || (error->type() == CrxInstallErrorType::OTHER &&
 +                 (error->detail() == CrxInstallErrorDetail::USER_CANCELED ||
 +                  error->detail() == CrxInstallErrorDetail::USER_ABORTED))) {
@@ -324,7 +325,7 @@ index de7830e047b..4b8f464353a 100644
  DeveloperPrivateInstallDroppedFileFunction::
      DeveloperPrivateInstallDroppedFileFunction() = default;
  DeveloperPrivateInstallDroppedFileFunction::
-@@ -1082,6 +1298,12 @@ DeveloperPrivateInstallDroppedFileFunction::Run() {
+@@ -1082,6 +1324,12 @@ DeveloperPrivateInstallDroppedFileFunction::Run() {
      return RespondNow(Error("No dragged path"));
    }
  
@@ -337,7 +338,7 @@ index de7830e047b..4b8f464353a 100644
    if (MatchesExtension(file, FILE_PATH_LITERAL(".zip"))) {
      ExtensionRegistrar* registrar = ExtensionRegistrar::Get(browser_context());
      ZipFileInstaller::Create(
-@@ -1111,6 +1333,7 @@ DeveloperPrivateInstallDroppedFileFunction::Run() {
+@@ -1111,6 +1359,7 @@ DeveloperPrivateInstallDroppedFileFunction::Run() {
    // the load succeeded or failed. For now, that's unnecessary, and just adds
    // complexity.
    return RespondNow(NoArguments());
@@ -346,7 +347,7 @@ index de7830e047b..4b8f464353a 100644
  
  DeveloperPrivateNotifyDragInstallInProgressFunction::
 diff --git a/chrome/browser/extensions/api/developer_private/developer_private_functions.h b/chrome/browser/extensions/api/developer_private/developer_private_functions.h
-index 187c9cf3cf7..9ed2362f578 100644
+index 187c9cf3cf7..46317ab5703 100644
 --- a/chrome/browser/extensions/api/developer_private/developer_private_functions.h
 +++ b/chrome/browser/extensions/api/developer_private/developer_private_functions.h
 @@ -11,11 +11,13 @@
@@ -363,7 +364,18 @@ index 187c9cf3cf7..9ed2362f578 100644
  #include "extensions/browser/load_error_reporter.h"
  #include "extensions/browser/webstore_install_result.h"
  #include "extensions/buildflags/buildflags.h"
-@@ -339,6 +341,11 @@ class DeveloperPrivateLoadUnpackedFunction
+@@ -41,6 +43,10 @@
+ 
+ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
++namespace extensions {
++class CrxInstaller;
++}  // namespace extensions
++
+ namespace extensions::api {
+ 
+ class DeveloperPrivateAPIFunction : public ExtensionFunction {
+@@ -339,6 +345,11 @@ class DeveloperPrivateLoadUnpackedFunction
    // Starts loading the given `file_path`.
    void StartFileLoad(const base::FilePath file_path);
  
@@ -375,7 +387,7 @@ index 187c9cf3cf7..9ed2362f578 100644
    // Called when `file_path` load is completed
    void OnLoadComplete(const Extension* extension,
                        const base::FilePath& file_path,
-@@ -363,6 +370,9 @@ class DeveloperPrivateLoadUnpackedFunction
+@@ -363,6 +374,9 @@ class DeveloperPrivateLoadUnpackedFunction
    // The identifier for the selected path when retrying an unpacked load.
    DeveloperPrivateAPI::UnpackedRetryId retry_guid_;
  
@@ -385,7 +397,7 @@ index 187c9cf3cf7..9ed2362f578 100644
    // The dialog with the select file picker.
    scoped_refptr<ui::SelectFileDialog> select_file_dialog_;
  
-@@ -373,6 +383,48 @@ class DeveloperPrivateLoadUnpackedFunction
+@@ -373,6 +387,54 @@ class DeveloperPrivateLoadUnpackedFunction
    std::optional<ui::SelectedFileInfo> selected_file_for_testing_;
  };
  
@@ -429,6 +441,12 @@ index 187c9cf3cf7..9ed2362f578 100644
 +  void Finish(ResponseValue response_value);
 +
 +  scoped_refptr<ui::SelectFileDialog> select_file_dialog_;
++
++  // The running install, kept to name what it added.
++  scoped_refptr<CrxInstaller> installer_;
++
++  // Whether the install runs without the dialog (Bare's setting).
++  bool quick_ = false;
 +};
 +
  class DeveloperPrivateInstallDroppedFileFunction
@@ -662,7 +680,7 @@ index f2de5b086dd..8d60b4f2f92 100644
    // clang-format on
  }
 diff --git a/chrome/browser/resources/extensions/toolbar.ts b/chrome/browser/resources/extensions/toolbar.ts
-index 178a09a2e5a..399f6ec1b5e 100644
+index 178a09a2e5a..a1593013369 100644
 --- a/chrome/browser/resources/extensions/toolbar.ts
 +++ b/chrome/browser/resources/extensions/toolbar.ts
 @@ -3,16 +3,14 @@
@@ -761,7 +779,7 @@ index 178a09a2e5a..399f6ec1b5e 100644
    focusSearchInput() {
      this.$.toolbar.getSearchField().showAndFocus();
    }
-@@ -135,51 +139,47 @@ export class ExtensionsToolbarElement extends ExtensionsToolbarElementBase {
+@@ -135,51 +139,52 @@ export class ExtensionsToolbarElement extends ExtensionsToolbarElementBase {
      return this.$.toolbar.getSearchField().isSearchFocused();
    }
  
@@ -798,9 +816,14 @@ index 178a09a2e5a..399f6ec1b5e 100644
 +    }
 +    this.loading_ = true;
 +    this.delegate.loadCrx()
-+        .then(error => {
-+          if (error) {
-+            this.showMessage_(this.i18n('toolbarLoadCrxFailed'), error);
++        .then(result => {
++          if (result && result.startsWith('added:')) {
++            const toastManager = getToastManager();
++            toastManager.duration = TOAST_DURATION_MS;
++            toastManager.show(
++                this.i18n('toolbarLoadCrxAdded', result.slice('added:'.length)));
++          } else if (result) {
++            this.showMessage_(this.i18n('toolbarLoadCrxFailed'), result);
 +          }
 +        })
 +        .finally(() => {
@@ -844,7 +867,7 @@ index 178a09a2e5a..399f6ec1b5e 100644
      this.delegate.loadUnpacked()
          .then((success) => {
            if (success) {
-@@ -190,6 +190,9 @@ export class ExtensionsToolbarElement extends ExtensionsToolbarElementBase {
+@@ -190,6 +195,9 @@ export class ExtensionsToolbarElement extends ExtensionsToolbarElementBase {
          })
          .catch(loadError => {
            this.fire('load-error', loadError);
@@ -854,7 +877,7 @@ index 178a09a2e5a..399f6ec1b5e 100644
          });
      chrome.metricsPrivate.recordUserAction('Options_LoadUnpackedExtension');
    }
-@@ -201,7 +204,6 @@ export class ExtensionsToolbarElement extends ExtensionsToolbarElementBase {
+@@ -201,7 +209,6 @@ export class ExtensionsToolbarElement extends ExtensionsToolbarElementBase {
  
    protected onPackDialogClose_() {
      this.showPackDialog_ = false;
@@ -863,10 +886,10 @@ index 178a09a2e5a..399f6ec1b5e 100644
  
    protected onUpdateNowClick_() {
 diff --git a/chrome/browser/ui/webui/extensions/extensions_ui.cc b/chrome/browser/ui/webui/extensions/extensions_ui.cc
-index 0513e23fd14..723277c4eec 100644
+index 0513e23fd14..51a047f2702 100644
 --- a/chrome/browser/ui/webui/extensions/extensions_ui.cc
 +++ b/chrome/browser/ui/webui/extensions/extensions_ui.cc
-@@ -433,6 +433,12 @@ content::WebUIDataSource* CreateAndAddExtensionsSource(Profile* profile,
+@@ -433,6 +433,13 @@ content::WebUIDataSource* CreateAndAddExtensionsSource(Profile* profile,
        {"pendingChangeWarning", IDS_PENDING_CHANGE_WARNING},
    };
    source->AddLocalizedStrings(kLocalizedStrings);
@@ -876,6 +899,7 @@ index 0513e23fd14..723277c4eec 100644
 +  source->AddString("toolbarComingSoon", u"Coming soon");
 +  source->AddString("toolbarLoadCrx", u"Load CRX");
 +  source->AddString("toolbarLoadCrxFailed", u"Extension not installed");
++  source->AddString("toolbarLoadCrxAdded", u"Added $1");
  
    // Add localized generic strings that need '&' to be removed from them.
    webui::AddLocalizedString(source, "edit", IDS_EDIT);
@@ -906,16 +930,18 @@ index aab48570153..a1272cf7665 100644
        prefs::kExtensionsPinnedByDefault, true,
        user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
 diff --git a/chrome/common/extensions/api/developer_private.webidl b/chrome/common/extensions/api/developer_private.webidl
-index 7969e26c3bf..1f4b3ca5050 100644
+index 7969e26c3bf..93138f7eb29 100644
 --- a/chrome/common/extensions/api/developer_private.webidl
 +++ b/chrome/common/extensions/api/developer_private.webidl
-@@ -674,6 +674,12 @@ interface DeveloperPrivate {
+@@ -674,6 +674,14 @@ interface DeveloperPrivate {
    // page.
    static Promise<undefined> installDroppedFile();
  
 +  // Lets the user pick a packed extension file and installs it, with the usual
-+  // confirmation. Resolves with a message saying why nothing was installed, or
-+  // with nothing when the extension was installed or the user cancelled.
++  // confirmation. Resolves with a message saying why nothing was installed,
++  // with "added:" and the extension's name when it was installed without the
++  // confirmation (Bare's setting), or with nothing when the extension was
++  // installed or the user cancelled.
 +  // |PromiseValue|: error
 +  static Promise<DOMString?> loadCrx();
 +

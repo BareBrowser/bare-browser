@@ -1,8 +1,32 @@
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java
-index 824853f7408..7554c85dd0e 100644
+index 824853f7408..270f44e358a 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/externalnav/ExternalNavigationDelegateImpl.java
-@@ -376,6 +376,20 @@ public class ExternalNavigationDelegateImpl implements ExternalNavigationDelegat
+@@ -13,6 +13,7 @@ import android.content.pm.PackageManager;
+ import android.content.pm.ResolveInfo;
+ import android.net.Uri;
+ import android.os.Build;
++import android.view.View;
+ 
+ import org.chromium.base.ApkInfo;
+ import org.chromium.base.ApplicationState;
+@@ -25,6 +26,7 @@ import org.chromium.base.PackageManagerUtils;
+ import org.chromium.base.ResettersForTesting;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.ChromeTabbedActivity2;
+ import org.chromium.chrome.browser.IntentHandler;
+ import org.chromium.chrome.browser.actor.ActorKeyedServiceFactory;
+@@ -43,6 +45,7 @@ import org.chromium.chrome.browser.tab.TabObserver;
+ import org.chromium.chrome.browser.tabmodel.TabClosureParams;
+ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+ import org.chromium.chrome.browser.tabmodel.TabModelSelectorSupplier;
++import org.chromium.components.browser_ui.widget.RiseSheet;
+ import org.chromium.components.embedder_support.util.UrlConstants;
+ import org.chromium.components.embedder_support.util.UrlUtilities;
+ import org.chromium.components.external_intents.ExternalNavigationDelegate;
+@@ -376,6 +379,58 @@ public class ExternalNavigationDelegateImpl implements ExternalNavigationDelegat
          return BareOpenInAppsMode.asksFirst(BareOpenInAppsMode.get());
      }
  
@@ -20,14 +44,69 @@ index 824853f7408..7554c85dd0e 100644
 +        return BareOpenInAppsMode.asksFirst(BareOpenInAppsMode.get());
 +    }
 +
++    @Override
++    public boolean isCurrentPage(GURL url) {
++        if (url.isEmpty() || !hasValidTab()) return false;
++        GURL current = mTab.getUrl();
++        if (UrlUtilities.urlsMatchIgnoringFragments(current.getSpec(), url.getSpec())) return true;
++        // A store page names itself as the fallback with extra parameters; the same app's page
++        // is the page already shown.
++        String app = playStoreAppId(url);
++        return app != null && app.equals(playStoreAppId(current));
++    }
++
++    private static @Nullable String playStoreAppId(GURL url) {
++        if (!"play.google.com".equals(url.getHost())
++                || !url.getPath().startsWith("/store/apps/details")) {
++            return null;
++        }
++        String app = UrlUtilities.getValueForKeyInQuery(url, "id");
++        return app == null || app.isEmpty() ? null : app;
++    }
++
++    @Override
++    public void onAppLaunchHeld(Runnable openAnyway) {
++        if (!hasValidTab()) return;
++        WindowAndroid window = mTab.getWindowAndroid();
++        Activity activity = window == null ? null : window.getActivity().get();
++        if (activity == null || activity.isFinishing()) return;
++        View root = activity.getWindow().getDecorView();
++        // Shown after the navigation has been decided, so the card does not hold it up.
++        root.post(
++                () ->
++                        RiseSheet.showMessage(
++                                root,
++                                activity.getString(R.string.bare_open_app_held),
++                                activity.getString(R.string.bare_open_app_anyway),
++                                openAnyway,
++                                null));
++    }
++
      /**
       * Sets the {@link TabLaunchType} for this delegate for testing purposes. This has no effect on
       * the related Tab launch type.
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index fc2132a1520..3acbec1bd55 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4375,6 +4375,12 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_OPEN_LINKS_IN_APPS_NEVER" desc="Setting value: links stay in the browser.">
+         Never
+       </message>
++      <message name="IDS_BARE_OPEN_APP_HELD" desc="Short message shown when a page tried to open an app and the Open links in apps setting kept it in the browser.">
++        Bare kept this link from opening an app.
++      </message>
++      <message name="IDS_BARE_OPEN_APP_ANYWAY" desc="Button on the message about a link kept from opening an app. Opens the app now.">
++        Open anyway
++      </message>
+       <message name="IDS_BARE_TAB_VIEW_TITLE" desc="Title of the setting for whether the tab switcher shows tabs as a grid of cards or as a list of rows.">
+         Tab view
+       </message>
 diff --git a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java
-index c1de756ee9e..42e89a39401 100644
+index c1de756ee9e..983517d0288 100644
 --- a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java
 +++ b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationDelegate.java
-@@ -240,4 +240,24 @@ public interface ExternalNavigationDelegate {
+@@ -240,4 +240,35 @@ public interface ExternalNavigationDelegate {
      default boolean shouldAskBeforeLeavingForApp(GURL url) {
          return false;
      }
@@ -51,12 +130,39 @@ index c1de756ee9e..42e89a39401 100644
 +    default boolean shouldAskBeforeLinkOpensApp() {
 +        return false;
 +    }
++
++    /** Whether {@code url} is the page the tab shows now, not counting the part after #. */
++    default boolean isCurrentPage(GURL url) {
++        return false;
++    }
++
++    /**
++     * Tells the user that a link was kept from opening an app, with a way to open it anyway.
++     * Called once for each launch {@link #allowLinkToOpenApp} holds.
++     */
++    default void onAppLaunchHeld(Runnable openAnyway) {}
  }
 diff --git a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
-index 5ad4e6ec9c8..2e156a69d80 100644
+index 5ad4e6ec9c8..50ba841bc89 100644
 --- a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
 +++ b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
-@@ -705,6 +705,11 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -35,6 +35,7 @@ import android.webkit.WebView;
+ import androidx.annotation.IntDef;
+ import androidx.annotation.VisibleForTesting;
+ 
++import org.chromium.base.Callback;
+ import org.chromium.base.CommandLine;
+ import org.chromium.base.ContextUtils;
+ import org.chromium.base.IntentUtils;
+@@ -42,6 +43,7 @@ import org.chromium.base.Log;
+ import org.chromium.base.PackageManagerUtils;
+ import org.chromium.base.PathUtils;
+ import org.chromium.base.RequiredCallback;
++import org.chromium.base.ThreadUtils;
+ import org.chromium.base.metrics.RecordHistogram;
+ import org.chromium.base.metrics.RecordUserAction;
+ import org.chromium.build.BuildConfig;
+@@ -705,6 +707,23 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
      @VisibleForTesting
      protected @Nullable OpenInAppDialogDelegate mOpenInAppDialogDelegate;
  
@@ -65,10 +171,22 @@ index 5ad4e6ec9c8..2e156a69d80 100644
 +    // message the user answered.
 +    private boolean mDecidingNavigation;
 +
++    // Bare: when the open-in-apps rule last held a launch. A page that tries again on its own
++    // soon after is left where it is, so it cannot reload itself in a loop through its fallback
++    // address. The launch itself may differ each time (store pages add a fresh token), so only
++    // the time and the missing tap count.
++    private static final long HELD_REPEAT_MS = 10_000;
++    private long mLastHeldAtMs = -HELD_REPEAT_MS;
++    // Set while deciding a navigation whose launch was held as a repeat: nothing loads.
++    private boolean mStayForHeldRepeat;
++    // Set while "Open anyway" starts a held launch. That navigation was answered long ago, so
++    // nothing the launch does afterwards may answer it again.
++    private boolean mOpeningHeldLaunch;
++
      @VisibleForTesting
      protected @Nullable DigitalCredentialsWarningDialogDelegate
              mDigitalCredentialsWarningDialogDelegate;
-@@ -768,17 +773,27 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -768,17 +787,36 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
          MutableBoolean canLaunchExternalFallbackResult = new MutableBoolean();
  
          long time = SystemClock.elapsedRealtime();
@@ -82,6 +200,7 @@ index 5ad4e6ec9c8..2e156a69d80 100644
 -        if (result.getResultType() == OverrideUrlLoadingResultType.NO_OVERRIDE) {
 +        OverrideUrlLoadingResult result;
 +        mDecidingNavigation = true;
++        mStayForHeldRepeat = false;
 +        try {
              result =
 -                    handleFallbackUrl(
@@ -97,16 +216,24 @@ index 5ad4e6ec9c8..2e156a69d80 100644
 +                    SystemClock.elapsedRealtime() - time);
 +
 +            if (result.getResultType() == OverrideUrlLoadingResultType.NO_OVERRIDE) {
-+                result =
-+                        handleFallbackUrl(
-+                                params, browserFallbackUrl, canLaunchExternalFallbackResult.get());
++                // Bare: a fallback that is the page already shown would only load it again, and
++                // the page would try the same launch again, over and over.
++                if (mStayForHeldRepeat || mDelegate.isCurrentPage(browserFallbackUrl)) {
++                    result = stayOnPage(params);
++                } else {
++                    result =
++                            handleFallbackUrl(
++                                    params,
++                                    browserFallbackUrl,
++                                    canLaunchExternalFallbackResult.get());
++                }
 +            }
 +        } finally {
 +            mDecidingNavigation = false;
          }
          if (debug()) printDebugShouldOverrideUrlLoadingResultType(result);
  
-@@ -840,7 +855,10 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -840,7 +878,10 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
                          == OverrideUrlLoadingResultType.OVERRIDE_WITH_EXTERNAL_INTENT) {
                      result = OverrideUrlLoadingResult.forExternalFallbackUrl();
                  }
@@ -118,7 +245,7 @@ index 5ad4e6ec9c8..2e156a69d80 100644
              }
          }
  
-@@ -1623,6 +1641,7 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -1623,6 +1664,7 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
       */
      private boolean startIncognitoIntent(
              ExternalNavigationParams params, Intent intent, GURL fallbackUrl) {
@@ -126,20 +253,21 @@ index 5ad4e6ec9c8..2e156a69d80 100644
          Context context = mDelegate.getContext();
          if (!canLaunchIncognitoIntent(intent, context)) return false;
          assumeNonNull(context);
-@@ -2269,6 +2288,12 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -2269,6 +2311,13 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
                  resumeUrl = intentTargetUrl;
              }
          }
 +        // An app's own scheme, or a store link for an app that is not installed, has no page
-+        // here to resume, so the current page stays.
-+        if (!UrlUtilities.isAcceptedScheme(resumeUrl)) {
++        // here to resume, so the current page stays. So does the page itself: loading it again
++        // would only ask the same question again.
++        if (!UrlUtilities.isAcceptedScheme(resumeUrl) || mDelegate.isCurrentPage(resumeUrl)) {
 +            callback.onResult(AsyncActionTakenParams.forNoAction());
 +            return;
 +        }
          callback.onResult(AsyncActionTakenParams.forNavigate(resumeUrl, params));
      }
  
-@@ -2547,9 +2572,10 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -2547,9 +2596,10 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
              if (debug()) Log.i(TAG, "Incognito intent to Play Store.");
              return OverrideUrlLoadingResult.forAsyncAction();
          } else {
@@ -152,7 +280,7 @@ index 5ad4e6ec9c8..2e156a69d80 100644
          }
      }
  
-@@ -2614,6 +2640,10 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -2614,6 +2664,10 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
              ExternalNavigationParams params) {
          String packageName = pickWebApkIfSoleIntentHandler(params, resolvingInfos);
          if (packageName == null) return false;
@@ -163,7 +291,7 @@ index 5ad4e6ec9c8..2e156a69d80 100644
  
          if (mDelegate.shouldLaunchNewWindow(params)) {
              if (debug()) Log.i(TAG, "Launching WebAPK in a new window");
-@@ -2786,6 +2816,17 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -2786,6 +2840,17 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
              @Nullable ResolveActivitySupplier resolveActivity,
              @Nullable GURL browserFallbackUrl,
              @Nullable GURL intentTargetUrl) {
@@ -181,7 +309,7 @@ index 5ad4e6ec9c8..2e156a69d80 100644
          // https://crbug.com/330555390. If we've launched an app on the current redirect chain, we
          // should never launch a second one.
          if (params.getRedirectHandler().isOnNavigation()) {
-@@ -2814,6 +2855,89 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -2814,6 +2879,158 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
          return doStartActivity(intent, context);
      }
  
@@ -212,6 +340,26 @@ index 5ad4e6ec9c8..2e156a69d80 100644
 +                intentTargetUrl != null ? intentTargetUrl : new GURL(intent.getDataString());
 +
 +        if (!mDelegate.allowLinkToOpenApp()) {
++            // Bare: the user hears about a held launch once. Another one soon after without a
++            // tap is the page retrying by itself: it is dropped quietly.
++            long now = SystemClock.elapsedRealtime();
++            boolean repeat = now - mLastHeldAtMs < HELD_REPEAT_MS && !params.hasUserGesture();
++            mLastHeldAtMs = now;
++            if (repeat) {
++                if (debug()) Log.i(TAG, "Held app launch tried again, page left as it is.");
++                mStayForHeldRepeat = true;
++                return OverrideUrlLoadingResult.forNoOverride();
++            }
++            mDelegate.onAppLaunchHeld(
++                    () ->
++                            openHeldLaunch(
++                                    intent,
++                                    params,
++                                    requiresIntentChooser,
++                                    resolvingInfos,
++                                    resolveActivity,
++                                    browserFallbackUrl,
++                                    intentTargetUrl));
 +            // The fallback address, when there is one, loads after this returns.
 +            if (UrlUtilities.hasIntentScheme(params.getUrl())
 +                    && fallbackUrl.isEmpty()
@@ -234,6 +382,55 @@ index 5ad4e6ec9c8..2e156a69d80 100644
 +                    targetUrl);
 +        }
 +        return null;
++    }
++
++    /** Bare: opens a launch the open-in-apps rule held, after the user asked for it. */
++    private void openHeldLaunch(
++            Intent intent,
++            ExternalNavigationParams params,
++            boolean requiresIntentChooser,
++            @Nullable QueryIntentActivitiesSupplier resolvingInfos,
++            @Nullable ResolveActivitySupplier resolveActivity,
++            @Nullable GURL browserFallbackUrl,
++            @Nullable GURL intentTargetUrl) {
++        // The navigation that held it is over by now; a launch from the same chain must not be
++        // refused as a second one.
++        if (params.getRedirectHandler().isOnNavigation()) params.getRedirectHandler().clear();
++        mLastHeldAtMs = -HELD_REPEAT_MS;
++        mOpeningHeldLaunch = true;
++        try {
++            startActivity(
++                    intent,
++                    params,
++                    requiresIntentChooser,
++                    resolvingInfos != null
++                            ? resolvingInfos
++                            : new QueryIntentActivitiesSupplier(intent),
++                    resolveActivity != null ? resolveActivity : new ResolveActivitySupplier(intent),
++                    browserFallbackUrl,
++                    intentTargetUrl);
++        } finally {
++            mOpeningHeldLaunch = false;
++        }
++    }
++
++    /**
++     * Bare: the result that leaves the current page as it is. An intent: or app address is not
++     * loaded by the browser, so letting it through does nothing; a web address is stopped through
++     * the async path, which the tab answers with no action.
++     */
++    private OverrideUrlLoadingResult stayOnPage(ExternalNavigationParams params) {
++        if (!UrlUtilities.isAcceptedScheme(params.getUrl())
++                || params.getRequiredAsyncActionTakenCallback() == null) {
++            return OverrideUrlLoadingResult.forNoOverride();
++        }
++        // After shouldOverrideUrlLoading() returns, so the callback answered is the one it set.
++        ThreadUtils.postOnUiThread(
++                () -> {
++                    var callback = params.getRequiredAsyncActionTakenCallback();
++                    if (callback != null) callback.onResult(AsyncActionTakenParams.forNoAction());
++                });
++        return OverrideUrlLoadingResult.forAsyncAction();
 +    }
 +
 +    /** Whether an unconfirmed launch is held, so no prompt about it should be shown either. */
@@ -271,7 +468,40 @@ index 5ad4e6ec9c8..2e156a69d80 100644
      private OverrideUrlLoadingResult doStartActivity(Intent intent, Context context) {
          // Only touches disk on Kitkat. See http://crbug.com/617725 for more context.
          StrictMode.ThreadPolicy oldPolicy = StrictMode.allowThreadDiskWrites();
-@@ -2987,6 +3111,10 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+@@ -2915,6 +3132,11 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+             pickerIntent.putExtra(Intent.EXTRA_SHORTCUT_ICON_RESOURCE, icons);
+         }
+ 
++        // Bare: a held launch opened from the "Open anyway" card has no navigation waiting for
++        // the chooser's answer; its callback is unset or already used. The chooser still opens
++        // the app picked, and backing out or picking this app leaves the page as it is.
++        final boolean answersNavigation = !mOpeningHeldLaunch;
++
+         // Call startActivityForResult on the PICK_ACTIVITY intent, which will set the component of
+         // the data result to the component of the chosen app.
+         WindowAndroid windowAndroid = assumeNonNull(mDelegate.getWindowAndroid());
+@@ -2923,9 +3145,17 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+                 new WindowAndroid.IntentCallback() {
+                     @Override
+                     public void onIntentCompleted(int resultCode, @Nullable Intent data) {
+-                        RequiredCallback<AsyncActionTakenParams> callback =
+-                                params.getRequiredAsyncActionTakenCallback();
+-                        assert callback != null;
++                        RequiredCallback<AsyncActionTakenParams> navigationCallback =
++                                answersNavigation
++                                        ? params.getRequiredAsyncActionTakenCallback()
++                                        : null;
++                        assert navigationCallback != null || !answersNavigation;
++                        Callback<AsyncActionTakenParams> callback =
++                                result -> {
++                                    if (navigationCallback != null) {
++                                        navigationCallback.onResult(result);
++                                    }
++                                };
+                         // If |data| is null, the user backed out of the intent chooser.
+                         if (data == null) {
+                             callback.onResult(AsyncActionTakenParams.forNoAction());
+@@ -2987,6 +3217,10 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
          // For URLs the browser supports, we shouldn't have reached here.
          assert isExternalProtocol;
  

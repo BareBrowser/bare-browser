@@ -1,0 +1,117 @@
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+index 8f21e1d3f9182..ffc37f6d075d1 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+@@ -597,18 +597,31 @@ class AppMenu implements OnKeyListener {
+                 && !DeviceInfo.isDesktop()
+                 && context.getResources().getConfiguration().smallestScreenWidthDp < 600) {
+             View root = anchorView.getRootView();
+-            int windowBottom = BareMenuSheet.toolbarTop(root, visibleDisplayFrame.bottom);
+-            int windowHeight = Math.max(1, windowBottom - visibleDisplayFrame.top);
++            int barTop = BareMenuSheet.toolbarTop(root, -1);
++            int visibleBottom = barTop >= 0 ? barTop : visibleDisplayFrame.bottom;
++            // The window starts at the top of the screen so the dim covers the status bar too.
++            // With no toolbar below it, it also runs to the bottom of the screen and the sheet
++            // carries on behind the navigation bar.
++            int windowBottom = barTop >= 0 ? barTop : Math.max(visibleBottom, root.getHeight());
++            int bottomInset = windowBottom - visibleBottom;
++            int sheetHeight =
++                    Math.round(
++                                    Math.max(1, visibleBottom - visibleDisplayFrame.top)
++                                            * BareMenuSheet.HEIGHT)
++                            + bottomInset;
+             popup.setWidth(visibleDisplayFrame.width());
+-            popup.setHeight(windowHeight);
++            popup.setHeight(Math.max(1, windowBottom));
++            popup.setClippingEnabled(false);
++            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) popup.setIsLaidOutInScreen(true);
+             popup.setAnimationStyle(0);
+-            position = new int[] {visibleDisplayFrame.left, visibleDisplayFrame.top};
++            position = new int[] {visibleDisplayFrame.left, 0};
+             mSheet =
+                     new BareMenuSheet(
+                             context,
+                             contentView,
+                             assumeNonNull(mListView),
+-                            Math.round(windowHeight * BareMenuSheet.HEIGHT),
++                            sheetHeight,
++                            bottomInset,
+                             BareMenuSheet.toolbarColor(root, context),
+                             this::dismiss,
+                             new BareMenuSheet.MoveHandler() {
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+index 7314cafedbe23..cdd1054731f20 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+@@ -59,6 +59,7 @@ final class BareMenuSheet {
+     private final ListView mList;
+     private final View mScrim;
+     private final int mHeight;
++    private final int mBottomInset;
+     private int mCompactY;
+     private final Runnable mDismiss;
+     private final Frame mFrame;
+@@ -77,6 +78,7 @@ final class BareMenuSheet {
+      * @param content The menu's content view; it is moved and dressed, its items are not changed.
+      * @param list The menu's list inside {@code content}.
+      * @param height The sheet's height when it is all the way up.
++     * @param bottomInset How much of the sheet's bottom sits behind the navigation bar.
+      * @param color The toolbar's colour, which the sheet takes.
+      * @param dismiss Closes the menu the usual way.
+      */
+@@ -85,12 +87,14 @@ final class BareMenuSheet {
+             View content,
+             ListView list,
+             int height,
++            int bottomInset,
+             @ColorInt int color,
+             Runnable dismiss,
+             @Nullable MoveHandler moveHandler) {
+         mContent = content;
+         mList = list;
+         mHeight = height;
++        mBottomInset = bottomInset;
+         mCompactY = Math.round(height * COMPACT_HIDDEN);
+         mDismiss = dismiss;
+         mMoveHandler = moveHandler;
+@@ -102,7 +106,7 @@ final class BareMenuSheet {
+                 mScrim,
+                 new FrameLayout.LayoutParams(
+                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+-        dress(context, content, color);
++        dress(context, content, color, bottomInset);
+         mFrame.addView(
+                 content,
+                 new FrameLayout.LayoutParams(
+@@ -156,7 +160,8 @@ final class BareMenuSheet {
+         mContent.getLocationOnScreen(contentAt);
+         row.getLocationOnScreen(rowAt);
+         float density = context.getResources().getDisplayMetrics().density;
+-        int needed = rowAt[1] + row.getHeight() - contentAt[1] + Math.round(8 * density);
++        int needed =
++                rowAt[1] + row.getHeight() - contentAt[1] + Math.round(8 * density) + mBottomInset;
+         mCompactY = Math.max(0, Math.min(mHeight, mHeight - needed));
+     }
+ 
+@@ -218,7 +223,8 @@ final class BareMenuSheet {
+     }
+ 
+     /** Square at the bottom, where it meets the toolbar; a handle at the top. */
+-    private static void dress(Context context, View content, @ColorInt int color) {
++    private static void dress(
++            Context context, View content, @ColorInt int color, int bottomInset) {
+         float density = context.getResources().getDisplayMetrics().density;
+         content.setBackground(null);
+         content.setPadding(0, 0, 0, 0);
+@@ -229,6 +235,11 @@ final class BareMenuSheet {
+         shape.setColor(color);
+         shape.setCornerRadii(new float[] {corner, corner, corner, corner, 0, 0, 0, 0});
+         column.setBackground(shape);
++        column.setPadding(
++                column.getPaddingLeft(),
++                column.getPaddingTop(),
++                column.getPaddingRight(),
++                column.getPaddingBottom() + bottomInset);
+ 
+         GradientDrawable bar = new GradientDrawable();
+         bar.setCornerRadius(2 * density);

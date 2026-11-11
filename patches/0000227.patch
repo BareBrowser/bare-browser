@@ -25,7 +25,7 @@ index 845e7811de6..e3fd7fbc8c9 100644
                  };
          mScrimModel.set(ScrimProperties.BACKGROUND_COLOR, scrimColor);
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
-index ffde0bbd728..4071635ec1c 100644
+index ffde0bbd728..eb7603eb6b7 100644
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
 @@ -7,6 +7,9 @@ package org.chromium.chrome.browser.omnibox.suggestions;
@@ -46,7 +46,15 @@ index ffde0bbd728..4071635ec1c 100644
  import androidx.annotation.Px;
  import androidx.annotation.StringRes;
  import androidx.annotation.VisibleForTesting;
-@@ -85,6 +89,11 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+@@ -38,6 +42,7 @@ import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
+ import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionViewBinder;
+ import org.chromium.chrome.browser.omnibox.suggestions.SelectionController.TraversalMode;
+ import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.components.omnibox.OmniboxFeatures;
+ import org.chromium.ui.base.KeyNavigationUtil;
+ import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
+@@ -85,6 +90,16 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
      private float mChildVerticalTranslation;
      private float mChildAlpha = 1.0f;
  
@@ -54,11 +62,27 @@ index ffde0bbd728..4071635ec1c 100644
 +    private @ColorInt int mCardColor;
 +    private final Paint mCardPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 +    private final RectF mCardRect = new RectF();
++    // Bare: the lines between rows, drawn on the card. The stock divider cuts a gap in each row
++    // instead, which shows whatever is behind the list.
++    private final Paint mDividerPaint = new Paint();
++    private @ColorInt int mDividerColor;
++    private @Nullable SuggestionHorizontalDivider mDivider;
 +
      private @Px int mBaseBottomPadding;
      private @Px int mBaseTopPadding;
      private final HeaderDecoration mHeaderDecoration;
-@@ -672,6 +681,9 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+@@ -326,7 +341,9 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+ 
+             // By default RecyclerViews come with item animators.
+             setItemAnimator(null);
+-            addItemDecoration(new SuggestionHorizontalDivider(context));
++            mDivider = new SuggestionHorizontalDivider(context);
++            addItemDecoration(mDivider);
++            mDividerColor = SemanticColorUtils.getDividerColor(context);
+ 
+             addItemDecoration(new GroupSeparatorDecoration(context));
+             mHeaderDecoration = new HeaderDecoration(context);
+@@ -672,6 +689,9 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
  
      @Override
      public boolean dispatchTouchEvent(MotionEvent ev) {
@@ -68,7 +92,7 @@ index ffde0bbd728..4071635ec1c 100644
          final int eventType = ev.getActionMasked();
          if (eventType == MotionEvent.ACTION_UP || eventType == MotionEvent.ACTION_DOWN) {
              mLayoutScrollListener.onNewGesture();
-@@ -729,6 +741,45 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+@@ -729,6 +749,69 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
       * @param topPadding Top padding in pixels.
       * @param bottomPadding Bottom padding in pixels.
       */
@@ -96,12 +120,36 @@ index ffde0bbd728..4071635ec1c 100644
 +    }
 +
 +    @Override
-+    protected void dispatchDraw(Canvas canvas) {
-+        if (mCardColor != 0 && updateCardRect()) {
-+            float radius = getResources().getDisplayMetrics().density * 20;
-+            canvas.drawRoundRect(mCardRect, radius, radius, mCardPaint);
++    public void draw(Canvas canvas) {
++        if (mCardColor == 0 || !updateCardRect()) {
++            super.draw(canvas);
++            return;
 +        }
-+        super.dispatchDraw(canvas);
++        // The card goes down before the rows, so the gaps the divider cuts show the card and not
++        // the page behind the list. The lines are drawn on top once the rows are done.
++        float radius = getResources().getDisplayMetrics().density * 20;
++        canvas.drawRoundRect(mCardRect, radius, radius, mCardPaint);
++        int saved = canvas.save();
++        super.draw(canvas);
++        canvas.restoreToCount(saved);
++        drawDividers(canvas);
++    }
++
++    private void drawDividers(Canvas canvas) {
++        SuggestionHorizontalDivider divider = mDivider;
++        if (divider == null) return;
++        int height = getResources().getDimensionPixelSize(R.dimen.divider_height);
++        for (int i = 0; i < getChildCount(); i++) {
++            View child = getChildAt(i);
++            if (child.getVisibility() != VISIBLE || !divider.shouldDrawDivider(child, this)) {
++                continue;
++            }
++            float bottom = child.getY() + child.getHeight();
++            float left = child.getX();
++            mDividerPaint.setColor(mDividerColor);
++            mDividerPaint.setAlpha(Math.round((mDividerColor >>> 24) * child.getAlpha()));
++            canvas.drawRect(left, bottom - height, left + child.getWidth(), bottom, mDividerPaint);
++        }
 +    }
 +
 +    /** Bare: whether a touch lands on the empty space above the card, not on a row. */

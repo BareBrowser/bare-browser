@@ -239,10 +239,10 @@ index ddbbffb9871..9dd2aca3cf2 100644
      <string name="bare_welcome_toolbar_intro" translatable="false">Choose the layout, the buttons and what a swipe does.</string>
      <string name="bare_welcome_opt_minimal" translatable="false">Minimal address bar</string>
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
-index ee6e30396d2..2068c0bd1cd 100644
+index ee6e30396d2..6070c4bb2a0 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
-@@ -51,6 +51,11 @@ public final class BareToolbarPreviewBinder {
+@@ -51,12 +51,18 @@ public final class BareToolbarPreviewBinder {
              boolean minimal,
              @Nullable Callback<Integer> onSlotClicked) {
          Context context = root.getContext();
@@ -254,7 +254,15 @@ index ee6e30396d2..2068c0bd1cd 100644
          root.findViewById(R.id.bare_preview_minimal)
                  .setVisibility(minimal ? View.VISIBLE : View.GONE);
          root.findViewById(R.id.bare_preview_full).setVisibility(minimal ? View.GONE : View.VISIBLE);
-@@ -71,9 +76,10 @@ public final class BareToolbarPreviewBinder {
+ 
+         if (minimal) {
+-            // The button at the left of the one-row bar holds the first button's choice.
++            // The button at the left of the one-row bar holds the first button's choice, and the
++            // one at the right, next to the menu, the fourth button's.
+             ImageView leftButton = root.findViewById(R.id.bare_preview_minimal_first);
+             setIcon(leftButton, first);
+             leftButton.setContentDescription(
+@@ -71,9 +77,26 @@ public final class BareToolbarPreviewBinder {
                              : v -> onSlotClicked.onResult(BareToolbarSlot.HOME));
              leftButton.setClickable(onSlotClicked != null);
              leftButton.setFocusable(onSlotClicked != null);
@@ -262,13 +270,29 @@ index ee6e30396d2..2068c0bd1cd 100644
 -            bindFixed(root, R.id.bare_preview_minimal_tab_switcher, ActionId.TAB_SWITCHER);
 -            bindFixed(root, R.id.bare_preview_minimal_app_menu, ActionId.APP_MENU);
 +            markEditable(leftButton, editable);
++            ImageView rightButton = root.findViewById(R.id.bare_preview_minimal_tab_switcher);
++            setIcon(rightButton, fourth);
++            rightButton.setContentDescription(
++                    context.getString(
++                            R.string.bare_toolbar_position_description,
++                            context.getString(
++                                    BareToolbarActionUi.positionNameFor(
++                                            BareToolbarSlot.TAB_SWITCHER)),
++                            context.getString(BareToolbarActionUi.labelFor(fourth))));
++            rightButton.setOnClickListener(
++                    onSlotClicked == null
++                            ? null
++                            : v -> onSlotClicked.onResult(BareToolbarSlot.TAB_SWITCHER));
++            rightButton.setClickable(onSlotClicked != null);
++            rightButton.setFocusable(onSlotClicked != null);
++            rightButton.setAlpha(1f);
++            markEditable(rightButton, editable);
 +            bindFixed(root, R.id.bare_preview_minimal_new_tab, ActionId.NEW_TAB, editable);
-+            bindFixed(root, R.id.bare_preview_minimal_tab_switcher, ActionId.TAB_SWITCHER, editable);
 +            bindFixed(root, R.id.bare_preview_minimal_app_menu, ActionId.APP_MENU, editable);
              return;
          }
  
-@@ -95,16 +101,29 @@ public final class BareToolbarPreviewBinder {
+@@ -95,16 +118,29 @@ public final class BareToolbarPreviewBinder {
              // After the listener: setting one makes a view clickable, even when it is null.
              view.setClickable(onSlotClicked != null);
              view.setFocusable(onSlotClicked != null);
@@ -450,10 +474,10 @@ index b87a8a75b26..65a176cf4e0 100644
              enableHidingBrowserControls = false;
              flags |= (1 << (int) LockReason.CHROME_URL);
 diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-index 54c6b7195d1..279f61256a5 100644
+index f321ad99080..ecbe6333111 100644
 --- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
 +++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-@@ -494,6 +494,7 @@ public final class ChromePreferenceKeys {
+@@ -501,6 +501,7 @@ public final class ChromePreferenceKeys {
  
      /** Whether panels are frosted glass where the system allows it. On unless turned off. */
      public static final String BARE_GLASS = "Bare.Glass";
@@ -461,7 +485,7 @@ index 54c6b7195d1..279f61256a5 100644
  
      /** Whether screenshots are blocked in Incognito. Off unless the user turned it on. */
      public static final String BARE_INCOGNITO_BLOCK_SCREENSHOTS = "Bare.Incognito.BlockScreenshots";
-@@ -1414,6 +1415,7 @@ public final class ChromePreferenceKeys {
+@@ -1421,6 +1422,7 @@ public final class ChromePreferenceKeys {
                  BARE_INCOGNITO_QUIET_ENTRY,
                  BARE_HAPTICS,
                  BARE_GLASS,
@@ -470,7 +494,7 @@ index 54c6b7195d1..279f61256a5 100644
                  BARE_INCOGNITO_ENTRY_HAPTIC,
                  BARE_APP_MENU_EDIT_TIP_COUNT,
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index cc63d7bbf94..b19334a0376 100644
+index ff45b407ac7..b1004fcfe5e 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 @@ -4384,8 +4384,8 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d

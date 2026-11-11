@@ -1,17 +1,87 @@
-From 79a86e60d35be1ca92b851dbaa520c24336e0069 Mon Sep 17 00:00:00 2001
-From: Bare <git@barebrowser.org>
-Date: Sun, 8 Nov 2026 07:07:48 +0000
-Subject: [PATCH] Patch 0000135
-
----
- .../extensions/ExtensionActionListMediator.java   | 15 +++++++++++++++
- 1 file changed, 15 insertions(+)
-
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/BUILD.gn b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/BUILD.gn
+index 7504a733cc1..ef4d2512d2c 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/BUILD.gn
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/BUILD.gn
+@@ -55,6 +55,7 @@ android_library("java") {
+     "//chrome/browser/profiles/android:java",
+     "//chrome/browser/tab:java",
+     "//chrome/browser/tabmodel:java",
++    "//chrome/browser/ui/android/actions:java",
+     "//chrome/browser/ui/android/extensions:java",
+     "//chrome/browser/ui/android/extensions:java_resources",
+     "//chrome/browser/ui/android/layouts:java",
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/DEPS b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/DEPS
+index 9f07c427713..f7f01f6c1fb 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/DEPS
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/DEPS
+@@ -1,4 +1,5 @@
+ include_rules = [
++  "+chrome/browser/ui/android/actions",
+   "+components/thin_webview",
+   "+extensions/common",
+ ]
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediator.java
-index 5b5292633b3..f95855b2294 100644
+index 5b5292633b3..a11e0d7b3f9 100644
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediator.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediator.java
-@@ -667,6 +667,7 @@ class ExtensionActionListMediator implements Destroyable {
+@@ -11,6 +11,7 @@ import android.graphics.Color;
+ import android.graphics.drawable.ColorDrawable;
+ import android.os.Handler;
+ import android.os.Looper;
++import android.os.SystemClock;
+ import android.view.LayoutInflater;
+ import android.view.MotionEvent;
+ import android.view.View;
+@@ -29,6 +30,7 @@ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+ import org.chromium.chrome.browser.toolbar.MenuBuilderHelper;
+ import org.chromium.chrome.browser.toolbar.extensions.ExtensionActionButtonProperties.ListItemType;
++import org.chromium.chrome.browser.ui.actions.ActionHaptics;
+ import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+ import org.chromium.chrome.browser.ui.extensions.ExtensionAction;
+ import org.chromium.chrome.browser.ui.extensions.ExtensionAction.HoverCardState;
+@@ -157,6 +159,12 @@ class ExtensionActionListMediator implements Destroyable {
+ 
+     private ActionState mActionState = new ActionState.Idle();
+ 
++    // Bare: a tap on a button whose popup is open first reaches the popup as an outside touch,
++    // which closes it on touch down. The click comes on touch up and would open the popup again.
++    // The action whose popup closed itself, and when, let that click count as the close.
++    private @Nullable String mDismissedActionId;
++    private long mDismissedAtUptime;
++
+     @Nullable private final LifetimeAssert mLifetimeAssert = LifetimeAssert.create(this);
+ 
+     // The ID of the action that should be "popped out", since it needs to be visible to show a
+@@ -413,7 +421,7 @@ class ExtensionActionListMediator implements Destroyable {
+                                         && !isPoppedOut)
+                         .with(
+                                 ExtensionActionButtonProperties.ON_CLICK_LISTENER,
+-                                (view) -> onPrimaryClick(actionId))
++                                (view) -> onPrimaryClick(view, actionId))
+                         .with(
+                                 ExtensionActionButtonProperties.ON_HOVER_LISTENER,
+                                 (view, event) -> {
+@@ -621,8 +629,17 @@ class ExtensionActionListMediator implements Destroyable {
+         }
+     }
+ 
+-    private void onPrimaryClick(String actionId) {
++    private void onPrimaryClick(@Nullable View view, String actionId) {
++        if (view != null) ActionHaptics.tick(view);
+         mClearOmniboxFocus.run();
++        if (actionId.equals(mDismissedActionId)
++                && SystemClock.uptimeMillis() - mDismissedAtUptime
++                        <= ViewConfiguration.getLongPressTimeout() + 100) {
++            // The touch that started this click already closed this action's popup.
++            mDismissedActionId = null;
++            return;
++        }
++        mDismissedActionId = null;
+         if (mActionState instanceof ActionState.PopupActive activeState) {
+             boolean closeOnly = activeState.getActionId().equals(actionId);
+             closePopup();
+@@ -667,6 +684,7 @@ class ExtensionActionListMediator implements Destroyable {
          if (findIndexForId(actionId) == -1) {
              mPoppedOutActionId = actionId;
          }
@@ -19,7 +89,7 @@ index 5b5292633b3..f95855b2294 100644
  
          // Force the toolbar to recalculate the toolbar ranking and provide us with a new {@code
          // availableWidth}, given that the amount we'll use has changed.
-@@ -676,10 +677,24 @@ class ExtensionActionListMediator implements Destroyable {
+@@ -676,10 +694,24 @@ class ExtensionActionListMediator implements Destroyable {
          mRecyclerViewDelegate.requestLayoutWithViewUtils();
      }
  
@@ -44,3 +114,26 @@ index 5b5292633b3..f95855b2294 100644
  
              // Request layout to update available width and trigger updates.
              mRecyclerViewDelegate.requestLayoutWithViewUtils();
+@@ -743,10 +775,21 @@ class ExtensionActionListMediator implements Destroyable {
+                         mTabModelSelector,
+                         inspectWithDevTools);
+         popup.loadInitialPage();
+-        popup.addOnDismissListener(this::closePopup);
++        popup.addOnDismissListener(() -> onPopupDismissed(actionId));
++        mDismissedActionId = null;
+         mActionState = new ActionState.PopupActive(popup, actionId);
+     }
+ 
++    /** The popup's window went away by itself: outside touch, Back, a tab change. */
++    private void onPopupDismissed(String actionId) {
++        if (mActionState instanceof ActionState.PopupActive activeState
++                && activeState.getActionId().equals(actionId)) {
++            mDismissedActionId = actionId;
++            mDismissedAtUptime = SystemClock.uptimeMillis();
++        }
++        closePopup();
++    }
++
+     private void closePopup() {
+         if (mActionState instanceof ActionState.PopupPending pendingState) {
+             // Handle cancellation of a pending popup.

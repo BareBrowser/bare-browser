@@ -1,29 +1,8 @@
-From 5653f2a219b19aa04143743be4430426ba9a6376 Mon Sep 17 00:00:00 2001
-From: Bare <git@barebrowser.org>
-Date: Sun, 8 Nov 2026 06:43:18 +0000
-Subject: [PATCH] Patch 0000172
-
----
- .../res/xml/bare_extensions_preferences.xml   |   7 +-
- .../BareExtensionsSettingsFragment.java       |  34 ++++
- chrome/android/junit/BUILD.gn                 |   1 +
- .../BareExtensionPresentationUnitTest.java    |  56 ++++++
- .../preferences/ChromePreferenceKeys.java     |   7 +
- chrome/browser/ui/android/extensions/BUILD.gn |   2 +
- .../extension_action_popup_contents.cc        |   4 +
- .../extensions/BareExtensionPresentation.java |  48 +++++
- .../ExtensionActionPopupContents.java         |   9 +
- .../strings/android_chrome_strings.grd        |  12 ++
- .../extensions/ExtensionActionPopup.java      | 179 +++++++++++++++---
- 11 files changed, 336 insertions(+), 23 deletions(-)
- create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/bare/BareExtensionPresentationUnitTest.java
- create mode 100644 chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/BareExtensionPresentation.java
-
 diff --git a/chrome/android/java/res/xml/bare_extensions_preferences.xml b/chrome/android/java/res/xml/bare_extensions_preferences.xml
-index 830c8280202..31b0e2c30f1 100644
+index 830c8280202..c1bce29a2c3 100644
 --- a/chrome/android/java/res/xml/bare_extensions_preferences.xml
 +++ b/chrome/android/java/res/xml/bare_extensions_preferences.xml
-@@ -7,9 +7,14 @@ found in the LICENSE file.
+@@ -7,11 +7,23 @@ found in the LICENSE file.
  
  <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
  
@@ -39,11 +18,20 @@ index 830c8280202..31b0e2c30f1 100644
          android:persistent="false"
          android:title="@string/bare_keep_extensions_title"
          android:summary="@string/bare_keep_extensions_summary" />
+ 
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_quick_crx"
++        android:order="2"
++        android:persistent="false"
++        android:title="@string/bare_quick_crx_title"
++        android:summary="@string/bare_quick_crx_summary" />
++
+ </PreferenceScreen>
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java
-index efaf9ed7b91..0cfe6ecd39d 100644
+index efaf9ed7b91..81e6516dfda 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareExtensionsSettingsFragment.java
-@@ -7,6 +7,8 @@ package org.chromium.chrome.browser.bare.settings;
+@@ -7,14 +7,19 @@ package org.chromium.chrome.browser.bare.settings;
  import android.content.Context;
  import android.os.Bundle;
  
@@ -52,23 +40,27 @@ index efaf9ed7b91..0cfe6ecd39d 100644
  import org.chromium.base.supplier.MonotonicObservableSupplier;
  import org.chromium.base.supplier.ObservableSuppliers;
  import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
-@@ -15,6 +17,7 @@ import org.chromium.build.annotations.Nullable;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
  import org.chromium.chrome.R;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
  import org.chromium.chrome.browser.preferences.Pref;
  import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
 +import org.chromium.chrome.browser.ui.extensions.BareExtensionPresentation;
  import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
  import org.chromium.components.browser_ui.settings.SettingsUtils;
  import org.chromium.components.user_prefs.UserPrefs;
-@@ -24,6 +27,7 @@ import org.chromium.components.user_prefs.UserPrefs;
+@@ -24,6 +29,8 @@ import org.chromium.components.user_prefs.UserPrefs;
  public class BareExtensionsSettingsFragment extends ChromeBaseSettingsFragment {
  
      public static final String PREF_KEEP_RUNNING = "bare_keep_extensions_running";
 +    public static final String PREF_PRESENTATION = "bare_extension_presentation";
++    public static final String PREF_QUICK_CRX = "bare_quick_crx";
  
      private final SettableMonotonicObservableSupplier<String> mPageTitle =
              ObservableSuppliers.createMonotonic();
-@@ -33,6 +37,29 @@ public class BareExtensionsSettingsFragment extends ChromeBaseSettingsFragment {
+@@ -33,6 +40,31 @@ public class BareExtensionsSettingsFragment extends ChromeBaseSettingsFragment {
          mPageTitle.set(getTitle(getContext()));
          SettingsUtils.addPreferencesFromResource(this, R.xml.bare_extensions_preferences);
  
@@ -79,11 +71,13 @@ index efaf9ed7b91..0cfe6ecd39d 100644
 +                new CharSequence[] {
 +                    getString(R.string.bare_extensions_open_popup),
 +                    getString(R.string.bare_extensions_open_full_screen),
++                    getString(R.string.bare_extensions_open_card),
 +                });
 +        presentation.setEntryValues(
 +                new CharSequence[] {
 +                    String.valueOf(BareExtensionPresentation.POPUP),
 +                    String.valueOf(BareExtensionPresentation.FULL_SCREEN),
++                    String.valueOf(BareExtensionPresentation.CARD),
 +                });
 +        presentation.setValue(String.valueOf(BareExtensionPresentation.get()));
 +        presentation.setSummary(presentationLabel(BareExtensionPresentation.get()));
@@ -98,20 +92,35 @@ index efaf9ed7b91..0cfe6ecd39d 100644
          ChromeSwitchPreference keepRunning = findPreference(PREF_KEEP_RUNNING);
          assert keepRunning != null;
          keepRunning.setChecked(
-@@ -45,6 +72,13 @@ public class BareExtensionsSettingsFragment extends ChromeBaseSettingsFragment {
+@@ -43,6 +75,28 @@ public class BareExtensionsSettingsFragment extends ChromeBaseSettingsFragment {
+                             .setBoolean(Pref.BARE_KEEP_EXTENSIONS_ALIVE, (boolean) newValue);
+                     return true;
                  });
-     }
- 
++
++        ChromeSwitchPreference quickCrx = findPreference(PREF_QUICK_CRX);
++        assert quickCrx != null;
++        quickCrx.setChecked(
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_QUICK_CRX, false));
++        quickCrx.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    ChromeSharedPreferences.getInstance()
++                            .writeBoolean(ChromePreferenceKeys.BARE_QUICK_CRX, (boolean) newValue);
++                    return true;
++                });
++    }
++
 +    private String presentationLabel(int presentation) {
++        if (presentation == BareExtensionPresentation.CARD) {
++            return getString(R.string.bare_extensions_open_card);
++        }
 +        return getString(
 +                presentation == BareExtensionPresentation.FULL_SCREEN
 +                        ? R.string.bare_extensions_open_full_screen
 +                        : R.string.bare_extensions_open_popup);
-+    }
-+
+     }
+ 
      @Override
-     public MonotonicObservableSupplier<String> getPageTitle() {
-         return mPageTitle;
 diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
 index 018947e0f17..0201e158dc7 100644
 --- a/chrome/android/junit/BUILD.gn
@@ -126,10 +135,10 @@ index 018947e0f17..0201e158dc7 100644
        "src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogueUnitTest.java",
 diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareExtensionPresentationUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareExtensionPresentationUnitTest.java
 new file mode 100644
-index 00000000000..68ede105d96
+index 00000000000..23d399db880
 --- /dev/null
 +++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareExtensionPresentationUnitTest.java
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,78 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -180,34 +189,64 @@ index 00000000000..68ede105d96
 +    }
 +
 +    @Test
++    public void testTheCardIsRemembered() {
++        BareExtensionPresentation.set(BareExtensionPresentation.CARD);
++        assertTrue(BareExtensionPresentation.isCard());
++        assertEquals(BareExtensionPresentation.CARD, BareExtensionPresentation.get());
++        assertFalse(BareExtensionPresentation.isFullScreen());
++        assertTrue(BareExtensionPresentation.sizedByView());
++    }
++
++    @Test
++    public void testChoosingThePopupAfterTheCardForgetsTheKey() {
++        BareExtensionPresentation.set(BareExtensionPresentation.CARD);
++        BareExtensionPresentation.set(BareExtensionPresentation.POPUP);
++        assertFalse(
++                ChromeSharedPreferences.getInstance()
++                        .contains(ChromePreferenceKeys.BARE_EXTENSION_PRESENTATION));
++        assertFalse(BareExtensionPresentation.sizedByView());
++    }
++
++    @Test
 +    public void testAValueThisBuildDoesNotOfferIsThePopup() {
 +        ChromeSharedPreferences.getInstance()
 +                .writeInt(ChromePreferenceKeys.BARE_EXTENSION_PRESENTATION, 7);
 +        assertFalse(BareExtensionPresentation.isFullScreen());
++        ChromeSharedPreferences.getInstance()
++                .writeInt(ChromePreferenceKeys.BARE_EXTENSION_PRESENTATION, 3);
++        assertEquals(BareExtensionPresentation.POPUP, BareExtensionPresentation.get());
 +    }
 +}
 diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-index ff78487b47b..7aece0e9cef 100644
+index ff78487b47b..8dd8d3d29ef 100644
 --- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
 +++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-@@ -414,6 +414,12 @@ public final class ChromePreferenceKeys {
+@@ -414,6 +414,19 @@ public final class ChromePreferenceKeys {
       */
      public static final String BARE_ADDRESS_BAR_SWIPE_TABS = "Bare.Toolbar.AddressBarSwipeTabs";
  
 +    /**
 +     * De-Googled build: how an extension's own interface opens. 0 or absent is the popup under its
-+     * toolbar button, 1 is a full-screen view with a close button.
++     * toolbar button, 1 is a full-screen view with a close button, 2 is a card that rises from
++     * behind the toolbar.
 +     */
 +    public static final String BARE_EXTENSION_PRESENTATION = "Bare.Extensions.Presentation";
++
++    /**
++     * De-Googled build: a .crx picked on the extensions page installs after its signature check,
++     * without the warning and permission dialog. Read by native code too. Off by default.
++     */
++    public static final String BARE_QUICK_CRX = "Bare.Extensions.QuickCrx";
 +
      /**
       * De-Googled build: the minimal layout, which leaves out the bottom bar so the address bar is
       * the only strip of controls. Read once when the process starts, so a change applies after a
-@@ -1327,6 +1333,7 @@ public final class ChromePreferenceKeys {
+@@ -1327,6 +1340,8 @@ public final class ChromePreferenceKeys {
                  BARE_USER_AGENT_CUSTOM,
                  BARE_USER_AGENT_PRESET,
                  BARE_ADDRESS_BAR_SWIPE_TABS,
 +                BARE_EXTENSION_PRESENTATION,
++                BARE_QUICK_CRX,
                  BARE_MINIMAL_LAYOUT,
                  BARE_AMOLED_WHEN_SYSTEM_DARK,
                  WEBSTORE_DESKTOP_SITE_CLEARED,
@@ -248,10 +287,10 @@ index d3b2b4b48d3..48b9364ef3d 100644
  
 diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/BareExtensionPresentation.java b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/BareExtensionPresentation.java
 new file mode 100644
-index 00000000000..98b7ff9f652
+index 00000000000..e77825912b9
 --- /dev/null
 +++ b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/BareExtensionPresentation.java
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,60 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -263,8 +302,8 @@ index 00000000000..98b7ff9f652
 +import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 +
 +/**
-+ * How an extension's own interface opens: the popup under its button, or a view that fills the
-+ * screen with a close button.
++ * How an extension's own interface opens: the popup under its button, a view that fills the
++ * screen with a close button, or a card that rises from behind the toolbar.
 + *
 + * <p>The popup is what Chromium does and what every install had, so it is what nothing stored
 + * means.
@@ -277,19 +316,22 @@ index 00000000000..98b7ff9f652
 +    /** A clean view over the page, with a close button. */
 +    public static final int FULL_SCREEN = 1;
 +
++    /** A card that rises from behind the toolbar, the page inside it. */
++    public static final int CARD = 2;
++
 +    private BareExtensionPresentation() {}
 +
 +    public static int get() {
 +        int stored =
 +                ChromeSharedPreferences.getInstance()
 +                        .readInt(ChromePreferenceKeys.BARE_EXTENSION_PRESENTATION, POPUP);
-+        return stored == FULL_SCREEN ? FULL_SCREEN : POPUP;
++        return stored == FULL_SCREEN || stored == CARD ? stored : POPUP;
 +    }
 +
 +    public static void set(int presentation) {
-+        if (presentation == FULL_SCREEN) {
++        if (presentation == FULL_SCREEN || presentation == CARD) {
 +            ChromeSharedPreferences.getInstance()
-+                    .writeInt(ChromePreferenceKeys.BARE_EXTENSION_PRESENTATION, FULL_SCREEN);
++                    .writeInt(ChromePreferenceKeys.BARE_EXTENSION_PRESENTATION, presentation);
 +        } else {
 +            ChromeSharedPreferences.getInstance()
 +                    .removeKey(ChromePreferenceKeys.BARE_EXTENSION_PRESENTATION);
@@ -299,9 +341,18 @@ index 00000000000..98b7ff9f652
 +    public static boolean isFullScreen() {
 +        return get() == FULL_SCREEN;
 +    }
++
++    public static boolean isCard() {
++        return get() == CARD;
++    }
++
++    /** Whether the page takes the size of the view it is shown in rather than its own. */
++    public static boolean sizedByView() {
++        return get() != POPUP;
++    }
 +}
 diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java
-index 980475e9fdc..04c91f07470 100644
+index 980475e9fdc..5d155b49af7 100644
 --- a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java
 +++ b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java
 @@ -38,6 +38,15 @@ public class ExtensionActionPopupContents implements Destroyable {
@@ -309,22 +360,22 @@ index 980475e9fdc..04c91f07470 100644
      private final JniUniquePtr<NativeExtensionActionPopupContents> mNative;
  
 +    /**
-+     * Whether popups fill the screen. When they do, the page takes the size of its view instead
-+     * of sizing the view to itself.
++     * Whether popups fill the screen or a card. When they do, the page takes the size of its view
++     * instead of sizing the view to itself.
 +     */
 +    @CalledByNative
 +    private static boolean usesFullScreen() {
-+        return BareExtensionPresentation.isFullScreen();
++        return BareExtensionPresentation.sizedByView();
 +    }
 +
      /** The WebContents hosting the extension popup's UI. */
      private final WebContents mWebContents;
  
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index a02b274ba06..5c4906195d8 100644
+index a02b274ba06..14644e2cf9d 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -4417,6 +4417,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4417,12 +4417,36 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
        <message name="IDS_BARE_EXTENSIONS_SETTINGS_TITLE" desc="Title of the settings screen for extensions. [CHAR_LIMIT=32]">
          Extensions
        </message>
@@ -337,11 +388,29 @@ index a02b274ba06..5c4906195d8 100644
 +      <message name="IDS_BARE_EXTENSIONS_OPEN_FULL_SCREEN" desc="Option: an extension opens in a full-screen view with a close button. [CHAR_LIMIT=40]">
 +        Full screen
 +      </message>
++      <message name="IDS_BARE_EXTENSIONS_OPEN_CARD" desc="Option: an extension opens in a card that rises from behind the address bar. [CHAR_LIMIT=40]">
++        Slide card
++      </message>
 +      <message name="IDS_BARE_EXTENSION_CLOSE" desc="Content description of the button that closes a full-screen extension view. [CHAR_LIMIT=40]">
 +        Close extension
 +      </message>
        <message name="IDS_BARE_KEEP_EXTENSIONS_TITLE" desc="Setting that keeps extensions running while the browser is in the background. [CHAR_LIMIT=48]">
          Keep extensions running
+       </message>
+       <message name="IDS_BARE_KEEP_EXTENSIONS_SUMMARY" desc="Summary of the setting that keeps extensions running in the background. Says what it does and that it costs some memory and battery.">
+         Make it less likely that Android stops extensions while you are in another app, and load them again if it does. Uses a little more memory and battery.
+       </message>
++      <message name="IDS_BARE_QUICK_CRX_TITLE" desc="Setting that installs a picked .crx extension file without the warning dialog. [CHAR_LIMIT=48]">
++        Install .crx files without asking
++      </message>
++      <message name="IDS_BARE_QUICK_CRX_SUMMARY" desc="Summary of the setting that installs .crx files without the warning dialog. Says what is skipped and that the file is still checked to be intact.">
++        Skips the warning and the list of permissions when you pick a .crx file. Bare still checks that the file is intact.
++      </message>
++      <message name="IDS_BARE_OVERLAY_BLOCKED_TAP" desc="Message shown when a tap on a dialog button was ignored because another app is drawing over the browser, for example a screen dimmer or a floating bubble.">
++        Another app is drawing over Bare, so this tap was blocked. Turn that app's overlay off, then try again.
++      </message>
+       <message name="IDS_BARE_MINIMAL_LAYOUT_TITLE" desc="Setting that removes the bottom button bar and leaves only the address bar. [CHAR_LIMIT=40]">
+         Minimal address bar
        </message>
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionPopup.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionPopup.java
 index 157f6a21a91..854083cdaa5 100644

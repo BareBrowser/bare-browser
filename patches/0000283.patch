@@ -1,5 +1,5 @@
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
-index 4c72b4ff771..a444988c667 100644
+index 14e87a0025c..528c5c8b27f 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomization.java
 @@ -6,6 +6,7 @@ package org.chromium.chrome.browser.app.appmenu;
@@ -18,120 +18,393 @@ index 4c72b4ff771..a444988c667 100644
  import java.util.ArrayList;
  import java.util.HashSet;
  import java.util.List;
-@@ -272,6 +274,7 @@ public final class BareAppMenuCustomization {
+@@ -274,6 +276,7 @@ public final class BareAppMenuCustomization {
      public static ModelList apply(
              Context context, AppMenuItemTheme theme, boolean isIconAtStart, ModelList list) {
          arrange(list);
-+        applyOrder(list);
++        placeKeyed(list, currentOrder(list));
          Set<String> hidden = getHidden();
          List<ListItem> hiddenItems = new ArrayList<>();
          for (int i = list.size() - 1; i >= 0; i--) {
-@@ -337,9 +340,105 @@ public final class BareAppMenuCustomization {
+@@ -287,6 +290,17 @@ public final class BareAppMenuCustomization {
+             if (key == null) continue;
+             boolean isHidden = hidden.contains(key);
+             if (sEditMode) {
++                // A row with a checkbox is drawn as a plain row while editing, so its eye and
++                // handle sit where every other row has them. Leaving edit mode builds the menu
++                // again with the real row.
++                if (item.type == AppMenuItemType.TITLE_BUTTON && hasCheckbox(item.model)) {
++                    ListItem plain =
++                            AppMenuItemUtils.createStandardListItem(
++                                    item.model,
++                                    item.model.get(AppMenuItemProperties.ICON) != null);
++                    list.update(i, plain);
++                    item = plain;
++                }
+                 item.model.set(AppMenuItemProperties.ENABLED, true);
+                 item.model.set(
+                         AppMenuItemProperties.END_ICON,
+@@ -339,9 +353,210 @@ public final class BareAppMenuCustomization {
          } else if (shouldShowTip()) {
              list.add(at, tipRow(context, theme, isIconAtStart));
          }
-+        rememberShown(list);
++        rememberShown(hidden);
          return list;
      }
  
-+    // The order the items were last shown in, and which run between two dividers each was in. A
-+    // move is only allowed inside a run, so a divider never ends up in the wrong place.
-+    private static final List<String> sShownKeys = new ArrayList<>();
-+    private static final List<Integer> sShownRuns = new ArrayList<>();
++    private static boolean hasCheckbox(PropertyModel model) {
++        if (!model.containsKey(AppMenuItemProperties.ADDITIONAL_ICONS)) return false;
++        ModelList icons = model.get(AppMenuItemProperties.ADDITIONAL_ICONS);
++        if (icons == null || icons.size() == 0) return false;
++        PropertyModel first = icons.get(0).model;
++        return first.containsKey(AppMenuItemProperties.CHECKABLE)
++                && first.get(AppMenuItemProperties.CHECKABLE);
++    }
 +
-+    private static String[] savedOrder() {
-+        String stored =
++    // The keys of the rows in the order they were last placed, one per place, hidden ones
++    // included; and the hidden set at that time. A move permutes the shown rows over the places
++    // they hold, so the dividers stay put and a hidden row keeps its place.
++    private static final List<String> sFullKeys = new ArrayList<>();
++    private static final Set<String> sHiddenAtApply = new HashSet<>();
++
++    private static List<String> parseOrder(@Nullable String stored) {
++        List<String> order = new ArrayList<>();
++        if (stored == null || stored.isEmpty()) return order;
++        List<String> known = Arrays.asList(KEYS);
++        for (String key : stored.split(",")) {
++            if (!key.isEmpty() && known.contains(key) && !order.contains(key)) order.add(key);
++        }
++        return order;
++    }
++
++    /** The order saved by this version: one list for the whole menu. */
++    private static List<String> savedOrder() {
++        return parseOrder(
 +                ChromeSharedPreferences.getInstance()
-+                        .readString(ChromePreferenceKeys.BARE_APP_MENU_ORDER, "");
-+        return stored == null || stored.isEmpty() ? new String[0] : stored.split(",");
++                        .readString(ChromePreferenceKeys.BARE_APP_MENU_ORDER_ALL, ""));
 +    }
 +
-+    private static void rememberShown(ModelList list) {
-+        sShownKeys.clear();
-+        sShownRuns.clear();
-+        int run = 0;
++    /** The order saved by 2.0.2 and earlier, which applied within each run between dividers. */
++    private static List<String> legacyOrder() {
++        return parseOrder(
++                ChromeSharedPreferences.getInstance()
++                        .readString(ChromePreferenceKeys.BARE_APP_MENU_ORDER, ""));
++    }
++
++    /** The indexes of the rows that can be placed: every row with a name, hidden ones included. */
++    private static List<Integer> places(ModelList list) {
++        List<Integer> places = new ArrayList<>();
 +        for (int i = 0; i < list.size(); i++) {
-+            ListItem item = list.get(i);
-+            if (item.type == AppMenuItemType.DIVIDER) {
-+                run++;
-+            } else if (isRowType(item.type)) {
-+                String key = keyFor(item.model.get(AppMenuItemProperties.MENU_ITEM_ID));
-+                if (key != null) {
-+                    sShownKeys.add(key);
-+                    sShownRuns.add(run);
-+                }
-+            }
++            if (keyOf(list.get(i)) != null) places.add(i);
 +        }
++        return places;
 +    }
 +
-+    /** Puts the items of each run in the order the user gave them, leaving the rest in place. */
-+    private static void applyOrder(ModelList list) {
-+        List<String> order = Arrays.asList(savedOrder());
-+        if (order.isEmpty()) return;
-+        int start = 0;
-+        for (int end = 0; end <= list.size(); end++) {
-+            boolean boundary = end == list.size() || list.get(end).type == AppMenuItemType.DIVIDER;
-+            if (!boundary) continue;
-+            List<Integer> slots = new ArrayList<>();
-+            List<ListItem> keyed = new ArrayList<>();
-+            for (int i = start; i < end; i++) {
-+                ListItem item = list.get(i);
-+                if (isRowType(item.type)
-+                        && keyFor(item.model.get(AppMenuItemProperties.MENU_ITEM_ID)) != null) {
-+                    slots.add(i);
-+                    keyed.add(item);
-+                }
-+            }
-+            if (keyed.size() > 1) {
-+                List<ListItem> original = new ArrayList<>(keyed);
-+                keyed.sort((a, b) -> rankOf(order, a) - rankOf(order, b));
-+                for (int k = 0; k < slots.size(); k++) {
-+                    if (keyed.get(k) != original.get(k)) list.update(slots.get(k), keyed.get(k));
-+                }
-+            }
-+            start = end + 1;
-+        }
-+    }
-+
-+    private static int rankOf(List<String> order, ListItem item) {
-+        int index = order.indexOf(keyFor(item.model.get(AppMenuItemProperties.MENU_ITEM_ID)));
-+        return index < 0 ? Integer.MAX_VALUE / 2 : index;
-+    }
-+
-+    /** Whether the row with this item id can be dragged: while editing, any item that can hide. */
-+    public static boolean canMove(int itemId) {
-+        return sEditMode && isHideable(itemId);
++    private static @Nullable String keyOf(ListItem item) {
++        if (!isRowType(item.type)) return null;
++        return keyFor(item.model.get(AppMenuItemProperties.MENU_ITEM_ID));
 +    }
 +
 +    /**
-+     * Saves a move: the item goes before or after another in its run. Returns whether the order
-+     * changed, which is not the case across a divider.
++     * Ranks rows by {@code order}. A row the order does not name goes right after the row before
++     * it in the menu as built, so a new item shows where the menu puts it.
++     */
++    private static double[] ranks(List<String> keys, List<String> order) {
++        double[] ranks = new double[keys.size()];
++        double previous = -1;
++        for (int k = 0; k < keys.size(); k++) {
++            int at = order.indexOf(keys.get(k));
++            ranks[k] = at >= 0 ? at : previous + 0.001;
++            previous = ranks[k];
++        }
++        return ranks;
++    }
++
++    /** The keys of {@code keys} sorted by rank, stable. */
++    private static List<Integer> sortedIndexes(List<String> keys, List<String> order) {
++        double[] ranks = ranks(keys, order);
++        List<Integer> indexes = new ArrayList<>();
++        for (int k = 0; k < keys.size(); k++) indexes.add(k);
++        indexes.sort((a, b) -> Double.compare(ranks[a], ranks[b]));
++        return indexes;
++    }
++
++    /**
++     * The one order for the whole menu, from what 2.0.2 saved: each run sorted as 2.0.2 sorted it,
++     * the runs in the order they are shown, then the saved names this page does not have, each
++     * after the name it followed. Worked out each time and never written, so the old setting stays
++     * as it was for a downgrade.
++     */
++    private static List<String> legacyToGlobal(ModelList list, List<String> legacy) {
++        List<String> result = new ArrayList<>();
++        List<String> run = new ArrayList<>();
++        for (int i = 0; i <= list.size(); i++) {
++            boolean boundary = i == list.size() || list.get(i).type == AppMenuItemType.DIVIDER;
++            if (!boundary) {
++                String key = keyOf(list.get(i));
++                if (key != null) run.add(key);
++                continue;
++            }
++            for (int index : sortedIndexes(run, legacy)) result.add(run.get(index));
++            run.clear();
++        }
++        return mergeOthers(result, legacy);
++    }
++
++    /** The order in effect: this version's, else the one 2.0.2 saved, else none. */
++    private static List<String> currentOrder(ModelList list) {
++        List<String> saved = savedOrder();
++        if (!saved.isEmpty()) return saved;
++        List<String> legacy = legacyOrder();
++        if (legacy.isEmpty()) return legacy;
++        return legacyToGlobal(list, legacy);
++    }
++
++    /**
++     * Adds to {@code order} the names of {@code older} it lacks, each right after the nearest
++     * name before it in {@code older} that is already there, or first. Items another page has
++     * keep their place among the rest.
++     */
++    private static List<String> mergeOthers(List<String> order, List<String> older) {
++        List<String> result = new ArrayList<>(order);
++        String before = null;
++        for (String key : older) {
++            if (!result.contains(key)) {
++                int at = before == null ? 0 : result.indexOf(before) + 1;
++                result.add(at, key);
++            }
++            before = key;
++        }
++        return result;
++    }
++
++    /** Puts the rows in the user's order over the places rows have, leaving the rest in place. */
++    private static void placeKeyed(ModelList list, List<String> order) {
++        List<Integer> places = places(list);
++        List<ListItem> items = new ArrayList<>();
++        List<String> keys = new ArrayList<>();
++        for (int place : places) {
++            items.add(list.get(place));
++            keys.add(assumeNonNull(keyOf(list.get(place))));
++        }
++        sFullKeys.clear();
++        if (order.isEmpty()) {
++            sFullKeys.addAll(keys);
++            return;
++        }
++        List<Integer> sorted = sortedIndexes(keys, order);
++        for (int k = 0; k < places.size(); k++) {
++            ListItem item = items.get(sorted.get(k));
++            sFullKeys.add(keys.get(sorted.get(k)));
++            if (item != list.get(places.get(k))) list.update(places.get(k), item);
++        }
++    }
++
++    private static void rememberShown(Set<String> hidden) {
++        sHiddenAtApply.clear();
++        sHiddenAtApply.addAll(hidden);
++    }
++
++    /** Whether the row with this item id can be dragged: while editing, any shown item. */
++    public static boolean canMove(int itemId) {
++        if (!sEditMode) return false;
++        String key = keyFor(itemId);
++        return key != null && !getHidden().contains(key);
++    }
++
++    /**
++     * Saves a move: the item goes before or after the item now in the place it was dropped on,
++     * anywhere in the menu. Returns whether the order changed.
 +     */
 +    public static boolean onRowMoved(int movedItemId, int targetItemId, boolean after) {
 +        if (!sEditMode) return false;
 +        String moved = keyFor(movedItemId);
 +        String target = keyFor(targetItemId);
 +        if (moved == null || target == null || moved.equals(target)) return false;
-+        int movedAt = sShownKeys.indexOf(moved);
-+        int targetAt = sShownKeys.indexOf(target);
-+        if (movedAt < 0 || targetAt < 0) return false;
-+        if (!sShownRuns.get(movedAt).equals(sShownRuns.get(targetAt))) {
-+            return false;
++        List<String> shown = new ArrayList<>();
++        for (String key : sFullKeys) {
++            if (!sHiddenAtApply.contains(key)) shown.add(key);
 +        }
-+        List<String> next = new ArrayList<>(sShownKeys);
-+        next.remove(moved);
-+        next.add(next.indexOf(target) + (after ? 1 : 0), moved);
-+        for (String key : savedOrder()) {
-+            if (!next.contains(key)) next.add(key);
++        if (!shown.contains(moved) || !shown.contains(target)) return false;
++        shown.remove(moved);
++        shown.add(shown.indexOf(target) + (after ? 1 : 0), moved);
++        List<String> full = new ArrayList<>(sFullKeys);
++        int next = 0;
++        for (int k = 0; k < full.size(); k++) {
++            if (!sHiddenAtApply.contains(full.get(k))) full.set(k, shown.get(next++));
++        }
++        if (full.equals(sFullKeys)) return false;
++        List<String> older = savedOrder();
++        if (older.isEmpty()) older = legacyOrder();
++        writeOrder(mergeOthers(full, older));
++        return true;
++    }
++
++    /** Writes this version's order. The order 2.0.2 saved is left as it was. */
++    private static void writeOrder(List<String> order) {
++        List<String> known = Arrays.asList(KEYS);
++        List<String> clean = new ArrayList<>();
++        for (String key : order) {
++            if (known.contains(key) && !clean.contains(key)) clean.add(key);
 +        }
 +        ChromeSharedPreferences.getInstance()
-+                .writeString(ChromePreferenceKeys.BARE_APP_MENU_ORDER, TextUtils.join(",", next));
-+        return true;
++                .writeString(
++                        ChromePreferenceKeys.BARE_APP_MENU_ORDER_ALL, TextUtils.join(",", clean));
 +    }
 +
      /**
       * Puts the short list first, ending with Exit, and everything else below Exit: the shortcut
       * row, then Add tab to new group, Customize new tab page, Settings and Exit, each group set
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomizationUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomizationUnitTest.java
+index 19477023b54..540d8602d91 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomizationUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/BareAppMenuCustomizationUnitTest.java
+@@ -47,6 +47,9 @@ public class BareAppMenuCustomizationUnitTest {
+                 .removeKey(ChromePreferenceKeys.BARE_APP_MENU_HIDDEN_ITEMS);
+         ChromeSharedPreferences.getInstance()
+                 .removeKey(ChromePreferenceKeys.BARE_APP_MENU_EDIT_TIP_COUNT);
++        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.BARE_APP_MENU_ORDER);
++        ChromeSharedPreferences.getInstance()
++                .removeKey(ChromePreferenceKeys.BARE_APP_MENU_ORDER_ALL);
+     }
+ 
+     private static ListItem item(int id) {
+@@ -384,4 +387,135 @@ public class BareAppMenuCustomizationUnitTest {
+         BareAppMenuCustomization.setEditMode(true);
+         assertFalse(BareAppMenuCustomization.shouldShowTip());
+     }
++
++    private static ListItem checkboxRow(int id, int checkboxId) {
++        PropertyModel box =
++                new PropertyModel.Builder(AppMenuItemProperties.ALL_ICON_KEYS)
++                        .with(AppMenuItemProperties.MENU_ITEM_ID, checkboxId)
++                        .with(AppMenuItemProperties.CHECKABLE, true)
++                        .with(AppMenuItemProperties.ENABLED, true)
++                        .build();
++        ModelList icons = new ModelList();
++        icons.add(new ListItem(0, box));
++        PropertyModel model =
++                new PropertyModel.Builder(AppMenuItemProperties.ALL_KEYS)
++                        .with(AppMenuItemProperties.MENU_ITEM_ID, id)
++                        .with(AppMenuItemProperties.ENABLED, true)
++                        .with(AppMenuItemProperties.ADDITIONAL_ICONS, icons)
++                        .build();
++        return new ListItem(AppMenuItemType.TITLE_BUTTON, model);
++    }
++
++    private int indexOf(ModelList list, int id) {
++        for (int i = 0; i < list.size(); i++) {
++            if (list.get(i).type != AppMenuItemType.DIVIDER && idAt(list, i) == id) return i;
++        }
++        return -1;
++    }
++
++    @Test
++    public void testTaskManagerHasAName() {
++        assertNotNull(BareAppMenuCustomization.keyFor(R.id.task_manager));
++        assertTrue(BareAppMenuCustomization.opensEditMode(R.id.task_manager));
++    }
++
++    @Test
++    public void testACheckboxRowIsAPlainRowWhileEditing() {
++        BareAppMenuCustomization.dismissTip();
++        ModelList list = new ModelList();
++        list.add(checkboxRow(R.id.request_desktop_site_id, R.id.request_desktop_site_check_id));
++        list.add(item(R.id.preferences_id));
++        assertEquals(AppMenuItemType.TITLE_BUTTON, apply(list).get(0).type);
++
++        list = new ModelList();
++        list.add(checkboxRow(R.id.request_desktop_site_id, R.id.request_desktop_site_check_id));
++        list.add(item(R.id.preferences_id));
++        BareAppMenuCustomization.setEditMode(true);
++        ModelList edited = apply(list);
++        ListItem row = edited.get(indexOf(edited, R.id.request_desktop_site_id));
++        assertEquals(AppMenuItemType.STANDARD_NO_ICON, row.type);
++        assertNotNull(row.model.get(AppMenuItemProperties.END_ICON));
++    }
++
++    @Test
++    public void testAHiddenItemCannotBeDragged() {
++        BareAppMenuCustomization.toggle(R.id.share_menu_id);
++        BareAppMenuCustomization.setEditMode(true);
++        assertFalse(BareAppMenuCustomization.canMove(R.id.share_menu_id));
++        assertTrue(BareAppMenuCustomization.canMove(R.id.print_id));
++        assertFalse(BareAppMenuCustomization.canMove(R.id.preferences_id));
++    }
++
++    @Test
++    public void testAnItemMovesAcrossADividerAndTheDividersStay() {
++        BareAppMenuCustomization.dismissTip();
++        BareAppMenuCustomization.setEditMode(true);
++        apply(menu());
++        assertTrue(
++                BareAppMenuCustomization.onRowMoved(
++                        R.id.new_tab_menu_id, R.id.print_id, /* after= */ true));
++        BareAppMenuCustomization.setEditMode(false);
++        ModelList list = apply(menu());
++        // [Share] | [Print, New tab] | [Settings]
++        assertEquals(R.id.share_menu_id, idAt(list, 0));
++        assertEquals(AppMenuItemType.DIVIDER, list.get(1).type);
++        assertEquals(R.id.print_id, idAt(list, 2));
++        assertEquals(R.id.new_tab_menu_id, idAt(list, 3));
++        assertEquals(AppMenuItemType.DIVIDER, list.get(4).type);
++    }
++
++    @Test
++    public void testAHiddenItemKeepsItsPlaceWhenOthersMove() {
++        BareAppMenuCustomization.dismissTip();
++        BareAppMenuCustomization.toggle(R.id.share_menu_id);
++        BareAppMenuCustomization.setEditMode(true);
++        apply(menu());
++        assertTrue(
++                BareAppMenuCustomization.onRowMoved(
++                        R.id.print_id, R.id.new_tab_menu_id, /* after= */ false));
++        BareAppMenuCustomization.toggle(R.id.share_menu_id);
++        BareAppMenuCustomization.setEditMode(false);
++        ModelList list = apply(menu());
++        // Share was hidden in the second place of its run and is back there.
++        assertEquals(R.id.print_id, idAt(list, 0));
++        assertEquals(R.id.share_menu_id, idAt(list, 2));
++        assertEquals(R.id.new_tab_menu_id, idAt(list, 3));
++    }
++
++    @Test
++    public void testTheOrderSavedBy202IsKeptAndNotRewritten() {
++        BareAppMenuCustomization.dismissTip();
++        ChromeSharedPreferences.getInstance()
++                .writeString(ChromePreferenceKeys.BARE_APP_MENU_ORDER, "print,share,unknown");
++        ModelList list = apply(menu());
++        assertEquals(R.id.print_id, idAt(list, 2));
++        assertEquals(R.id.share_menu_id, idAt(list, 3));
++
++        BareAppMenuCustomization.setEditMode(true);
++        apply(menu());
++        assertTrue(
++                BareAppMenuCustomization.onRowMoved(
++                        R.id.share_menu_id, R.id.new_tab_menu_id, /* after= */ false));
++        assertEquals(
++                "print,share,unknown",
++                ChromeSharedPreferences.getInstance()
++                        .readString(ChromePreferenceKeys.BARE_APP_MENU_ORDER, ""));
++        String saved =
++                ChromeSharedPreferences.getInstance()
++                        .readString(ChromePreferenceKeys.BARE_APP_MENU_ORDER_ALL, "");
++        assertTrue(saved.startsWith("share,new_tab,print"));
++        assertFalse(saved.contains("unknown"));
++    }
++
++    @Test
++    public void testAnItemTheOrderDoesNotNameStaysAfterItsNeighbour() {
++        BareAppMenuCustomization.dismissTip();
++        ChromeSharedPreferences.getInstance()
++                .writeString(ChromePreferenceKeys.BARE_APP_MENU_ORDER_ALL, "print,new_tab");
++        ModelList list = apply(menu());
++        // Print first, then New tab, then Share, which comes after New tab in the built menu.
++        assertEquals(R.id.print_id, idAt(list, 0));
++        assertEquals(R.id.new_tab_menu_id, idAt(list, 2));
++        assertEquals(R.id.share_menu_id, idAt(list, 3));
++    }
+ }
 diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
 index 7dc3997326e..dded702e47b 100644
 --- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
@@ -199,20 +472,66 @@ index 9901da42891..b4e5bde67eb 100644
      public boolean onItemLongClick(PropertyModel model, View view) {
          if (mAppMenu == null) return false;
 diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
-index 09233ff21f1..2af45014a04 100644
+index 09233ff21f1..b9e12c4badc 100644
 --- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
 +++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
-@@ -6,7 +6,9 @@ package org.chromium.chrome.browser.ui.appmenu;
+@@ -4,21 +4,31 @@
  
+ package org.chromium.chrome.browser.ui.appmenu;
+ 
++import android.animation.Animator;
++import android.animation.AnimatorListenerAdapter;
  import android.animation.ValueAnimator;
  import android.content.Context;
++import android.graphics.Bitmap;
 +import android.graphics.Canvas;
  import android.graphics.Color;
 +import android.graphics.Paint;
  import android.graphics.drawable.ColorDrawable;
  import android.graphics.drawable.Drawable;
  import android.graphics.drawable.GradientDrawable;
-@@ -62,6 +64,14 @@ final class BareMenuSheet {
++import android.view.Choreographer;
+ import android.view.Gravity;
+ import android.view.MotionEvent;
+ import android.view.VelocityTracker;
+ import android.view.View;
+ import android.view.ViewConfiguration;
+ import android.view.ViewGroup;
++import android.view.ViewTreeObserver;
+ import android.view.animation.Interpolator;
++import android.widget.AbsListView;
+ import android.widget.FrameLayout;
++import android.widget.ImageView;
+ import android.widget.LinearLayout;
++import android.widget.ListAdapter;
+ import android.widget.ListView;
+ 
+ import androidx.annotation.ColorInt;
+@@ -31,6 +41,9 @@ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.ui.interpolators.Interpolators;
+ import org.chromium.ui.modelutil.MVCListAdapter;
+ 
++import java.util.ArrayList;
++import java.util.List;
++
+ /**
+  * Bare: the three-dot menu as a sheet that comes up from behind the bottom toolbar and carries on
+  * from it, in the toolbar's colour. It opens half way, can be dragged or scrolled up to its full
+@@ -52,6 +65,13 @@ final class BareMenuSheet {
+     private static final float CLOSE_DRAG_DP = 48f;
+     private static final float CORNER_DP = 24f;
+     private static final int SCRIM_COLOR = 0x66000000;
++    // Dragging a row while the menu is being edited.
++    private static final long SLIDE_MS = 150;
++    private static final long SETTLE_MS_DROP = 180;
++    private static final float EDGE_ZONE_DP = 64f;
++    private static final float MAX_SCROLL_DP_PER_FRAME = 14f;
++    private static final float LIFT_SCALE = 1.03f;
++    private static final float LIFT_ELEVATION_DP = 8f;
+ 
+     private final View mContent;
+     private final ListView mList;
+@@ -62,6 +82,14 @@ final class BareMenuSheet {
      private final Frame mFrame;
      private @Nullable ValueAnimator mAnimator;
      private boolean mClosing;
@@ -227,7 +546,7 @@ index 09233ff21f1..2af45014a04 100644
  
      /**
       * @param content The menu's content view; it is moved and dressed, its items are not changed.
-@@ -76,12 +86,14 @@ final class BareMenuSheet {
+@@ -76,12 +104,14 @@ final class BareMenuSheet {
              ListView list,
              int height,
              @ColorInt int color,
@@ -243,7 +562,7 @@ index 09233ff21f1..2af45014a04 100644
          mFrame = new Frame(context);
          mScrim = new View(context);
          mScrim.setBackgroundColor(SCRIM_COLOR);
-@@ -301,10 +313,206 @@ final class BareMenuSheet {
+@@ -301,10 +331,476 @@ final class BareMenuSheet {
          private boolean mDragging;
          private boolean mAbove;
          private @Nullable VelocityTracker mVelocity;
@@ -252,8 +571,28 @@ index 09233ff21f1..2af45014a04 100644
 +        private int mRowPosition = -1;
 +        private int mRowId;
 +        private float mRowDownY;
-+        private int mTargetPosition = -1;
-+        private boolean mTargetAfter;
++        // The drag of a row: the rows that can move take turns in the places they hold, and the
++        // others (dividers, Settings, headings) stay where they are.
++        private int[] mHeights = new int[0];
++        private int[] mTops = new int[0];
++        private int[] mPlaces = new int[0];
++        private float[] mOffsets = new float[0];
++        private float[] mFrom = new float[0];
++        private float[] mTo = new float[0];
++        private int mDragPlace = -1;
++        private int mTargetPlace = -1;
++        private float mLiftStartY;
++        private float mLastY;
++        private @Nullable ImageView mLift;
++        private @Nullable ValueAnimator mSlide;
++        private boolean mSettling;
++        private final ViewTreeObserver.OnPreDrawListener mApplyOffsets =
++                () -> {
++                    applyOffsets();
++                    return true;
++                };
++        private final Choreographer.FrameCallback mAutoScroll = this::autoScroll;
++        private boolean mScrolling;
  
          Frame(Context context) {
              super(context);
@@ -319,7 +658,9 @@ index 09233ff21f1..2af45014a04 100644
 +        }
 +
 +        private boolean beginRowDrag(MotionEvent event) {
-+            if (!editing()) return false;
++            if (mSettling || !editing()) return false;
++            ListAdapter adapter = mList.getAdapter();
++            if (adapter == null) return false;
 +            for (int i = 0; i < mList.getChildCount(); i++) {
 +                View child = mList.getChildAt(i);
 +                int position = mList.getFirstVisiblePosition() + i;
@@ -334,42 +675,237 @@ index 09233ff21f1..2af45014a04 100644
 +                mRowPosition = position;
 +                mRowId = itemIdAt(position);
 +                mRowDownY = event.getY();
-+                mTargetPosition = -1;
-+                child.setAlpha(0.85f);
++                mLastY = event.getY();
++                measureRows(adapter);
++                mDragPlace = placeOf(position);
++                mTargetPlace = mDragPlace;
++                lift(child, origin);
++                mList.setRecyclerListener(
++                        view -> {
++                            view.setTranslationY(0f);
++                            view.setAlpha(1f);
++                        });
++                mList.getViewTreeObserver().addOnPreDrawListener(mApplyOffsets);
++                mList.invalidate();
 +                ActionHaptics.tick(this);
 +                return true;
 +            }
 +            return false;
 +        }
 +
-+        private void updateRowTarget(MotionEvent event) {
-+            mTargetPosition = -1;
-+            mTargetAfter = false;
-+            int lastMovable = -1;
-+            for (int i = 0; i < mList.getChildCount(); i++) {
-+                int position = mList.getFirstVisiblePosition() + i;
-+                if (!movable(position)) continue;
-+                lastMovable = position;
-+                if (position == mRowPosition) continue;
-+                View child = mList.getChildAt(i);
-+                float[] origin = originOf(child);
-+                if (event.getY() < origin[1] + child.getHeight() / 2f) {
-+                    mTargetPosition = position;
-+                    return;
++        /** The height and the top of every row, as the list lays them out from its first row. */
++        private void measureRows(ListAdapter adapter) {
++            int count = adapter.getCount();
++            mHeights = new int[count];
++            mTops = new int[count];
++            mOffsets = new float[count];
++            mFrom = new float[count];
++            mTo = new float[count];
++            int widthSpec =
++                    View.MeasureSpec.makeMeasureSpec(
++                            mList.getWidth() - mList.getPaddingLeft() - mList.getPaddingRight(),
++                            View.MeasureSpec.EXACTLY);
++            int heightSpec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
++            int first = mList.getFirstVisiblePosition();
++            List<Integer> places = new ArrayList<>();
++            for (int p = 0; p < count; p++) {
++                int index = p - first;
++                if (index >= 0 && index < mList.getChildCount()) {
++                    mHeights[p] = mList.getChildAt(index).getHeight();
++                } else {
++                    View view = adapter.getView(p, null, mList);
++                    if (view.getLayoutParams() == null) {
++                        view.setLayoutParams(
++                                new AbsListView.LayoutParams(
++                                        ViewGroup.LayoutParams.MATCH_PARENT,
++                                        ViewGroup.LayoutParams.WRAP_CONTENT));
++                    }
++                    view.measure(widthSpec, heightSpec);
++                    mHeights[p] = view.getMeasuredHeight();
++                }
++                if (movable(p)) places.add(p);
++            }
++            int gap = Math.max(0, mList.getDividerHeight());
++            int top = 0;
++            for (int p = 0; p < count; p++) {
++                mTops[p] = top;
++                top += mHeights[p] + gap;
++            }
++            mPlaces = new int[places.size()];
++            for (int k = 0; k < mPlaces.length; k++) mPlaces[k] = places.get(k);
++        }
++
++        private int placeOf(int position) {
++            for (int k = 0; k < mPlaces.length; k++) {
++                if (mPlaces[k] == position) return k;
++            }
++            return -1;
++        }
++
++        /** How far the list has scrolled past its first row, in pixels. */
++        private float scrolled() {
++            if (mList.getChildCount() == 0) return 0;
++            int first = mList.getFirstVisiblePosition();
++            if (first >= mTops.length) return 0;
++            return mTops[first] - mList.getChildAt(0).getTop();
++        }
++
++        /** A raised copy of the row that follows the finger while its place stays empty. */
++        private void lift(View child, float[] origin) {
++            Bitmap bitmap =
++                    Bitmap.createBitmap(
++                            Math.max(1, child.getWidth()),
++                            Math.max(1, child.getHeight()),
++                            Bitmap.Config.ARGB_8888);
++            Canvas canvas = new Canvas(bitmap);
++            canvas.drawColor(sheetColor());
++            child.draw(canvas);
++            ImageView lift = new ImageView(getContext());
++            lift.setImageBitmap(bitmap);
++            GradientDrawable shape = new GradientDrawable();
++            shape.setColor(sheetColor());
++            shape.setCornerRadius(dp(8));
++            lift.setBackground(shape);
++            lift.setClipToOutline(true);
++            lift.setElevation(dp(LIFT_ELEVATION_DP));
++            lift.setAlpha(0.96f);
++            lift.setScaleX(LIFT_SCALE);
++            lift.setScaleY(LIFT_SCALE);
++            lift.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
++            addView(lift, new FrameLayout.LayoutParams(child.getWidth(), child.getHeight()));
++            lift.setTranslationX(origin[0]);
++            lift.setTranslationY(origin[1]);
++            mLiftStartY = origin[1];
++            mLift = lift;
++        }
++
++        private @ColorInt int sheetColor() {
++            View column = mContent.findViewById(R.id.app_menu_content_container);
++            Drawable background = column == null ? null : column.getBackground();
++            if (background instanceof GradientDrawable shape && shape.getColor() != null) {
++                return shape.getColor().getDefaultColor();
++            }
++            return SemanticColorUtils.getColorSurfaceContainerHigh(getContext());
++        }
++
++        /** Where the list's top is in this frame; a row sits at this plus its top minus scrolled(). */
++        private float listTop() {
++            return originOf(mList)[1];
++        }
++
++        /** The place nearest to the middle of the raised row. */
++        private int nearestPlace() {
++            ImageView lift = mLift;
++            if (lift == null || mPlaces.length == 0) return mDragPlace;
++            float middle =
++                    lift.getTranslationY() - listTop() + scrolled() + mHeights[mRowPosition] / 2f;
++            int best = mDragPlace;
++            float bestDistance = Float.MAX_VALUE;
++            for (int k = 0; k < mPlaces.length; k++) {
++                int p = mPlaces[k];
++                float distance = Math.abs(mTops[p] + mHeights[p] / 2f - middle);
++                if (distance < bestDistance) {
++                    bestDistance = distance;
++                    best = k;
 +                }
 +            }
-+            if (lastMovable >= 0 && lastMovable != mRowPosition) {
-+                mTargetPosition = lastMovable;
-+                mTargetAfter = true;
++            return best;
++        }
++
++        /** The position whose row ends up in place {@code k} with the dragged row at the target. */
++        private int rowAtPlace(int k) {
++            int from = mDragPlace;
++            int to = mTargetPlace;
++            if (k == to) return mPlaces[from];
++            if (from < to && k >= from && k < to) return mPlaces[k + 1];
++            if (from > to && k > to && k <= from) return mPlaces[k - 1];
++            return mPlaces[k];
++        }
++
++        /** Moves the other rows aside so there is a gap where the raised row would land. */
++        private void retarget() {
++            int target = nearestPlace();
++            if (target == mTargetPlace) return;
++            mTargetPlace = target;
++            ActionHaptics.tick(this);
++            int count = mTops.length;
++            int[] heightAt = mHeights.clone();
++            int[] rowAt = new int[count];
++            for (int p = 0; p < count; p++) rowAt[p] = p;
++            for (int k = 0; k < mPlaces.length; k++) {
++                rowAt[mPlaces[k]] = rowAtPlace(k);
++                heightAt[mPlaces[k]] = mHeights[rowAt[mPlaces[k]]];
++            }
++            int gap = Math.max(0, mList.getDividerHeight());
++            int top = 0;
++            float[] next = new float[count];
++            for (int p = 0; p < count; p++) {
++                next[rowAt[p]] = top - mTops[rowAt[p]];
++                top += heightAt[p] + gap;
++            }
++            if (mSlide != null) mSlide.cancel();
++            mFrom = mOffsets.clone();
++            mTo = next;
++            ValueAnimator slide = ValueAnimator.ofFloat(0f, 1f);
++            slide.setDuration(SLIDE_MS);
++            slide.setInterpolator(Interpolators.FAST_OUT_SLOW_IN_INTERPOLATOR);
++            slide.addUpdateListener(
++                    a -> {
++                        float f = (float) a.getAnimatedValue();
++                        for (int p = 0; p < mOffsets.length; p++) {
++                            mOffsets[p] = mFrom[p] + (mTo[p] - mFrom[p]) * f;
++                        }
++                        mList.invalidate();
++                    });
++            mSlide = slide;
++            slide.start();
++        }
++
++        /** Puts each row shown where the drag has it; the dragged row's own place stays empty. */
++        private void applyOffsets() {
++            int first = mList.getFirstVisiblePosition();
++            for (int i = 0; i < mList.getChildCount(); i++) {
++                int position = first + i;
++                View child = mList.getChildAt(i);
++                if (position >= mOffsets.length) continue;
++                child.setTranslationY(mRowChild == null ? 0f : mOffsets[position]);
++                child.setAlpha(mRowChild != null && position == mRowPosition ? 0f : 1f);
 +            }
 +        }
 +
++        /** Scrolls the list while the finger is near its top or bottom edge. */
++        private void autoScroll(long frameTimeNanos) {
++            mScrolling = false;
++            if (mRowChild == null || mSettling) return;
++            float listTop = Math.max(originOf(mList)[1], sheetTop());
++            float listBottom = Math.min(originOf(mList)[1] + mList.getHeight(), getHeight());
++            float zone = dp(EDGE_ZONE_DP);
++            float step = 0;
++            if (mLastY < listTop + zone && mList.canScrollVertically(-1)) {
++                float near = (listTop + zone - mLastY) / zone;
++                step = -dp(MAX_SCROLL_DP_PER_FRAME) * Math.min(1f, near * near);
++            } else if (mLastY > listBottom - zone && mList.canScrollVertically(1)) {
++                float near = (mLastY - (listBottom - zone)) / zone;
++                step = dp(MAX_SCROLL_DP_PER_FRAME) * Math.min(1f, near * near);
++            }
++            if (step == 0) return;
++            mList.scrollListBy(Math.round(step));
++            retarget();
++            mScrolling = true;
++            Choreographer.getInstance().postFrameCallback(mAutoScroll);
++        }
++
 +        private boolean handleRowDrag(MotionEvent event) {
++            if (mSettling) return true;
 +            switch (event.getActionMasked()) {
 +                case MotionEvent.ACTION_MOVE:
-+                    if (mRowChild != null) mRowChild.setTranslationY(event.getY() - mRowDownY);
-+                    updateRowTarget(event);
-+                    mList.invalidate();
++                    mLastY = event.getY();
++                    if (mLift != null) mLift.setTranslationY(mLiftStartY + mLastY - mRowDownY);
++                    retarget();
++                    if (!mScrolling) {
++                        mScrolling = true;
++                        Choreographer.getInstance().postFrameCallback(mAutoScroll);
++                    }
 +                    return true;
 +                case MotionEvent.ACTION_UP:
 +                    finishRowDrag(true);
@@ -383,33 +919,101 @@ index 09233ff21f1..2af45014a04 100644
 +            }
 +        }
 +
++        /** Lets the raised row settle into its gap, then saves the move in one step. */
 +        private void finishRowDrag(boolean drop) {
-+            View child = mRowChild;
-+            if (child != null) {
++            if (mRowChild == null || mSettling) return;
++            Choreographer.getInstance().removeFrameCallback(mAutoScroll);
++            mScrolling = false;
++            boolean moved = drop && mTargetPlace >= 0 && mTargetPlace != mDragPlace;
++            int targetId = moved ? itemIdAt(mPlaces[mTargetPlace]) : -1;
++            boolean after = mTargetPlace > mDragPlace;
++            int movedId = mRowId;
++            if (!moved) {
++                // Back where it came from: the others slide back too.
++                mTargetPlace = mDragPlace;
++                if (mSlide != null) mSlide.cancel();
++                mFrom = mOffsets.clone();
++                mTo = new float[mOffsets.length];
++            }
++            float landing =
++                    listTop()
++                            - scrolled()
++                            + mTops[mRowPosition]
++                            + (moved ? mTo[mRowPosition] : 0);
++            mSettling = true;
++            ImageView lift = mLift;
++            if (lift == null) {
++                endRowDrag(movedId, targetId, after);
++                return;
++            }
++            ValueAnimator settle = ValueAnimator.ofFloat(0f, 1f);
++            float startY = lift.getTranslationY();
++            settle.setDuration(SETTLE_MS_DROP);
++            settle.setInterpolator(Interpolators.DECELERATE_INTERPOLATOR);
++            settle.addUpdateListener(
++                    a -> {
++                        float f = (float) a.getAnimatedValue();
++                        lift.setTranslationY(startY + (landing - startY) * f);
++                        float scale = LIFT_SCALE + (1f - LIFT_SCALE) * f;
++                        lift.setScaleX(scale);
++                        lift.setScaleY(scale);
++                        lift.setElevation(dp(LIFT_ELEVATION_DP) * (1f - f));
++                        if (!moved) {
++                            for (int p = 0; p < mOffsets.length; p++) {
++                                mOffsets[p] = mFrom[p] + (mTo[p] - mFrom[p]) * f;
++                            }
++                            mList.invalidate();
++                        }
++                    });
++            settle.addListener(
++                    new AnimatorListenerAdapter() {
++                        @Override
++                        public void onAnimationEnd(Animator animation) {
++                            endRowDrag(movedId, targetId, after);
++                        }
++                    });
++            if (mSlide != null && !moved) mSlide.cancel();
++            settle.start();
++        }
++
++        /**
++         * Saves the move and clears the drag in one go. The menu is rebuilt in the new order while
++         * the rows are still drawn where the drag put them, which is the same picture, so the
++         * rebuild does not show.
++         */
++        private void endRowDrag(int movedId, int targetId, boolean after) {
++            if (mSlide != null) mSlide.cancel();
++            mSlide = null;
++            boolean changed = false;
++            if (targetId != -1 && mMoveHandler != null) {
++                changed = mMoveHandler.move(movedId, targetId, after);
++            }
++            if (changed) ActionHaptics.tick(this);
++            mList.getViewTreeObserver().removeOnPreDrawListener(mApplyOffsets);
++            mList.setRecyclerListener(null);
++            mRowChild = null;
++            mRowPosition = -1;
++            mDragPlace = -1;
++            mTargetPlace = -1;
++            for (int i = 0; i < mList.getChildCount(); i++) {
++                View child = mList.getChildAt(i);
 +                child.setTranslationY(0f);
 +                child.setAlpha(1f);
 +            }
-+            int targetId = drop ? itemIdAt(mTargetPosition) : -1;
-+            boolean after = mTargetAfter;
-+            int movedId = mRowId;
-+            mRowChild = null;
-+            mRowPosition = -1;
-+            mTargetPosition = -1;
++            if (mLift != null) removeView(mLift);
++            mLift = null;
++            mSettling = false;
 +            mList.invalidate();
-+            if (targetId != -1 && mMoveHandler != null) {
-+                boolean changed = mMoveHandler.move(movedId, targetId, after);
-+                if (changed) ActionHaptics.tick(this);
-+            }
 +        }
 +
-+        /** Draws the drag handles and the line where a dragged row would land, over the list. */
++        /** Draws the drag handles over the list; they move with their rows. */
 +        private final class RowHandles extends android.graphics.drawable.Drawable {
 +            @Override
 +            public void draw(Canvas canvas) {
 +                if (!editing()) return;
 +                for (int i = 0; i < mList.getChildCount(); i++) {
 +                    int position = mList.getFirstVisiblePosition() + i;
-+                    if (!movable(position)) continue;
++                    if (!movable(position) || position == mRowPosition) continue;
 +                    View child = mList.getChildAt(i);
 +                    float centerX = child.getLeft() + child.getWidth() - dp(84);
 +                    float centerY = child.getTop() + child.getTranslationY() + child.getHeight() / 2f;
@@ -418,21 +1022,6 @@ index 09233ff21f1..2af45014a04 100644
 +                        canvas.drawRoundRect(
 +                                centerX - dp(8), y - dp(1), centerX + dp(8), y + dp(1), dp(1),
 +                                dp(1), mHandlePaint);
-+                    }
-+                }
-+                if (mRowChild != null && mTargetPosition >= 0) {
-+                    int index = mTargetPosition - mList.getFirstVisiblePosition();
-+                    if (index >= 0 && index < mList.getChildCount()) {
-+                        View child = mList.getChildAt(index);
-+                        float y = child.getTop() + (mTargetAfter ? child.getHeight() : 0);
-+                        Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
-+                        line.setColor(0xFF3989FF);
-+                        canvas.drawRect(
-+                                child.getLeft() + dp(12),
-+                                y - dp(1.5f),
-+                                child.getLeft() + child.getWidth() - dp(12),
-+                                y + dp(1.5f),
-+                                line);
 +                    }
 +                }
 +            }
@@ -450,7 +1039,7 @@ index 09233ff21f1..2af45014a04 100644
          }
  
          /** The y in this frame where the sheet's top is now. */
-@@ -325,6 +533,7 @@ final class BareMenuSheet {
+@@ -325,6 +821,7 @@ final class BareMenuSheet {
                      mAbove = mDownY < sheetTop();
                      float handleZone = HANDLE_ZONE_DP * getResources().getDisplayMetrics().density;
                      boolean onHandle = !mAbove && mDownY < sheetTop() + handleZone;
@@ -458,7 +1047,7 @@ index 09233ff21f1..2af45014a04 100644
                      return mAbove || onHandle;
                  case MotionEvent.ACTION_MOVE:
                      float dy = event.getY() - mDownY;
-@@ -346,6 +555,7 @@ final class BareMenuSheet {
+@@ -346,6 +843,7 @@ final class BareMenuSheet {
          @Override
          public boolean onTouchEvent(MotionEvent event) {
              if (mClosing) return true;
