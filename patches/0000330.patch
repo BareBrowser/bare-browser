@@ -1,0 +1,44 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/BottomAttachedUiObserver.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/BottomAttachedUiObserver.java
+index 366ba1dffab71..3d59313d372a1 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/BottomAttachedUiObserver.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/BottomAttachedUiObserver.java
+@@ -304,8 +304,15 @@ public class BottomAttachedUiObserver
+             return mBottomSheetColor;
+         }
+         // If this check returns false, the overlay panel logic below could be applicable.
+-        if (shouldMatchBottomControlsColor()) {
+-            return mBottomControlsColor;
++        // Bare: while any non-chin bottom control is visible, use the stacker color for the
++        // system navigation bar so it matches the address bar (Chromium often leaves this null
++        // when the toolbar is fully on-screen and not scrollable).
++        if (shouldMatchBottomControlsColor()
++                || mUseBottomControlsColor
++                || areNonBottomChinBottomControlsVisible()) {
++            if (mBottomControlsColor != null && mBottomControlsColor != 0) {
++                return mBottomControlsColor;
++            }
+         }
+         if (mOverlayPanelVisible
+                 && assumeNonNull(mOverlayPanelStateProvider).isFullWidthSizePanel()) {
+@@ -313,9 +320,6 @@ public class BottomAttachedUiObserver
+             // content will be "bottom attached".
+             return mOverlayPanelState == PanelState.PEEKED ? mOverlayPanelColor : null;
+         }
+-        if (mUseBottomControlsColor) {
+-            return mBottomControlsColor;
+-        }
+         if (mKeyboardAccessoryVisible) {
+             return mKeyboardAccessoryColor;
+         }
+@@ -488,7 +492,10 @@ public class BottomAttachedUiObserver
+                 bottomOffset < mBottomControlsHeight - mBottomControlsMinHeight;
+         boolean hasFixedBrowserControlsAttached =
+                 mBottomControlsStacker.hasNonScrollableLayersOtherThan(LayerType.BOTTOM_CHIN);
+-        boolean useBrowserControlsColor = hasScrollablePortion || hasFixedBrowserControlsAttached;
++        boolean useBrowserControlsColor =
++                hasScrollablePortion
++                        || hasFixedBrowserControlsAttached
++                        || hasOtherVisibleBottomControls;
+ 
+         updateUseBottomControlsColor(useBrowserControlsColor);
+     }
