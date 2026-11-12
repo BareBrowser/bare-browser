@@ -1,0 +1,192 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index 0822a224ed717..cf5be8d963303 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -571,7 +571,10 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+                         getIntentRequestTracker(),
+                         getInsetObserver());
+         window.setKeyboardShortcutsDelegate(this);
+-        if (this instanceof ChromeTabbedActivity) BareImmersive.attachCutoutMode(this, window);
++        if (this instanceof ChromeTabbedActivity) {
++            BareImmersive.attachCutoutMode(this, window);
++            getWindow().setNavigationBarContrastEnforced(false);
++        }
+         return window;
+     }
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedNavigationBarColorController.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedNavigationBarColorController.java
+index acaabe0455bf8..828026d24a45f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedNavigationBarColorController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedNavigationBarColorController.java
+@@ -484,9 +484,23 @@ class TabbedNavigationBarColorController
+         if (mOverviewMode && mOverviewColorSupplier.get() != null) {
+             return mOverviewColorSupplier.get();
+         } else if (useBottomAttachedUiColor()) {
++            // Bare: stacker color can be dimmer than the visible toolbar (common on NTP).
++            if (useActiveTabColor()) {
++                @ColorInt
++                int toolbarColor =
++                        org.chromium.chrome.browser.theme.ThemeUtils.getBackgroundColor(
++                                mActiveTab);
++                if (Math.abs(Color.red(toolbarColor) - Color.red(mBottomAttachedUiColor)) > 6
++                        || Math.abs(Color.green(toolbarColor) - Color.green(mBottomAttachedUiColor))
++                                > 6
++                        || Math.abs(Color.blue(toolbarColor) - Color.blue(mBottomAttachedUiColor))
++                                > 6) {
++                    return toolbarColor;
++                }
++            }
+             return mBottomAttachedUiColor;
+         } else if (useActiveTabColor()) {
+-            return mActiveTab.getBackgroundColor();
++            return org.chromium.chrome.browser.theme.ThemeUtils.getBackgroundColor(mActiveTab);
+         } else {
+             return forceDarkNavigationBar
+                     ? mContext.getColor(R.color.toolbar_background_primary_dark)
+@@ -500,9 +514,22 @@ class TabbedNavigationBarColorController
+         if (mOverviewMode && mOverviewColorSupplier.get() != null) {
+             return mOverviewColorSupplier.get();
+         } else if (!forceShowDivider && useBottomAttachedUiColor()) {
++            if (useActiveTabColor()) {
++                @ColorInt
++                int toolbarColor =
++                        org.chromium.chrome.browser.theme.ThemeUtils.getBackgroundColor(
++                                mActiveTab);
++                if (Math.abs(Color.red(toolbarColor) - Color.red(mBottomAttachedUiColor)) > 6
++                        || Math.abs(Color.green(toolbarColor) - Color.green(mBottomAttachedUiColor))
++                                > 6
++                        || Math.abs(Color.blue(toolbarColor) - Color.blue(mBottomAttachedUiColor))
++                                > 6) {
++                    return toolbarColor;
++                }
++            }
+             return mBottomAttachedUiColor;
+         } else if (!forceShowDivider && useActiveTabColor()) {
+-            return mActiveTab.getBackgroundColor();
++            return org.chromium.chrome.browser.theme.ThemeUtils.getBackgroundColor(mActiveTab);
+         } else {
+             return forceDarkNavigationBar
+                     ? mContext.getColor(R.color.bottom_system_nav_divider_color_light)
+diff --git a/ui/edge_to_edge/android/java/src/org/chromium/ui/edge_to_edge/EdgeToEdgeSystemBarColorHelper.java b/ui/edge_to_edge/android/java/src/org/chromium/ui/edge_to_edge/EdgeToEdgeSystemBarColorHelper.java
+index b1f23dc2b4296..a7f71397bfc33 100644
+--- a/ui/edge_to_edge/android/java/src/org/chromium/ui/edge_to_edge/EdgeToEdgeSystemBarColorHelper.java
++++ b/ui/edge_to_edge/android/java/src/org/chromium/ui/edge_to_edge/EdgeToEdgeSystemBarColorHelper.java
+@@ -131,7 +131,8 @@ public class EdgeToEdgeSystemBarColorHelper extends BaseSystemBarColorHelper {
+         mWindowColorHelper.setNavigationBarDividerColor(windowNavDividerColor);
+         // When setting a transparent navbar for drawing toEdge, the system navbar contrast
+         // should not be enforced - otherwise, some devices will apply a scrim to the navbar.
+-        mWindowColorHelper.setNavigationBarContrastEnforced(!mIsActivityEdgeToEdge);
++        // Bare: never let the platform add a light scrim over the gesture nav band.
++        mWindowColorHelper.setNavigationBarContrastEnforced(false);
+ 
+         SystemBarColorHelper delegateHelper = mEdgeToEdgeDelegateHelperSupplier.get();
+         if (delegateHelper != null && mIsActivityEdgeToEdge) {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index 0822a224ed717..cf5be8d963303 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -571,7 +571,10 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+                         getIntentRequestTracker(),
+                         getInsetObserver());
+         window.setKeyboardShortcutsDelegate(this);
+-        if (this instanceof ChromeTabbedActivity) BareImmersive.attachCutoutMode(this, window);
++        if (this instanceof ChromeTabbedActivity) {
++            BareImmersive.attachCutoutMode(this, window);
++            getWindow().setNavigationBarContrastEnforced(false);
++        }
+         return window;
+     }
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedNavigationBarColorController.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedNavigationBarColorController.java
+index acaabe0455bf8..0936165dc4eea 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedNavigationBarColorController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedNavigationBarColorController.java
+@@ -77,6 +77,7 @@ class TabbedNavigationBarColorController
+     private final Callback<EdgeToEdgeController> mEdgeToEdgeRegisterChangeObserverCallback;
+     private EdgeToEdgeSystemBarColorHelper mEdgeToEdgeSystemBarColorHelper;
+     private final BottomAttachedUiObserver mBottomAttachedUiObserver;
++    private final BottomControlsStacker mBottomControlsStacker;
+     private final TabObserver mTabObserver;
+     private final ObserverList<Observer> mObservers = new ObserverList<>();
+ 
+@@ -164,6 +165,7 @@ class TabbedNavigationBarColorController
+                 edgeToEdgeControllerSupplier,
+                 overviewColorSupplier,
+                 edgeToEdgeSystemBarColorHelper,
++                bottomControlsStacker,
+                 new BottomAttachedUiObserver(
+                         context,
+                         bottomControlsStacker,
+@@ -184,12 +186,14 @@ class TabbedNavigationBarColorController
+             MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier,
+             MonotonicObservableSupplier<Integer> overviewColorSupplier,
+             EdgeToEdgeSystemBarColorHelper edgeToEdgeSystemBarColorHelper,
++            BottomControlsStacker bottomControlsStacker,
+             BottomAttachedUiObserver bottomAttachedUiObserver) {
+         mContext = context;
+         mFullScreenManager = fullscreenManager;
+         mEdgeToEdgeSystemBarColorHelper = edgeToEdgeSystemBarColorHelper;
+ 
+         mBottomAttachedUiObserver = bottomAttachedUiObserver;
++        mBottomControlsStacker = bottomControlsStacker;
+         mBottomAttachedUiObserver.addObserver(this);
+ 
+         mTabModelSelector = tabModelSelector;
+@@ -484,9 +488,32 @@ class TabbedNavigationBarColorController
+         if (mOverviewMode && mOverviewColorSupplier.get() != null) {
+             return mOverviewColorSupplier.get();
+         } else if (useBottomAttachedUiColor()) {
++            // Bare: stacker color can be dimmer than the visible toolbar (common on NTP).
++            if (useActiveTabColor()) {
++                @ColorInt
++                int toolbarColor =
++                        org.chromium.chrome.browser.theme.ThemeUtils.getBackgroundColor(
++                                mActiveTab);
++                if (Math.abs(Color.red(toolbarColor) - Color.red(mBottomAttachedUiColor)) > 6
++                        || Math.abs(Color.green(toolbarColor) - Color.green(mBottomAttachedUiColor))
++                                > 6
++                        || Math.abs(Color.blue(toolbarColor) - Color.blue(mBottomAttachedUiColor))
++                                > 6) {
++                    return toolbarColor;
++                }
++            }
+             return mBottomAttachedUiColor;
+         } else if (useActiveTabColor()) {
+-            return mActiveTab.getBackgroundColor();
++            @ColorInt int toolbarColor =
++                    org.chromium.chrome.browser.theme.ThemeUtils.getBackgroundColor(mActiveTab);
++            @ColorInt int stacked = mBottomControlsStacker.getBackgroundColor();
++            if (stacked != 0) {
++                return Color.rgb(
++                        Math.max(Color.red(stacked), Color.red(toolbarColor)),
++                        Math.max(Color.green(stacked), Color.green(toolbarColor)),
++                        Math.max(Color.blue(stacked), Color.blue(toolbarColor)));
++            }
++            return toolbarColor;
+         } else {
+             return forceDarkNavigationBar
+                     ? mContext.getColor(R.color.toolbar_background_primary_dark)
+@@ -500,9 +527,22 @@ class TabbedNavigationBarColorController
+         if (mOverviewMode && mOverviewColorSupplier.get() != null) {
+             return mOverviewColorSupplier.get();
+         } else if (!forceShowDivider && useBottomAttachedUiColor()) {
++            if (useActiveTabColor()) {
++                @ColorInt
++                int toolbarColor =
++                        org.chromium.chrome.browser.theme.ThemeUtils.getBackgroundColor(
++                                mActiveTab);
++                if (Math.abs(Color.red(toolbarColor) - Color.red(mBottomAttachedUiColor)) > 6
++                        || Math.abs(Color.green(toolbarColor) - Color.green(mBottomAttachedUiColor))
++                                > 6
++                        || Math.abs(Color.blue(toolbarColor) - Color.blue(mBottomAttachedUiColor))
++                                > 6) {
++                    return toolbarColor;
++                }
++            }
+             return mBottomAttachedUiColor;
+         } else if (!forceShowDivider && useActiveTabColor()) {
+-            return mActiveTab.getBackgroundColor();
++            return org.chromium.chrome.browser.theme.ThemeUtils.getBackgroundColor(mActiveTab);
+         } else {
+             return forceDarkNavigationBar
+                     ? mContext.getColor(R.color.bottom_system_nav_divider_color_light)
