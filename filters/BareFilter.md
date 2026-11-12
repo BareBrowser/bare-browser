@@ -7,3 +7,5 @@ It is on by default. Switch it off in Extensions; the change applies the next ti
 Today it covers the app prompts on Reddit, m.facebook.com and m.youtube.com.
 
 There is one copy of the list, [`BareFilter.txt`](BareFilter.txt), and it lives here. While BareFilter is on, uBlock Origin fetches it from this repository once a day, so a fix reaches you without a new Bare. With BareFilter off, nothing is requested and the copy is removed.
+
+Want to add a fix or report a broken page? See [CONTRIBUTING.md](CONTRIBUTING.md).

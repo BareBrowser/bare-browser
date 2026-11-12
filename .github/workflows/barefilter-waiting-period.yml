@@ -1,0 +1,45 @@
+# Reports whether a pull request that changes the BareFilter rules has waited
+# long enough. See .github/barefilter-gate/README.md.
+#
+# pull_request_target runs this file as it exists on the pull request's BASE
+# branch, so a pull request cannot change the gate it is judged by. Nothing
+# from the pull request is checked out or executed: the job checks out the base
+# branch and only reads the pull request through the API.
+name: BareFilter waiting period
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, labeled, unlabeled, edited]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number (leave blank to check every open pull request)"
+        required: false
+
+permissions: {}
+
+# One run at a time per pull request (all other runs share a group). Every run
+# reads the current state afresh, so if a queued run is replaced by a newer one
+# for the same pull request nothing is lost, and one pull request's event can
+# never replace another's. A manual run covers anything else that is dropped.
+concurrency:
+  group: barefilter-waiting-period-${{ github.event.pull_request.number || inputs.pr_number || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read        # check out the base branch
+      pull-requests: write  # create and edit the gate's own status comment
+      checks: write         # create the "BareFilter waiting period" check run
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Evaluate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: python3 -I .github/barefilter-gate/gate.py
