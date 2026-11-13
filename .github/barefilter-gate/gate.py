@@ -296,6 +296,10 @@ class Gate:
                 state["commits"][sha] = [fmt_time(now), rule, touched]
         if head not in current:
             raise GateError("head commit is not in the commit list")
+        # Keep only the commits in the pull request now, so force-pushes can't
+        # grow the record past MAX_COMMITS entries. A dropped commit that comes
+        # back is first seen again, which can only make the wait longer.
+        state["commits"] = {sha: state["commits"][sha] for sha in current}
 
         pr_files = self.api.paginate(self.r("/pulls/%d/files" % number))
         if len(pr_files) >= MAX_FILES:
