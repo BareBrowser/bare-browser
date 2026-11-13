@@ -70,13 +70,16 @@ User-Agent would have carried the model and the build, so it is replaced. Choosi
 nothing leaves the device until the Check for updates row is tapped.
 
 **If you make Google your search engine**, more of Chromium's Google-only behaviour switches on
-with it. Focusing the address bar asks `www.google.com/complete/search` for suggestions before you
-type anything. By the code, Chromium also preconnects to `www.google.com` from time to time,
+with it. By the code, Chromium preconnects to `www.google.com` from time to time,
 prefetches search results, prerenders `www.google.com/search/warmup.html` on focus (`kPrewarm`),
 asks `www.google.com/async/folae` whether AI Mode is available, and sends a word you tap on a
 page to `www.google.com/s` for Touch to Search. With DuckDuckGo or any other engine none of this
-happens. With Google, the new tab page shows the plain Google logo; with DuckDuckGo it shows
-DuckDuckGo's, from `staticcdn.duckduckgo.com`.
+happens.
+
+**Whatever the engine**, focusing the address bar no longer asks for suggestions before you type
+anything: an empty address bar shows none (0000245). With Google that request went to
+`www.google.com/complete/search`. The new tab page shows Bare's own logo, and no engine's logo is
+fetched for it (0000196, 0000199). Both come from reading the patches and were not captured.
 
 **Request desktop site sends a Chrome OS User-Agent** (`X11; CrOS x86_64 14541.0.0`), as
 Chromium 156 does, where earlier releases said desktop Linux. Its client hints do not match: the
@@ -86,8 +89,11 @@ notice the difference.
 **The Chrome Web Store gets that desktop User-Agent at the phone's width.** With a phone
 User-Agent the store swaps "Add to Chrome" for "Add to Desktop", which sends the extension to a
 signed-in desktop Chrome instead of installing it. So `chromewebstore.google.com` is asked for its
-desktop pages. Extension pages then fit the phone's width; the store's front page and category
-pages are still laid out for a desktop, so some rows run off the side. Earlier releases did this with a stored desktop-site
+desktop pages. Extension pages then fit the phone's width. On a screen no wider than 700 pixels
+the store's front page, category pages and search are redrawn as a plain list of the extensions
+on the page, each row a link to the store's own listing; a button at the foot of the list, "Show
+the store's own page", switches back to the store's layout (0000179, read from the patch and not
+captured). Earlier releases asked for the desktop pages with a stored desktop-site
 setting that covered every `google.com` site; 1.0.1 removes that setting once, on first launch.
 
 **Developer options can change the User-Agent.** Default sends the strings described here. The
@@ -97,14 +103,23 @@ string send none, as those browsers don't. While one is chosen, Request desktop 
 out. Sites can still tell it isn't really that browser, from `navigator.platform` and similar signals.
 
 **Page translation sends the page's text where you point it.** Translate pages goes to the
-server whose address you typed in Settings, Translate pages, after you confirm each time. The
-separate Google Translate choice is off by default and uses Chromium's own Translate when you
-turn it on. Both come from reading patches 0000174 and 0000195 and were not captured.
+server whose address you typed in Settings, Translate pages, after you confirm once for that
+server's host name; a different host asks again. The separate Google Translate choice is off by
+default and uses Chromium's own Translate when you turn it on. With either, translating a page
+also translates the next `http` and `https` pages that tab loads on the same site, without
+asking. With Google that stops once the tab has loaded such a page on another site, or is closed;
+a failed load, or a page of another kind, does not stop it. With your own server it stops when
+the tab loads a page on another site or a page of another kind, when you show the original, when
+you turn the server off, or when the tab is closed. This comes from reading patches 0000174,
+0000195, 0000220, 0000221, 0000224 and 0000237 and was not captured.
+
+**Help & feedback opens this project's page on GitHub**, `github.com/BareBrowser/bare-browser`,
+in a tab, and so does the keyboard shortcut for help. It no longer opens Google's Chrome help
+centre at `support.google.com` or checks connectivity against `clients4.google.com` and
+`www.google.com` first (0000190, read from the patch and not captured).
 
 **Some things reach Google only when you do them:**
 
-- **Settings, Help & feedback** opens Google's Chrome help centre at `support.google.com`, after
-  checking connectivity against `clients4.google.com` and `www.google.com`.
 - **A site you allow to send push notifications** registers with Google's push service, through
   Google Play services, as web push does in Chrome, unless you have picked a push distributor app
   in Settings, Push notifications (0000176). Without one, the subscription it gets back names

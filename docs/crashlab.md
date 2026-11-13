@@ -16,6 +16,7 @@ A native crash cannot write to the file, so it shows as the last lines before th
 previous session note in the next log. The renderer and GPU processes run under their own user and
 are not in the app's logcat.
 
-Every GitHub release has a CrashLab APK for each ABI. The Play build does not have one.
+Every GitHub release since 2.0.0-beta.5 has a CrashLab APK for each ABI. The Play build does not
+have one.
 
 Version codes for 2.0.3: 802000317 for arm64, 802000312 for 32-bit ARM.
