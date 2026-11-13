@@ -9,11 +9,11 @@
 Bare removes Google sign-in, browser telemetry and AI features from Chromium. Desktop extensions
 work, and uBlock Origin comes installed.
 
-- Version: `2.0.3`. versionCode `802000315` (arm64) and `802000310`
+- Version: `2.0.4`. versionCode `802000415` (arm64) and `802000410`
   (32-bit arm).
 - Base: Chromium `157.0.8103.46` (commit `800628ad`).
 - Runs on: Android 10 or newer, on arm64 or 32-bit ARM. There is no x86 build.
-- Size: 298 patches, 46,977 insertions and 3,249 deletions across 873 files.
+- Size: 313 patches, 66,193 insertions and 3,256 deletions across 962 files.
 
 ## What you can do
 
@@ -86,7 +86,7 @@ Chromium updates security components and may provision Widevine through Google; 
 fetches filter lists and extension updates. The GitHub APK checks for Bare releases if you enable
 automatic updates. Google Play handles updates for the Play build.
 
-Safe Browsing is unavailable in this build, so Bare does not show phishing or malware warnings.
+Safe Browsing is unavailable in this build. Bare uses uBlock Origin's malware and phishing lists instead, which block known bad addresses but cover less than Google's lists.
 See the [measured network behaviour](docs/network-behaviour.md) for the detailed capture and
 [privacy policy](https://barebrowser.org/privacy) for how browsing data is handled.
 

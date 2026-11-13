@@ -1,0 +1,832 @@
+diff --git a/chrome/android/java/res/values/bare_backup_strings.xml b/chrome/android/java/res/values/bare_backup_strings.xml
+index a85489d1fd1..52d46cb4cef 100644
+--- a/chrome/android/java/res/values/bare_backup_strings.xml
++++ b/chrome/android/java/res/values/bare_backup_strings.xml
+@@ -150,6 +150,25 @@
+     <string name="bare_direct_notification_title" translatable="false">Bare transfer</string>
+     <string name="bare_direct_notification_text" translatable="false">Connected to a phone nearby</string>
+ 
++    <string name="bare_direct_preparing" translatable="false">Getting it ready to send…</string>
++    <string name="bare_direct_waiting_for_send" translatable="false">Waiting for %1$s to send.</string>
++    <string name="bare_direct_offer_setup" translatable="false">Setup from %1$s</string>
++    <string name="bare_direct_offer_setup_body" translatable="false">Settings and extensions. No personal data. You choose what to restore next.</string>
++    <string name="bare_direct_offer_full" translatable="false">Everything from %1$s</string>
++    <string name="bare_direct_offer_full_body" translatable="false">Settings, bookmarks, site settings and extensions. You choose what to restore next.</string>
++    <string name="bare_direct_accept" translatable="false">Accept</string>
++    <string name="bare_direct_decline" translatable="false">Decline</string>
++    <string name="bare_direct_waiting_accept" translatable="false">Waiting for %1$s to accept…</string>
++    <string name="bare_direct_sending" translatable="false">Sending to %1$s…</string>
++    <string name="bare_direct_receiving" translatable="false">Receiving from %1$s…</string>
++    <string name="bare_direct_keep_close" translatable="false">Keep both phones close.</string>
++    <string name="bare_direct_sent" translatable="false">Sent to %1$s</string>
++    <string name="bare_direct_sent_body" translatable="false">Finish on the other phone. Nothing changed on this phone.</string>
++    <string name="bare_direct_done" translatable="false">Done</string>
++    <string name="bare_direct_declined" translatable="false">The other phone declined.</string>
++    <string name="bare_direct_couldnt_build" translatable="false">Bare couldn\'t put together what to send.</string>
++    <string name="bare_direct_sent_from" translatable="false">Sent from %1$s with Bare %2$s</string>
++
+     <string name="bare_bring_over_title" translatable="false">Bring your Bare over</string>
+     <string name="bare_bring_from_phone" translatable="false">From another phone</string>
+     <string name="bare_bring_from_phone_summary" translatable="false">Keep both phones close. Nothing goes online.</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
+index 54883e2d7fd..360ec7dcec5 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
+@@ -56,6 +56,14 @@ public final class BareBackupBridge {
+         return BareBackupBridgeJni.get().verifyTransferCommitment(a, cert, commitment);
+     }
+ 
++    /**
++     * The package for a phone-to-phone transfer: Setup, or everything with extension files. Empty
++     * if it couldn't be built.
++     */
++    static void buildTransfer(Profile profile, boolean full, Callback<byte[]> done) {
++        BareBackupBridgeJni.get().buildTransfer(profile, full, done);
++    }
++
+     /** The six digits both phones show, or an empty string for bad input. */
+     static String matchingCode(byte[] a, byte[] b) {
+         return BareBackupBridgeJni.get().matchingCode(a, b);
+@@ -114,6 +122,11 @@ public final class BareBackupBridge {
+             BareBackupBridgeJni.get().open(mHandle, profile, secret, secretIsCode, done);
+         }
+ 
++        /** Like {@link #open}, for a package received from another phone. */
++        public void openTransfer(Profile profile, Callback<String> done) {
++            BareBackupBridgeJni.get().openTransfer(mHandle, profile, done);
++        }
++
+         public void restore(
+                 Profile profile,
+                 boolean settings,
+@@ -264,6 +277,10 @@ public final class BareBackupBridge {
+                 int bareVersionCode,
+                 Callback<byte[]> done);
+ 
++        void buildTransfer(Profile profile, boolean full, Callback<byte[]> done);
++
++        void openTransfer(long handle, Profile profile, Callback<String> done);
++
+         void verifyBackup(
+                 @JniType("std::vector<uint8_t>") byte[] file,
+                 @JniType("std::vector<uint8_t>") byte[] secret,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java
+index 297e1839851..25078ce7d0e 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java
+@@ -56,11 +56,14 @@ public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
+     // The file picked on the previous page. A page can't take an object as an argument.
+     private static BareBackupBridge.@Nullable Opened sPending;
+     private static boolean sPendingFromWelcome;
++    // For a package from another phone: what the offer said, in place of a file header.
++    private static @Nullable JSONObject sPendingTransfer;
+ 
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+             ObservableSuppliers.createMonotonic();
+     private BareBackupBridge.@Nullable Opened mOpened;
+     private boolean mFromWelcome;
++    private boolean mTransfer;
+     private boolean mRestoring;
+     private JSONObject mHeader = new JSONObject();
+ 
+@@ -74,6 +77,34 @@ public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
+         if (sPending != null) sPending.close();
+         sPending = opened;
+         sPendingFromWelcome = fromWelcome;
++        sPendingTransfer = null;
++    }
++
++    /**
++     * Opens this page for a package received from another phone. It goes through the same checks
++     * and choices as a file, without a code: the phones confirmed a matching code instead.
++     */
++    public static void openTransfer(
++            Context context,
++            byte[] transfer,
++            boolean full,
++            String fromModel,
++            String bareVersion,
++            boolean fromWelcome) {
++        BareBackupBridge.Opened opened = new BareBackupBridge.Opened(transfer);
++        Arrays.fill(transfer, (byte) 0);
++        setPending(opened, fromWelcome);
++        JSONObject header = new JSONObject();
++        try {
++            header.put("kind", full ? "full" : "setup");
++            header.put("device_label", fromModel);
++            header.put("bare_version", bareVersion);
++        } catch (JSONException e) {
++            // Only the summary line would be missing.
++        }
++        sPendingTransfer = header;
++        SettingsNavigationFactory.createSettingsNavigation()
++                .startSettings(context, BareBackupRestoreFragment.class, null);
+     }
+ 
+     /**
+@@ -120,14 +151,23 @@ public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
+         mPageTitle.set(getContext().getString(R.string.bare_backup_restore));
+         mOpened = sPending;
+         mFromWelcome = sPendingFromWelcome;
++        JSONObject transfer = sPendingTransfer;
+         sPending = null;
+         sPendingFromWelcome = false;
++        sPendingTransfer = null;
+         PreferenceScreen screen = getPreferenceManager().createPreferenceScreen(getContext());
+         setPreferenceScreen(screen);
+         if (mOpened == null) {
+             // Recreated after Android discarded the page; the file is gone with it.
+             return;
+         }
++        if (transfer != null) {
++            mTransfer = true;
++            mHeader = transfer;
++            showHeader();
++            openReceived();
++            return;
++        }
+         try {
+             mHeader = new JSONObject(mOpened.describe());
+         } catch (JSONException e) {
+@@ -158,11 +198,16 @@ public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
+                         : R.string.bare_backup_kind_setup);
+         StringBuilder summary =
+                 new StringBuilder(
+-                        context.getString(
+-                                R.string.bare_backup_made,
+-                                localDate(mHeader.optString("created")),
+-                                mHeader.optString("bare_version"),
+-                                mHeader.optString("device_label")));
++                        mTransfer
++                                ? context.getString(
++                                        R.string.bare_direct_sent_from,
++                                        mHeader.optString("device_label"),
++                                        mHeader.optString("bare_version"))
++                                : context.getString(
++                                        R.string.bare_backup_made,
++                                        localDate(mHeader.optString("created")),
++                                        mHeader.optString("bare_version"),
++                                        mHeader.optString("device_label")));
+         JSONObject contents = mHeader.optJSONObject("contents");
+         if (contents != null) {
+             List<String> parts = new ArrayList<>();
+@@ -238,23 +283,33 @@ public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
+                 isCode,
+                 json -> {
+                     Arrays.fill(secret, (byte) 0);
+-                    progress.dismiss();
+-                    if (getContext() == null) return;
+-                    try {
+-                        JSONObject result = new JSONObject(json);
+-                        if (!result.optBoolean("ok")) {
+-                            BareBackupDialogs.message(
+-                                    getContext(),
+-                                    BareBackupDialogs.errorMessage(result.optString("error")));
+-                            return;
+-                        }
+-                        showChoices(result);
+-                    } catch (JSONException e) {
+-                        BareBackupDialogs.message(getContext(), R.string.bare_backup_damaged);
+-                    }
++                    onOpened(progress, json);
+                 });
+     }
+ 
++    private void openReceived() {
++        if (mOpened == null) return;
++        AlertDialog progress =
++                BareBackupDialogs.progress(getContext(), R.string.bare_backup_reading);
++        mOpened.openTransfer(getProfile(), json -> onOpened(progress, json));
++    }
++
++    private void onOpened(AlertDialog progress, String json) {
++        progress.dismiss();
++        if (getContext() == null) return;
++        try {
++            JSONObject result = new JSONObject(json);
++            if (!result.optBoolean("ok")) {
++                BareBackupDialogs.message(
++                        getContext(), BareBackupDialogs.errorMessage(result.optString("error")));
++                return;
++            }
++            showChoices(result);
++        } catch (JSONException e) {
++            BareBackupDialogs.message(getContext(), R.string.bare_backup_damaged);
++        }
++    }
++
+     private void showChoices(JSONObject result) throws JSONException {
+         Context context = getContext();
+         PreferenceScreen screen = getPreferenceScreen();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectFragment.java
+index 7aa18950a91..d0860d0120d 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectFragment.java
+@@ -168,7 +168,21 @@ abstract class BareDirectFragment extends ChromeBaseSettingsFragment
+                 heading(
+                         screen,
+                         context.getString(R.string.bare_direct_connected, other),
+-                        context.getString(R.string.bare_direct_both_confirmed));
++                        context.getString(
++                                session.isSending()
++                                        ? R.string.bare_direct_preparing
++                                        : R.string.bare_direct_waiting_for_send,
++                                other));
++                return true;
++            case BareDirectSession.State.SENDING:
++                heading(
++                        screen,
++                        context.getString(
++                                session.isSending()
++                                        ? R.string.bare_direct_sending
++                                        : R.string.bare_direct_receiving,
++                                other),
++                        context.getString(R.string.bare_direct_keep_close));
+                 return true;
+             case BareDirectSession.State.FAILED:
+                 int error = session.getError();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectModePreference.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectModePreference.java
+index 7d34766a70f..05a29ba66a1 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectModePreference.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectModePreference.java
+@@ -38,6 +38,11 @@ public class BareDirectModePreference extends Preference {
+         return mMode;
+     }
+ 
++    void setMode(@BareDirectSession.Mode int mode) {
++        mMode = mode;
++        notifyChanged();
++    }
++
+     @Override
+     public void onBindViewHolder(PreferenceViewHolder holder) {
+         super.onBindViewHolder(holder);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectReceiveFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectReceiveFragment.java
+index 19bcaa60294..a9d5d0e968d 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectReceiveFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectReceiveFragment.java
+@@ -9,6 +9,7 @@ import android.content.Context;
+ import androidx.preference.PreferenceScreen;
+ 
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+ 
+ /**
+  * Settings > Backup and transfer > Receive from another device, and the welcome's "From another
+@@ -59,6 +60,39 @@ public class BareDirectReceiveFragment extends BareDirectFragment {
+     protected void render() {
+         Context context = getContext();
+         PreferenceScreen screen = clear();
++        BareDirectSession session = mSession;
++        if (session != null && session.getState() == BareDirectSession.State.RECEIVED) {
++            byte[] received = session.takeReceived();
++            if (received == null) return;
++            BareBackupRestoreFragment.openTransfer(
++                    context,
++                    received,
++                    session.isOfferFull(),
++                    session.getPeerModel(),
++                    session.getOfferVersion(),
++                    fromWelcome());
++            // The restore page takes over; Back from it shouldn't land on a finished transfer.
++            // Settings opens the restore page in this same activity, so only this page goes.
++            SettingsNavigationFactory.createSettingsNavigation().finishCurrentSettings(this);
++            return;
++        }
++        if (session != null && session.getState() == BareDirectSession.State.OFFERED) {
++            String other = session.getPeerModel();
++            heading(
++                    screen,
++                    context.getString(
++                            session.isOfferFull()
++                                    ? R.string.bare_direct_offer_full
++                                    : R.string.bare_direct_offer_setup,
++                            other),
++                    context.getString(
++                            session.isOfferFull()
++                                    ? R.string.bare_direct_offer_full_body
++                                    : R.string.bare_direct_offer_setup_body));
++            button(screen, R.string.bare_direct_accept, session::accept);
++            button(screen, R.string.bare_direct_decline, session::cancel);
++            return;
++        }
+         if (renderShared(screen, this::begin)) return;
+         heading(
+                 screen,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSendFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSendFragment.java
+index 79a37052994..8b9a2bffcb2 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSendFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSendFragment.java
+@@ -46,7 +46,10 @@ public class BareDirectSendFragment extends BareDirectFragment {
+     /** The mode cards and the button. */
+     private void choose() {
+         PreferenceScreen screen = clear();
+-        if (mModes == null) mModes = new BareDirectModePreference(getContext(), null);
++        // A preference belongs to one screen, so a new screen gets a new one with the same choice.
++        int mode = mModes == null ? BareDirectSession.Mode.SETUP : mModes.getMode();
++        mModes = new BareDirectModePreference(getContext(), null);
++        mModes.setMode(mode);
+         screen.addPreference(mModes);
+         button(screen, R.string.bare_direct_find, this::find);
+     }
+@@ -77,8 +80,28 @@ public class BareDirectSendFragment extends BareDirectFragment {
+     protected void render() {
+         Context context = getContext();
+         PreferenceScreen screen = clear();
+-        if (renderShared(screen, this::again)) return;
+         BareDirectSession session = mSession;
++        if (session != null && session.getState() == BareDirectSession.State.OFFERED) {
++            heading(
++                    screen,
++                    context.getString(R.string.bare_direct_waiting_accept, session.getPeerModel()),
++                    null);
++            return;
++        }
++        if (session != null && session.getState() == BareDirectSession.State.SENT) {
++            heading(
++                    screen,
++                    context.getString(R.string.bare_direct_sent, session.getPeerModel()),
++                    context.getString(R.string.bare_direct_sent_body));
++            button(
++                    screen,
++                    R.string.bare_direct_done,
++                    () -> {
++                        if (getActivity() != null) getActivity().finish();
++                    });
++            return;
++        }
++        if (renderShared(screen, this::again)) return;
+         if (session == null) {
+             choose();
+             return;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSession.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSession.java
+index 90772659929..38c4f7d2d71 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSession.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSession.java
+@@ -24,9 +24,12 @@ import androidx.annotation.IntDef;
+ import androidx.annotation.StringRes;
+ 
+ import org.chromium.base.ContextUtils;
++import org.chromium.base.Log;
+ import org.chromium.base.ObserverList;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.profiles.Profile;
++import org.chromium.chrome.browser.profiles.ProfileManager;
+ 
+ import org.json.JSONException;
+ import org.json.JSONObject;
+@@ -45,6 +48,7 @@ import java.nio.charset.StandardCharsets;
+ import java.security.GeneralSecurityException;
+ import java.security.SecureRandom;
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.HashMap;
+ import java.util.LinkedHashMap;
+ import java.util.List;
+@@ -62,6 +66,7 @@ import java.util.concurrent.Executors;
+  * the other connects to it. TLS runs over that connection with the receiver as server.
+  */
+ public final class BareDirectSession {
++    private static final String TAG = "BareDirect";
+     private static final String SERVICE_TYPE = "_baredirect._tcp";
+     private static final String PROTOCOL_VERSION = "1";
+     static final int PORT = 51747;
+@@ -70,6 +75,16 @@ public final class BareDirectSession {
+     private static final int CONNECT_ATTEMPTS = 6;
+     private static final long REDISCOVER_MS = 20_000;
+     private static final long GIVE_UP_MS = 10 * 60 * 1000;
++    private static final int HANG_UP_WAIT_MS = 5000;
++    // Pairing is phone to phone with nobody to wait for, so it is quick or broken.
++    private static final int HANDSHAKE_TIMEOUT_MS = 30_000;
++    // Receiver, once both people confirmed: how long the sender may take to build its package
++    // and say what it offers.
++    private static final long OFFER_WAIT_MS = 3 * 60 * 1000;
++
++    // The first byte of a transfer package, as in backup_file.h's Kind.
++    private static final int KIND_SETUP = 1;
++    private static final int KIND_FULL = 2;
+ 
+     // Frame types. Each frame is a type byte, a 4-byte big-endian length and the payload.
+     static final int FRAME_HELLO = 1;
+@@ -77,7 +92,13 @@ public final class BareDirectSession {
+     static final int FRAME_REVEAL = 3;
+     static final int FRAME_CONFIRM = 4;
+     static final int FRAME_CANCEL = 5;
++    static final int FRAME_OFFER = 6;
++    static final int FRAME_ACCEPT = 7;
++    static final int FRAME_PACKAGE = 8;
++    static final int FRAME_RECEIVED = 9;
+     private static final int MAX_CONTROL_FRAME = 16 * 1024;
++    // The kind byte and a body no bigger than a backup file's.
++    private static final int MAX_PACKAGE_FRAME = 1 + 64 * 1024 * 1024;
+ 
+     @IntDef({
+         State.STARTING,
+@@ -86,6 +107,10 @@ public final class BareDirectSession {
+         State.CONNECTING,
+         State.CHECKING,
+         State.CONFIRMED,
++        State.OFFERED,
++        State.SENDING,
++        State.SENT,
++        State.RECEIVED,
+         State.FAILED
+     })
+     @Retention(RetentionPolicy.SOURCE)
+@@ -98,8 +123,16 @@ public final class BareDirectSession {
+         int CONNECTING = 3;
+         // Both phones show the code.
+         int CHECKING = 4;
++        // Both confirmed. The sender is building the package.
+         int CONFIRMED = 5;
+-        int FAILED = 6;
++        // The receiver is asked to accept; the sender waits for the answer.
++        int OFFERED = 6;
++        int SENDING = 7;
++        // The receiver has the package. The transfer is over on the sender.
++        int SENT = 8;
++        // The package is here and goes to the restore page.
++        int RECEIVED = 9;
++        int FAILED = 10;
+     }
+ 
+     /** What the sender chose to send. */
+@@ -153,6 +186,13 @@ public final class BareDirectSession {
+     private boolean mLinking;
+     private boolean mEnded;
+ 
++    // The offer as the receiver sees it, and the package once it's here.
++    private boolean mOfferFull;
++    private String mOfferVersion = "";
++    private byte @Nullable [] mReceived;
++    // The sender's package, kept until it is sent.
++    private volatile byte @Nullable [] mPackage;
++
+     private BareDirectTls.@Nullable Identity mIdentity;
+     private @Nullable ServerSocket mServer;
+     private @Nullable Socket mSocket;
+@@ -228,6 +268,32 @@ public final class BareDirectSession {
+         return new ArrayList<>(mPeers.values());
+     }
+ 
++    /** Receiver: whether the offer is everything rather than Setup only. */
++    boolean isOfferFull() {
++        return mOfferFull;
++    }
++
++    /** Receiver: the sender's Bare version, from the offer. */
++    String getOfferVersion() {
++        return mOfferVersion;
++    }
++
++    /** Receiver: the package, once. The restore page owns it from then on. */
++    byte @Nullable [] takeReceived() {
++        byte[] received = mReceived;
++        mReceived = null;
++        if (received != null && (!mConfirmedHere || !mAcceptedHere)) {
++            Arrays.fill(received, (byte) 0);
++            return null;
++        }
++        return received;
++    }
++
++    /** Receiver: whether this phone's person accepted the offer. */
++    boolean isAcceptedHere() {
++        return mAcceptedHere;
++    }
++
+     /** This phone's name as the other phone sees it. */
+     static String thisModel() {
+         return Build.MODEL;
+@@ -439,10 +505,18 @@ public final class BareDirectSession {
+                         mCode = code;
+                         setState(State.CHECKING);
+                     });
+-            awaitConfirmation(in);
++            if (!awaitConfirmation(in)) return;
++            if (mSending) {
++                sendWhenAccepted(in, out);
++            } else {
++                receive(in, out);
++            }
+         } catch (SecurityException e) {
++            Log.w(TAG, "Transfer stopped: %s", e.getMessage());
+             mHandler.post(() -> fail(R.string.bare_direct_security));
+         } catch (IOException | GeneralSecurityException | JSONException e) {
++            // After a deliberate end the socket is closed under the reader, which lands here too.
++            if (!mEnded) Log.w(TAG, "Transfer lost: %s", e.toString());
+             mHandler.post(() -> fail(R.string.bare_direct_lost));
+         }
+     }
+@@ -527,20 +601,91 @@ public final class BareDirectSession {
+         return BareBackupBridge.matchingCode(a, b);
+     }
+ 
+-    private void awaitConfirmation(DataInputStream in) throws IOException {
+-        int type = in.readUnsignedByte();
+-        int length = in.readInt();
+-        if (length < 0 || length > MAX_CONTROL_FRAME) throw new IOException("frame");
+-        in.skipBytes(length);
+-        if (type == FRAME_CONFIRM) {
++    /** False if the other phone said the codes don't match, or backed out. */
++    private boolean awaitConfirmation(DataInputStream in) throws IOException {
++        if (readEmpty(in) == FRAME_CONFIRM) {
+             mHandler.post(
+                     () -> {
+                         mConfirmedThere = true;
+                         maybeConfirmed();
+                     });
+-        } else {
+-            mHandler.post(() -> fail(R.string.bare_direct_not_confirmed));
++            return true;
+         }
++        mHandler.post(() -> fail(R.string.bare_direct_not_confirmed));
++        return false;
++    }
++
++    /** Sender: waits for the receiver's answer to the offer, then sends the package. */
++    private void sendWhenAccepted(DataInputStream in, DataOutputStream out) throws IOException {
++        if (readEmpty(in) != FRAME_ACCEPT) {
++            mHandler.post(() -> fail(R.string.bare_direct_declined));
++            return;
++        }
++        // The offer only goes out once the package is built.
++        byte[] transfer = mPackage;
++        if (transfer == null) throw new IOException("no package");
++        mHandler.post(() -> setState(State.SENDING));
++        synchronized (out) {
++            out.writeByte(FRAME_PACKAGE);
++            out.writeInt(transfer.length);
++            out.write(transfer);
++            out.flush();
++        }
++        if (readEmpty(in) != FRAME_RECEIVED) throw new IOException("not received");
++        mHandler.post(() -> end(State.SENT, 0));
++    }
++
++    /** Receiver: shows the offer, and takes the package if it is accepted. */
++    private void receive(DataInputStream in, DataOutputStream out)
++            throws IOException, JSONException {
++        JSONObject offer = read(in, FRAME_OFFER);
++        boolean full = "full".equals(offer.optString("kind"));
++        String version = offer.optString("bare_version");
++        mHandler.post(
++                () -> {
++                    mOfferFull = full;
++                    mOfferVersion = version;
++                    setState(State.OFFERED);
++                });
++        int type = in.readUnsignedByte();
++        int length = in.readInt();
++        if (type != FRAME_PACKAGE || length <= 1 || length > MAX_PACKAGE_FRAME) {
++            throw new IOException("package frame");
++        }
++        byte[] transfer = new byte[length];
++        in.readFully(transfer);
++        synchronized (out) {
++            out.writeByte(FRAME_RECEIVED);
++            out.writeInt(0);
++            out.flush();
++        }
++        // The sender hangs up once it reads that. Removing the group straight away could drop
++        // the reply before it leaves this phone, so wait for the sender to close, briefly.
++        Socket socket = mSocket;
++        try {
++            if (socket != null) socket.setSoTimeout(HANG_UP_WAIT_MS);
++            in.read();
++        } catch (IOException e) {
++            // Closed or timed out: either way the sender is done with it.
++        }
++        mHandler.post(
++                () -> {
++                    if (mEnded) {
++                        Arrays.fill(transfer, (byte) 0);
++                        return;
++                    }
++                    mReceived = transfer;
++                    end(State.RECEIVED, 0);
++                });
++    }
++
++    /** Reads a frame that carries nothing and returns its type. */
++    private static int readEmpty(DataInputStream in) throws IOException {
++        int type = in.readUnsignedByte();
++        int length = in.readInt();
++        if (length < 0 || length > MAX_CONTROL_FRAME) throw new IOException("frame");
++        in.skipBytes(length);
++        return type;
+     }
+ 
+     // ---------------------------------------------------------------------------------------
+@@ -562,10 +707,60 @@ public final class BareDirectSession {
+         end(State.FAILED, 0);
+     }
+ 
++    /** Receiver: the person accepts what the sender offered. */
++    void accept() {
++        if (mEnded || mSending || mState != State.OFFERED) return;
++        mAcceptedHere = true;
++        send(FRAME_ACCEPT);
++        setState(State.SENDING);
++    }
++
+     private void maybeConfirmed() {
+         if (mEnded || !mConfirmedHere || !mConfirmedThere) return;
+         mHandler.removeCallbacks(mGiveUp);
++        // The receiver waits for the sender to build and offer; that shouldn't take long.
++        if (!mSending) mHandler.postDelayed(mGiveUp, OFFER_WAIT_MS);
+         setState(State.CONFIRMED);
++        if (mSending) offer();
++    }
++
++    /** Sender: builds the package, then tells the receiver what's coming. */
++    private void offer() {
++        boolean full = mMode != Mode.SETUP;
++        Profile profile = ProfileManager.getLastUsedRegularProfile();
++        BareBackupBridge.buildTransfer(
++                profile,
++                full,
++                transfer -> {
++                    if (mEnded) {
++                        if (transfer != null) Arrays.fill(transfer, (byte) 0);
++                        return;
++                    }
++                    if (transfer == null || transfer.length == 0) {
++                        fail(R.string.bare_direct_couldnt_build);
++                        return;
++                    }
++                    mPackage = transfer;
++                    JSONObject offer = new JSONObject();
++                    try {
++                        offer.put("kind", full ? "full" : "setup");
++                        offer.put("bare_version", BareBackupIo.bareVersion(mContext));
++                    } catch (JSONException e) {
++                        fail(R.string.bare_direct_couldnt_build);
++                        return;
++                    }
++                    DataOutputStream out = mOut;
++                    if (out == null) return;
++                    mWriter.execute(
++                            () -> {
++                                try {
++                                    write(out, FRAME_OFFER, offer);
++                                } catch (IOException e) {
++                                    // The reader sees the connection go.
++                                }
++                            });
++                    setState(State.OFFERED);
++                });
+     }
+ 
+     private void send(int type) {
+@@ -596,11 +791,22 @@ public final class BareDirectSession {
+     private void end(@State int state, @StringRes int error) {
+         if (mEnded) return;
+         mEnded = true;
++        Log.i(TAG, "Transfer ended in state %d after state %d", state, mState);
+         mError = error;
+         mHandler.removeCallbacks(mGiveUp);
+         mHandler.removeCallbacks(mRediscover);
+-        closeQuietly(mServer);
+-        closeQuietly(mSocket);
++        byte[] transfer = mPackage;
++        mPackage = null;
++        if (transfer != null) Arrays.fill(transfer, (byte) 0);
++        // Closing TLS sends a last message, which isn't allowed on this thread. The writer
++        // closes after anything already queued, so a Cancel still reaches the other phone.
++        ServerSocket server = mServer;
++        Socket socket = mSocket;
++        mWriter.execute(
++                () -> {
++                    closeQuietly(server);
++                    closeQuietly(socket);
++                });
+         mIo.shutdownNow();
+         mWriter.shutdown();
+         if (mIdentity != null) mIdentity.delete();
+diff --git a/chrome/browser/ui/android/bare_backup_bridge.cc b/chrome/browser/ui/android/bare_backup_bridge.cc
+index d6645f9d2a0..88d588b4c1f 100644
+--- a/chrome/browser/ui/android/bare_backup_bridge.cc
++++ b/chrome/browser/ui/android/bare_backup_bridge.cc
+@@ -288,6 +288,34 @@ void OnCollected(base::WeakPtr<Profile> profile,
+           std::move(callback)));
+ }
+ 
++// A package for a phone-to-phone transfer: the kind byte, then the same zip a
++// backup file carries. It travels inside TLS, so it isn't encrypted again.
++void OnCollectedForTransfer(base::WeakPtr<Profile> profile,
++                            Kind kind,
++                            ScopedJavaGlobalRef<jobject> callback,
++                            CollectedExtensions extensions) {
++  JNIEnv* env = AttachCurrentThread();
++  if (!profile) {
++    Java_BareBackupBridge_onBytes(env, callback, std::vector<uint8_t>());
++    return;
++  }
++  JavaAndroidPrefs android;
++  Sources sources = SourcesFor(profile.get(), &android);
++  sources.extensions = &extensions;
++  std::optional<BuiltPackage> built = BuildPackage(kind, sources);
++  if (!built || built->zip.size() > kMaxBodySize) {
++    Java_BareBackupBridge_onBytes(env, callback, std::vector<uint8_t>());
++    return;
++  }
++  std::vector<uint8_t> transfer;
++  transfer.reserve(built->zip.size() + 1);
++  transfer.push_back(static_cast<uint8_t>(kind));
++  transfer.insert(transfer.end(), built->zip.begin(), built->zip.end());
++  OPENSSL_cleanse(built->zip.data(), built->zip.size());
++  Java_BareBackupBridge_onBytes(env, callback, transfer);
++  OPENSSL_cleanse(transfer.data(), transfer.size());
++}
++
+ // Opens `file` the way a restore would and checks every part of it.
+ bool VerifyOffThread(std::vector<uint8_t> file, std::vector<uint8_t> secret) {
+   auto parsed = ParseFile(file);
+@@ -408,6 +436,34 @@ OpenResult OpenOffThread(std::vector<uint8_t> file,
+   return result;
+ }
+ 
++// Opens a received transfer package with the same checks as a file's body.
++OpenResult OpenTransferOffThread(std::vector<uint8_t> transfer) {
++  OpenResult result;
++  if (transfer.empty() || transfer.size() - 1 > kMaxBodySize ||
++      (transfer[0] != static_cast<uint8_t>(Kind::kSetup) &&
++       transfer[0] != static_cast<uint8_t>(Kind::kFull))) {
++    result.error = "not_bare";
++    return result;
++  }
++  const Kind kind = static_cast<Kind>(transfer[0]);
++  std::string body(transfer.begin() + 1, transfer.end());
++  OPENSSL_cleanse(transfer.data(), transfer.size());
++  auto package = ReadPackage(body);
++  OPENSSL_cleanse(body.data(), body.size());
++  if (!package.has_value()) {
++    result.error = "damaged";
++    return result;
++  }
++  auto summary = ReadManifest(*package, kind);
++  if (!summary.has_value()) {
++    result.error = ContentsErrorName(summary.error());
++    return result;
++  }
++  result.package = std::move(*package);
++  result.summary = std::move(*summary);
++  return result;
++}
++
+ std::string UpdateHost(const std::string& update_url) {
+   const GURL url(update_url);
+   return url.is_valid() ? url.GetHost() : std::string();
+@@ -605,6 +661,25 @@ static void JNI_BareBackupBridge_CreateBackup(
+                      std::move(callback)));
+ }
+ 
++static void JNI_BareBackupBridge_BuildTransfer(
++    JNIEnv* env,
++    const JavaRef<jobject>& jprofile,
++    jboolean full,
++    const JavaRef<jobject>& jcallback) {
++  ScopedJavaGlobalRef<jobject> callback(jcallback);
++  Profile* profile = Profile::FromJavaObject(jprofile);
++  if (!profile) {
++    Java_BareBackupBridge_onBytes(env, callback, std::vector<uint8_t>());
++    return;
++  }
++  const bare_backup::Kind kind =
++      full ? bare_backup::Kind::kFull : bare_backup::Kind::kSetup;
++  bare_backup::CollectExtensions(
++      profile, /*with_files=*/full,
++      base::BindOnce(&bare_backup::OnCollectedForTransfer,
++                     profile->GetWeakPtr(), kind, std::move(callback)));
++}
++
+ static void JNI_BareBackupBridge_VerifyBackup(
+     JNIEnv* env,
+     std::vector<uint8_t> file,
+@@ -662,6 +737,24 @@ static void JNI_BareBackupBridge_Open(JNIEnv* env,
+                      profile->GetWeakPtr(), std::move(callback)));
+ }
+ 
++static void JNI_BareBackupBridge_OpenTransfer(
++    JNIEnv* env,
++    jlong handle,
++    const JavaRef<jobject>& jprofile,
++    const JavaRef<jobject>& jcallback) {
++  auto* backup = reinterpret_cast<bare_backup::OpenedBackup*>(handle);
++  Profile* profile = Profile::FromJavaObject(jprofile);
++  ScopedJavaGlobalRef<jobject> callback(jcallback);
++  if (!profile) {
++    return;
++  }
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
++      base::BindOnce(&bare_backup::OpenTransferOffThread, backup->file()),
++      base::BindOnce(&bare_backup::OnOpened, backup->GetWeakPtr(),
++                     profile->GetWeakPtr(), std::move(callback)));
++}
++
+ static void JNI_BareBackupBridge_Restore(
+     JNIEnv* env,
+     jlong handle,

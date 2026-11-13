@@ -1,0 +1,2009 @@
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index b976e1a16dc..d43b55ed8b2 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -249,11 +249,14 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java",
+   "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
+   "java/src/org/chromium/chrome/browser/bare/BareUboUpdate.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackup.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupButtonPreference.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupCreateFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupDialogs.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareBackupFolder.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupIo.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareBackupKeyStore.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupKindPreference.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupSettingsFragment.java",
+diff --git a/chrome/android/java/res/values/bare_backup_strings.xml b/chrome/android/java/res/values/bare_backup_strings.xml
+index fc61ee725bc..81ba10d5e7b 100644
+--- a/chrome/android/java/res/values/bare_backup_strings.xml
++++ b/chrome/android/java/res/values/bare_backup_strings.xml
+@@ -194,4 +194,12 @@
+     <string name="bare_direct_move_mismatch" translatable="false">The other phone didn\'t restore everything.</string>
+     <string name="bare_direct_restore_stopped" translatable="false">The other phone stopped before restoring.</string>
+     <string name="bare_direct_nothing_erased" translatable="false">Nothing was erased on this phone.</string>
++
++    <!-- Automatic backup: the card when a backup failed. -->
++    <string name="bare_autobackup_card_folder" translatable="false">Bare can\'t reach your backup folder.</string>
++    <string name="bare_autobackup_card_storage" translatable="false">Your phone is out of space, so Bare couldn\'t save your backup.</string>
++    <string name="bare_autobackup_card_failed" translatable="false">The last backup didn\'t finish.</string>
++    <string name="bare_autobackup_card_key" translatable="false">Bare lost the key it uses for your backups. Set them up again to make a new passphrase.</string>
++    <string name="bare_autobackup_fix_it" translatable="false">Fix it</string>
++    <string name="bare_autobackup_dont_show" translatable="false">Don\'t show again</string>
+ </resources>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+index 6b855948b1c..1c445cd68e8 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+@@ -70,6 +70,7 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.app.ChromeActivity;
++import org.chromium.chrome.browser.bare.backup.BareAutoBackup;
+ import org.chromium.chrome.browser.bare.settings.BareToolbarActionUi;
+ import org.chromium.chrome.browser.bare.settings.BareToolbarPreviewBinder;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+@@ -183,6 +184,8 @@ public class BareWelcomeOverlay {
+      * otherwise.
+      */
+     public static void maybeShow(Activity activity) {
++        // Every new browser window passes here, which is where automatic backups start watching.
++        BareAutoBackup.attach(activity);
+         SharedPreferences prefs = activity.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE);
+         // Two builds of one release share a version name, so the test for having been shown is
+         // the update time Android records for each install.
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackup.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackup.java
+new file mode 100644
+index 00000000000..a85727a6ac8
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackup.java
+@@ -0,0 +1,549 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.app.Activity;
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.net.Uri;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.PowerManager;
++import android.view.View;
++
++import androidx.annotation.StringRes;
++
++import org.chromium.base.ActivityState;
++import org.chromium.base.ApplicationState;
++import org.chromium.base.ApplicationStatus;
++import org.chromium.base.Callback;
++import org.chromium.base.ContextUtils;
++import org.chromium.base.Log;
++import org.chromium.base.library_loader.LibraryLoader;
++import org.chromium.base.task.PostTask;
++import org.chromium.base.task.TaskTraits;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.profiles.Profile;
++import org.chromium.chrome.browser.profiles.ProfileManager;
++import org.chromium.components.browser_ui.widget.RiseSheet;
++
++import java.lang.ref.WeakReference;
++import java.util.Arrays;
++import java.util.Calendar;
++
++/**
++ * Automatic backups. Nothing is scheduled with Android: when a backup is due, Bare writes it as
++ * the user leaves the app, or a little after it comes back to the front if that didn't happen.
++ * When Bare isn't used, nothing runs, and nothing has changed that would need backing up.
++ *
++ * <p>A run builds the full backup with the key kept on the phone, writes it beside the last one
++ * under a temporary name, reads it back and opens it, and only then swaps it in. A run that fails
++ * or is cut short leaves the last good file as it was.
++ */
++public final class BareAutoBackup {
++    private static final String TAG = "BareAutoBackup";
++
++    static final String PREFS_FILE = "bare_backup_rule";
++    static final String KEY_RULE = "rule";
++    static final String KEY_FOLDER = "folder_uri";
++    static final String KEY_FOLDER_LABEL = "folder_label";
++    static final String KEY_KEEP = "keep";
++    static final String KEY_KEY = "key_blob";
++    static final String KEY_SECRET_KIND = "secret_kind";
++    static final String KEY_LAST_SUCCESS = "last_success_ms";
++    static final String KEY_LAST_ATTEMPT = "last_attempt_ms";
++    static final String KEY_LAST_ERROR = "last_error";
++    static final String KEY_FAILURE_EPOCH = "failure_epoch";
++    static final String KEY_CARD_EPOCH = "card_shown_epoch";
++    static final String KEY_IN_PROGRESS = "in_progress_ms";
++    static final String KEY_LAST_FILE = "last_file";
++    static final String KEY_LAST_SIZE = "last_size";
++    static final String KEY_SCHEMA = "schema";
++
++    static final int RULE_MANUAL = 0;
++    static final int RULE_DAILY = 1;
++    static final int RULE_WEEKLY = 2;
++    static final int RULE_MONTHLY = 3;
++
++    static final String ERROR_NONE = "none";
++    static final String ERROR_FOLDER_GONE = "folder_gone";
++    static final String ERROR_PERMISSION_LOST = "permission_lost";
++    static final String ERROR_STORAGE_FULL = "storage_full";
++    static final String ERROR_WRITE_FAILED = "write_failed";
++    static final String ERROR_BUILD_FAILED = "build_failed";
++    static final String ERROR_KEY_LOST = "key_lost";
++    /** Not stored: a run asked for while one is under way. */
++    static final String ERROR_BUSY = "busy";
++
++    private static final String FIXED_NAME = "Bare backup.bare";
++    private static final String TEMP_NAME = "Bare backup.bare.tmp";
++    private static final String OLD_SUFFIX = ".old";
++    private static final long RETRY_AFTER_FAILURE_MS = 60 * 60 * 1000;
++    private static final long STALE_RUN_MS = 15 * 60 * 1000;
++    private static final long OPEN_RUN_DELAY_MS = 20_000;
++    private static final long OPEN_CARD_DELAY_MS = 3_000;
++    private static final long WAKE_LOCK_MS = 2 * 60 * 1000;
++    private static final long SPACE_MARGIN = 8 * 1024 * 1024;
++    private static final int MAX_FILE_BYTES = 80 * 1024 * 1024;
++
++    private static final Handler sHandler = new Handler(Looper.getMainLooper());
++    private static final Runnable sOpenRun = BareAutoBackup::runIfDue;
++    private static final Runnable sOpenCard = BareAutoBackup::showCardIfDue;
++    private static boolean sAttached;
++    private static boolean sRunning;
++    private static WeakReference<Activity> sActivity = new WeakReference<>(null);
++
++    private BareAutoBackup() {}
++
++    static SharedPreferences prefs() {
++        return ContextUtils.getApplicationContext()
++                .getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE);
++    }
++
++    /**
++     * Starts watching for the user leaving Bare and coming back. Called for each new browser
++     * window; does the registration once.
++     */
++    public static void attach(Activity activity) {
++        sActivity = new WeakReference<>(activity);
++        if (!sAttached) {
++            sAttached = true;
++            ApplicationStatus.registerApplicationStateListener(
++                    state -> {
++                        if (state == ApplicationState.HAS_STOPPED_ACTIVITIES) {
++                            sHandler.removeCallbacks(sOpenRun);
++                            sHandler.removeCallbacks(sOpenCard);
++                            runIfDue();
++                        } else if (state == ApplicationState.HAS_RUNNING_ACTIVITIES) {
++                            onFront();
++                        }
++                    });
++        }
++        onFront();
++    }
++
++    private static void onFront() {
++        sHandler.removeCallbacks(sOpenRun);
++        sHandler.removeCallbacks(sOpenCard);
++        sHandler.postDelayed(sOpenCard, OPEN_CARD_DELAY_MS);
++        sHandler.postDelayed(sOpenRun, OPEN_RUN_DELAY_MS);
++    }
++
++    // ---------------------------------------------------------------------------------------
++    // State the pages read and change.
++
++    static int rule() {
++        return prefs().getInt(KEY_RULE, RULE_MANUAL);
++    }
++
++    /** Whether automatic backups are on: a schedule, a kept key and a folder. */
++    static boolean isOn() {
++        SharedPreferences prefs = prefs();
++        return prefs.getInt(KEY_RULE, RULE_MANUAL) != RULE_MANUAL
++                && prefs.contains(KEY_KEY)
++                && prefs.contains(KEY_FOLDER);
++    }
++
++    static String lastError() {
++        return prefs().getString(KEY_LAST_ERROR, ERROR_NONE);
++    }
++
++    /** Switches between Daily, Weekly and Monthly while backups are on. */
++    static void setRule(int rule) {
++        if (rule == RULE_MANUAL) {
++            turnOff();
++            return;
++        }
++        prefs().edit().putInt(KEY_RULE, rule).apply();
++    }
++
++    static int keep() {
++        int keep = prefs().getInt(KEY_KEEP, 1);
++        return keep == 3 || keep == 5 ? keep : 1;
++    }
++
++    static void setKeep(int keep) {
++        prefs().edit().putInt(KEY_KEEP, keep).apply();
++    }
++
++    /**
++     * Turns backups on, or replaces the key or folder of backups already on. {@code wrappedKey}
++     * comes from {@link BareBackupKeyStore#wrap}. The first backup is due at once.
++     */
++    static void turnOn(int rule, Uri folder, String label, String wrappedKey, boolean isCode) {
++        SharedPreferences prefs = prefs();
++        String oldFolder = prefs.getString(KEY_FOLDER, null);
++        if (oldFolder != null && !oldFolder.equals(folder.toString())) {
++            BareBackupFolder.releaseGrant(ContextUtils.getApplicationContext(), Uri.parse(oldFolder));
++        }
++        prefs.edit()
++                .putInt(KEY_SCHEMA, 1)
++                .putInt(KEY_RULE, rule)
++                .putString(KEY_FOLDER, folder.toString())
++                .putString(KEY_FOLDER_LABEL, label)
++                .putString(KEY_KEY, wrappedKey)
++                .putString(KEY_SECRET_KIND, isCode ? "code" : "passphrase")
++                .putLong(KEY_LAST_SUCCESS, 0)
++                .putString(KEY_LAST_ERROR, ERROR_NONE)
++                .remove(KEY_IN_PROGRESS)
++                .apply();
++    }
++
++    /** Moves backups to another folder. The old folder's files stay where they are. */
++    static void setFolder(Uri folder, String label) {
++        SharedPreferences prefs = prefs();
++        String oldFolder = prefs.getString(KEY_FOLDER, null);
++        if (oldFolder != null && !oldFolder.equals(folder.toString())) {
++            BareBackupFolder.releaseGrant(ContextUtils.getApplicationContext(), Uri.parse(oldFolder));
++        }
++        prefs.edit()
++                .putString(KEY_FOLDER, folder.toString())
++                .putString(KEY_FOLDER_LABEL, label)
++                .putLong(KEY_LAST_SUCCESS, 0)
++                .putString(KEY_LAST_ERROR, ERROR_NONE)
++                .apply();
++    }
++
++    /**
++     * Back to Manual: the kept key is deleted, so nothing can write a backup until setup runs
++     * again with a new passphrase. The folder stays chosen for next time. Files already written
++     * stay where they are and still open with the passphrase the user saved.
++     */
++    static void turnOff() {
++        prefs().edit()
++                .putInt(KEY_RULE, RULE_MANUAL)
++                .remove(KEY_KEY)
++                .remove(KEY_SECRET_KIND)
++                .putString(KEY_LAST_ERROR, ERROR_NONE)
++                .remove(KEY_IN_PROGRESS)
++                .apply();
++        BareBackupKeyStore.delete();
++    }
++
++    // ---------------------------------------------------------------------------------------
++    // Running.
++
++    /** Writes a backup if one is due. Quietly does nothing otherwise. */
++    static void runIfDue() {
++        if (!isOn() || !LibraryLoader.getInstance().isInitialized()) return;
++        SharedPreferences prefs = prefs();
++        long now = System.currentTimeMillis();
++        if (!BareBackupBridge.isBackupDue(rule(), prefs.getLong(KEY_LAST_SUCCESS, 0), now)) return;
++        // After a failure, wait a while: a folder that is gone stays gone for a few app switches.
++        if (!ERROR_NONE.equals(lastError())
++                && Math.abs(now - prefs.getLong(KEY_LAST_ATTEMPT, 0)) < RETRY_AFTER_FAILURE_MS) {
++            return;
++        }
++        run(null);
++    }
++
++    /** Writes a backup now. {@code done} gets {@link #ERROR_NONE} or the reason it failed. */
++    static void runNow(Callback<String> done) {
++        if (!isOn()) {
++            done.onResult(ERROR_KEY_LOST);
++            return;
++        }
++        run(done);
++    }
++
++    private static void run(@Nullable Callback<String> done) {
++        SharedPreferences prefs = prefs();
++        long now = System.currentTimeMillis();
++        long started = prefs.getLong(KEY_IN_PROGRESS, 0);
++        if (sRunning || (started != 0 && Math.abs(now - started) < STALE_RUN_MS)) {
++            if (done != null) done.onResult(ERROR_BUSY);
++            return;
++        }
++        if (!ProfileManager.isInitialized()) {
++            if (done != null) done.onResult(ERROR_BUSY);
++            return;
++        }
++        Profile profile = ProfileManager.getLastUsedRegularProfile();
++        Context context = ContextUtils.getApplicationContext();
++        String wrapped = prefs.getString(KEY_KEY, "");
++        Uri tree = Uri.parse(prefs.getString(KEY_FOLDER, ""));
++        boolean isCode = !"passphrase".equals(prefs.getString(KEY_SECRET_KIND, "code"));
++        int keep = keep();
++        sRunning = true;
++        prefs.edit().putLong(KEY_IN_PROGRESS, now).putLong(KEY_LAST_ATTEMPT, now).apply();
++        PowerManager power = context.getSystemService(PowerManager.class);
++        PowerManager.WakeLock wakeLock =
++                power == null ? null : power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Bare:backup");
++        if (wakeLock != null) wakeLock.acquire(WAKE_LOCK_MS);
++        Run run = new Run(context, new BareBackupFolder(context, tree), keep, wakeLock, done);
++
++        PostTask.postTask(
++                TaskTraits.USER_VISIBLE_MAY_BLOCK,
++                () -> {
++                    byte[] stored = BareBackupKeyStore.unwrap(wrapped);
++                    String problem = null;
++                    if (stored == null) {
++                        problem = ERROR_KEY_LOST;
++                    } else if (!run.mFolder.hasGrant()) {
++                        problem = ERROR_PERMISSION_LOST;
++                    } else if (!run.mFolder.exists()) {
++                        problem = ERROR_FOLDER_GONE;
++                    }
++                    String failure = problem;
++                    PostTask.postTask(
++                            TaskTraits.UI_DEFAULT,
++                            () -> {
++                                if (failure != null) {
++                                    if (stored != null) Arrays.fill(stored, (byte) 0);
++                                    run.finish(failure);
++                                    return;
++                                }
++                                run.build(profile, stored, isCode);
++                            });
++                });
++    }
++
++    /** One backup run, from the kept key to the swapped-in file. */
++    private static final class Run {
++        private final Context mContext;
++        private final BareBackupFolder mFolder;
++        private final int mKeep;
++        private final PowerManager.@Nullable WakeLock mWakeLock;
++        private final @Nullable Callback<String> mDone;
++
++        Run(
++                Context context,
++                BareBackupFolder folder,
++                int keep,
++                PowerManager.@Nullable WakeLock wakeLock,
++                @Nullable Callback<String> done) {
++            mContext = context;
++            mFolder = folder;
++            mKeep = keep;
++            mWakeLock = wakeLock;
++            mDone = done;
++        }
++
++        void build(Profile profile, byte[] stored, boolean isCode) {
++            BareBackupBridge.buildAutoBackup(
++                    profile,
++                    stored,
++                    isCode,
++                    BareBackupIo.deviceLabel(),
++                    BareBackupIo.bareVersion(mContext),
++                    BareBackupIo.bareVersionCode(mContext),
++                    bytes -> {
++                        if (bytes == null || bytes.length == 0) {
++                            Arrays.fill(stored, (byte) 0);
++                            finish(ERROR_BUILD_FAILED);
++                            return;
++                        }
++                        PostTask.postTask(
++                                TaskTraits.USER_VISIBLE_MAY_BLOCK,
++                                () -> writeTemp(bytes, stored));
++                    });
++        }
++
++        /** Off the UI thread: tidies up after an earlier run, then writes and reads back. */
++        private void writeTemp(byte[] bytes, byte[] stored) {
++            String failure = null;
++            byte[] readBack = null;
++            Uri temp = null;
++            long free = mFolder.freeBytes();
++            if (free >= 0 && free < bytes.length + SPACE_MARGIN) {
++                failure = ERROR_STORAGE_FULL;
++            } else {
++                recoverEarlierRun();
++                try {
++                    temp = mFolder.create(TEMP_NAME);
++                    if (temp == null) throw new java.io.IOException("not created");
++                    mFolder.write(temp, bytes);
++                    readBack = mFolder.read(temp, MAX_FILE_BYTES);
++                    if (readBack == null) throw new java.io.IOException("not read back");
++                } catch (java.io.IOException | RuntimeException e) {
++                    Log.w(TAG, "Backup not written: %s", e.getClass().getSimpleName());
++                    failure = mFolder.exists() ? ERROR_WRITE_FAILED : ERROR_FOLDER_GONE;
++                }
++            }
++            if (failure != null && temp != null) mFolder.delete(temp);
++            String result = failure;
++            Uri written = temp;
++            byte[] check = readBack;
++            long size = bytes.length;
++            PostTask.postTask(
++                    TaskTraits.UI_DEFAULT,
++                    () -> {
++                        if (result != null) {
++                            Arrays.fill(stored, (byte) 0);
++                            finish(result);
++                            return;
++                        }
++                        BareBackupBridge.verifyWithStoredKey(
++                                check,
++                                stored,
++                                ok -> {
++                                    Arrays.fill(stored, (byte) 0);
++                                    PostTask.postTask(
++                                            TaskTraits.USER_VISIBLE_MAY_BLOCK,
++                                            () -> swapIn(written, ok, size));
++                                });
++                    });
++        }
++
++        /**
++         * A run that was cut short may have left the temporary file, or the last good file under
++         * its ".old" name. The temporary file goes; an ".old" whose file is missing gets its name
++         * back, and goes if the file is there.
++         */
++        private void recoverEarlierRun() {
++            mFolder.deleteIfThere(TEMP_NAME);
++            for (String name : mFolder.names()) {
++                if (!name.endsWith(OLD_SUFFIX)) continue;
++                String base = name.substring(0, name.length() - OLD_SUFFIX.length());
++                if (!BareBackupBridge.isBackupFileName(base)) continue;
++                Uri old = mFolder.find(name);
++                if (old == null) continue;
++                if (mFolder.find(base) == null) {
++                    mFolder.rename(old, base);
++                } else {
++                    mFolder.delete(old);
++                }
++            }
++        }
++
++        /** Off the UI thread: puts the checked file in place and prunes the oldest. */
++        private void swapIn(Uri temp, boolean ok, long size) {
++            if (!ok) {
++                mFolder.delete(temp);
++                done(ERROR_WRITE_FAILED, null, 0);
++                return;
++            }
++            String name = mKeep == 1 ? FIXED_NAME : datedName();
++            Uri existing = mFolder.find(name);
++            Uri old = null;
++            if (existing != null) {
++                mFolder.deleteIfThere(name + OLD_SUFFIX);
++                old = mFolder.rename(existing, name + OLD_SUFFIX);
++                if (old == null) {
++                    mFolder.delete(temp);
++                    done(ERROR_WRITE_FAILED, null, 0);
++                    return;
++                }
++            }
++            // From here a complete file always exists under one of the names.
++            if (mFolder.rename(temp, name) == null) {
++                if (old != null) mFolder.rename(old, name);
++                mFolder.delete(temp);
++                done(ERROR_WRITE_FAILED, null, 0);
++                return;
++            }
++            if (old != null) mFolder.delete(old);
++            for (String prune : BareBackupBridge.backupNamesToPrune(mFolder.names(), mKeep)) {
++                if (!prune.equals(name)) mFolder.deleteIfThere(prune);
++            }
++            done(ERROR_NONE, name, size);
++        }
++
++        private void done(String result, @Nullable String name, long size) {
++            PostTask.postTask(
++                    TaskTraits.UI_DEFAULT,
++                    () -> {
++                        if (ERROR_NONE.equals(result)) {
++                            prefs().edit()
++                                    .putString(KEY_LAST_FILE, name)
++                                    .putLong(KEY_LAST_SIZE, size)
++                                    .apply();
++                        }
++                        finish(result);
++                    });
++        }
++
++        void finish(String result) {
++            SharedPreferences prefs = prefs();
++            SharedPreferences.Editor edit = prefs.edit().remove(KEY_IN_PROGRESS);
++            if (ERROR_NONE.equals(result)) {
++                // Written last, so a run cut short before this point is simply still due.
++                edit.putLong(KEY_LAST_SUCCESS, System.currentTimeMillis())
++                        .putString(KEY_LAST_ERROR, ERROR_NONE);
++            } else if (prefs.contains(KEY_KEY)) {
++                // The first failure after a success starts a new epoch, which gets one card.
++                if (ERROR_NONE.equals(prefs.getString(KEY_LAST_ERROR, ERROR_NONE))) {
++                    edit.putLong(KEY_FAILURE_EPOCH, prefs.getLong(KEY_FAILURE_EPOCH, 0) + 1);
++                }
++                edit.putString(KEY_LAST_ERROR, result);
++            }
++            edit.apply();
++            sRunning = false;
++            if (mWakeLock != null && mWakeLock.isHeld()) mWakeLock.release();
++            Log.i(TAG, "Backup run: %s", result);
++            if (mDone != null) mDone.onResult(result);
++        }
++
++        private static String datedName() {
++            Calendar now = Calendar.getInstance();
++            return BareBackupBridge.datedBackupName(
++                    now.get(Calendar.YEAR),
++                    now.get(Calendar.MONTH) + 1,
++                    now.get(Calendar.DAY_OF_MONTH),
++                    now.get(Calendar.HOUR_OF_DAY),
++                    now.get(Calendar.MINUTE));
++        }
++    }
++
++    // ---------------------------------------------------------------------------------------
++    // The failure card.
++
++    /** What the card says for a failure. */
++    static @StringRes int failureText(String error) {
++        switch (error) {
++            case ERROR_FOLDER_GONE:
++            case ERROR_PERMISSION_LOST:
++                return R.string.bare_autobackup_card_folder;
++            case ERROR_STORAGE_FULL:
++                return R.string.bare_autobackup_card_storage;
++            case ERROR_KEY_LOST:
++                return R.string.bare_autobackup_card_key;
++            default:
++                return R.string.bare_autobackup_card_failed;
++        }
++    }
++
++    /**
++     * Once per failure: a card over the browser with Fix it and Don't show again. Swiping it away
++     * counts as seen. Not while another card, the welcome or What's new is up.
++     */
++    static void showCardIfDue() {
++        Activity activity = sActivity.get();
++        if (activity == null
++                || activity.isFinishing()
++                || ApplicationStatus.getStateForActivity(activity) != ActivityState.RESUMED) {
++            return;
++        }
++        SharedPreferences prefs = prefs();
++        String error = lastError();
++        long epoch = prefs.getLong(KEY_FAILURE_EPOCH, 0);
++        if (ERROR_NONE.equals(error)
++                || rule() == RULE_MANUAL
++                || epoch <= prefs.getLong(KEY_CARD_EPOCH, 0)
++                || RiseSheet.isOpen()
++                || activity.findViewById(R.id.bare_welcome_root) != null
++                || activity.findViewById(R.id.bare_whats_new_root) != null) {
++            return;
++        }
++        View root = activity.getWindow().getDecorView();
++        boolean shown =
++                RiseSheet.showMessage(
++                        root,
++                        activity.getString(failureText(error)),
++                        activity.getString(R.string.bare_autobackup_fix_it),
++                        () -> openFix(activity, error),
++                        activity.getString(R.string.bare_autobackup_dont_show),
++                        BareAutoBackup::turnOff,
++                        null);
++        if (shown) prefs.edit().putLong(KEY_CARD_EPOCH, epoch).apply();
++    }
++
++    /** Where Fix it goes. */
++    static void openFix(Activity activity, String error) {
++        org.chromium.chrome.browser.settings.SettingsNavigationFactory.createSettingsNavigation()
++                .startSettings(activity, BareBackupSettingsFragment.class, null);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
+index a6a2f846553..85b36917258 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
+@@ -105,6 +105,59 @@ public final class BareBackupBridge {
+                         done);
+     }
+ 
++    /**
++     * Derives the key automatic backups keep, from the passphrase setup showed or the user chose.
++     * {@code done} gets it, or an empty array; the caller wipes it once it is wrapped.
++     */
++    static void deriveStoredKey(byte[] secret, boolean secretIsCode, Callback<byte[]> done) {
++        BareBackupBridgeJni.get().deriveStoredKey(secret, secretIsCode, done);
++    }
++
++    /** Builds a full backup with the kept key. {@code done} gets the file, or an empty array. */
++    static void buildAutoBackup(
++            Profile profile,
++            byte[] storedKey,
++            boolean secretIsCode,
++            String deviceLabel,
++            String bareVersion,
++            int bareVersionCode,
++            Callback<byte[]> done) {
++        BareBackupBridgeJni.get()
++                .buildAutoBackup(
++                        profile,
++                        storedKey,
++                        secretIsCode,
++                        deviceLabel,
++                        bareVersion,
++                        bareVersionCode,
++                        done);
++    }
++
++    /** Opens a file an automatic backup wrote, with the key it was written with. */
++    static void verifyWithStoredKey(byte[] file, byte[] storedKey, Callback<Boolean> done) {
++        BareBackupBridgeJni.get().verifyWithStoredKey(file, storedKey, done);
++    }
++
++    static boolean isBackupDue(int rule, long lastSuccessMs, long nowMs) {
++        return BareBackupBridgeJni.get().isBackupDue(rule, lastSuccessMs, nowMs);
++    }
++
++    /** Which of the folder's files to delete so that the newest {@code keep} backups remain. */
++    static java.util.List<String> backupNamesToPrune(java.util.List<String> names, int keep) {
++        String prune = BareBackupBridgeJni.get().backupNamesToPrune(String.join("\0", names), keep);
++        return prune.isEmpty()
++                ? new java.util.ArrayList<>()
++                : java.util.Arrays.asList(prune.split("\0"));
++    }
++
++    static String datedBackupName(int year, int month, int day, int hour, int minute) {
++        return BareBackupBridgeJni.get().datedBackupName(year, month, day, hour, minute);
++    }
++
++    static boolean isBackupFileName(String name) {
++        return BareBackupBridgeJni.get().isBackupFileName(name);
++    }
++
+     /** Opens {@code file} as a restore would, to check what was saved. */
+     public static void verifyBackup(
+             byte[] file, byte[] secret, boolean secretIsCode, Callback<Boolean> done) {
+@@ -294,6 +347,35 @@ public final class BareBackupBridge {
+ 
+         void buildTransfer(Profile profile, boolean full, TransferCallback done);
+ 
++        void deriveStoredKey(
++                @JniType("std::vector<uint8_t>") byte[] secret,
++                boolean secretIsCode,
++                Callback<byte[]> done);
++
++        void buildAutoBackup(
++                Profile profile,
++                @JniType("std::vector<uint8_t>") byte[] storedKey,
++                boolean secretIsCode,
++                @JniType("std::string") String deviceLabel,
++                @JniType("std::string") String bareVersion,
++                int bareVersionCode,
++                Callback<byte[]> done);
++
++        void verifyWithStoredKey(
++                @JniType("std::vector<uint8_t>") byte[] file,
++                @JniType("std::vector<uint8_t>") byte[] storedKey,
++                Callback<Boolean> done);
++
++        boolean isBackupDue(int rule, long lastSuccessMs, long nowMs);
++
++        @JniType("std::string")
++        String backupNamesToPrune(@JniType("std::string") String names, int keep);
++
++        @JniType("std::string")
++        String datedBackupName(int year, int month, int day, int hour, int minute);
++
++        boolean isBackupFileName(@JniType("std::string") String name);
++
+         void openTransfer(long handle, Profile profile, Callback<String> done);
+ 
+         void verifyBackup(
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupFolder.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupFolder.java
+new file mode 100644
+index 00000000000..1fe2eb698b5
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupFolder.java
+@@ -0,0 +1,314 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.content.ContentResolver;
++import android.content.Context;
++import android.content.Intent;
++import android.content.UriPermission;
++import android.database.Cursor;
++import android.net.Uri;
++import android.os.Environment;
++import android.os.StatFs;
++import android.provider.DocumentsContract;
++
++import org.chromium.build.annotations.Nullable;
++
++import java.io.File;
++import java.io.FileNotFoundException;
++import java.io.IOException;
++import java.io.InputStream;
++import java.io.OutputStream;
++import java.util.ArrayList;
++import java.util.List;
++
++/**
++ * The folder automatic backups go to: a folder the user granted through Android's folder picker,
++ * by default Download/BareBackup. A grant, unlike files Bare makes in Downloads by itself, still
++ * reaches the old backups after Bare is reinstalled, once the folder is picked again.
++ *
++ * <p>Everything here does disk or provider work; call it off the UI thread, except {@link
++ * #pickerIntent}.
++ */
++final class BareBackupFolder {
++    static final String DEFAULT_LABEL = "Download/BareBackup";
++    private static final String EXTERNAL_STORAGE = "com.android.externalstorage.documents";
++    private static final String DEFAULT_DOCUMENT = "primary:Download/BareBackup";
++    private static final String MIME = "application/octet-stream";
++    private static final String TEST_NAME = ".bare-test.tmp";
++    private static final String TEST_RENAMED = ".bare-test-2.tmp";
++
++    private final Context mContext;
++    private final Uri mTree;
++
++    BareBackupFolder(Context context, Uri tree) {
++        mContext = context.getApplicationContext();
++        mTree = tree;
++    }
++
++    Uri tree() {
++        return mTree;
++    }
++
++    /**
++     * The folder picker, opened on Download/BareBackup. The folder is made first so the picker can
++     * open in it.
++     */
++    static Intent pickerIntent() {
++        File folder =
++                new File(
++                        Environment.getExternalStoragePublicDirectory(
++                                Environment.DIRECTORY_DOWNLOADS),
++                        "BareBackup");
++        if (!folder.isDirectory()) {
++            // Allowed on Android 11 and up; on 10 the picker's own "new folder" is the fallback.
++            folder.mkdirs();
++        }
++        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
++        intent.putExtra(
++                DocumentsContract.EXTRA_INITIAL_URI,
++                DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE, DEFAULT_DOCUMENT));
++        intent.addFlags(
++                Intent.FLAG_GRANT_READ_URI_PERMISSION
++                        | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
++                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
++        return intent;
++    }
++
++    /** Keeps the grant across restarts. False if Android refused it. */
++    boolean keepGrant() {
++        try {
++            mContext.getContentResolver()
++                    .takePersistableUriPermission(
++                            mTree,
++                            Intent.FLAG_GRANT_READ_URI_PERMISSION
++                                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
++            return true;
++        } catch (SecurityException e) {
++            return false;
++        }
++    }
++
++    /** Gives the grant back, when the user picks another folder or turns backups off. */
++    static void releaseGrant(Context context, Uri tree) {
++        try {
++            context.getContentResolver()
++                    .releasePersistableUriPermission(
++                            tree,
++                            Intent.FLAG_GRANT_READ_URI_PERMISSION
++                                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
++        } catch (SecurityException e) {
++            // Not held any more.
++        }
++    }
++
++    /** Whether Bare still holds a write grant for the folder. */
++    boolean hasGrant() {
++        for (UriPermission permission :
++                mContext.getContentResolver().getPersistedUriPermissions()) {
++            if (permission.getUri().equals(mTree) && permission.isWritePermission()) return true;
++        }
++        return false;
++    }
++
++    /** What the screens call the folder: "Download/BareBackup", or the folder's own name. */
++    String label() {
++        String id = DocumentsContract.getTreeDocumentId(mTree);
++        if (EXTERNAL_STORAGE.equals(mTree.getAuthority()) && id.startsWith("primary:")) {
++            String path = id.substring("primary:".length());
++            if (!path.isEmpty()) return path;
++        }
++        String name = displayName(root());
++        return name == null ? id : name;
++    }
++
++    /** Whether the folder is a volume's top or the Downloads folder itself, which aren't used. */
++    boolean isTooHigh() {
++        String id = DocumentsContract.getTreeDocumentId(mTree);
++        int colon = id.indexOf(':');
++        String path = colon < 0 ? id : id.substring(colon + 1);
++        return path.isEmpty() || path.equalsIgnoreCase("Download");
++    }
++
++    /** Whether the folder is there and answers. */
++    boolean exists() {
++        return displayName(root()) != null;
++    }
++
++    /**
++     * Makes, renames and deletes a small file. A folder that can't do all three, such as some
++     * cloud folders, can't hold backups safely.
++     */
++    boolean canHoldBackups() {
++        Uri test = null;
++        try {
++            deleteIfThere(TEST_NAME);
++            deleteIfThere(TEST_RENAMED);
++            test = create(TEST_NAME);
++            if (test == null) return false;
++            try (OutputStream out = mContext.getContentResolver().openOutputStream(test, "w")) {
++                if (out == null) return false;
++                out.write(new byte[] {'b', 'a', 'r', 'e'});
++            }
++            Uri renamed = rename(test, TEST_RENAMED);
++            if (renamed == null) return false;
++            test = renamed;
++            boolean deleted = delete(test);
++            test = null;
++            return deleted;
++        } catch (IOException | RuntimeException e) {
++            return false;
++        } finally {
++            if (test != null) delete(test);
++        }
++    }
++
++    /** Free bytes where the folder is, if it is on the phone's own storage; else -1. */
++    long freeBytes() {
++        String id = DocumentsContract.getTreeDocumentId(mTree);
++        if (!EXTERNAL_STORAGE.equals(mTree.getAuthority()) || !id.startsWith("primary:")) {
++            return -1;
++        }
++        try {
++            return new StatFs(Environment.getExternalStorageDirectory().getPath())
++                    .getAvailableBytes();
++        } catch (IllegalArgumentException e) {
++            return -1;
++        }
++    }
++
++    /** The names of the folder's files. */
++    List<String> names() {
++        List<String> names = new ArrayList<>();
++        Uri children =
++                DocumentsContract.buildChildDocumentsUriUsingTree(
++                        mTree, DocumentsContract.getTreeDocumentId(mTree));
++        try (Cursor cursor =
++                mContext.getContentResolver()
++                        .query(
++                                children,
++                                new String[] {DocumentsContract.Document.COLUMN_DISPLAY_NAME},
++                                null,
++                                null,
++                                null)) {
++            while (cursor != null && cursor.moveToNext()) {
++                String name = cursor.getString(0);
++                if (name != null) names.add(name);
++            }
++        } catch (RuntimeException e) {
++            // An empty list: nothing is deleted.
++        }
++        return names;
++    }
++
++    /** The document for a file of this name in the folder, or null. */
++    @Nullable
++    Uri find(String name) {
++        Uri children =
++                DocumentsContract.buildChildDocumentsUriUsingTree(
++                        mTree, DocumentsContract.getTreeDocumentId(mTree));
++        try (Cursor cursor =
++                mContext.getContentResolver()
++                        .query(
++                                children,
++                                new String[] {
++                                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
++                                    DocumentsContract.Document.COLUMN_DISPLAY_NAME
++                                },
++                                null,
++                                null,
++                                null)) {
++            while (cursor != null && cursor.moveToNext()) {
++                if (name.equals(cursor.getString(1))) {
++                    return DocumentsContract.buildDocumentUriUsingTree(mTree, cursor.getString(0));
++                }
++            }
++        } catch (RuntimeException e) {
++            return null;
++        }
++        return null;
++    }
++
++    @Nullable
++    Uri create(String name) throws FileNotFoundException {
++        return DocumentsContract.createDocument(
++                mContext.getContentResolver(), root(), MIME, name);
++    }
++
++    /** Writes {@code bytes} to the document and flushes them to disk. */
++    void write(Uri document, byte[] bytes) throws IOException {
++        ContentResolver resolver = mContext.getContentResolver();
++        try (android.os.ParcelFileDescriptor descriptor =
++                resolver.openFileDescriptor(document, "w")) {
++            if (descriptor == null) throw new IOException("no descriptor");
++            try (java.io.FileOutputStream out =
++                    new java.io.FileOutputStream(descriptor.getFileDescriptor())) {
++                out.write(bytes);
++                out.flush();
++                out.getFD().sync();
++            }
++        }
++    }
++
++    byte @Nullable [] read(Uri document, int limit) {
++        try (InputStream in = mContext.getContentResolver().openInputStream(document)) {
++            if (in == null) return null;
++            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
++            byte[] buffer = new byte[64 * 1024];
++            int total = 0;
++            int n;
++            while ((n = in.read(buffer)) > 0) {
++                total += n;
++                if (total > limit) return null;
++                out.write(buffer, 0, n);
++            }
++            return out.toByteArray();
++        } catch (IOException | RuntimeException e) {
++            return null;
++        }
++    }
++
++    @Nullable
++    Uri rename(Uri document, String name) {
++        try {
++            return DocumentsContract.renameDocument(mContext.getContentResolver(), document, name);
++        } catch (FileNotFoundException | RuntimeException e) {
++            return null;
++        }
++    }
++
++    boolean delete(Uri document) {
++        try {
++            return DocumentsContract.deleteDocument(mContext.getContentResolver(), document);
++        } catch (FileNotFoundException | RuntimeException e) {
++            return false;
++        }
++    }
++
++    void deleteIfThere(String name) {
++        Uri document = find(name);
++        if (document != null) delete(document);
++    }
++
++    private Uri root() {
++        return DocumentsContract.buildDocumentUriUsingTree(
++                mTree, DocumentsContract.getTreeDocumentId(mTree));
++    }
++
++    private @Nullable String displayName(Uri document) {
++        try (Cursor cursor =
++                mContext.getContentResolver()
++                        .query(
++                                document,
++                                new String[] {DocumentsContract.Document.COLUMN_DISPLAY_NAME},
++                                null,
++                                null,
++                                null)) {
++            return cursor != null && cursor.moveToFirst() ? cursor.getString(0) : null;
++        } catch (RuntimeException e) {
++            return null;
++        }
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupKeyStore.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupKeyStore.java
+new file mode 100644
+index 00000000000..048c0c1f942
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupKeyStore.java
+@@ -0,0 +1,112 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.security.keystore.KeyGenParameterSpec;
++import android.security.keystore.KeyProperties;
++import android.util.Base64;
++
++import org.chromium.base.Log;
++import org.chromium.build.annotations.Nullable;
++
++import java.security.GeneralSecurityException;
++import java.security.KeyStore;
++import java.util.Arrays;
++
++import javax.crypto.Cipher;
++import javax.crypto.KeyGenerator;
++import javax.crypto.SecretKey;
++import javax.crypto.spec.GCMParameterSpec;
++
++/**
++ * Keeps an automatic backup's key on the phone, encrypted with a key that lives in Android's
++ * keystore and never leaves it. Backups run while nobody is there to type a passphrase, so the
++ * keystore key needs no unlock; it guards against the key being copied off the phone, not against
++ * someone using the phone. It goes when Bare is uninstalled.
++ */
++final class BareBackupKeyStore {
++    private static final String TAG = "BareBackupKey";
++    private static final String PROVIDER = "AndroidKeyStore";
++    private static final String ALIAS = "bare_backup_wrap";
++    private static final String TRANSFORMATION = "AES/GCM/NoPadding";
++    private static final int IV_SIZE = 12;
++    private static final int TAG_BITS = 128;
++
++    private BareBackupKeyStore() {}
++
++    /** Encrypts {@code key}, making the keystore key if there is none. Null on failure. */
++    static @Nullable String wrap(byte[] key) {
++        try {
++            Cipher cipher = Cipher.getInstance(TRANSFORMATION);
++            cipher.init(Cipher.ENCRYPT_MODE, keystoreKey(/* create= */ true));
++            byte[] iv = cipher.getIV();
++            byte[] sealed = cipher.doFinal(key);
++            byte[] out = new byte[iv.length + sealed.length];
++            System.arraycopy(iv, 0, out, 0, iv.length);
++            System.arraycopy(sealed, 0, out, iv.length, sealed.length);
++            return Base64.encodeToString(out, Base64.NO_WRAP);
++        } catch (GeneralSecurityException | RuntimeException e) {
++            Log.w(TAG, "Couldn't keep the key: %s", e.getClass().getSimpleName());
++            return null;
++        }
++    }
++
++    /** The key {@link #wrap} was given, or null if the keystore key is gone or the blob is bad. */
++    static byte @Nullable [] unwrap(String wrapped) {
++        byte[] bytes = null;
++        try {
++            bytes = Base64.decode(wrapped, Base64.NO_WRAP);
++            if (bytes.length <= IV_SIZE) return null;
++            SecretKey key = keystoreKey(/* create= */ false);
++            if (key == null) return null;
++            Cipher cipher = Cipher.getInstance(TRANSFORMATION);
++            cipher.init(
++                    Cipher.DECRYPT_MODE,
++                    key,
++                    new GCMParameterSpec(TAG_BITS, Arrays.copyOfRange(bytes, 0, IV_SIZE)));
++            return cipher.doFinal(bytes, IV_SIZE, bytes.length - IV_SIZE);
++        } catch (GeneralSecurityException | RuntimeException e) {
++            Log.w(TAG, "Couldn't read the key: %s", e.getClass().getSimpleName());
++            return null;
++        } finally {
++            if (bytes != null) Arrays.fill(bytes, (byte) 0);
++        }
++    }
++
++    /** Deletes the keystore key, which makes every wrapped key useless. */
++    static void delete() {
++        try {
++            KeyStore store = KeyStore.getInstance(PROVIDER);
++            store.load(null);
++            store.deleteEntry(ALIAS);
++        } catch (GeneralSecurityException | java.io.IOException | RuntimeException e) {
++            Log.w(TAG, "Couldn't delete the key: %s", e.getClass().getSimpleName());
++        }
++    }
++
++    private static @Nullable SecretKey keystoreKey(boolean create)
++            throws GeneralSecurityException {
++        KeyStore store = KeyStore.getInstance(PROVIDER);
++        try {
++            store.load(null);
++        } catch (java.io.IOException e) {
++            throw new GeneralSecurityException(e);
++        }
++        KeyStore.Entry entry = store.getEntry(ALIAS, null);
++        if (entry instanceof KeyStore.SecretKeyEntry secret) return secret.getSecretKey();
++        if (!create) return null;
++        KeyGenerator generator =
++                KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, PROVIDER);
++        generator.init(
++                new KeyGenParameterSpec.Builder(
++                                ALIAS,
++                                KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
++                        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
++                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
++                        .setKeySize(256)
++                        .build());
++        return generator.generateKey();
++    }
++}
+diff --git a/chrome/browser/bare/backup/BUILD.gn b/chrome/browser/bare/backup/BUILD.gn
+index e8e864addf5..a605612b7cb 100644
+--- a/chrome/browser/bare/backup/BUILD.gn
++++ b/chrome/browser/bare/backup/BUILD.gn
+@@ -12,6 +12,8 @@ static_library("backup") {
+     "backup_package.h",
+     "backup_recovery_code.cc",
+     "backup_recovery_code.h",
++    "backup_schedule.cc",
++    "backup_schedule.h",
+     "backup_transfer_code.cc",
+     "backup_transfer_code.h",
+   ]
+@@ -83,6 +85,7 @@ _format_test_sources = [
+   "backup_file_unittest.cc",
+   "backup_package_unittest.cc",
+   "backup_recovery_code_unittest.cc",
++  "backup_schedule_unittest.cc",
+   "backup_transfer_code_unittest.cc",
+ ]
+ _format_test_deps = [
+diff --git a/chrome/browser/bare/backup/backup_file.cc b/chrome/browser/bare/backup/backup_file.cc
+index 742d119c11e..8f406216f40 100644
+--- a/chrome/browser/bare/backup/backup_file.cc
++++ b/chrome/browser/bare/backup/backup_file.cc
+@@ -265,6 +265,30 @@ std::optional<Key> DeriveKey(base::span<const uint8_t> passphrase,
+   return key;
+ }
+ 
++std::vector<uint8_t> StoreKey(const KdfParams& kdf, const Key& key) {
++  std::vector<uint8_t> out;
++  out.reserve(kStoredKeySize);
++  out.push_back(kdf.log2_n);
++  out.insert(out.end(), kdf.salt.begin(), kdf.salt.end());
++  out.insert(out.end(), key.bytes().begin(), key.bytes().end());
++  return out;
++}
++
++std::optional<StoredKey> LoadStoredKey(base::span<const uint8_t> stored) {
++  if (stored.size() != kStoredKeySize) {
++    return std::nullopt;
++  }
++  StoredKey out;
++  out.kdf.log2_n = stored[0];
++  base::span(out.kdf.salt).copy_from(stored.subspan(1u).first<kSaltSize>());
++  base::span(out.key.bytes_).copy_from(
++      stored.subspan(1u + kSaltSize).first<kKeySize>());
++  if (!KdfParamsInRange(out.kdf)) {
++    return std::nullopt;
++  }
++  return out;
++}
++
+ base::expected<ParsedFile, ReadError> ParseFile(
+     base::span<const uint8_t> file) {
+   base::SpanReader reader(file);
+diff --git a/chrome/browser/bare/backup/backup_file.h b/chrome/browser/bare/backup/backup_file.h
+index 607dbecdf65..07e8058c01d 100644
+--- a/chrome/browser/bare/backup/backup_file.h
++++ b/chrome/browser/bare/backup/backup_file.h
+@@ -118,6 +118,8 @@ struct ParsedFile {
+   base::span<const uint8_t> body;
+ };
+ 
++struct StoredKey;
++
+ // Holds a derived key and wipes it on destruction.
+ class Key {
+  public:
+@@ -133,9 +135,28 @@ class Key {
+  private:
+   friend std::optional<Key> DeriveKey(base::span<const uint8_t> passphrase,
+                                       const KdfParams& params);
++  friend std::optional<StoredKey> LoadStoredKey(
++      base::span<const uint8_t> stored);
+   std::array<uint8_t, kKeySize> bytes_ = {};
+ };
+ 
++// An automatic backup's key, which the phone keeps (wrapped by Android's
++// keystore) so a backup can be written without asking: scrypt's cost and salt,
++// and the key they gave. Every file written with it carries that salt, so the
++// passphrase the user wrote down opens all of them.
++struct StoredKey {
++  KdfParams kdf;
++  Key key;
++};
++
++inline constexpr size_t kStoredKeySize = 1 + kSaltSize + kKeySize;
++
++// log2_n, salt, key. r and p are always the defaults.
++std::vector<uint8_t> StoreKey(const KdfParams& kdf, const Key& key);
++
++// nullopt if `stored` isn't what StoreKey() wrote or its cost is out of range.
++std::optional<StoredKey> LoadStoredKey(base::span<const uint8_t> stored);
++
+ // Default cost with a fresh random salt.
+ KdfParams NewKdfParams();
+ 
+diff --git a/chrome/browser/bare/backup/backup_file_unittest.cc b/chrome/browser/bare/backup/backup_file_unittest.cc
+index 3089cb9c3b0..f0a55883bb1 100644
+--- a/chrome/browser/bare/backup/backup_file_unittest.cc
++++ b/chrome/browser/bare/backup/backup_file_unittest.cc
+@@ -421,6 +421,59 @@ TEST_F(BackupFileTest, KdfRange) {
+ }
+ 
+ }  // namespace
++TEST_F(BackupFileTest, StoredKeyRoundTrip) {
++  std::vector<uint8_t> stored = StoreKey(*kdf_, *key_);
++  ASSERT_EQ(stored.size(), kStoredKeySize);
++  std::optional<StoredKey> loaded = LoadStoredKey(stored);
++  ASSERT_TRUE(loaded);
++  EXPECT_EQ(loaded->kdf.log2_n, kdf_->log2_n);
++  EXPECT_EQ(loaded->kdf.r, kdf_->r);
++  EXPECT_EQ(loaded->kdf.p, kdf_->p);
++  EXPECT_EQ(loaded->kdf.salt, kdf_->salt);
++  EXPECT_TRUE(std::ranges::equal(loaded->key.bytes(), key_->bytes()));
++  WipeSecret(stored);
++}
++
++// What an automatic backup relies on: files written with the kept key open
++// with the passphrase alone, on any phone, and each has its own nonces.
++TEST_F(BackupFileTest, StoredKeyFilesOpenWithThePassphrase) {
++  std::vector<uint8_t> stored = StoreKey(*kdf_, *key_);
++  std::optional<StoredKey> loaded = LoadStoredKey(stored);
++  ASSERT_TRUE(loaded);
++  const std::vector<uint8_t> zip = Bytes("PK the zip");
++  const std::vector<uint8_t> first = *WriteFullFile(
++      TestDescription(), loaded->kdf, NewAeadParams(), loaded->key, zip);
++  const std::vector<uint8_t> second = *WriteFullFile(
++      TestDescription(), loaded->kdf, NewAeadParams(), loaded->key, zip);
++  auto a = ParseFile(first);
++  auto b = ParseFile(second);
++  ASSERT_TRUE(a.has_value());
++  ASSERT_TRUE(b.has_value());
++  EXPECT_EQ(a->kdf.salt, b->kdf.salt);
++  EXPECT_NE(a->aead.nonce_prefix, b->aead.nonce_prefix);
++  std::optional<Key> typed = DeriveKey(Bytes(kPassphrase), a->kdf);
++  ASSERT_TRUE(typed);
++  auto body_a = DecryptBody(*a, *typed);
++  auto body_b = DecryptBody(*b, *typed);
++  ASSERT_TRUE(body_a.has_value());
++  ASSERT_TRUE(body_b.has_value());
++  EXPECT_EQ(*body_a, "PK the zip");
++  EXPECT_EQ(*body_b, "PK the zip");
++}
++
++TEST_F(BackupFileTest, StoredKeyBadInput) {
++  std::vector<uint8_t> stored = StoreKey(*kdf_, *key_);
++  EXPECT_FALSE(LoadStoredKey(base::span(stored).first(kStoredKeySize - 1)));
++  std::vector<uint8_t> longer = stored;
++  longer.push_back(0);
++  EXPECT_FALSE(LoadStoredKey(longer));
++  stored[0] = 0;
++  EXPECT_FALSE(LoadStoredKey(stored));
++  stored[0] = 40;
++  EXPECT_FALSE(LoadStoredKey(stored));
++  EXPECT_FALSE(LoadStoredKey({}));
++}
++
+ TEST(BackupSecretTest, WipeSecretClearsTheCallersBytes) {
+   std::vector<uint8_t> secret = {'s', 'e', 'c', 'r', 'e', 't'};
+   const uint8_t* storage = secret.data();
+diff --git a/chrome/browser/bare/backup/backup_schedule.cc b/chrome/browser/bare/backup/backup_schedule.cc
+new file mode 100644
+index 00000000000..e47e1cb530c
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_schedule.cc
+@@ -0,0 +1,116 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_schedule.h"
++
++#include <algorithm>
++
++#include "base/strings/string_util.h"
++#include "base/strings/stringprintf.h"
++
++namespace bare::backup {
++
++namespace {
++
++constexpr int64_t kDayMs = int64_t{24} * 60 * 60 * 1000;
++constexpr int64_t kClockSlackMs = int64_t{5} * 60 * 1000;
++constexpr std::string_view kDatedPrefix = "Bare backup ";
++constexpr std::string_view kSuffix = ".bare";
++
++// "YYYY-MM-DD HHMM" between the prefix and the suffix.
++bool IsDatedName(std::string_view name) {
++  if (!base::StartsWith(name, kDatedPrefix) || !base::EndsWith(name, kSuffix)) {
++    return false;
++  }
++  name.remove_prefix(kDatedPrefix.size());
++  name.remove_suffix(kSuffix.size());
++  if (name.size() != 15) {
++    return false;
++  }
++  for (size_t i = 0; i < name.size(); ++i) {
++    const char c = name[i];
++    if (i == 4 || i == 7) {
++      if (c != '-') {
++        return false;
++      }
++    } else if (i == 10) {
++      if (c != ' ') {
++        return false;
++      }
++    } else if (!base::IsAsciiDigit(c)) {
++      return false;
++    }
++  }
++  return true;
++}
++
++}  // namespace
++
++int64_t BackupPeriodMs(int rule) {
++  switch (static_cast<BackupRule>(rule)) {
++    case BackupRule::kDaily:
++      return kDayMs;
++    case BackupRule::kWeekly:
++      return 7 * kDayMs;
++    case BackupRule::kMonthly:
++      return 30 * kDayMs;
++    case BackupRule::kManual:
++      return 0;
++  }
++  return 0;
++}
++
++bool IsBackupDue(int rule, int64_t last_success_ms, int64_t now_ms) {
++  const int64_t period = BackupPeriodMs(rule);
++  if (period == 0) {
++    return false;
++  }
++  if (last_success_ms <= 0 || now_ms < last_success_ms - kClockSlackMs) {
++    return true;
++  }
++  return now_ms - last_success_ms >= period;
++}
++
++std::string DatedBackupName(int year, int month, int day, int hour,
++                            int minute) {
++  return base::StringPrintf("Bare backup %04d-%02d-%02d %02d%02d.bare", year,
++                            month, day, hour, minute);
++}
++
++bool IsBackupFileName(std::string_view name) {
++  return name == kFixedBackupName || IsDatedName(name);
++}
++
++std::vector<std::string> BackupNamesToPrune(
++    const std::vector<std::string>& names,
++    int keep) {
++  std::vector<std::string> ours;
++  for (const std::string& name : names) {
++    if (IsBackupFileName(name) &&
++        std::ranges::find(ours, name) == ours.end()) {
++      ours.push_back(name);
++    }
++  }
++  if (keep <= 1) {
++    std::erase(ours, std::string(kFixedBackupName));
++    return ours;
++  }
++  // Oldest first. Dated names sort by date as text.
++  std::ranges::sort(ours, [](const std::string& a, const std::string& b) {
++    const bool a_fixed = a == kFixedBackupName;
++    const bool b_fixed = b == kFixedBackupName;
++    if (a_fixed != b_fixed) {
++      return a_fixed;
++    }
++    return a < b;
++  });
++  const size_t kept = static_cast<size_t>(keep);
++  if (ours.size() <= kept) {
++    return {};
++  }
++  ours.resize(ours.size() - kept);
++  return ours;
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_schedule.h b/chrome/browser/bare/backup/backup_schedule.h
+new file mode 100644
+index 00000000000..e252da907d8
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_schedule.h
+@@ -0,0 +1,56 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKUP_BACKUP_SCHEDULE_H_
++#define CHROME_BROWSER_BARE_BACKUP_BACKUP_SCHEDULE_H_
++
++#include <stdint.h>
++
++#include <string>
++#include <string_view>
++#include <vector>
++
++// When an automatic backup is due, and the names of the files it writes.
++// Nothing is scheduled with Android: Bare asks IsBackupDue() when the user
++// leaves it, and a little while after it comes back to the front.
++namespace bare::backup {
++
++// Stored as an int in the rule's preferences.
++enum class BackupRule : int {
++  kManual = 0,
++  kDaily = 1,
++  kWeekly = 2,
++  kMonthly = 3,
++};
++
++// How long `rule` waits between backups, or 0 for Manual and unknown values.
++int64_t BackupPeriodMs(int rule);
++
++// Whether a backup should be made now. Never for Manual. Always when none has
++// been made yet, and when the clock reads more than five minutes before the
++// last success: it was set back, and waiting for it to catch up could take as
++// long as it moved.
++bool IsBackupDue(int rule, int64_t last_success_ms, int64_t now_ms);
++
++// The one file kept when the rule keeps a single backup.
++inline constexpr std::string_view kFixedBackupName = "Bare backup.bare";
++
++// "Bare backup 2026-11-12 0941.bare", for keeping the last 3 or 5. Local time.
++std::string DatedBackupName(int year, int month, int day, int hour, int minute);
++
++// Whether `name` is the fixed name or a dated one. Nothing else in the folder
++// is ever renamed or deleted.
++bool IsBackupFileName(std::string_view name);
++
++// Of `names`, the backup files to delete so that the newest `keep` remain.
++// Names that aren't backup files are never listed. Keeping one means keeping
++// the fixed name, so every dated file goes; keeping more counts the fixed
++// name as older than any dated one.
++std::vector<std::string> BackupNamesToPrune(
++    const std::vector<std::string>& names,
++    int keep);
++
++}  // namespace bare::backup
++
++#endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_SCHEDULE_H_
+diff --git a/chrome/browser/bare/backup/backup_schedule_unittest.cc b/chrome/browser/bare/backup/backup_schedule_unittest.cc
+new file mode 100644
+index 00000000000..518698f5471
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_schedule_unittest.cc
+@@ -0,0 +1,138 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_schedule.h"
++
++#include <string>
++#include <vector>
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace bare::backup {
++namespace {
++
++constexpr int64_t kHour = int64_t{60} * 60 * 1000;
++constexpr int64_t kDay = 24 * kHour;
++constexpr int64_t kNow = int64_t{1'762'950'000'000};
++
++constexpr int kManual = static_cast<int>(BackupRule::kManual);
++constexpr int kDaily = static_cast<int>(BackupRule::kDaily);
++constexpr int kWeekly = static_cast<int>(BackupRule::kWeekly);
++constexpr int kMonthly = static_cast<int>(BackupRule::kMonthly);
++
++TEST(BackupScheduleTest, ManualIsNeverDue) {
++  EXPECT_FALSE(IsBackupDue(kManual, 0, kNow));
++  EXPECT_FALSE(IsBackupDue(kManual, kNow - 365 * kDay, kNow));
++  EXPECT_FALSE(IsBackupDue(7, 0, kNow));
++  EXPECT_FALSE(IsBackupDue(-1, 0, kNow));
++}
++
++TEST(BackupScheduleTest, NeverDoneIsDue) {
++  EXPECT_TRUE(IsBackupDue(kDaily, 0, kNow));
++  EXPECT_TRUE(IsBackupDue(kWeekly, 0, kNow));
++  EXPECT_TRUE(IsBackupDue(kMonthly, 0, kNow));
++}
++
++TEST(BackupScheduleTest, DailyEdges) {
++  EXPECT_FALSE(IsBackupDue(kDaily, kNow - kDay + 1, kNow));
++  EXPECT_TRUE(IsBackupDue(kDaily, kNow - kDay, kNow));
++  EXPECT_FALSE(IsBackupDue(kDaily, kNow, kNow));
++}
++
++TEST(BackupScheduleTest, WeeklyEdges) {
++  EXPECT_FALSE(IsBackupDue(kWeekly, kNow - 7 * kDay + 1, kNow));
++  EXPECT_TRUE(IsBackupDue(kWeekly, kNow - 7 * kDay, kNow));
++  EXPECT_FALSE(IsBackupDue(kWeekly, kNow - 6 * kDay, kNow));
++}
++
++TEST(BackupScheduleTest, MonthlyEdges) {
++  EXPECT_FALSE(IsBackupDue(kMonthly, kNow - 30 * kDay + 1, kNow));
++  EXPECT_TRUE(IsBackupDue(kMonthly, kNow - 30 * kDay, kNow));
++  EXPECT_FALSE(IsBackupDue(kMonthly, kNow - 29 * kDay, kNow));
++}
++
++TEST(BackupScheduleTest, ClockSetBack) {
++  // A little behind is a clock correction, not a reason to back up.
++  EXPECT_FALSE(IsBackupDue(kWeekly, kNow + 4 * 60 * 1000, kNow));
++  // Further back, the last backup looks like it is from the future.
++  EXPECT_TRUE(IsBackupDue(kWeekly, kNow + 6 * 60 * 1000, kNow));
++  EXPECT_TRUE(IsBackupDue(kMonthly, kNow + kDay, kNow));
++}
++
++TEST(BackupScheduleTest, ClockSetForward) {
++  EXPECT_TRUE(IsBackupDue(kMonthly, kNow, kNow + 31 * kDay));
++}
++
++TEST(BackupScheduleTest, Periods) {
++  EXPECT_EQ(BackupPeriodMs(kManual), 0);
++  EXPECT_EQ(BackupPeriodMs(kDaily), kDay);
++  EXPECT_EQ(BackupPeriodMs(kWeekly), 7 * kDay);
++  EXPECT_EQ(BackupPeriodMs(kMonthly), 30 * kDay);
++  EXPECT_EQ(BackupPeriodMs(4), 0);
++}
++
++TEST(BackupScheduleTest, Names) {
++  EXPECT_EQ(DatedBackupName(2026, 11, 2, 9, 5),
++            "Bare backup 2026-11-02 0905.bare");
++  for (const char* name :
++       {"Bare backup.bare", "Bare backup 2026-11-02 0905.bare",
++        "Bare backup 1999-12-31 2359.bare"}) {
++    EXPECT_TRUE(IsBackupFileName(name)) << name;
++  }
++  for (const char* name :
++       {"", "Bare backup (1).bare", "Bare backup.bare.tmp",
++        "Bare backup.bare.old", "bare backup.bare", "Bare backup.BARE",
++        "Bare backup 2026-11-2 0905.bare", "Bare backup 2026-11-02 905.bare",
++        "Bare backup 2026-11-02_0905.bare", "Bare backup 2026-11-02 0905.bare ",
++        "Bare backup 2026-11-02 0905 (1).bare", "Bare setup 2026-11-02.bare",
++        "notes.txt", "Bare backup abcd-ef-gh ijkl.bare"}) {
++    EXPECT_FALSE(IsBackupFileName(name)) << name;
++  }
++}
++
++TEST(BackupScheduleTest, KeepThree) {
++  const std::vector<std::string> names = {
++      "Bare backup 2026-11-04 0900.bare", "Bare backup 2026-11-01 0900.bare",
++      "Bare backup 2026-11-03 0900.bare", "Bare backup 2026-11-02 0900.bare",
++      "holiday.jpg"};
++  EXPECT_EQ(BackupNamesToPrune(names, 3),
++            std::vector<std::string>({"Bare backup 2026-11-01 0900.bare"}));
++  EXPECT_TRUE(BackupNamesToPrune(names, 5).empty());
++}
++
++TEST(BackupScheduleTest, KeepMoreCountsTheFixedNameAsOldest) {
++  const std::vector<std::string> names = {
++      "Bare backup 2026-11-02 0900.bare", "Bare backup.bare",
++      "Bare backup 2026-11-03 0900.bare", "Bare backup 2026-11-04 0900.bare"};
++  EXPECT_EQ(BackupNamesToPrune(names, 3),
++            std::vector<std::string>({"Bare backup.bare"}));
++}
++
++TEST(BackupScheduleTest, KeepOneDropsDatedFiles) {
++  const std::vector<std::string> names = {
++      "Bare backup 2026-11-02 0900.bare", "Bare backup.bare",
++      "Bare backup 2026-11-03 0900.bare", "Bare setup 2026-11-01.bare"};
++  EXPECT_EQ(BackupNamesToPrune(names, 1),
++            std::vector<std::string>({"Bare backup 2026-11-02 0900.bare",
++                                      "Bare backup 2026-11-03 0900.bare"}));
++  EXPECT_TRUE(BackupNamesToPrune({"Bare backup.bare"}, 1).empty());
++}
++
++TEST(BackupScheduleTest, NeverTouchesOtherFiles) {
++  const std::vector<std::string> names = {
++      "Bare backup (1).bare", "Bare backup.bare.tmp", "Bare backup.bare.old",
++      "Bare setup 2026-11-01.bare", "my backup.bare", "Bare backup.txt"};
++  EXPECT_TRUE(BackupNamesToPrune(names, 1).empty());
++  EXPECT_TRUE(BackupNamesToPrune(names, 3).empty());
++}
++
++TEST(BackupScheduleTest, DuplicateNamesCountOnce) {
++  const std::vector<std::string> names = {"Bare backup 2026-11-02 0900.bare",
++                                          "Bare backup 2026-11-02 0900.bare",
++                                          "Bare backup 2026-11-03 0900.bare"};
++  EXPECT_TRUE(BackupNamesToPrune(names, 3).empty());
++}
++
++}  // namespace
++}  // namespace bare::backup
+diff --git a/chrome/browser/ui/android/bare_backup_bridge.cc b/chrome/browser/ui/android/bare_backup_bridge.cc
+index 652a7c3921d..28b49301d11 100644
+--- a/chrome/browser/ui/android/bare_backup_bridge.cc
++++ b/chrome/browser/ui/android/bare_backup_bridge.cc
+@@ -22,6 +22,8 @@
+ #include "base/json/json_reader.h"
+ #include "base/json/json_writer.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/thread_pool.h"
+@@ -32,6 +34,7 @@
+ #include "chrome/browser/bare/backup/backup_file.h"
+ #include "chrome/browser/bare/backup/backup_package.h"
+ #include "chrome/browser/bare/backup/backup_recovery_code.h"
++#include "chrome/browser/bare/backup/backup_schedule.h"
+ #include "chrome/browser/bare/backup/backup_settings.h"
+ #include "chrome/browser/bare/backup/backup_transfer_code.h"
+ #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+@@ -365,6 +368,93 @@ bool VerifyOffThread(std::vector<uint8_t> file, std::vector<uint8_t> secret) {
+          ReadManifest(*package, parsed->kind).has_value();
+ }
+ 
++// --------------------------------------------------------- automatic backups
++
++// The key for automatic backups, from the passphrase setup showed or the user
++// chose. Empty on failure.
++std::vector<uint8_t> DeriveStoredKeyOffThread(std::vector<uint8_t> key_input) {
++  const KdfParams kdf = NewKdfParams();
++  std::optional<Key> key = DeriveKey(key_input, kdf);
++  WipeSecret(key_input);
++  if (!key) {
++    return {};
++  }
++  return StoreKey(kdf, *key);
++}
++
++std::vector<uint8_t> EncryptWithStoredKeyOffThread(
++    Description description,
++    std::string zip,
++    std::vector<uint8_t> stored) {
++  std::optional<StoredKey> loaded = LoadStoredKey(stored);
++  WipeSecret(stored);
++  std::optional<std::vector<uint8_t>> file;
++  if (loaded) {
++    file = WriteFullFile(description, loaded->kdf, NewAeadParams(),
++                         loaded->key, base::as_byte_span(zip));
++  }
++  OPENSSL_cleanse(zip.data(), zip.size());
++  return file.value_or(std::vector<uint8_t>());
++}
++
++void OnCollectedForAuto(base::WeakPtr<Profile> profile,
++                        Description description,
++                        std::vector<uint8_t> stored,
++                        ScopedJavaGlobalRef<jobject> callback,
++                        CollectedExtensions extensions) {
++  JNIEnv* env = AttachCurrentThread();
++  if (!profile) {
++    WipeSecret(stored);
++    Java_BareBackupBridge_onBytes(env, callback, std::vector<uint8_t>());
++    return;
++  }
++  JavaAndroidPrefs android;
++  Sources sources = SourcesFor(profile.get(), &android);
++  sources.extensions = &extensions;
++  std::optional<BuiltPackage> built = BuildPackage(Kind::kFull, sources);
++  if (!built) {
++    WipeSecret(stored);
++    Java_BareBackupBridge_onBytes(env, callback, std::vector<uint8_t>());
++    return;
++  }
++  for (const auto& [name, count] : built->counts) {
++    description.contents[name] = count;
++  }
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(&EncryptWithStoredKeyOffThread, std::move(description),
++                     std::move(built->zip), std::move(stored)),
++      base::BindOnce(
++          [](ScopedJavaGlobalRef<jobject> callback,
++             std::vector<uint8_t> bytes) {
++            Java_BareBackupBridge_onBytes(AttachCurrentThread(), callback,
++                                          bytes);
++          },
++          std::move(callback)));
++}
++
++// Opens a file an automatic backup just wrote, with the key it was written
++// with: the salt must be the kept one and every part must read back.
++bool VerifyWithStoredKeyOffThread(std::vector<uint8_t> file,
++                                  std::vector<uint8_t> stored) {
++  std::optional<StoredKey> loaded = LoadStoredKey(stored);
++  WipeSecret(stored);
++  auto parsed = ParseFile(file);
++  if (!loaded || !parsed.has_value() || parsed->kind != Kind::kFull ||
++      parsed->kdf.salt != loaded->kdf.salt ||
++      parsed->kdf.log2_n != loaded->kdf.log2_n) {
++    return false;
++  }
++  auto body = DecryptBody(*parsed, loaded->key);
++  if (!body.has_value()) {
++    return false;
++  }
++  auto package = ReadPackage(*body);
++  OPENSSL_cleanse(body->data(), body->size());
++  return package.has_value() &&
++         ReadManifest(*package, Kind::kFull).has_value();
++}
++
+ // ----------------------------------------------------------------- opening
+ 
+ // A backup being restored. Lives until Java closes it.
+@@ -862,4 +952,109 @@ static void JNI_BareBackupBridge_Close(JNIEnv* env, jlong handle) {
+   delete reinterpret_cast<bare_backup::OpenedBackup*>(handle);
+ }
+ 
++static void JNI_BareBackupBridge_DeriveStoredKey(
++    JNIEnv* env,
++    std::vector<uint8_t> secret,
++    jboolean secret_is_code,
++    const JavaRef<jobject>& jcallback) {
++  ScopedJavaGlobalRef<jobject> callback(jcallback);
++  std::vector<uint8_t> key_input =
++      bare_backup::SecretBytes(std::move(secret), secret_is_code);
++  if (key_input.empty()) {
++    Java_BareBackupBridge_onBytes(env, callback, std::vector<uint8_t>());
++    return;
++  }
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
++      base::BindOnce(&bare_backup::DeriveStoredKeyOffThread,
++                     std::move(key_input)),
++      base::BindOnce(
++          [](ScopedJavaGlobalRef<jobject> callback,
++             std::vector<uint8_t> stored) {
++            Java_BareBackupBridge_onBytes(AttachCurrentThread(), callback,
++                                          stored);
++            OPENSSL_cleanse(stored.data(), stored.size());
++          },
++          std::move(callback)));
++}
++
++static void JNI_BareBackupBridge_BuildAutoBackup(
++    JNIEnv* env,
++    const JavaRef<jobject>& jprofile,
++    std::vector<uint8_t> stored_key,
++    jboolean secret_is_code,
++    std::string device_label,
++    std::string bare_version,
++    jint bare_version_code,
++    const JavaRef<jobject>& jcallback) {
++  ScopedJavaGlobalRef<jobject> callback(jcallback);
++  Profile* profile = Profile::FromJavaObject(jprofile);
++  if (!profile || profile->IsOffTheRecord()) {
++    bare_backup::WipeSecret(stored_key);
++    Java_BareBackupBridge_onBytes(env, callback, std::vector<uint8_t>());
++    return;
++  }
++  bare_backup::Description description;
++  description.created = bare_backup::UtcTimestamp(base::Time::Now());
++  description.bare_version = bare_version;
++  description.bare_version_code = bare_version_code;
++  description.device_label = device_label;
++  description.secret = secret_is_code ? "code" : "passphrase";
++  bare_backup::CollectExtensions(
++      profile, /*with_files=*/true,
++      base::BindOnce(&bare_backup::OnCollectedForAuto, profile->GetWeakPtr(),
++                     std::move(description), std::move(stored_key),
++                     std::move(callback)));
++}
++
++static void JNI_BareBackupBridge_VerifyWithStoredKey(
++    JNIEnv* env,
++    std::vector<uint8_t> file,
++    std::vector<uint8_t> stored_key,
++    const JavaRef<jobject>& jcallback) {
++  ScopedJavaGlobalRef<jobject> callback(jcallback);
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(&bare_backup::VerifyWithStoredKeyOffThread,
++                     std::move(file), std::move(stored_key)),
++      base::BindOnce(
++          [](ScopedJavaGlobalRef<jobject> callback, bool ok) {
++            Java_BareBackupBridge_onBoolean(AttachCurrentThread(), callback,
++                                            ok);
++          },
++          std::move(callback)));
++}
++
++static bool JNI_BareBackupBridge_IsBackupDue(JNIEnv* env,
++                                             jint rule,
++                                             jlong last_success_ms,
++                                             jlong now_ms) {
++  return bare_backup::IsBackupDue(rule, last_success_ms, now_ms);
++}
++
++// Names travel joined by NUL, which no file name contains.
++static std::string JNI_BareBackupBridge_BackupNamesToPrune(JNIEnv* env,
++                                                           std::string names,
++                                                           jint keep) {
++  std::vector<std::string> list = base::SplitString(
++      names, std::string(1, '\0'), base::KEEP_WHITESPACE,
++      base::SPLIT_WANT_NONEMPTY);
++  return base::JoinString(bare_backup::BackupNamesToPrune(list, keep),
++                          std::string(1, '\0'));
++}
++
++static std::string JNI_BareBackupBridge_DatedBackupName(JNIEnv* env,
++                                                        jint year,
++                                                        jint month,
++                                                        jint day,
++                                                        jint hour,
++                                                        jint minute) {
++  return bare_backup::DatedBackupName(year, month, day, hour, minute);
++}
++
++static bool JNI_BareBackupBridge_IsBackupFileName(JNIEnv* env,
++                                                  std::string name) {
++  return bare_backup::IsBackupFileName(name);
++}
++
+ DEFINE_JNI(BareBackupBridge)
+diff --git a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
+index 69828e65cd4..505f2fa9d9c 100644
+--- a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
++++ b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
+@@ -161,7 +161,47 @@ public final class RiseSheet {
+             @Nullable CharSequence actionLabel,
+             @Nullable Runnable onAction,
+             @Nullable Runnable onDismissed) {
++        return showMessageCard(
++                root,
++                text,
++                actionLabel == null ? new CharSequence[0] : new CharSequence[] {actionLabel},
++                new Runnable[] {onAction},
++                /* closesItself= */ true,
++                onDismissed);
++    }
++
++    /**
++     * Shows a message with two text buttons that stays until it is answered: a button (which runs
++     * its action first), a tap outside it, a drag down or Back. It never closes by itself, so it
++     * suits something the user has to decide. {@code first} is the main answer and sits at the
++     * end. Returns whether it showed; it does not while another card is up.
++     */
++    public static boolean showMessage(
++            View root,
++            CharSequence text,
++            CharSequence firstLabel,
++            Runnable onFirst,
++            CharSequence secondLabel,
++            Runnable onSecond,
++            @Nullable Runnable onDismissed) {
++        return showMessageCard(
++                root,
++                text,
++                new CharSequence[] {secondLabel, firstLabel},
++                new Runnable[] {onSecond, onFirst},
++                /* closesItself= */ false,
++                onDismissed);
++    }
++
++    private static boolean showMessageCard(
++            View root,
++            CharSequence text,
++            CharSequence[] labels,
++            @Nullable Runnable[] actions,
++            boolean closesItself,
++            @Nullable Runnable onDismissed) {
+         if (sActive != null) return false;
++        boolean hasButtons = labels.length > 0;
+         Context context = root.getContext();
+         float density = context.getResources().getDisplayMetrics().density;
+         Rect frame = new Rect();
+@@ -171,7 +211,7 @@ public final class RiseSheet {
+         LinearLayout content = new LinearLayout(context);
+         content.setOrientation(LinearLayout.VERTICAL);
+         int side = Math.round(20 * density);
+-        content.setPadding(side, 0, side, Math.round((actionLabel == null ? 16 : 6) * density));
++        content.setPadding(side, 0, side, Math.round((hasButtons ? 6 : 16) * density));
+         TextView message = new TextView(context);
+         message.setText(text);
+         message.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+@@ -184,32 +224,42 @@ public final class RiseSheet {
+         // A card can come up while the user is tapping the page, so its button takes no tap that
+         // starts before the card has been fully up for a moment.
+         long[] buttonReadyAt = {Long.MAX_VALUE};
+-        if (actionLabel != null) {
+-            Button action = new Button(context, null, android.R.attr.borderlessButtonStyle);
+-            action.setText(actionLabel);
+-            action.setAllCaps(false);
+-            action.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+-            action.setTextColor(SemanticColorUtils.getDefaultControlColorActive(context));
+-            action.setOnClickListener(
+-                    v -> {
+-                        if (onAction != null) onAction.run();
+-                        if (closeCard[0] != null) closeCard[0].run();
+-                    });
+-            boolean[] early = new boolean[1];
+-            action.setOnTouchListener(
+-                    (v, event) -> {
+-                        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+-                            early[0] = event.getEventTime() < buttonReadyAt[0];
+-                        }
+-                        return early[0];
+-                    });
++        if (hasButtons) {
++            LinearLayout row = new LinearLayout(context);
++            row.setOrientation(LinearLayout.HORIZONTAL);
++            row.setGravity(Gravity.END);
++            for (int i = 0; i < labels.length; i++) {
++                @Nullable Runnable onAction = actions[i];
++                Button action = new Button(context, null, android.R.attr.borderlessButtonStyle);
++                action.setText(labels[i]);
++                action.setAllCaps(false);
++                action.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
++                action.setTextColor(SemanticColorUtils.getDefaultControlColorActive(context));
++                action.setOnClickListener(
++                        v -> {
++                            if (onAction != null) onAction.run();
++                            if (closeCard[0] != null) closeCard[0].run();
++                        });
++                boolean[] early = new boolean[1];
++                action.setOnTouchListener(
++                        (v, event) -> {
++                            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
++                                early[0] = event.getEventTime() < buttonReadyAt[0];
++                            }
++                            return early[0];
++                        });
++                row.addView(
++                        action,
++                        new LinearLayout.LayoutParams(
++                                ViewGroup.LayoutParams.WRAP_CONTENT,
++                                ViewGroup.LayoutParams.WRAP_CONTENT));
++            }
+             LinearLayout.LayoutParams params =
+                     new LinearLayout.LayoutParams(
+-                            ViewGroup.LayoutParams.WRAP_CONTENT,
++                            ViewGroup.LayoutParams.MATCH_PARENT,
+                             ViewGroup.LayoutParams.WRAP_CONTENT);
+-            params.gravity = Gravity.END;
+             params.topMargin = Math.round(4 * density);
+-            content.addView(action, params);
++            content.addView(row, params);
+         }
+         content.measure(
+                 View.MeasureSpec.makeMeasureSpec(frame.width(), View.MeasureSpec.EXACTLY),
+@@ -228,7 +278,7 @@ public final class RiseSheet {
+                         Mode.MESSAGE);
+         closeCard[0] = sheet::close;
+         sheet.mOnDismissed = onDismissed;
+-        if (actionLabel == null) {
++        if (!hasButtons) {
+             sheet.mPopup.setFocusable(false);
+             sheet.mPopup.setOutsideTouchable(false);
+             sheet.mPopup.setTouchInterceptor(null);
+@@ -252,7 +302,7 @@ public final class RiseSheet {
+                                 () ->
+                                         buttonReadyAt[0] =
+                                                 SystemClock.uptimeMillis() + BUTTON_GUARD_MS));
+-        sheet.mFrame.postDelayed(sheet.mTimeout, MESSAGE_MS);
++        if (closesItself) sheet.mFrame.postDelayed(sheet.mTimeout, MESSAGE_MS);
+         return true;
+     }
+ 

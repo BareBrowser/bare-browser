@@ -1,0 +1,4217 @@
+diff --git a/chrome/browser/bare/backup/BUILD.gn b/chrome/browser/bare/backup/BUILD.gn
+index 7035317ea0c..073eed217bb 100644
+--- a/chrome/browser/bare/backup/BUILD.gn
++++ b/chrome/browser/bare/backup/BUILD.gn
+@@ -14,15 +14,53 @@ static_library("backup") {
+   public_deps = [ "//base" ]
+   deps = [
+     "//third_party/boringssl",
++    "//third_party/zlib",
+     "//third_party/zlib/google:zip",
+   ]
+ }
+ 
+-_test_sources = [
++# What goes into a package and how it is restored. Works on the models and
++# pref services directly, so it is tested without a profile.
++static_library("data") {
++  sources = [
++    "backup_bookmarks.cc",
++    "backup_bookmarks.h",
++    "backup_contents.cc",
++    "backup_contents.h",
++    "backup_reading_list.cc",
++    "backup_reading_list.h",
++    "backup_search_engines.cc",
++    "backup_search_engines.h",
++    "backup_settings.cc",
++    "backup_settings.h",
++    "backup_site_settings.cc",
++    "backup_site_settings.h",
++  ]
++  public_deps = [
++    ":backup",
++    "//base",
++  ]
++  deps = [
++    "//components/bookmarks/browser",
++    "//components/content_settings/core/browser",
++    "//components/content_settings/core/common",
++    "//components/prefs",
++    "//components/reading_list/core",
++    "//components/search_engines",
++    "//net",
++    "//url",
++  ]
++}
++
++# The file format and zip tests need only base, BoringSSL and zlib, so they
++# also build for the host and run in the build container. The data tests pull
++# in components that the host side of an Android out dir hasn't built, and run
++# on a device or emulator.
++_format_test_sources = [
+   "backup_file_unittest.cc",
+   "backup_package_unittest.cc",
+ ]
+-_test_deps = [
++_format_test_deps = [
+   ":backup",
+   "//base",
+   "//base/test:run_all_unittests",
+@@ -32,19 +70,49 @@ _test_deps = [
+ 
+ if (is_android) {
+   test("bare_backup_unittests") {
+-    sources = _test_sources
+-    deps = _test_deps + [ "//third_party/icu:icu_assets" ]
++    sources = _format_test_sources + [
++                "backup_bookmarks_unittest.cc",
++                "backup_contents_unittest.cc",
++                "backup_reading_list_unittest.cc",
++                "backup_search_engines_unittest.cc",
++                "backup_settings_unittest.cc",
++                "backup_site_settings_unittest.cc",
++                "backup_test_util.cc",
++                "backup_test_util.h",
++              ]
++    deps = _format_test_deps + [
++             ":data",
++             "//base/test:test_support",
++             "//components/bookmarks/browser",
++             "//components/bookmarks/test",
++             "//components/content_settings/core/browser",
++             "//components/content_settings/core/common",
++             "//components/prefs:test_support",
++             "//components/reading_list/core",
++             "//components/reading_list/core:test_support",
++             "//components/search_engines",
++             "//components/search_engines:test_support",
++
++             # SearchEnginesTestEnvironment sets up a fake account manager,
++             # which is Java on Android.
++             "//components/signin/public/android:signin_java_test_support",
++             "//components/sync/base",
++             "//components/sync/model",
++             "//components/sync_preferences:test_support",
++             "//testing/gmock",
++             "//third_party/icu:icu_assets",
++             "//ui/base:test_support",
++             "//url",
++           ]
+   }
+ 
+-  # The same tests as a Linux binary, built from the Android out dir with the
+-  # host toolchain, so they run in the build container without a device.
+   group("bare_backup_host_unittests") {
+     testonly = true
+     deps = [ ":bare_backup_host_unittests($host_toolchain)" ]
+   }
+ } else {
+   test("bare_backup_host_unittests") {
+-    sources = _test_sources
+-    deps = _test_deps
++    sources = _format_test_sources
++    deps = _format_test_deps
+   }
+ }
+diff --git a/chrome/browser/bare/backup/DEPS b/chrome/browser/bare/backup/DEPS
+index c6e9550543b..56b2c0197a8 100644
+--- a/chrome/browser/bare/backup/DEPS
++++ b/chrome/browser/bare/backup/DEPS
+@@ -1,3 +1,13 @@
+ include_rules = [
++  "+components/bookmarks",
++  "+components/content_settings/core",
++  "+components/prefs",
++  "+components/reading_list/core",
++  "+components/sync/base",
++  "+components/sync/model",
++  "+ui/base/resource",
++  "+components/search_engines",
++  "+components/sync_preferences",
++  "+net/dns/public",
+   "+third_party/zlib",
+ ]
+diff --git a/chrome/browser/bare/backup/backup_bookmarks.cc b/chrome/browser/bare/backup/backup_bookmarks.cc
+new file mode 100644
+index 00000000000..af5021fcd04
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_bookmarks.cc
+@@ -0,0 +1,245 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_bookmarks.h"
++
++#include <array>
++#include <map>
++#include <set>
++#include <utility>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/time/time.h"
++#include "components/bookmarks/browser/bookmark_model.h"
++#include "components/bookmarks/browser/bookmark_node.h"
++#include "url/gurl.h"
++#include "url/url_constants.h"
++
++namespace bare::backup {
++
++namespace {
++
++using bookmarks::BookmarkModel;
++using bookmarks::BookmarkNode;
++
++constexpr size_t kMaxTitleLength = 4096;
++
++constexpr char kBookmarkBar[] = "bookmark_bar";
++constexpr char kOther[] = "other";
++constexpr char kMobile[] = "mobile";
++
++struct Root {
++  const char* name;
++  const BookmarkNode* node;
++};
++
++std::array<Root, 3> Roots(const BookmarkModel& model) {
++  return {{{kBookmarkBar, model.bookmark_bar_node()},
++           {kOther, model.other_node()},
++           {kMobile, model.mobile_node()}}};
++}
++
++std::string TimeToString(base::Time time) {
++  return base::NumberToString(
++      time.ToDeltaSinceWindowsEpoch().InMicroseconds());
++}
++
++base::Time TimeFromString(const std::string* text, base::Time fallback) {
++  int64_t micros = 0;
++  if (!text || !base::StringToInt64(*text, &micros) || micros <= 0) {
++    return fallback;
++  }
++  return base::Time::FromDeltaSinceWindowsEpoch(base::Microseconds(micros));
++}
++
++void AppendChildren(const BookmarkNode* folder,
++                    base::Value parent,
++                    BookmarksWriteResult& result,
++                    base::ListValue& nodes,
++                    int& next_id) {
++  for (const auto& child : folder->children()) {
++    base::DictValue node;
++    const int id = next_id++;
++    node.Set("id", id);
++    node.Set("parent", parent.Clone());
++    node.Set("title", base::UTF16ToUTF8(child->GetTitle()));
++    node.Set("added", TimeToString(child->date_added()));
++    if (child->is_folder()) {
++      node.Set("type", "folder");
++      nodes.Append(std::move(node));
++      ++result.folders;
++      AppendChildren(child.get(), base::Value(id), result, nodes, next_id);
++    } else {
++      node.Set("type", "url");
++      node.Set("url", child->url().spec());
++      nodes.Append(std::move(node));
++      ++result.urls;
++    }
++  }
++}
++
++std::u16string UniqueFolderTitle(const BookmarkNode* parent,
++                                 const std::u16string& title) {
++  std::set<std::u16string> taken;
++  for (const auto& child : parent->children()) {
++    if (child->is_folder()) {
++      taken.insert(child->GetTitle());
++    }
++  }
++  if (!taken.contains(title)) {
++    return title;
++  }
++  for (size_t i = 1;; ++i) {
++    std::u16string candidate =
++        title + u" (" + base::NumberToString16(i) + u")";
++    if (!taken.contains(candidate)) {
++      return candidate;
++    }
++  }
++}
++
++// A node from the file after checking. `parent` is a root name or the id of
++// an accepted folder.
++struct Checked {
++  int id = 0;
++  std::string root;
++  int parent_id = 0;
++  bool is_folder = false;
++  std::u16string title;
++  GURL url;
++  base::Time added;
++};
++
++}  // namespace
++
++BookmarksWriteResult BookmarksToJson(const BookmarkModel& model) {
++  BookmarksWriteResult result;
++  base::ListValue nodes;
++  int next_id = 1;
++  for (const Root& root : Roots(model)) {
++    AppendChildren(root.node, base::Value(root.name), result, nodes, next_id);
++  }
++  result.json.Set("nodes", std::move(nodes));
++  return result;
++}
++
++std::optional<BookmarksRestoreResult> RestoreBookmarks(
++    BookmarkModel& model,
++    const base::DictValue& json,
++    const std::u16string& folder_title) {
++  const base::ListValue* nodes = json.FindList("nodes");
++  if (!nodes || nodes->size() > kMaxBookmarkNodes) {
++    return std::nullopt;
++  }
++
++  BookmarksRestoreResult result;
++  const base::Time now = base::Time::Now();
++  std::vector<Checked> accepted;
++  std::set<int> seen_ids;
++  std::set<int> folder_ids;
++  std::set<std::string> roots_used;
++  for (const base::Value& value : *nodes) {
++    const base::DictValue* node = value.GetIfDict();
++    if (!node) {
++      ++result.skipped;
++      continue;
++    }
++    Checked checked;
++    const std::optional<int> id = node->FindInt("id");
++    const std::string* type = node->FindString("type");
++    const std::string* title = node->FindString("title");
++    const base::Value* parent = node->Find("parent");
++    if (!id || *id <= 0 || !seen_ids.insert(*id).second || !type ||
++        (*type != "folder" && *type != "url") || !parent) {
++      ++result.skipped;
++      continue;
++    }
++    checked.id = *id;
++    checked.is_folder = *type == "folder";
++    if (parent->is_string() &&
++        (parent->GetString() == kBookmarkBar || parent->GetString() == kOther ||
++         parent->GetString() == kMobile)) {
++      checked.root = parent->GetString();
++    } else if (parent->is_int() && folder_ids.contains(parent->GetInt())) {
++      checked.parent_id = parent->GetInt();
++    } else {
++      // Unknown parent, or inside a folder that was skipped.
++      ++result.skipped;
++      continue;
++    }
++    if (title) {
++      checked.title = base::UTF8ToUTF16(*title).substr(0, kMaxTitleLength);
++    }
++    if (!checked.is_folder) {
++      const std::string* url = node->FindString("url");
++      if (!url || url->size() > url::kMaxURLChars) {
++        ++result.skipped;
++        continue;
++      }
++      checked.url = GURL(*url);
++      if (!checked.url.is_valid()) {
++        ++result.skipped;
++        continue;
++      }
++    }
++    checked.added = TimeFromString(node->FindString("added"), now);
++    if (checked.is_folder) {
++      folder_ids.insert(checked.id);
++    }
++    if (!checked.root.empty()) {
++      roots_used.insert(checked.root);
++    }
++    accepted.push_back(std::move(checked));
++  }
++
++  bool model_empty = true;
++  for (const Root& root : Roots(model)) {
++    model_empty = model_empty && root.node->children().empty();
++  }
++
++  std::map<std::string, raw_ptr<const BookmarkNode>> targets;
++  if (model_empty) {
++    for (const Root& root : Roots(model)) {
++      targets[root.name] = root.node;
++    }
++  } else if (!accepted.empty()) {
++    result.into_folder = true;
++    result.folder_title = UniqueFolderTitle(model.mobile_node(), folder_title);
++    const BookmarkNode* container =
++        model.AddFolder(model.mobile_node(), model.mobile_node()->children().size(),
++                        result.folder_title);
++    for (const Root& root : Roots(model)) {
++      if (!roots_used.contains(root.name)) {
++        continue;
++      }
++      targets[root.name] =
++          roots_used.size() == 1
++              ? container
++              : model.AddFolder(container, container->children().size(),
++                                root.node->GetTitle());
++    }
++  }
++
++  std::map<int, raw_ptr<const BookmarkNode>> folders;
++  for (const Checked& node : accepted) {
++    const BookmarkNode* parent = node.root.empty()
++                                     ? folders[node.parent_id].get()
++                                     : targets[node.root].get();
++    const size_t index = parent->children().size();
++    if (node.is_folder) {
++      folders[node.id] =
++          model.AddFolder(parent, index, node.title, nullptr, node.added);
++      ++result.folders;
++    } else {
++      model.AddURL(parent, index, node.title, node.url, nullptr, node.added);
++      ++result.urls;
++    }
++  }
++  return result;
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_bookmarks.h b/chrome/browser/bare/backup/backup_bookmarks.h
+new file mode 100644
+index 00000000000..048b84bbf5d
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_bookmarks.h
+@@ -0,0 +1,66 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKUP_BACKUP_BOOKMARKS_H_
++#define CHROME_BROWSER_BARE_BACKUP_BACKUP_BOOKMARKS_H_
++
++#include <stddef.h>
++
++#include <optional>
++#include <string>
++
++#include "base/values.h"
++
++namespace bookmarks {
++class BookmarkModel;
++}
++
++// Bookmarks in personal/bookmarks.json:
++//
++//   {"nodes": [{"id": 1, "parent": "bookmark_bar", "type": "folder",
++//               "title": "News", "added": "13350000000000000"},
++//              {"id": 2, "parent": 1, "type": "url", "title": "...",
++//               "url": "https://...", "added": "..."}]}
++//
++// The list is flat and in tree order, so a folder always comes before what's
++// in it and deep folders don't nest the JSON. "parent" is a permanent folder
++// name or the id of an earlier folder. "added" is microseconds since the
++// Windows epoch, as a string because JSON numbers lose int64 precision.
++namespace bare::backup {
++
++inline constexpr size_t kMaxBookmarkNodes = 100000;
++
++struct BookmarksWriteResult {
++  base::DictValue json;
++  size_t urls = 0;
++  size_t folders = 0;
++};
++
++// The three permanent folders and everything in them. Managed and account
++// folders are left out.
++BookmarksWriteResult BookmarksToJson(const bookmarks::BookmarkModel& model);
++
++struct BookmarksRestoreResult {
++  size_t urls = 0;
++  size_t folders = 0;
++  // Nodes that failed a check, and everything inside a folder that did.
++  size_t skipped = 0;
++  // False when the model was empty and the tree went back where it was.
++  bool into_folder = false;
++  std::u16string folder_title;
++};
++
++// An empty model gets the tree back exactly. Otherwise everything goes into a
++// new folder in Mobile bookmarks named `folder_title`, or `folder_title (1)`
++// and so on if that name is taken; the phone's own bookmarks are not touched.
++// Returns nullopt, with the model unchanged, if `json` isn't a bookmarks list
++// at all.
++std::optional<BookmarksRestoreResult> RestoreBookmarks(
++    bookmarks::BookmarkModel& model,
++    const base::DictValue& json,
++    const std::u16string& folder_title);
++
++}  // namespace bare::backup
++
++#endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_BOOKMARKS_H_
+diff --git a/chrome/browser/bare/backup/backup_bookmarks_unittest.cc b/chrome/browser/bare/backup/backup_bookmarks_unittest.cc
+new file mode 100644
+index 00000000000..5903bc2e35b
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_bookmarks_unittest.cc
+@@ -0,0 +1,223 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_bookmarks.h"
++
++#include <memory>
++#include <string>
++
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/test/task_environment.h"
++#include "chrome/browser/bare/backup/backup_test_util.h"
++#include "components/bookmarks/browser/bookmark_model.h"
++#include "components/bookmarks/browser/bookmark_node.h"
++#include "components/bookmarks/test/test_bookmark_client.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace bare::backup {
++namespace {
++
++using bookmarks::BookmarkModel;
++using bookmarks::BookmarkNode;
++using bookmarks::TestBookmarkClient;
++
++// One line per node, indented by depth, for comparing whole trees.
++void Describe(const BookmarkNode* node, int depth, std::string& out) {
++  for (const auto& child : node->children()) {
++    out += std::string(depth * 2, ' ') + base::UTF16ToUTF8(child->GetTitle());
++    if (child->is_url()) {
++      out += " " + child->url().spec();
++    }
++    out += "\n";
++    if (child->is_folder()) {
++      Describe(child.get(), depth + 1, out);
++    }
++  }
++}
++
++std::string Describe(const BookmarkModel& model) {
++  std::string out;
++  for (const BookmarkNode* root :
++       {static_cast<const BookmarkNode*>(model.bookmark_bar_node()),
++        static_cast<const BookmarkNode*>(model.other_node()),
++        static_cast<const BookmarkNode*>(model.mobile_node())}) {
++    out += "[" + base::UTF16ToUTF8(root->GetTitle()) + "]\n";
++    Describe(root, 1, out);
++  }
++  return out;
++}
++
++base::DictValue Parse(std::string_view json) {
++  return *base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
++}
++
++class BackupBookmarksTest : public testing::Test {
++ protected:
++  void FillSource() {
++    BookmarkModel& m = *source_;
++    const BookmarkNode* news =
++        m.AddFolder(m.bookmark_bar_node(), 0, u"News");
++    m.AddURL(news, 0, u"Example", GURL("https://example.org/"));
++    const BookmarkNode* deep = m.AddFolder(news, 1, u"Deeper");
++    m.AddURL(deep, 0, u"日本語 \U0001F600",
++             GURL("https://example.org/ja"));
++    m.AddURL(m.bookmark_bar_node(), 1, u"Bar link", GURL("https://a.test/"));
++    m.AddURL(m.other_node(), 0, u"Other", GURL("https://b.test/x?y=1#z"));
++    m.AddFolder(m.other_node(), 1, u"Empty folder");
++    m.AddURL(m.mobile_node(), 0, u"Mobile", GURL("https://c.test/"));
++    m.AddURL(m.mobile_node(), 1, u"Bookmarklet",
++             GURL("javascript:alert(1)"));
++  }
++
++  base::test::SingleThreadTaskEnvironment task_environment_;
++  ScopedTestStrings strings_;
++  std::unique_ptr<BookmarkModel> source_ = TestBookmarkClient::CreateModel();
++  std::unique_ptr<BookmarkModel> target_ = TestBookmarkClient::CreateModel();
++};
++
++TEST_F(BackupBookmarksTest, EmptyModel) {
++  BookmarksWriteResult written = BookmarksToJson(*source_);
++  EXPECT_EQ(written.urls, 0u);
++  EXPECT_TRUE(written.json.FindList("nodes")->empty());
++  auto restored = RestoreBookmarks(*target_, written.json, u"Restored");
++  ASSERT_TRUE(restored);
++  EXPECT_EQ(restored->urls + restored->folders, 0u);
++  EXPECT_FALSE(restored->into_folder);
++  EXPECT_TRUE(target_->mobile_node()->children().empty());
++}
++
++TEST_F(BackupBookmarksTest, ExactTreeIntoEmptyModel) {
++  FillSource();
++  BookmarksWriteResult written = BookmarksToJson(*source_);
++  EXPECT_EQ(written.urls, 6u);
++  EXPECT_EQ(written.folders, 3u);
++
++  // Through JSON text, as it will be in the file.
++  const std::string text = *base::WriteJson(written.json);
++  auto restored =
++      RestoreBookmarks(*target_, Parse(text), u"Restored 2026-11-03");
++  ASSERT_TRUE(restored);
++  EXPECT_FALSE(restored->into_folder);
++  EXPECT_EQ(restored->urls, 6u);
++  EXPECT_EQ(restored->folders, 3u);
++  EXPECT_EQ(restored->skipped, 0u);
++  EXPECT_EQ(Describe(*target_), Describe(*source_));
++
++  const BookmarkNode* news = target_->bookmark_bar_node()->children()[0].get();
++  EXPECT_EQ(news->date_added(),
++            source_->bookmark_bar_node()->children()[0]->date_added());
++}
++
++TEST_F(BackupBookmarksTest, PhoneInUseGetsAFolder) {
++  FillSource();
++  target_->AddURL(target_->bookmark_bar_node(), 0, u"Mine",
++                  GURL("https://mine.test/"));
++  target_->AddFolder(target_->mobile_node(), 0, u"Restored 2026-11-03");
++
++  auto restored = RestoreBookmarks(*target_, BookmarksToJson(*source_).json,
++                                   u"Restored 2026-11-03");
++  ASSERT_TRUE(restored);
++  EXPECT_TRUE(restored->into_folder);
++  EXPECT_EQ(restored->folder_title, u"Restored 2026-11-03 (1)");
++  EXPECT_EQ(restored->urls, 6u);
++
++  // The user's own bookmarks are where they were.
++  EXPECT_EQ(target_->bookmark_bar_node()->children().size(), 1u);
++  EXPECT_EQ(target_->bookmark_bar_node()->children()[0]->GetTitle(), u"Mine");
++  ASSERT_EQ(target_->mobile_node()->children().size(), 2u);
++  const BookmarkNode* folder = target_->mobile_node()->children()[1].get();
++  EXPECT_EQ(folder->GetTitle(), u"Restored 2026-11-03 (1)");
++  // Three permanent folders were used, so each gets its own subfolder.
++  ASSERT_EQ(folder->children().size(), 3u);
++  EXPECT_EQ(folder->children()[0]->GetTitle(),
++            source_->bookmark_bar_node()->GetTitle());
++  EXPECT_EQ(folder->children()[0]->children().size(), 2u);
++
++  // Running it again adds a second folder and nothing else.
++  restored = RestoreBookmarks(*target_, BookmarksToJson(*source_).json,
++                              u"Restored 2026-11-03");
++  EXPECT_EQ(restored->folder_title, u"Restored 2026-11-03 (2)");
++  EXPECT_EQ(target_->mobile_node()->children().size(), 3u);
++  EXPECT_EQ(target_->bookmark_bar_node()->children().size(), 1u);
++  EXPECT_TRUE(target_->mobile_node()->children()[0]->children().empty());
++}
++
++TEST_F(BackupBookmarksTest, OneRootGoesStraightIntoTheFolder) {
++  source_->AddURL(source_->mobile_node(), 0, u"Only", GURL("https://o.test/"));
++  target_->AddURL(target_->mobile_node(), 0, u"Mine",
++                  GURL("https://mine.test/"));
++  auto restored =
++      RestoreBookmarks(*target_, BookmarksToJson(*source_).json, u"Restored");
++  ASSERT_TRUE(restored);
++  const BookmarkNode* folder = target_->mobile_node()->children()[1].get();
++  ASSERT_EQ(folder->children().size(), 1u);
++  EXPECT_EQ(folder->children()[0]->GetTitle(), u"Only");
++}
++
++TEST_F(BackupBookmarksTest, TenThousandAndDeep) {
++  const BookmarkNode* folder = source_->other_node();
++  for (int depth = 0; depth < 200; ++depth) {
++    folder = source_->AddFolder(folder, 0,
++                                u"Level " + base::NumberToString16(depth));
++  }
++  for (int i = 0; i < 10000; ++i) {
++    source_->AddURL(i % 2 ? folder : source_->mobile_node(), 0,
++                    u"Page " + base::NumberToString16(i),
++                    GURL("https://example.org/" + base::NumberToString(i)));
++  }
++  const std::string text = *base::WriteJson(BookmarksToJson(*source_).json);
++  auto restored = RestoreBookmarks(*target_, Parse(text), u"Restored");
++  ASSERT_TRUE(restored);
++  EXPECT_EQ(restored->urls, 10000u);
++  EXPECT_EQ(restored->folders, 200u);
++  EXPECT_EQ(Describe(*target_), Describe(*source_));
++}
++
++TEST_F(BackupBookmarksTest, BadNodesAreSkipped) {
++  base::DictValue json = Parse(R"({"nodes": [
++    {"id": 1, "parent": "bookmark_bar", "type": "folder", "title": "Good"},
++    {"id": 2, "parent": 1, "type": "url", "title": "ok", "url": "https://ok.test/"},
++    {"id": 3, "parent": 1, "type": "url", "title": "bad url", "url": "not a url"},
++    {"id": 4, "parent": 99, "type": "url", "title": "no parent", "url": "https://a.test/"},
++    {"id": 5, "parent": "elsewhere", "type": "folder", "title": "bad root"},
++    {"id": 6, "parent": 5, "type": "url", "title": "in bad folder", "url": "https://a.test/"},
++    {"id": 2, "parent": 1, "type": "url", "title": "duplicate id", "url": "https://a.test/"},
++    {"id": 7, "parent": 1, "type": "separator"},
++    {"id": 8, "parent": 1, "type": "url", "title": "no url"},
++    {"id": 9, "parent": 9, "type": "folder", "title": "own parent"},
++    "not a node",
++    {"id": 10, "parent": 1, "type": "url", "url": "https://untitled.test/", "added": "x"}
++  ]})");
++  auto restored = RestoreBookmarks(*target_, json, u"Restored");
++  ASSERT_TRUE(restored);
++  EXPECT_EQ(restored->folders, 1u);
++  EXPECT_EQ(restored->urls, 2u);
++  EXPECT_EQ(restored->skipped, 9u);
++  EXPECT_EQ(Describe(*target_),
++            "[" + base::UTF16ToUTF8(target_->bookmark_bar_node()->GetTitle()) +
++                "]\n  Good\n    ok https://ok.test/\n     https://untitled.test/\n"
++                "[" + base::UTF16ToUTF8(target_->other_node()->GetTitle()) +
++                "]\n[" +
++                base::UTF16ToUTF8(target_->mobile_node()->GetTitle()) + "]\n");
++}
++
++TEST_F(BackupBookmarksTest, NotABookmarkList) {
++  EXPECT_FALSE(RestoreBookmarks(*target_, Parse(R"({"nodes": 1})"), u"R"));
++  EXPECT_FALSE(RestoreBookmarks(*target_, Parse(R"({})"), u"R"));
++  base::ListValue too_many;
++  for (size_t i = 0; i <= kMaxBookmarkNodes; ++i) {
++    too_many.Append(base::Value());
++  }
++  base::DictValue json;
++  json.Set("nodes", std::move(too_many));
++  EXPECT_FALSE(RestoreBookmarks(*target_, json, u"R"));
++  EXPECT_TRUE(target_->mobile_node()->children().empty());
++}
++
++}  // namespace
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_contents.cc b/chrome/browser/bare/backup/backup_contents.cc
+new file mode 100644
+index 00000000000..3edbd0b1de7
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_contents.cc
+@@ -0,0 +1,346 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_contents.h"
++
++#include <set>
++#include <utility>
++
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/strings/string_util.h"
++
++namespace bare::backup {
++
++namespace {
++
++constexpr char kManifest[] = "manifest.json";
++constexpr char kSetupSettings[] = "setup/settings.json";
++constexpr char kPersonalSettings[] = "personal/settings.json";
++constexpr char kPersonalSearchEngines[] = "personal/search_engines.json";
++constexpr char kPersonalSiteSettings[] = "personal/site_settings.json";
++constexpr char kPersonalBookmarks[] = "personal/bookmarks.json";
++constexpr char kPersonalReadingList[] = "personal/reading_list.json";
++
++constexpr size_t kMaxJsonDepth = 8;
++
++const char* KindName(Kind kind) {
++  return kind == Kind::kFull ? "full" : "setup";
++}
++
++bool AddJson(PackageWriter& writer,
++             const char* name,
++             const base::DictValue& json) {
++  std::optional<std::string> text = base::WriteJson(json);
++  return text && writer.Add(name, *text);
++}
++
++std::optional<base::DictValue> ReadJson(const Package& package,
++                                        const char* name) {
++  auto it = package.find(name);
++  if (it == package.end()) {
++    return std::nullopt;
++  }
++  return base::JSONReader::ReadDict(it->second, base::JSON_PARSE_RFC,
++                                    kMaxJsonDepth);
++}
++
++bool IsKnownEntry(const std::string& name, Kind kind) {
++  if (name == kManifest || name == kSetupSettings) {
++    return true;
++  }
++  // Extension files and their list arrive with the extensions step; until
++  // then they are listed as ignored like anything else.
++  if (kind != Kind::kFull) {
++    return false;
++  }
++  for (const char* known :
++       {kPersonalSettings, kPersonalSearchEngines, kPersonalSiteSettings,
++        kPersonalBookmarks, kPersonalReadingList}) {
++    if (name == known) {
++      return true;
++    }
++  }
++  return false;
++}
++
++}  // namespace
++
++PackageSummary::PackageSummary() = default;
++PackageSummary::PackageSummary(const PackageSummary&) = default;
++PackageSummary& PackageSummary::operator=(const PackageSummary&) = default;
++PackageSummary::~PackageSummary() = default;
++
++RestoreReport::RestoreReport() = default;
++RestoreReport::RestoreReport(RestoreReport&&) = default;
++RestoreReport& RestoreReport::operator=(RestoreReport&&) = default;
++RestoreReport::~RestoreReport() = default;
++
++std::optional<BuiltPackage> BuildPackage(Kind kind, const Sources& from) {
++  BuiltPackage built;
++  PackageWriter writer;
++  base::ListValue sections;
++
++  // Setup group.
++  SettingsWriteResult setup = SettingsToJson(SettingGroup::kSetup,
++                                             from.settings);
++  base::DictValue setup_json;
++  setup_json.Set("prefs", std::move(setup.json));
++  if (from.site_settings) {
++    setup_json.Set("site_defaults", SiteDefaultsToJson(*from.site_settings));
++  }
++  if (from.search_engines) {
++    base::DictValue engine;
++    if (std::optional<int> id =
++            BuiltInDefaultSearchEngine(*from.search_engines)) {
++      engine.Set("default_prepopulate_id", *id);
++    }
++    setup_json.Set("search_engine", std::move(engine));
++  }
++  if (!AddJson(writer, kSetupSettings, setup_json)) {
++    return std::nullopt;
++  }
++  sections.Append(kSectionSettings);
++  int settings_count = static_cast<int>(setup.count);
++
++  if (kind == Kind::kFull) {
++    SettingsWriteResult personal =
++        SettingsToJson(SettingGroup::kPersonal, from.settings);
++    settings_count += static_cast<int>(personal.count);
++    base::DictValue personal_json;
++    personal_json.Set("prefs", std::move(personal.json));
++    if (!AddJson(writer, kPersonalSettings, personal_json)) {
++      return std::nullopt;
++    }
++    if (from.search_engines) {
++      SearchEnginesWriteResult engines =
++          SearchEnginesToJson(*from.search_engines);
++      if (!AddJson(writer, kPersonalSearchEngines, engines.json)) {
++        return std::nullopt;
++      }
++      sections.Append(kSectionSearchEngines);
++      built.counts["search_engines"] = static_cast<int>(engines.engines);
++    }
++    if (from.site_settings) {
++      SiteExceptionsWriteResult exceptions =
++          SiteExceptionsToJson(*from.site_settings);
++      if (!AddJson(writer, kPersonalSiteSettings, exceptions.json)) {
++        return std::nullopt;
++      }
++      sections.Append(kSectionSiteSettings);
++      built.counts["site_settings"] = static_cast<int>(exceptions.exceptions);
++    }
++    if (from.bookmarks) {
++      BookmarksWriteResult bookmarks = BookmarksToJson(*from.bookmarks);
++      if (!AddJson(writer, kPersonalBookmarks, bookmarks.json)) {
++        return std::nullopt;
++      }
++      sections.Append(kSectionBookmarks);
++      built.counts["bookmarks"] = static_cast<int>(bookmarks.urls);
++      if (from.reading_list) {
++        ReadingListWriteResult reading_list =
++            ReadingListToJson(*from.reading_list);
++        if (!AddJson(writer, kPersonalReadingList, reading_list.json)) {
++          return std::nullopt;
++        }
++        built.counts["reading_list"] =
++            static_cast<int>(reading_list.entries);
++      }
++    }
++  }
++  built.counts["settings"] = settings_count;
++
++  base::DictValue counts;
++  for (const auto& [name, count] : built.counts) {
++    counts.Set(name, count);
++  }
++  base::DictValue manifest;
++  manifest.Set("schema", kSchemaVersion);
++  manifest.Set("kind", KindName(kind));
++  manifest.Set("sections", std::move(sections));
++  manifest.Set("counts", std::move(counts));
++  if (!AddJson(writer, kManifest, manifest)) {
++    return std::nullopt;
++  }
++  built.zip = writer.Finish();
++  return built;
++}
++
++base::expected<PackageSummary, ContentsError> ReadManifest(
++    const Package& package,
++    Kind file_kind) {
++  if (!package.contains(kManifest)) {
++    return base::unexpected(ContentsError::kNoManifest);
++  }
++  std::optional<base::DictValue> manifest = ReadJson(package, kManifest);
++  if (!manifest) {
++    return base::unexpected(ContentsError::kBadManifest);
++  }
++  const std::optional<int> schema = manifest->FindInt("schema");
++  const std::string* kind = manifest->FindString("kind");
++  const base::ListValue* sections = manifest->FindList("sections");
++  if (!schema || *schema < 1 || !kind || !sections) {
++    return base::unexpected(ContentsError::kBadManifest);
++  }
++  if (*schema > kSchemaVersion) {
++    return base::unexpected(ContentsError::kNewerSchema);
++  }
++  if (*kind != KindName(file_kind)) {
++    return base::unexpected(ContentsError::kKindMismatch);
++  }
++
++  PackageSummary summary;
++  summary.schema = *schema;
++  summary.kind = file_kind;
++  std::set<std::string> seen;
++  for (const base::Value& section : *sections) {
++    if (!section.is_string()) {
++      return base::unexpected(ContentsError::kBadManifest);
++    }
++    const std::string& name = section.GetString();
++    const bool known =
++        name == kSectionSettings ||
++        (file_kind == Kind::kFull &&
++         (name == kSectionSearchEngines || name == kSectionSiteSettings ||
++          name == kSectionBookmarks));
++    // Sections from a later Bare, or personal ones in a setup file, are not
++    // offered.
++    if (known && seen.insert(name).second) {
++      summary.sections.push_back(name);
++    }
++  }
++  if (const base::DictValue* counts = manifest->FindDict("counts")) {
++    for (const auto [name, count] : *counts) {
++      if (count.is_int() && count.GetInt() >= 0) {
++        summary.counts[name] = count.GetInt();
++      }
++    }
++  }
++  return summary;
++}
++
++RestoreReport RestorePackage(const Package& package,
++                             const PackageSummary& summary,
++                             const RestoreChoices& choices,
++                             const Sources& to,
++                             const std::u16string& bookmark_folder_title) {
++  RestoreReport report;
++  for (const auto& [name, contents] : package) {
++    if (!IsKnownEntry(name, summary.kind)) {
++      report.ignored_entries.push_back(name);
++    }
++  }
++  const auto offered = [&](const char* section) {
++    return std::ranges::find(summary.sections, section) !=
++           summary.sections.end();
++  };
++
++  struct Step {
++    const char* section;
++    bool chosen;
++  };
++  const Step steps[] = {
++      {kSectionSettings, choices.settings},
++      {kSectionSearchEngines, choices.search_engines},
++      {kSectionSiteSettings, choices.site_settings},
++      {kSectionBookmarks, choices.bookmarks},
++  };
++
++  for (const Step& step : steps) {
++    if (!step.chosen || !offered(step.section)) {
++      continue;
++    }
++    if (report.section_failed) {
++      report.sections_not_run.push_back(step.section);
++      continue;
++    }
++    const std::string section = step.section;
++    bool ok = false;
++    if (section == kSectionSettings) {
++      std::optional<base::DictValue> setup = ReadJson(package, kSetupSettings);
++      std::optional<base::DictValue> personal;
++      if (summary.kind == Kind::kFull) {
++        personal = ReadJson(package, kPersonalSettings);
++      }
++      ok = setup && (summary.kind != Kind::kFull || personal);
++      if (ok) {
++        if (const base::DictValue* prefs = setup->FindDict("prefs")) {
++          report.settings =
++              RestoreSettings(SettingGroup::kSetup, *prefs, to.settings);
++        }
++        if (const base::DictValue* defaults = setup->FindDict("site_defaults");
++            defaults && to.site_settings) {
++          report.site_defaults =
++              RestoreSiteDefaults(*to.site_settings, *defaults);
++        }
++        const base::DictValue* engine = setup->FindDict("search_engine");
++        if (std::optional<int> id =
++                engine ? engine->FindInt("default_prepopulate_id")
++                       : std::nullopt;
++            id && to.search_engines) {
++          report.default_search_engine_restored =
++              RestoreBuiltInDefaultSearchEngine(*to.search_engines, *id);
++        }
++        if (personal) {
++          if (const base::DictValue* prefs = personal->FindDict("prefs")) {
++            SettingsRestoreResult more =
++                RestoreSettings(SettingGroup::kPersonal, *prefs, to.settings);
++            report.settings.applied += more.applied;
++            report.settings.needs_restart |= more.needs_restart;
++            std::ranges::move(more.skipped,
++                              std::back_inserter(report.settings.skipped));
++            std::ranges::move(more.unknown,
++                              std::back_inserter(report.settings.unknown));
++          }
++        }
++      }
++    } else if (section == kSectionSearchEngines) {
++      std::optional<base::DictValue> json =
++          ReadJson(package, kPersonalSearchEngines);
++      std::optional<SearchEnginesRestoreResult> result;
++      if (json && to.search_engines) {
++        result = RestoreSearchEngines(*to.search_engines, *json);
++      }
++      if ((ok = result.has_value())) {
++        report.search_engines = *result;
++      }
++    } else if (section == kSectionSiteSettings) {
++      std::optional<base::DictValue> json =
++          ReadJson(package, kPersonalSiteSettings);
++      std::optional<SiteSettingsRestoreResult> result;
++      if (json && to.site_settings) {
++        result = RestoreSiteExceptions(*to.site_settings, *json);
++      }
++      if ((ok = result.has_value())) {
++        report.site_exceptions = *result;
++      }
++    } else if (section == kSectionBookmarks) {
++      std::optional<base::DictValue> json =
++          ReadJson(package, kPersonalBookmarks);
++      std::optional<BookmarksRestoreResult> result;
++      if (json && to.bookmarks) {
++        result = RestoreBookmarks(*to.bookmarks, *json, bookmark_folder_title);
++      }
++      if ((ok = result.has_value())) {
++        report.bookmarks = std::move(*result);
++        // The reading list travels with bookmarks and is optional in a file.
++        std::optional<base::DictValue> list =
++            ReadJson(package, kPersonalReadingList);
++        if (list && to.reading_list) {
++          if (auto added = RestoreReadingList(*to.reading_list, *list)) {
++            report.reading_list = *added;
++          }
++        }
++      }
++    }
++    if (ok) {
++      report.sections_applied.push_back(section);
++    } else {
++      report.section_failed = section;
++    }
++  }
++  return report;
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_contents.h b/chrome/browser/bare/backup/backup_contents.h
+new file mode 100644
+index 00000000000..a9bb748a7cd
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_contents.h
+@@ -0,0 +1,146 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKUP_BACKUP_CONTENTS_H_
++#define CHROME_BROWSER_BARE_BACKUP_BACKUP_CONTENTS_H_
++
++#include <map>
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "base/types/expected.h"
++#include "chrome/browser/bare/backup/backup_bookmarks.h"
++#include "chrome/browser/bare/backup/backup_file.h"
++#include "chrome/browser/bare/backup/backup_package.h"
++#include "chrome/browser/bare/backup/backup_reading_list.h"
++#include "chrome/browser/bare/backup/backup_search_engines.h"
++#include "chrome/browser/bare/backup/backup_settings.h"
++#include "chrome/browser/bare/backup/backup_site_settings.h"
++
++class HostContentSettingsMap;
++class ReadingListModel;
++class TemplateURLService;
++
++namespace bookmarks {
++class BookmarkModel;
++}
++
++// What goes in a package and how it comes back out. A package holds:
++//
++//   manifest.json              {"schema": 1, "kind": "full",
++//                               "sections": [...], "counts": {...}}
++//   setup/settings.json        {"prefs": {...}, "site_defaults": {...},
++//                               "search_engine": {"default_prepopulate_id": 92}}
++//   personal/settings.json     {"prefs": {...}}
++//   personal/search_engines.json
++//   personal/site_settings.json
++//   personal/bookmarks.json
++//   personal/reading_list.json
++//
++// A setup package has the manifest and setup/ only.
++namespace bare::backup {
++
++inline constexpr int kSchemaVersion = 1;
++
++// Sections the restore screen offers a switch for.
++inline constexpr char kSectionSettings[] = "settings";
++inline constexpr char kSectionSearchEngines[] = "search_engines";
++inline constexpr char kSectionSiteSettings[] = "site_settings";
++inline constexpr char kSectionBookmarks[] = "bookmarks";
++
++struct Sources {
++  SettingsStores settings;
++  raw_ptr<HostContentSettingsMap> site_settings = nullptr;
++  raw_ptr<TemplateURLService> search_engines = nullptr;
++  raw_ptr<bookmarks::BookmarkModel> bookmarks = nullptr;
++  raw_ptr<ReadingListModel> reading_list = nullptr;
++};
++
++struct BuiltPackage {
++  std::string zip;
++  // For the file header: "settings", "bookmarks", "reading_list",
++  // "site_settings", "search_engines".
++  std::map<std::string, int> counts;
++};
++
++// Setup writes the Setup group only; full adds Personal. Returns nullopt if
++// a section is too large for a package.
++std::optional<BuiltPackage> BuildPackage(Kind kind, const Sources& from);
++
++enum class ContentsError {
++  kNoManifest,
++  kBadManifest,
++  // Written by a newer Bare.
++  kNewerSchema,
++  // The manifest says setup and the file header says full, or the reverse.
++  kKindMismatch,
++};
++
++struct PackageSummary {
++  PackageSummary();
++  PackageSummary(const PackageSummary&);
++  PackageSummary& operator=(const PackageSummary&);
++  ~PackageSummary();
++
++  int schema = 0;
++  Kind kind = Kind::kSetup;
++  std::vector<std::string> sections;
++  std::map<std::string, int> counts;
++};
++
++// `file_kind` is the kind in the file header, which is authenticated in a
++// full file.
++base::expected<PackageSummary, ContentsError> ReadManifest(
++    const Package& package,
++    Kind file_kind);
++
++struct RestoreChoices {
++  bool settings = true;
++  bool search_engines = true;
++  bool site_settings = true;
++  bool bookmarks = true;
++};
++
++struct RestoreReport {
++  RestoreReport();
++  RestoreReport(RestoreReport&&);
++  RestoreReport& operator=(RestoreReport&&);
++  ~RestoreReport();
++
++  std::vector<std::string> sections_applied;
++  // The section that stopped the restore: unreadable, or nothing on this
++  // phone to restore into.
++  std::optional<std::string> section_failed;
++  // Chosen sections after the failed one, which were not run.
++  std::vector<std::string> sections_not_run;
++
++  SettingsRestoreResult settings;
++  SiteSettingsRestoreResult site_defaults;
++  // nullopt when the backup's default engine isn't a built-in one.
++  std::optional<bool> default_search_engine_restored;
++  SearchEnginesRestoreResult search_engines;
++  SiteSettingsRestoreResult site_exceptions;
++  BookmarksRestoreResult bookmarks;
++  ReadingListRestoreResult reading_list;
++
++  // Entries Bare doesn't know, and personal entries in a setup package.
++  std::vector<std::string> ignored_entries;
++};
++
++// Applies the chosen sections in order: settings, search engines, site
++// settings, bookmarks with the reading list. A failed section stops the
++// restore; what was applied stays, and running it again is safe (settings are
++// written again, bookmarks go into a second folder, nothing is duplicated
++// elsewhere).
++RestoreReport RestorePackage(const Package& package,
++                             const PackageSummary& summary,
++                             const RestoreChoices& choices,
++                             const Sources& to,
++                             const std::u16string& bookmark_folder_title);
++
++}  // namespace bare::backup
++
++#endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_CONTENTS_H_
+diff --git a/chrome/browser/bare/backup/backup_contents_unittest.cc b/chrome/browser/bare/backup/backup_contents_unittest.cc
+new file mode 100644
+index 00000000000..f7b211bb4df
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_contents_unittest.cc
+@@ -0,0 +1,275 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_contents.h"
++
++#include <memory>
++#include <string>
++
++#include "base/memory/scoped_refptr.h"
++#include "base/strings/string_util.h"
++#include "base/test/simple_test_clock.h"
++#include "base/test/task_environment.h"
++#include "chrome/browser/bare/backup/backup_test_util.h"
++#include "components/bookmarks/browser/bookmark_model.h"
++#include "components/bookmarks/test/test_bookmark_client.h"
++#include "components/content_settings/core/browser/host_content_settings_map.h"
++#include "components/content_settings/core/common/content_settings_pattern.h"
++#include "components/prefs/testing_pref_service.h"
++#include "components/reading_list/core/fake_reading_list_model_storage.h"
++#include "components/reading_list/core/reading_list_model_impl.h"
++#include "components/search_engines/search_engines_test_environment.h"
++#include "components/search_engines/template_url.h"
++#include "components/search_engines/template_url_data.h"
++#include "components/search_engines/template_url_service.h"
++#include "components/sync/base/storage_type.h"
++#include "components/sync/model/wipe_model_upon_sync_disabled_behavior.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace bare::backup {
++namespace {
++
++// Everything a backup reads from or restores into, for one phone.
++class Phone {
++ public:
++  Phone() {
++    RegisterSettingsForTest(profile_.registry(), SettingStore::kProfile);
++    RegisterSettingsForTest(local_state_.registry(),
++                            SettingStore::kLocalState);
++    HostContentSettingsMap::RegisterProfilePrefs(
++        engines_env_.pref_service().registry());
++    site_settings_ = base::MakeRefCounted<HostContentSettingsMap>(
++        &engines_env_.pref_service(), false, true, false, false);
++    engines_env_.template_url_service()->Load();
++
++    auto storage = std::make_unique<FakeReadingListModelStorage>();
++    FakeReadingListModelStorage* storage_ptr = storage.get();
++    reading_list_ = std::make_unique<ReadingListModelImpl>(
++        std::move(storage), syncer::StorageType::kUnspecified,
++        syncer::WipeModelUponSyncDisabledBehavior::kNever, &clock_);
++    storage_ptr->TriggerLoadCompletion();
++  }
++  ~Phone() { site_settings_->ShutdownOnUIThread(); }
++
++  Sources sources() {
++    Sources sources;
++    sources.settings = {&android_, &profile_, &local_state_};
++    sources.site_settings = site_settings_.get();
++    sources.search_engines = engines_env_.template_url_service();
++    sources.bookmarks = bookmarks_.get();
++    sources.reading_list = reading_list_.get();
++    return sources;
++  }
++
++  FakeAndroidPrefs android_;
++  TestingPrefServiceSimple profile_;
++  TestingPrefServiceSimple local_state_;
++  search_engines::SearchEnginesTestEnvironment engines_env_;
++  scoped_refptr<HostContentSettingsMap> site_settings_;
++  std::unique_ptr<bookmarks::BookmarkModel> bookmarks_ =
++      bookmarks::TestBookmarkClient::CreateModel();
++  base::SimpleTestClock clock_;
++  std::unique_ptr<ReadingListModelImpl> reading_list_;
++};
++
++class BackupContentsTest : public testing::Test {
++ protected:
++  void Fill(Phone& phone) {
++    phone.android_.Set("Bare.Glass", base::Value(false));
++    phone.android_.Set("Bare.Translate.ApiKey", base::Value("secret"));
++    phone.profile_.SetBoolean("enable_do_not_track", true);
++    phone.site_settings_->SetDefaultContentSetting(
++        ContentSettingsType::POPUPS, CONTENT_SETTING_ALLOW);
++    phone.site_settings_->SetContentSettingCustomScope(
++        ContentSettingsPattern::FromString("https://a.test:443"),
++        ContentSettingsPattern::Wildcard(), ContentSettingsType::GEOLOCATION,
++        CONTENT_SETTING_ALLOW);
++    TemplateURLData engine;
++    engine.SetShortName(u"Mine");
++    engine.SetKeyword(u"mine");
++    engine.SetURL("https://search.test/?q={searchTerms}");
++    phone.engines_env_.template_url_service()->Add(
++        std::make_unique<TemplateURL>(engine));
++    phone.bookmarks_->AddURL(phone.bookmarks_->mobile_node(), 0, u"Page",
++                             GURL("https://page.test/"));
++    phone.reading_list_->AddOrReplaceEntry(
++        GURL("https://later.test/"), "Later",
++        reading_list::ADDED_VIA_CURRENT_APP, std::nullopt, std::nullopt);
++  }
++
++  // Through a real file: write, parse, open, unzip.
++  Package ThroughFile(Kind kind, const BuiltPackage& built) {
++    const auto zip = base::as_byte_span(built.zip);
++    std::optional<std::vector<uint8_t>> file;
++    std::optional<Key> key;
++    KdfParams kdf = NewKdfParams();
++    if (kind == Kind::kFull) {
++      key = DeriveKey(base::as_byte_span(std::string_view("code")), kdf);
++      file = WriteFullFile(Description(), kdf, NewAeadParams(), *key, zip);
++    } else {
++      file = WriteSetupFile(Description(), zip);
++    }
++    auto parsed = ParseFile(*file);
++    auto body = kind == Kind::kFull ? DecryptBody(*parsed, *key)
++                                    : ReadSetupBody(*parsed);
++    return *ReadPackage(*body);
++  }
++
++  base::test::SingleThreadTaskEnvironment task_environment_;
++  ScopedTestStrings strings_;
++  Phone old_phone_;
++  Phone new_phone_;
++};
++
++TEST_F(BackupContentsTest, FullBackupToAnotherPhone) {
++  Fill(old_phone_);
++  std::optional<BuiltPackage> built =
++      BuildPackage(Kind::kFull, old_phone_.sources());
++  ASSERT_TRUE(built);
++  EXPECT_EQ(built->counts.at("bookmarks"), 1);
++  EXPECT_EQ(built->counts.at("reading_list"), 1);
++  EXPECT_EQ(built->counts.at("site_settings"), 1);
++  EXPECT_EQ(built->counts.at("search_engines"), 1);
++
++  const Package package = ThroughFile(Kind::kFull, *built);
++  auto summary = ReadManifest(package, Kind::kFull);
++  ASSERT_TRUE(summary.has_value());
++  EXPECT_EQ(summary->sections.size(), 4u);
++
++  RestoreReport report = RestorePackage(package, *summary, RestoreChoices(),
++                                        new_phone_.sources(), u"Restored");
++  EXPECT_EQ(report.sections_applied.size(), 4u);
++  EXPECT_FALSE(report.section_failed);
++  EXPECT_TRUE(report.ignored_entries.empty());
++  EXPECT_TRUE(report.settings.unknown.empty());
++  EXPECT_TRUE(report.settings.skipped.empty());
++
++  EXPECT_EQ(new_phone_.android_.values_.at("Bare.Glass"), base::Value(false));
++  EXPECT_EQ(new_phone_.android_.values_.at("Bare.Translate.ApiKey"),
++            base::Value("secret"));
++  EXPECT_TRUE(new_phone_.profile_.GetBoolean("enable_do_not_track"));
++  EXPECT_EQ(new_phone_.site_settings_->GetDefaultContentSetting(
++                ContentSettingsType::POPUPS),
++            CONTENT_SETTING_ALLOW);
++  EXPECT_EQ(new_phone_.site_settings_->GetContentSetting(
++                GURL("https://a.test/"), GURL("https://a.test/"),
++                ContentSettingsType::GEOLOCATION),
++            CONTENT_SETTING_ALLOW);
++  EXPECT_TRUE(new_phone_.engines_env_.template_url_service()
++                  ->GetTemplateURLForKeyword(u"mine"));
++  EXPECT_EQ(new_phone_.bookmarks_->mobile_node()->children().size(), 1u);
++  EXPECT_EQ(report.reading_list.added, 1u);
++}
++
++TEST_F(BackupContentsTest, SetupCarriesNothingPersonal) {
++  Fill(old_phone_);
++  std::optional<BuiltPackage> built =
++      BuildPackage(Kind::kSetup, old_phone_.sources());
++  ASSERT_TRUE(built);
++  const Package package = ThroughFile(Kind::kSetup, *built);
++  for (const auto& [name, contents] : package) {
++    EXPECT_FALSE(name.starts_with("personal/")) << name;
++    EXPECT_EQ(contents.find("secret"), std::string::npos) << name;
++    EXPECT_EQ(contents.find("a.test"), std::string::npos) << name;
++    EXPECT_EQ(contents.find("page.test"), std::string::npos) << name;
++    EXPECT_EQ(contents.find("search.test"), std::string::npos) << name;
++  }
++  auto summary = ReadManifest(package, Kind::kSetup);
++  ASSERT_TRUE(summary.has_value());
++  EXPECT_EQ(summary->sections, std::vector<std::string>{"settings"});
++
++  RestoreReport report = RestorePackage(package, *summary, RestoreChoices(),
++                                        new_phone_.sources(), u"Restored");
++  EXPECT_EQ(report.sections_applied, std::vector<std::string>{"settings"});
++  EXPECT_EQ(new_phone_.android_.values_.at("Bare.Glass"), base::Value(false));
++  EXPECT_FALSE(new_phone_.android_.values_.contains("Bare.Translate.ApiKey"));
++}
++
++TEST_F(BackupContentsTest, PersonalEntriesInASetupFileAreIgnored) {
++  Fill(old_phone_);
++  Package package = ThroughFile(
++      Kind::kFull, *BuildPackage(Kind::kFull, old_phone_.sources()));
++  // Someone edits a full package and ships it as an unprotected setup file.
++  auto manifest = package.find("manifest.json");
++  base::ReplaceFirstSubstringAfterOffset(&manifest->second, 0,
++                                         "\"kind\":\"full\"",
++                                         "\"kind\":\"setup\"");
++  auto summary = ReadManifest(package, Kind::kSetup);
++  ASSERT_TRUE(summary.has_value());
++  EXPECT_EQ(summary->sections, std::vector<std::string>{"settings"});
++
++  RestoreReport report = RestorePackage(package, *summary, RestoreChoices(),
++                                        new_phone_.sources(), u"Restored");
++  EXPECT_EQ(report.ignored_entries.size(), 5u);
++  EXPECT_TRUE(new_phone_.bookmarks_->mobile_node()->children().empty());
++  EXPECT_FALSE(new_phone_.android_.values_.contains("Bare.Translate.ApiKey"));
++  EXPECT_FALSE(new_phone_.engines_env_.template_url_service()
++                   ->GetTemplateURLForKeyword(u"mine"));
++}
++
++TEST_F(BackupContentsTest, ManifestChecks) {
++  Package package;
++  EXPECT_EQ(ReadManifest(package, Kind::kSetup).error(),
++            ContentsError::kNoManifest);
++  package["manifest.json"] = "not json";
++  EXPECT_EQ(ReadManifest(package, Kind::kSetup).error(),
++            ContentsError::kBadManifest);
++  package["manifest.json"] =
++      R"j({"schema": 2, "kind": "setup", "sections": ["settings"]})j";
++  EXPECT_EQ(ReadManifest(package, Kind::kSetup).error(),
++            ContentsError::kNewerSchema);
++  package["manifest.json"] =
++      R"j({"schema": 1, "kind": "full", "sections": ["settings"]})j";
++  EXPECT_EQ(ReadManifest(package, Kind::kSetup).error(),
++            ContentsError::kKindMismatch);
++  package["manifest.json"] =
++      R"j({"schema": 1, "kind": "full",
++          "sections": ["settings", "passwords", "bookmarks", "bookmarks"]})j";
++  auto summary = ReadManifest(package, Kind::kFull);
++  ASSERT_TRUE(summary.has_value());
++  EXPECT_EQ(summary->sections,
++            (std::vector<std::string>{"settings", "bookmarks"}));
++}
++
++TEST_F(BackupContentsTest, FailureStopsTheRestore) {
++  Fill(old_phone_);
++  Package package = ThroughFile(
++      Kind::kFull, *BuildPackage(Kind::kFull, old_phone_.sources()));
++  package["personal/search_engines.json"] = "[1, 2";
++  auto summary = ReadManifest(package, Kind::kFull);
++  RestoreReport report = RestorePackage(package, *summary, RestoreChoices(),
++                                        new_phone_.sources(), u"Restored");
++  EXPECT_EQ(report.sections_applied, std::vector<std::string>{"settings"});
++  EXPECT_EQ(report.section_failed, "search_engines");
++  EXPECT_EQ(report.sections_not_run,
++            (std::vector<std::string>{"site_settings", "bookmarks"}));
++  EXPECT_TRUE(new_phone_.bookmarks_->mobile_node()->children().empty());
++
++  // Fixed and run again: the rest comes in, settings are written again.
++  package = ThroughFile(Kind::kFull,
++                        *BuildPackage(Kind::kFull, old_phone_.sources()));
++  report = RestorePackage(package, *summary, RestoreChoices(),
++                          new_phone_.sources(), u"Restored");
++  EXPECT_EQ(report.sections_applied.size(), 4u);
++  EXPECT_EQ(new_phone_.bookmarks_->mobile_node()->children().size(), 1u);
++}
++
++TEST_F(BackupContentsTest, ChoicesAreHonoured) {
++  Fill(old_phone_);
++  const Package package = ThroughFile(
++      Kind::kFull, *BuildPackage(Kind::kFull, old_phone_.sources()));
++  auto summary = ReadManifest(package, Kind::kFull);
++  RestoreChoices choices;
++  choices.settings = false;
++  choices.site_settings = false;
++  RestoreReport report = RestorePackage(package, *summary, choices,
++                                        new_phone_.sources(), u"Restored");
++  EXPECT_EQ(report.sections_applied,
++            (std::vector<std::string>{"search_engines", "bookmarks"}));
++  EXPECT_TRUE(new_phone_.android_.values_.empty());
++}
++
++}  // namespace
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_package.cc b/chrome/browser/bare/backup/backup_package.cc
+index 82d1248dc40..7974169979a 100644
+--- a/chrome/browser/bare/backup/backup_package.cc
++++ b/chrome/browser/bare/backup/backup_package.cc
+@@ -6,9 +6,13 @@
+ 
+ #include <algorithm>
+ 
+-#include "base/strings/string_util.h"
++#include "base/check_op.h"
++#include "base/numerics/byte_conversions.h"
++#include "base/numerics/safe_conversions.h"
+ #include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
+ #include "third_party/zlib/google/zip_reader.h"
++#include "third_party/zlib/zlib.h"
+ 
+ namespace bare::backup {
+ 
+@@ -26,6 +30,45 @@ base::unexpected<PackageReadError> Fail(PackageError error,
+   return base::unexpected(PackageReadError{error, std::move(entry)});
+ }
+ 
++// Zip records, little-endian, no zip64 (the size caps keep every offset well
++// under 4 GB).
++constexpr uint32_t kLocalHeaderSignature = 0x04034b50;
++constexpr uint32_t kCentralHeaderSignature = 0x02014b50;
++constexpr uint32_t kEndSignature = 0x06054b50;
++constexpr uint16_t kZipVersion = 20;
++constexpr uint16_t kMethodStored = 0;
++constexpr uint16_t kMethodDeflated = 8;
++constexpr uint16_t kFlagUtf8Name = 1 << 11;
++// 1980-01-01 00:00, the earliest DOS date. Bare doesn't put file times in a
++// package.
++constexpr uint16_t kDosTime = 0;
++constexpr uint16_t kDosDate = (1 << 5) | 1;
++
++void Append16(std::string& out, uint16_t value) {
++  out.append(base::as_string_view(base::U16ToLittleEndian(value)));
++}
++
++void Append32(std::string& out, uint32_t value) {
++  out.append(base::as_string_view(base::U32ToLittleEndian(value)));
++}
++
++std::string RawDeflate(std::string_view in) {
++  z_stream stream = {};
++  CHECK_EQ(deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -MAX_WBITS,
++                        8, Z_DEFAULT_STRATEGY),
++           Z_OK);
++  std::string out(deflateBound(&stream, in.size()), '\0');
++  stream.next_in =
++      reinterpret_cast<Bytef*>(const_cast<char*>(in.data()));
++  stream.avail_in = base::checked_cast<uInt>(in.size());
++  stream.next_out = reinterpret_cast<Bytef*>(out.data());
++  stream.avail_out = base::checked_cast<uInt>(out.size());
++  CHECK_EQ(deflate(&stream, Z_FINISH), Z_STREAM_END);
++  out.resize(stream.total_out);
++  deflateEnd(&stream);
++  return out;
++}
++
+ bool IsExtensionNameChar(char c) {
+   const auto byte = static_cast<unsigned char>(c);
+   return byte >= 0x20 && byte != 0x7f && c != '\\';
+@@ -128,4 +171,97 @@ base::expected<Package, PackageReadError> ReadPackage(
+   return package;
+ }
+ 
++PackageWriter::PackageWriter(const PackageLimits& limits) : limits_(limits) {}
++
++PackageWriter::~PackageWriter() = default;
++
++bool PackageWriter::Add(std::string_view name, std::string_view contents) {
++  if (!IsSafeEntryName(name) || name.back() == '/' ||
++      entries_.size() >= limits_.max_entries ||
++      contents.size() > limits_.max_file_size ||
++      contents.size() > limits_.max_total_size - total_size_ ||
++      std::ranges::any_of(entries_,
++                          [&](const Entry& e) { return e.name == name; })) {
++    return false;
++  }
++  entries_.push_back({std::string(name), std::string(contents)});
++  total_size_ += contents.size();
++  return true;
++}
++
++std::string PackageWriter::Finish() {
++  auto build = [this](bool deflate) {
++    std::string out;
++    std::string central;
++    for (const Entry& entry : entries_) {
++      std::string deflated;
++      if (deflate) {
++        deflated = RawDeflate(entry.contents);
++      }
++      const bool use_deflated =
++          deflate && deflated.size() < entry.contents.size();
++      const std::string_view body =
++          use_deflated ? std::string_view(deflated) : entry.contents;
++      const uint16_t method = use_deflated ? kMethodDeflated : kMethodStored;
++      const uint16_t flags = base::IsStringASCII(entry.name) ? 0 : kFlagUtf8Name;
++      const uint32_t crc = static_cast<uint32_t>(
++          crc32(0, reinterpret_cast<const Bytef*>(entry.contents.data()),
++                base::checked_cast<uInt>(entry.contents.size())));
++      const uint32_t offset = base::checked_cast<uint32_t>(out.size());
++
++      Append32(out, kLocalHeaderSignature);
++      Append16(out, kZipVersion);
++      Append16(out, flags);
++      Append16(out, method);
++      Append16(out, kDosTime);
++      Append16(out, kDosDate);
++      Append32(out, crc);
++      Append32(out, base::checked_cast<uint32_t>(body.size()));
++      Append32(out, base::checked_cast<uint32_t>(entry.contents.size()));
++      Append16(out, base::checked_cast<uint16_t>(entry.name.size()));
++      Append16(out, 0);
++      out += entry.name;
++      out += body;
++
++      Append32(central, kCentralHeaderSignature);
++      Append16(central, kZipVersion);
++      Append16(central, kZipVersion);
++      Append16(central, flags);
++      Append16(central, method);
++      Append16(central, kDosTime);
++      Append16(central, kDosDate);
++      Append32(central, crc);
++      Append32(central, base::checked_cast<uint32_t>(body.size()));
++      Append32(central, base::checked_cast<uint32_t>(entry.contents.size()));
++      Append16(central, base::checked_cast<uint16_t>(entry.name.size()));
++      Append16(central, 0);  // extra field
++      Append16(central, 0);  // comment
++      Append16(central, 0);  // disk
++      Append16(central, 0);  // internal attributes
++      Append32(central, 0);  // external attributes
++      Append32(central, offset);
++      central += entry.name;
++    }
++    const uint32_t central_offset = base::checked_cast<uint32_t>(out.size());
++    out += central;
++    Append32(out, kEndSignature);
++    Append16(out, 0);
++    Append16(out, 0);
++    Append16(out, base::checked_cast<uint16_t>(entries_.size()));
++    Append16(out, base::checked_cast<uint16_t>(entries_.size()));
++    Append32(out, base::checked_cast<uint32_t>(central.size()));
++    Append32(out, central_offset);
++    Append16(out, 0);
++    return out;
++  };
++
++  std::string zip = build(/*deflate=*/true);
++  if (total_size_ > limits_.max_ratio * zip.size()) {
++    zip = build(/*deflate=*/false);
++  }
++  entries_.clear();
++  total_size_ = 0;
++  return zip;
++}
++
+ }  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_package.h b/chrome/browser/bare/backup/backup_package.h
+index b532d6a7ded..0d04d49a51f 100644
+--- a/chrome/browser/bare/backup/backup_package.h
++++ b/chrome/browser/bare/backup/backup_package.h
+@@ -11,6 +11,7 @@
+ #include <map>
+ #include <string>
+ #include <string_view>
++#include <vector>
+ 
+ #include "base/types/expected.h"
+ 
+@@ -64,6 +65,34 @@ base::expected<Package, PackageReadError> ReadPackage(
+     const std::string& zip,
+     const PackageLimits& limits = PackageLimits());
+ 
++// Builds a package in memory. Anything it writes, ReadPackage() reads back
++// with the same limits.
++class PackageWriter {
++ public:
++  explicit PackageWriter(const PackageLimits& limits = PackageLimits());
++  PackageWriter(const PackageWriter&) = delete;
++  PackageWriter& operator=(const PackageWriter&) = delete;
++  ~PackageWriter();
++
++  // Returns false, and adds nothing, if `name` fails IsSafeEntryName(), names
++  // a directory, is already in the package, or would take it past a limit.
++  bool Add(std::string_view name, std::string_view contents);
++
++  // The zip. Entries are deflated, or all stored if deflating would put the
++  // package over the ratio limit.
++  std::string Finish();
++
++ private:
++  struct Entry {
++    std::string name;
++    std::string contents;
++  };
++
++  const PackageLimits limits_;
++  std::vector<Entry> entries_;
++  uint64_t total_size_ = 0;
++};
++
+ }  // namespace bare::backup
+ 
+ #endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_PACKAGE_H_
+diff --git a/chrome/browser/bare/backup/backup_package_unittest.cc b/chrome/browser/bare/backup/backup_package_unittest.cc
+index 0acdd4f2f78..421257bdc26 100644
+--- a/chrome/browser/bare/backup/backup_package_unittest.cc
++++ b/chrome/browser/bare/backup/backup_package_unittest.cc
+@@ -295,6 +295,61 @@ TEST(BackupPackageTest, NotZip) {
+   EXPECT_FALSE(ReadPackage(cut).has_value());
+ }
+ 
++TEST(BackupPackageWriterTest, RoundTrip) {
++  std::string json;
++  for (int i = 0; json.size() < 200000; ++i) {
++    json += base::NumberToString(i * 7919) + ",";
++  }
++  PackageWriter writer;
++  EXPECT_TRUE(writer.Add("manifest.json", "{\"schema\":1}"));
++  EXPECT_TRUE(writer.Add("setup/settings.json", json));
++  EXPECT_TRUE(writer.Add("personal/empty.json", ""));
++  EXPECT_TRUE(writer.Add("setup/extensions/abc/caf\xc3\xa9 @2x.png", "png"));
++  const std::string zip = writer.Finish();
++  EXPECT_LT(zip.size(), json.size());
++
++  auto package = ReadPackage(zip);
++  ASSERT_TRUE(package.has_value());
++  EXPECT_EQ(package->size(), 4u);
++  EXPECT_EQ(package->at("setup/settings.json"), json);
++  EXPECT_EQ(package->at("personal/empty.json"), "");
++  EXPECT_EQ(package->at("setup/extensions/abc/caf\xc3\xa9 @2x.png"), "png");
++}
++
++TEST(BackupPackageWriterTest, Refuses) {
++  PackageLimits limits;
++  limits.max_entries = 3;
++  limits.max_file_size = 10;
++  limits.max_total_size = 15;
++  PackageWriter writer(limits);
++  EXPECT_FALSE(writer.Add("../a", "x"));
++  EXPECT_FALSE(writer.Add("/a", "x"));
++  EXPECT_FALSE(writer.Add("a b", "x"));
++  EXPECT_FALSE(writer.Add("dir/", ""));
++  EXPECT_FALSE(writer.Add("big", std::string(11, 'x')));
++  EXPECT_TRUE(writer.Add("a", std::string(10, 'x')));
++  EXPECT_FALSE(writer.Add("a", "y"));
++  EXPECT_FALSE(writer.Add("b", std::string(6, 'x')));
++  EXPECT_TRUE(writer.Add("b", std::string(5, 'x')));
++  EXPECT_TRUE(writer.Add("c", ""));
++  EXPECT_FALSE(writer.Add("d", ""));
++  auto package = ReadPackage(writer.Finish(), limits);
++  ASSERT_TRUE(package.has_value());
++  EXPECT_EQ(package->size(), 3u);
++}
++
++TEST(BackupPackageWriterTest, StoresWhenDeflateWouldTripTheRatio) {
++  // Zeros deflate about 1000:1, past what the reader accepts.
++  const std::string zeros(4 * 1024 * 1024, '\0');
++  PackageWriter writer;
++  ASSERT_TRUE(writer.Add("zeros", zeros));
++  const std::string zip = writer.Finish();
++  EXPECT_GT(zip.size(), zeros.size());
++  auto package = ReadPackage(zip);
++  ASSERT_TRUE(package.has_value());
++  EXPECT_EQ(package->at("zeros"), zeros);
++}
++
+ // The whole path a full backup takes: package, encrypt, parse, decrypt, read.
+ TEST(BackupPackageTest, ThroughFullFile) {
+   std::string bookmarks;
+diff --git a/chrome/browser/bare/backup/backup_reading_list.cc b/chrome/browser/bare/backup/backup_reading_list.cc
+new file mode 100644
+index 00000000000..1399943491d
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_reading_list.cc
+@@ -0,0 +1,88 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_reading_list.h"
++
++#include <string>
++#include <utility>
++
++#include "base/strings/string_number_conversions.h"
++#include "base/time/time.h"
++#include "components/reading_list/core/reading_list_entry.h"
++#include "components/reading_list/core/reading_list_model.h"
++#include "url/gurl.h"
++#include "url/url_constants.h"
++
++namespace bare::backup {
++
++namespace {
++
++constexpr size_t kMaxTitleLength = 4096;
++
++}  // namespace
++
++ReadingListWriteResult ReadingListToJson(const ReadingListModel& model) {
++  ReadingListWriteResult result;
++  base::ListValue entries;
++  for (const GURL& url : model.GetKeys()) {
++    scoped_refptr<const ReadingListEntry> entry = model.GetEntryByURL(url);
++    if (!entry || result.entries >= kMaxReadingListEntries) {
++      continue;
++    }
++    base::DictValue json;
++    json.Set("url", entry->URL().spec());
++    json.Set("title", entry->Title());
++    json.Set("read", entry->IsRead());
++    json.Set("added", base::NumberToString(entry->CreationTime()));
++    entries.Append(std::move(json));
++    ++result.entries;
++  }
++  result.json.Set("entries", std::move(entries));
++  return result;
++}
++
++std::optional<ReadingListRestoreResult> RestoreReadingList(
++    ReadingListModel& model,
++    const base::DictValue& json) {
++  const base::ListValue* entries = json.FindList("entries");
++  if (!model.loaded() || !entries ||
++      entries->size() > kMaxReadingListEntries) {
++    return std::nullopt;
++  }
++  ReadingListRestoreResult result;
++  for (const base::Value& value : *entries) {
++    const base::DictValue* entry = value.GetIfDict();
++    const std::string* spec = entry ? entry->FindString("url") : nullptr;
++    const std::string* title = entry ? entry->FindString("title") : nullptr;
++    if (!spec || spec->size() > url::kMaxURLChars) {
++      ++result.skipped;
++      continue;
++    }
++    const GURL url(*spec);
++    if (!url.is_valid() || !model.IsUrlSupported(url)) {
++      ++result.skipped;
++      continue;
++    }
++    if (model.GetEntryByURL(url)) {
++      ++result.already_present;
++      continue;
++    }
++    std::optional<base::Time> added;
++    int64_t micros = 0;
++    const std::string* added_text = entry->FindString("added");
++    if (added_text && base::StringToInt64(*added_text, &micros) && micros > 0) {
++      added = base::Time::UnixEpoch() + base::Microseconds(micros);
++    }
++    model.AddOrReplaceEntry(url, title ? title->substr(0, kMaxTitleLength) : "",
++                            reading_list::ADDED_VIA_IMPORT, std::nullopt,
++                            added);
++    if (entry->FindBool("read").value_or(false)) {
++      model.SetReadStatusIfExists(url, true);
++    }
++    ++result.added;
++  }
++  return result;
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_reading_list.h b/chrome/browser/bare/backup/backup_reading_list.h
+new file mode 100644
+index 00000000000..b4c9ddbf989
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_reading_list.h
+@@ -0,0 +1,48 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKUP_BACKUP_READING_LIST_H_
++#define CHROME_BROWSER_BARE_BACKUP_BACKUP_READING_LIST_H_
++
++#include <stddef.h>
++
++#include <optional>
++
++#include "base/values.h"
++
++class ReadingListModel;
++
++// The reading list, in personal/reading_list.json:
++//
++//   {"entries": [{"url": "https://...", "title": "...", "read": false,
++//                 "added": "1762200000000000"}]}
++//
++// "added" is microseconds since the Unix epoch, as a string.
++namespace bare::backup {
++
++inline constexpr size_t kMaxReadingListEntries = 10000;
++
++struct ReadingListWriteResult {
++  base::DictValue json;
++  size_t entries = 0;
++};
++
++ReadingListWriteResult ReadingListToJson(const ReadingListModel& model);
++
++struct ReadingListRestoreResult {
++  size_t added = 0;
++  // Already in this phone's list. The phone's entry is kept.
++  size_t already_present = 0;
++  size_t skipped = 0;
++};
++
++// `model` must be loaded. Returns nullopt, changing nothing, if `json` isn't
++// an entry list.
++std::optional<ReadingListRestoreResult> RestoreReadingList(
++    ReadingListModel& model,
++    const base::DictValue& json);
++
++}  // namespace bare::backup
++
++#endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_READING_LIST_H_
+diff --git a/chrome/browser/bare/backup/backup_reading_list_unittest.cc b/chrome/browser/bare/backup/backup_reading_list_unittest.cc
+new file mode 100644
+index 00000000000..21d27dd478d
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_reading_list_unittest.cc
+@@ -0,0 +1,93 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_reading_list.h"
++
++#include <memory>
++#include <string>
++
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/test/simple_test_clock.h"
++#include "base/test/task_environment.h"
++#include "components/reading_list/core/fake_reading_list_model_storage.h"
++#include "components/reading_list/core/reading_list_entry.h"
++#include "components/reading_list/core/reading_list_model_impl.h"
++#include "components/sync/base/storage_type.h"
++#include "components/sync/model/wipe_model_upon_sync_disabled_behavior.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace bare::backup {
++namespace {
++
++base::DictValue Parse(std::string_view json) {
++  return *base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
++}
++
++std::unique_ptr<ReadingListModelImpl> CreateModel(base::Clock* clock) {
++  auto storage = std::make_unique<FakeReadingListModelStorage>();
++  FakeReadingListModelStorage* storage_ptr = storage.get();
++  auto model = std::make_unique<ReadingListModelImpl>(
++      std::move(storage), syncer::StorageType::kUnspecified,
++      syncer::WipeModelUponSyncDisabledBehavior::kNever, clock);
++  storage_ptr->TriggerLoadCompletion();
++  return model;
++}
++
++class BackupReadingListTest : public testing::Test {
++ protected:
++  base::test::SingleThreadTaskEnvironment task_environment_;
++  base::SimpleTestClock clock_;
++  std::unique_ptr<ReadingListModelImpl> source_ = CreateModel(&clock_);
++  std::unique_ptr<ReadingListModelImpl> target_ = CreateModel(&clock_);
++};
++
++TEST_F(BackupReadingListTest, RoundTrip) {
++  ASSERT_TRUE(source_->loaded());
++  source_->AddOrReplaceEntry(GURL("https://a.test/1"), "First",
++                             reading_list::ADDED_VIA_CURRENT_APP, std::nullopt,
++                             std::nullopt);
++  source_->AddOrReplaceEntry(GURL("https://b.test/2"), "Second é",
++                             reading_list::ADDED_VIA_CURRENT_APP, std::nullopt,
++                             std::nullopt);
++  source_->SetReadStatusIfExists(GURL("https://b.test/2"), true);
++  target_->AddOrReplaceEntry(GURL("https://a.test/1"), "Phone's own",
++                             reading_list::ADDED_VIA_CURRENT_APP, std::nullopt,
++                             std::nullopt);
++
++  ReadingListWriteResult written = ReadingListToJson(*source_);
++  EXPECT_EQ(written.entries, 2u);
++  auto result =
++      RestoreReadingList(*target_, Parse(*base::WriteJson(written.json)));
++  ASSERT_TRUE(result);
++  EXPECT_EQ(result->added, 1u);
++  EXPECT_EQ(result->already_present, 1u);
++  EXPECT_EQ(target_->size(), 2u);
++  EXPECT_EQ(target_->GetEntryByURL(GURL("https://a.test/1"))->Title(),
++            "Phone's own");
++  auto second = target_->GetEntryByURL(GURL("https://b.test/2"));
++  ASSERT_TRUE(second);
++  EXPECT_EQ(second->Title(), "Second é");
++  EXPECT_TRUE(second->IsRead());
++  EXPECT_EQ(second->CreationTime(),
++            source_->GetEntryByURL(GURL("https://b.test/2"))->CreationTime());
++}
++
++TEST_F(BackupReadingListTest, BadEntriesSkipped) {
++  auto result = RestoreReadingList(*target_, Parse(R"j({"entries": [
++      {"url": "not a url", "title": "x"},
++      {"title": "no url"},
++      {"url": "javascript:alert(1)", "title": "script"},
++      "not an entry",
++      {"url": "https://ok.test/", "added": "garbage"}
++  ]})j"));
++  ASSERT_TRUE(result);
++  EXPECT_EQ(result->added, 1u);
++  EXPECT_EQ(result->skipped, 4u);
++  EXPECT_FALSE(RestoreReadingList(*target_, Parse(R"j({"entries": 1})j")));
++}
++
++}  // namespace
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_search_engines.cc b/chrome/browser/bare/backup/backup_search_engines.cc
+new file mode 100644
+index 00000000000..b54c01d1634
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_search_engines.cc
+@@ -0,0 +1,195 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_search_engines.h"
++
++#include <memory>
++#include <string>
++#include <utility>
++
++#include "base/strings/utf_string_conversions.h"
++#include "components/search_engines/template_url.h"
++#include "components/search_engines/template_url_data.h"
++#include "components/search_engines/template_url_service.h"
++#include "components/search_engines/template_url_starter_pack_data.h"
++#include "url/gurl.h"
++
++namespace bare::backup {
++
++namespace {
++
++constexpr size_t kMaxNameLength = 256;
++
++bool IsUserEngine(const TemplateURL& engine) {
++  return engine.type() == TemplateURL::NORMAL &&
++         engine.prepopulate_id() == 0 &&
++         engine.starter_pack_id() ==
++             template_url_starter_pack_data::StarterPackId::kNone &&
++         !engine.CreatedByPolicy();
++}
++
++bool IsWebUrl(const std::string& spec) {
++  const GURL url(spec);
++  return url.is_valid() && url.SchemeIsHTTPOrHTTPS();
++}
++
++// An optional URL field: absent or empty is fine, anything else must be a web
++// URL. Returns false if the field is present and bad.
++bool ReadOptionalUrl(const base::DictValue& json,
++                     std::string_view key,
++                     std::string& out) {
++  const base::Value* value = json.Find(key);
++  if (!value) {
++    return true;
++  }
++  if (!value->is_string()) {
++    return false;
++  }
++  if (value->GetString().empty()) {
++    return true;
++  }
++  if (!IsWebUrl(value->GetString())) {
++    return false;
++  }
++  out = value->GetString();
++  return true;
++}
++
++std::optional<TemplateURLData> ReadEngine(const base::DictValue& json,
++                                          const SearchTermsData& terms) {
++  const std::string* name = json.FindString("name");
++  const std::string* keyword = json.FindString("keyword");
++  const std::string* url = json.FindString("url");
++  if (!name || name->empty() || name->size() > kMaxNameLength || !keyword ||
++      keyword->empty() || keyword->size() > kMaxNameLength || !url ||
++      !IsWebUrl(*url)) {
++    return std::nullopt;
++  }
++  TemplateURLData data;
++  data.SetShortName(base::UTF8ToUTF16(*name));
++  data.SetKeyword(base::UTF8ToUTF16(*keyword));
++  data.SetURL(*url);
++  std::string favicon;
++  if (!ReadOptionalUrl(json, "suggestions_url", data.suggestions_url) ||
++      !ReadOptionalUrl(json, "new_tab_url", data.new_tab_url) ||
++      !ReadOptionalUrl(json, "favicon_url", favicon)) {
++    return std::nullopt;
++  }
++  data.favicon_url = GURL(favicon);
++  data.safe_for_autoreplace =
++      json.FindBool("safe_for_autoreplace").value_or(false);
++  data.date_created = base::Time::Now();
++  data.last_modified = data.date_created;
++
++  // TemplateURLData accepts any string; the engine must also have a search
++  // URL with a place for the terms.
++  TemplateURL engine(data);
++  if (data.keyword().empty() || !engine.url_ref().IsValid(terms) ||
++      !engine.url_ref().SupportsReplacement(terms)) {
++    return std::nullopt;
++  }
++  return data;
++}
++
++}  // namespace
++
++std::optional<int> BuiltInDefaultSearchEngine(
++    const TemplateURLService& service) {
++  const TemplateURL* engine = service.GetDefaultSearchProvider();
++  if (!engine || engine->prepopulate_id() <= 0 ||
++      engine->type() != TemplateURL::NORMAL) {
++    return std::nullopt;
++  }
++  return engine->prepopulate_id();
++}
++
++bool RestoreBuiltInDefaultSearchEngine(TemplateURLService& service,
++                                       int prepopulate_id) {
++  if (prepopulate_id <= 0 || service.is_default_search_managed()) {
++    return false;
++  }
++  if (BuiltInDefaultSearchEngine(service) == prepopulate_id) {
++    return true;
++  }
++  for (TemplateURL* engine : service.GetTemplateURLs()) {
++    if (engine->prepopulate_id() == prepopulate_id &&
++        engine->type() == TemplateURL::NORMAL &&
++        service.CanMakeDefault(engine)) {
++      service.SetUserSelectedDefaultSearchProvider(engine);
++      return true;
++    }
++  }
++  return false;
++}
++
++SearchEnginesWriteResult SearchEnginesToJson(TemplateURLService& service) {
++  SearchEnginesWriteResult result;
++  base::ListValue engines;
++  for (const TemplateURL* engine : service.GetTemplateURLs()) {
++    if (!IsUserEngine(*engine) || result.engines >= kMaxSearchEngines) {
++      continue;
++    }
++    base::DictValue json;
++    json.Set("name", base::UTF16ToUTF8(engine->short_name()));
++    json.Set("keyword", base::UTF16ToUTF8(engine->keyword()));
++    json.Set("url", engine->url());
++    json.Set("suggestions_url", engine->suggestions_url());
++    json.Set("new_tab_url", engine->new_tab_url());
++    json.Set("favicon_url", engine->favicon_url().is_valid()
++                                ? engine->favicon_url().spec()
++                                : std::string());
++    json.Set("safe_for_autoreplace", engine->safe_for_autoreplace());
++    engines.Append(std::move(json));
++    ++result.engines;
++  }
++  result.json.Set("engines", std::move(engines));
++  const TemplateURL* default_engine = service.GetDefaultSearchProvider();
++  if (default_engine && IsUserEngine(*default_engine)) {
++    result.json.Set("default_keyword",
++                    base::UTF16ToUTF8(default_engine->keyword()));
++  }
++  return result;
++}
++
++std::optional<SearchEnginesRestoreResult> RestoreSearchEngines(
++    TemplateURLService& service,
++    const base::DictValue& json) {
++  const base::ListValue* engines = json.FindList("engines");
++  if (!engines || engines->size() > kMaxSearchEngines) {
++    return std::nullopt;
++  }
++  SearchEnginesRestoreResult result;
++  for (const base::Value& value : *engines) {
++    std::optional<TemplateURLData> data;
++    if (value.is_dict()) {
++      data = ReadEngine(value.GetDict(), service.search_terms_data());
++    }
++    if (!data) {
++      ++result.skipped;
++      continue;
++    }
++    if (service.GetTemplateURLForKeyword(data->keyword())) {
++      ++result.already_present;
++      continue;
++    }
++    if (service.Add(std::make_unique<TemplateURL>(*data))) {
++      ++result.added;
++    } else {
++      ++result.skipped;
++    }
++  }
++
++  const std::string* default_keyword = json.FindString("default_keyword");
++  if (default_keyword && !service.is_default_search_managed()) {
++    TemplateURL* engine =
++        service.GetTemplateURLForKeyword(base::UTF8ToUTF16(*default_keyword));
++    if (engine && IsUserEngine(*engine) && service.CanMakeDefault(engine)) {
++      service.SetUserSelectedDefaultSearchProvider(engine);
++      result.default_set = true;
++    }
++  }
++  return result;
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_search_engines.h b/chrome/browser/bare/backup/backup_search_engines.h
+new file mode 100644
+index 00000000000..6ebd2a76591
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_search_engines.h
+@@ -0,0 +1,60 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKUP_BACKUP_SEARCH_ENGINES_H_
++#define CHROME_BROWSER_BARE_BACKUP_BACKUP_SEARCH_ENGINES_H_
++
++#include <stddef.h>
++
++#include <optional>
++
++#include "base/values.h"
++
++class TemplateURLService;
++
++// Search engines, in two parts:
++// - Setup: the default engine when it is one of the built-in ones, stored as
++//   its prepopulate ID so it maps to the same engine on any phone.
++// - Personal (personal/search_engines.json): every engine that isn't built in,
++//   a starter pack keyword or set by policy, and the default when it is one of
++//   those, by keyword.
++namespace bare::backup {
++
++inline constexpr size_t kMaxSearchEngines = 500;
++
++// nullopt when the default is not built in, or there is none.
++std::optional<int> BuiltInDefaultSearchEngine(
++    const TemplateURLService& service);
++
++// Makes the built-in engine with `prepopulate_id` the default. Returns true if
++// it is the default afterwards. The list of built-in engines depends on the
++// region, so the engine may not exist here.
++bool RestoreBuiltInDefaultSearchEngine(TemplateURLService& service,
++                                       int prepopulate_id);
++
++struct SearchEnginesWriteResult {
++  base::DictValue json;
++  size_t engines = 0;
++};
++
++SearchEnginesWriteResult SearchEnginesToJson(TemplateURLService& service);
++
++struct SearchEnginesRestoreResult {
++  size_t added = 0;
++  // A keyword this phone already has. The phone's engine is kept.
++  size_t already_present = 0;
++  size_t skipped = 0;
++  bool default_set = false;
++};
++
++// Adds the engines whose keyword is free. The default changes only if the
++// backup's default is among the engines now present. Returns nullopt, changing
++// nothing, if `json` isn't an engine list.
++std::optional<SearchEnginesRestoreResult> RestoreSearchEngines(
++    TemplateURLService& service,
++    const base::DictValue& json);
++
++}  // namespace bare::backup
++
++#endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_SEARCH_ENGINES_H_
+diff --git a/chrome/browser/bare/backup/backup_search_engines_unittest.cc b/chrome/browser/bare/backup/backup_search_engines_unittest.cc
+new file mode 100644
+index 00000000000..787435fd72e
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_search_engines_unittest.cc
+@@ -0,0 +1,164 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_search_engines.h"
++
++#include <memory>
++#include <string>
++
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/test/task_environment.h"
++#include "components/search_engines/search_engines_test_environment.h"
++#include "components/search_engines/template_url.h"
++#include "components/search_engines/template_url_data.h"
++#include "components/search_engines/template_url_service.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace bare::backup {
++namespace {
++
++base::DictValue Parse(std::string_view json) {
++  return *base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
++}
++
++TemplateURL* AddEngine(TemplateURLService& service,
++                       const std::u16string& name,
++                       const std::u16string& keyword,
++                       const std::string& url) {
++  TemplateURLData data;
++  data.SetShortName(name);
++  data.SetKeyword(keyword);
++  data.SetURL(url);
++  data.suggestions_url = url + "&suggest=1";
++  return service.Add(std::make_unique<TemplateURL>(data));
++}
++
++class BackupSearchEnginesTest : public testing::Test {
++ protected:
++  void SetUp() override {
++    for (auto* env : {&source_env_, &target_env_}) {
++      env->template_url_service()->Load();
++      ASSERT_TRUE(env->template_url_service()->loaded());
++    }
++  }
++
++  TemplateURLService& source() { return *source_env_.template_url_service(); }
++  TemplateURLService& target() { return *target_env_.template_url_service(); }
++
++  base::test::SingleThreadTaskEnvironment task_environment_;
++  search_engines::SearchEnginesTestEnvironment source_env_;
++  search_engines::SearchEnginesTestEnvironment target_env_;
++};
++
++TEST_F(BackupSearchEnginesTest, BuiltInDefault) {
++  // Bare's prepopulated list for the test region has one engine, so the
++  // target is moved off it first with a custom default.
++  std::optional<int> id = BuiltInDefaultSearchEngine(source());
++  ASSERT_TRUE(id);
++  EXPECT_EQ(*id, source().GetDefaultSearchProvider()->prepopulate_id());
++
++  TemplateURL* mine = AddEngine(target(), u"Mine", u"mine",
++                                "https://search.test/?q={searchTerms}");
++  target().SetUserSelectedDefaultSearchProvider(mine);
++  ASSERT_FALSE(BuiltInDefaultSearchEngine(target()));
++  EXPECT_TRUE(RestoreBuiltInDefaultSearchEngine(target(), *id));
++  EXPECT_EQ(target().GetDefaultSearchProvider()->prepopulate_id(), *id);
++
++  // Already the default: nothing to do, and that counts as restored.
++  EXPECT_TRUE(RestoreBuiltInDefaultSearchEngine(target(), *id));
++
++  // An ID this phone doesn't have changes nothing.
++  target().SetUserSelectedDefaultSearchProvider(mine);
++  EXPECT_FALSE(RestoreBuiltInDefaultSearchEngine(target(), 99999));
++  EXPECT_FALSE(RestoreBuiltInDefaultSearchEngine(target(), 0));
++  EXPECT_EQ(target().GetDefaultSearchProvider(), mine);
++}
++
++TEST_F(BackupSearchEnginesTest, CustomDefaultIsNotBuiltIn) {
++  TemplateURL* mine = AddEngine(source(), u"Mine", u"mine",
++                                "https://search.test/?q={searchTerms}");
++  source().SetUserSelectedDefaultSearchProvider(mine);
++  EXPECT_FALSE(BuiltInDefaultSearchEngine(source()));
++}
++
++TEST_F(BackupSearchEnginesTest, RoundTrip) {
++  TemplateURL* mine = AddEngine(source(), u"Mine é", u"mine",
++                                "https://search.test/?q={searchTerms}");
++  AddEngine(source(), u"Wiki", u"w",
++            "https://wiki.test/w/index.php?search={searchTerms}");
++  source().SetUserSelectedDefaultSearchProvider(mine);
++
++  SearchEnginesWriteResult written = SearchEnginesToJson(source());
++  EXPECT_EQ(written.engines, 2u);
++  EXPECT_EQ(*written.json.FindString("default_keyword"), "mine");
++  // Built-in engines are not in the personal list.
++  for (const base::Value& engine : *written.json.FindList("engines")) {
++    EXPECT_NE(*engine.GetDict().FindString("keyword"), "google.com");
++  }
++
++  auto restored =
++      RestoreSearchEngines(target(), Parse(*base::WriteJson(written.json)));
++  ASSERT_TRUE(restored);
++  EXPECT_EQ(restored->added, 2u);
++  EXPECT_EQ(restored->skipped, 0u);
++  EXPECT_TRUE(restored->default_set);
++  const TemplateURL* engine = target().GetDefaultSearchProvider();
++  EXPECT_EQ(engine->keyword(), u"mine");
++  EXPECT_EQ(engine->short_name(), u"Mine é");
++  EXPECT_EQ(engine->url(), "https://search.test/?q={searchTerms}");
++  EXPECT_EQ(engine->suggestions_url(),
++            "https://search.test/?q={searchTerms}&suggest=1");
++
++  // Again: nothing new, the phone's engines stay.
++  restored = RestoreSearchEngines(target(), written.json);
++  EXPECT_EQ(restored->added, 0u);
++  EXPECT_EQ(restored->already_present, 2u);
++}
++
++TEST_F(BackupSearchEnginesTest, ExistingKeywordKept) {
++  AddEngine(target(), u"Phone's own", u"mine",
++            "https://own.test/?q={searchTerms}");
++  auto restored = RestoreSearchEngines(target(), Parse(R"({"engines": [
++      {"name": "Backup", "keyword": "mine",
++       "url": "https://backup.test/?q={searchTerms}"}],
++      "default_keyword": "mine"})"));
++  ASSERT_TRUE(restored);
++  EXPECT_EQ(restored->already_present, 1u);
++  EXPECT_EQ(target().GetTemplateURLForKeyword(u"mine")->short_name(),
++            u"Phone's own");
++}
++
++TEST_F(BackupSearchEnginesTest, BadEnginesSkipped) {
++  const TemplateURL* default_before = target().GetDefaultSearchProvider();
++  auto restored = RestoreSearchEngines(target(), Parse(R"json({"engines": [
++      {"name": "No terms", "keyword": "a", "url": "https://a.test/"},
++      {"name": "Script", "keyword": "b", "url": "javascript:alert('{searchTerms}')"},
++      {"name": "File", "keyword": "c", "url": "file:///sdcard/{searchTerms}"},
++      {"name": "", "keyword": "d", "url": "https://d.test/?q={searchTerms}"},
++      {"name": "No keyword", "keyword": "", "url": "https://e.test/?q={searchTerms}"},
++      {"name": "Bad suggest", "keyword": "f", "url": "https://f.test/?q={searchTerms}",
++       "suggestions_url": "javascript:x"},
++      {"name": "Not a string", "keyword": 7, "url": "https://g.test/?q={searchTerms}"},
++      "not an engine",
++      {"name": "Good", "keyword": "ok", "url": "https://ok.test/?q={searchTerms}",
++       "favicon_url": ""}],
++      "default_keyword": "b"})json"));
++  ASSERT_TRUE(restored);
++  EXPECT_EQ(restored->added, 1u);
++  EXPECT_EQ(restored->skipped, 8u);
++  EXPECT_FALSE(restored->default_set);
++  EXPECT_EQ(target().GetDefaultSearchProvider(), default_before);
++  EXPECT_TRUE(target().GetTemplateURLForKeyword(u"ok"));
++  EXPECT_FALSE(target().GetTemplateURLForKeyword(u"b"));
++}
++
++TEST_F(BackupSearchEnginesTest, NotAList) {
++  EXPECT_FALSE(RestoreSearchEngines(target(), Parse(R"({"engines": {}})")));
++  EXPECT_FALSE(RestoreSearchEngines(target(), Parse(R"({})")));
++}
++
++}  // namespace
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_settings.cc b/chrome/browser/bare/backup/backup_settings.cc
+new file mode 100644
+index 00000000000..67b92886c4c
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_settings.cc
+@@ -0,0 +1,649 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_settings.h"
++
++#include <algorithm>
++#include <array>
++#include <string_view>
++
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
++#include "components/prefs/pref_service.h"
++#include "net/dns/public/doh_provider_entry.h"
++#include "url/gurl.h"
++#include "url/url_constants.h"
++
++namespace bare::backup {
++
++std::string SerializeGurlForAndroid(const GURL& url) {
++  const url::Parsed& parsed = url.parsed_for_possibly_invalid_spec();
++  if (parsed.inner_parsed()) {
++    return std::string();
++  }
++  constexpr char kDelimiter = '\0';
++  std::string body = "1";
++  body += kDelimiter;
++  body += url.is_valid() ? "true" : "false";
++  for (const url::Component& part :
++       {parsed.scheme, parsed.username, parsed.password, parsed.host,
++        parsed.port, parsed.path, parsed.query, parsed.ref}) {
++    body += kDelimiter;
++    body += base::NumberToString(part.begin);
++    body += kDelimiter;
++    body += base::NumberToString(part.len);
++  }
++  body += kDelimiter;
++  body += parsed.potentially_dangling_markup ? "true" : "false";
++  body += kDelimiter;
++  body += "false";  // no inner URL
++  body += kDelimiter;
++  body += url.possibly_invalid_spec();
++  return base::NumberToString(body.size()) + kDelimiter + body;
++}
++
++namespace {
++
++using SV = std::string_view;
++
++constexpr size_t kMaxStringLength = 4096;
++constexpr size_t kMaxUrlLength = 2 * 1024 * 1024;
++
++// BareAppMenuCustomization.KEYS.
++constexpr auto kAppMenuItems = std::to_array<SV>({
++    "new_tab", "new_incognito_tab", "new_window", "new_incognito_window",
++    "move_to_other_window", "manage_all_windows", "history", "quick_delete",
++    "page_info", "homepage", "downloads", "recently_closed", "extensions",
++    "zoom", "share", "download_page", "print", "find_in_page", "translate",
++    "read_aloud", "reader_mode", "task_manager", "open_with", "open_in_app",
++    "add_to_home_screen", "request_desktop_site", "dark_pages", "immersive",
++    "developer_tools", "help", "lens", "image_descriptions", "listen_to_feed",
++    "add_tab_to_new_group", "add_to_group", "add_tab_to_group", "bookmarks",
++    "bookmarks_menu", "reading_list", "customize_new_tab_page", "exit",
++    "close_all_tabs", "close_all_incognito_tabs", "select_tabs", "update",
++    "back", "forward", "bookmark_this_page", "reload", "about", "ai_mode",
++    "passwords_and_autofill", "payment_methods", "addresses",
++    "password_manager", "save_and_share", "more_tools", "help_menu",
++    "default_browser", "managed_by",
++});
++
++// BareTranslateSettings.TARGET_LANGUAGES, and "" for the device language.
++constexpr auto kTranslateTargets = std::to_array<SV>({
++    "",   "en", "ar", "az", "zh", "cs", "da", "nl", "eo", "fi", "fr",
++    "de", "el", "he", "hi", "hu", "id", "ga", "it", "ja", "ko", "fa",
++    "pl", "pt", "ru", "sk", "es", "sv", "tr", "uk", "vi",
++});
++
++// UserAgentPresets.IDS.
++constexpr auto kUserAgentPresets = std::to_array<SV>({
++    "", "chrome-android", "chrome-linux", "chrome-windows", "chrome-mac",
++    "chrome-chromeos", "edge-windows", "firefox-windows", "firefox-android",
++    "safari-mac", "safari-iphone", "custom",
++});
++
++constexpr auto kTabViews = std::to_array<SV>({"grid", "list"});
++constexpr auto kOpenLinksInApps = std::to_array<SV>({"never", "ask", "always"});
++constexpr auto kWebRtcPolicies = std::to_array<SV>({
++    "default", "default_public_and_private_interfaces",
++    "default_public_interface_only", "disable_non_proxied_udp",
++});
++constexpr auto kSecureDnsModes = std::to_array<SV>({"off", "automatic", "secure"});
++
++// ActionId values the bottom bar slots accept, and the same without the tab
++// switcher for what holding a button does.
++constexpr auto kSlotActions =
++    std::to_array<int>({14, 0, 7, 8, 9, 10, 11, 12, 3, 13, 15, 1});
++constexpr auto kHoldActions =
++    std::to_array<int>({14, 0, 7, 8, 9, 10, 11, 12, 3, 13, 15});
++constexpr auto kWipeAfter = std::to_array<int>({0, 1, 3, 5});
++// AdaptiveToolbarButtonVariant values Settings offers.
++constexpr auto kToolbarShortcuts = std::to_array<int>({5, 2, 3, 4, 8, 9, 10});
++
++bool AnyBool(const base::Value&) {
++  return true;
++}
++
++template <int kMin, int kMax>
++bool IntRange(const base::Value& value) {
++  return value.GetInt() >= kMin && value.GetInt() <= kMax;
++}
++
++template <const auto& kValues>
++bool IntIn(const base::Value& value) {
++  return std::ranges::find(kValues, value.GetInt()) != kValues.end();
++}
++
++template <const auto& kValues>
++bool StringIn(const base::Value& value) {
++  return std::ranges::find(kValues, SV(value.GetString())) != kValues.end();
++}
++
++template <const auto& kValues>
++bool ListOf(const base::Value& value) {
++  return std::ranges::all_of(value.GetList(), [](const base::Value& item) {
++    return item.is_string() && StringIn<kValues>(item);
++  });
++}
++
++template <const auto& kValues>
++bool CommaListOf(const base::Value& value) {
++  if (value.GetString().empty()) {
++    return true;
++  }
++  return std::ranges::all_of(
++      base::SplitStringPiece(value.GetString(), ",", base::TRIM_WHITESPACE,
++                             base::SPLIT_WANT_ALL),
++      [](SV item) {
++        return std::ranges::find(kValues, item) != kValues.end();
++      });
++}
++
++// "en", "pt-BR", "zh-Hant", "sr-Latn-RS".
++bool IsLanguageCode(SV code) {
++  if (code.empty() || code.size() > 16) {
++    return false;
++  }
++  const std::vector<SV> parts =
++      base::SplitStringPiece(code, "-", base::KEEP_WHITESPACE,
++                             base::SPLIT_WANT_ALL);
++  if (parts[0].size() < 2 || parts[0].size() > 3 ||
++      !std::ranges::all_of(parts[0], base::IsAsciiAlpha<char>)) {
++    return false;
++  }
++  return std::ranges::all_of(parts, [](SV part) {
++    return !part.empty() && part.size() <= 8 &&
++           std::ranges::all_of(part, base::IsAsciiAlphaNumeric<char>);
++  });
++}
++
++bool LanguageCodeOrEmpty(const base::Value& value) {
++  return value.GetString().empty() || IsLanguageCode(value.GetString());
++}
++
++bool LanguageCodeCsv(const base::Value& value) {
++  return value.GetString().empty() ||
++         std::ranges::all_of(
++             base::SplitStringPiece(value.GetString(), ",",
++                                    base::TRIM_WHITESPACE,
++                                    base::SPLIT_WANT_ALL),
++             IsLanguageCode);
++}
++
++bool LanguageCodeList(const base::Value& value) {
++  return value.GetList().size() <= 300 &&
++         std::ranges::all_of(value.GetList(), [](const base::Value& item) {
++           return item.is_string() && IsLanguageCode(item.GetString());
++         });
++}
++
++// translate_allowlists: source language to target language.
++bool LanguageCodeMap(const base::Value& value) {
++  return value.GetDict().size() <= 300 &&
++         std::ranges::all_of(value.GetDict(), [](const auto& entry) {
++           return IsLanguageCode(entry.first) && entry.second.is_string() &&
++                  IsLanguageCode(entry.second.GetString());
++         });
++}
++
++// partition.default_zoom_level: partition key to zoom level. Chromium's zoom
++// levels run from about -7.6 (25%) to 8.8 (500%).
++bool ZoomLevels(const base::Value& value) {
++  return value.GetDict().size() <= 16 &&
++         std::ranges::all_of(value.GetDict(), [](const auto& entry) {
++           const std::optional<double> level = entry.second.GetIfDouble();
++           return entry.first.size() <= 256 && level && *level >= -8.0 &&
++                  *level <= 9.0;
++         });
++}
++
++bool AnyString(const base::Value& value) {
++  return value.GetString().size() <= kMaxStringLength;
++}
++
++// Bare.UserAgent.Custom: printable ASCII, like UserAgentPresets.isValidCustom.
++bool UserAgent(const base::Value& value) {
++  const std::string& text = value.GetString();
++  return !text.empty() && text.size() <= kMaxStringLength &&
++         std::ranges::all_of(text, [](char c) { return c >= 0x20 && c <= 0x7e; });
++}
++
++bool Hostname(const base::Value& value) {
++  const std::string& host = value.GetString();
++  return host.size() <= 255 &&
++         std::ranges::all_of(host, [](char c) {
++           return base::IsAsciiAlphaNumeric(c) || c == '.' || c == '-' ||
++                  c == ':' || c == '[' || c == ']';
++         });
++}
++
++// BareTranslateProtocol.isAllowedEndpoint: https anywhere, http only to the
++// phone itself or a private network.
++bool TranslateEndpoint(const base::Value& value) {
++  if (value.GetString().size() > kMaxStringLength) {
++    return false;
++  }
++  const GURL url(value.GetString());
++  if (!url.is_valid()) {
++    return false;
++  }
++  if (url.SchemeIs(url::kHttpsScheme)) {
++    return true;
++  }
++  if (!url.SchemeIs(url::kHttpScheme)) {
++    return false;
++  }
++  const std::string host = url.GetHost();
++  if (host == "localhost" || host.ends_with(".local") ||
++      host.ends_with(".lan") || host.starts_with("127.") ||
++      host.starts_with("10.") || host.starts_with("192.168.")) {
++    return true;
++  }
++  if (host.starts_with("172.")) {
++    const std::vector<SV> octets = base::SplitStringPiece(
++        host, ".", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
++    int second = 0;
++    return octets.size() == 4 && base::StringToInt(octets[1], &second) &&
++           second >= 16 && second <= 31;
++  }
++  return false;
++}
++
++// Chrome.Homepage.CustomGurl holds a GURL as Java's GURL.serialize() writes
++// it, and Java reads it back trusting the component offsets it carries. So a
++// restored value must be exactly what this build would write for its own
++// spec, and the page must be a web page or the new tab page.
++bool HomepageGurl(const base::Value& value) {
++  const std::string& serialized = value.GetString();
++  if (serialized.empty() || serialized.size() > kMaxUrlLength) {
++    return false;
++  }
++  const size_t last = serialized.rfind('\0');
++  if (last == std::string::npos) {
++    return false;
++  }
++  const GURL url(serialized.substr(last + 1));
++  const bool allowed = url.is_valid() && (url.SchemeIsHTTPOrHTTPS() ||
++                                          url.spec() == "chrome-native://newtab/" ||
++                                          url.spec() == "chrome://newtab/");
++  return allowed && serialized == SerializeGurlForAndroid(url);
++}
++
++// dns_over_https.templates: whitespace-separated https URL templates.
++bool DohTemplates(const base::Value& value) {
++  if (value.GetString().size() > kMaxStringLength) {
++    return false;
++  }
++  return std::ranges::all_of(
++      base::SplitStringPiece(value.GetString(), " \t\n", base::TRIM_WHITESPACE,
++                             base::SPLIT_WANT_NONEMPTY),
++      [](SV spec) {
++        const GURL url(spec);
++        return url.is_valid() && url.SchemeIs(url::kHttpsScheme);
++      });
++}
++
++// Templates that are all Chromium's built-in providers (public resolvers, the
++// same for everyone). A custom template can carry an account ID, so it stays
++// personal.
++bool BuiltInDohTemplates(const base::Value& value) {
++  const std::vector<SV> templates =
++      base::SplitStringPiece(value.GetString(), " \t\n",
++                             base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++  return !templates.empty() &&
++         std::ranges::all_of(templates, [](SV spec) {
++           return std::ranges::any_of(
++               net::DohProviderEntry::GetList(), [&](const auto& entry) {
++                 return entry->doh_server_config.server_template() == spec;
++               });
++         });
++}
++
++constexpr SettingStore A = SettingStore::kAndroid;
++constexpr SettingStore P = SettingStore::kProfile;
++constexpr SettingStore L = SettingStore::kLocalState;
++constexpr SettingGroup kSetup = SettingGroup::kSetup;
++constexpr SettingGroup kPersonal = SettingGroup::kPersonal;
++constexpr SettingType kBool = SettingType::kBool;
++constexpr SettingType kInt = SettingType::kInt;
++constexpr SettingType kString = SettingType::kString;
++constexpr SettingType kStringSet = SettingType::kStringSet;
++constexpr SettingType kList = SettingType::kList;
++constexpr SettingType kDict = SettingType::kDict;
++
++constexpr bool kRestart = true;
++
++// Keys and values from the beta.6 code; the reasoning for each, and what is
++// left out, is in the 2.1 spec, section 5.
++constexpr Setting kSettings[] = {
++    // Theme and look.
++    {A, kSetup, "ui_theme_setting", kInt, IntRange<0, 3>},
++    {A, kSetup, "Bare.Theme.AmoledWhenSystemDark", kBool, AnyBool},
++    {P, kSetup, "webkit.webprefs.amoled_dark_backgrounds_enabled", kBool,
++     AnyBool},
++    {A, kSetup, "Bare.Glass", kBool, AnyBool},
++    {A, kSetup, "Bare.Appearance.MinimalLayout", kBool, AnyBool, kRestart},
++    {A, kSetup, "Chrome.Bare.LauncherIcon", kInt, IntRange<0, 2>, kRestart},
++    {A, kSetup, "Chrome.Language.ApplicationOverrideLanguage", kString,
++     LanguageCodeOrEmpty, kRestart},
++
++    // Toolbar and address bar.
++    {A, kSetup, "Chrome.BottomBar.SlotPrimaryAction.0", kInt,
++     IntIn<kSlotActions>},
++    {A, kSetup, "Chrome.BottomBar.SlotPrimaryAction.1", kInt,
++     IntIn<kSlotActions>},
++    {A, kSetup, "Chrome.BottomBar.SlotPrimaryAction.3", kInt,
++     IntIn<kSlotActions>},
++    {A, kSetup, "Chrome.BottomBar.SlotSecondaryAction.0", kInt,
++     IntIn<kHoldActions>},
++    {A, kSetup, "Chrome.BottomBar.SlotSecondaryAction.1", kInt,
++     IntIn<kHoldActions>},
++    {A, kSetup, "Chrome.BottomBar.SlotSecondaryAction.3", kInt,
++     IntIn<kHoldActions>},
++    {A, kSetup, "Chrome.BottomBar.SwipeAction", kInt, IntRange<0, 3>},
++    {A, kSetup, "Chrome.AdaptiveToolbarCustomization.Enabled", kBool, AnyBool},
++    {A, kSetup, "Chrome.AdaptiveToolbarCustomization.Settings", kInt,
++     IntIn<kToolbarShortcuts>},
++    {A, kSetup, "Bare.Toolbar.MenuOnLeft", kBool, AnyBool},
++    {A, kSetup, "Bare.ToolbarAlwaysVisible", kBool, AnyBool},
++    {A, kSetup, "Bare.Toolbar.AddressBarSwipeTabs", kBool, AnyBool},
++    // Address bar top or bottom. Local state wins when the two disagree, and
++    // both are written so they agree.
++    {A, kSetup, "Chrome.Toolbar.TopAnchored", kInt, IntRange<0, 3>},
++    {L, kSetup, "omnibox.is_in_bottom_position", kBool, AnyBool},
++
++    // Menu and tabs.
++    {A, kSetup, "Chrome.Bare.AppMenuOrder", kString, CommaListOf<kAppMenuItems>},
++    {A, kSetup, "Bare.AppMenu.OrderAll", kString, CommaListOf<kAppMenuItems>},
++    {A, kSetup, "Bare.AppMenu.HiddenItems", kStringSet, ListOf<kAppMenuItems>},
++    {A, kSetup, "Chrome.Bare.TabView", kString, StringIn<kTabViews>},
++    {A, kSetup, "Chrome.Bare.VerticalTabsGrid", kBool, AnyBool},
++
++    // Browsing.
++    {A, kSetup, "Chrome.Bare.SmoothScrolling", kBool, AnyBool, kRestart},
++    {A, kSetup, "Bare.Haptics", kBool, AnyBool},
++    {A, kSetup, "Chrome.Bare.OpenLinksInApps", kString,
++     StringIn<kOpenLinksInApps>},
++    {A, kSetup, "Bare.Media.FullscreenFollowsPhone", kBool, AnyBool},
++    {P, kSetup, "bare.background_media_playback", kBool, AnyBool},
++    {P, kSetup, "bare.omnibox.suggest_history_urls", kBool, AnyBool},
++    {P, kSetup, "search.suggest_enabled", kBool, AnyBool},
++    {P, kSetup, "net.network_prediction_options", kInt, IntRange<0, 3>},
++    {A, kSetup, "Chrome.Download.UseExternalDownloadManager", kBool, AnyBool},
++    {A, kSetup, "Bare.Downloads.ExternalSignIn", kBool, AnyBool},
++    {A, kSetup, "Bare.Extensions.QuickCrx", kBool, AnyBool},
++
++    // Text scaling.
++    {P, kSetup, "partition.default_zoom_level.android", kDict, ZoomLevels,
++     kRestart},
++    {P, kSetup, "webkit.webprefs.force_enable_zoom", kBool, AnyBool},
++    {P, kSetup, "settings.a11y.text_size_contrast_factor", kInt,
++     IntRange<0, 100>},
++    {A, kSetup, "Chrome.PageZoom.AlwaysShowMenuItem.Refreshed", kBool, AnyBool},
++    {A, kSetup, "Chrome.PageZoom.IncludeOSAdjustment", kBool, AnyBool},
++
++    // Privacy, security and clearing.
++    {P, kSetup, "bare.clear_on_exit_types", kInt, IntRange<0, 63>},
++    {A, kSetup, "Bare.ClearOnExit.CloseTabs", kBool, AnyBool},
++    {A, kSetup, "Bare.ClearOnExit.LeaveAsExit", kBool, AnyBool},
++    {P, kSetup, "enable_do_not_track", kBool, AnyBool},
++    {P, kSetup, "https_only_mode_enabled", kBool, AnyBool},
++    {P, kSetup, "profile.cookie_controls_mode", kInt, IntRange<0, 2>},
++    {P, kSetup, "webrtc.ip_handling_policy", kString,
++     StringIn<kWebRtcPolicies>},
++    {L, kSetup, "dns_over_https.mode", kString, StringIn<kSecureDnsModes>},
++
++    // Incognito.
++    {A, kSetup, "Bare.Incognito.BiometricOnly", kBool, AnyBool},
++    {A, kSetup, "Bare.Incognito.BlockScreenshots", kBool, AnyBool},
++    {A, kSetup, "Bare.Incognito.WipeAfter", kInt, IntIn<kWipeAfter>},
++
++    // Ad blocking and extensions.
++    {A, kSetup, "Chrome.Bare.BundledAdBlockerEnabled", kBool, AnyBool,
++     kRestart},
++    {A, kSetup, "Chrome.Bare.BareFilterEnabled", kBool, AnyBool, kRestart},
++    {P, kSetup, "bare.ubo_auto_update", kBool, AnyBool},
++    {A, kSetup, "Bare.Extensions.Presentation", kInt, IntRange<0, 1>},
++    {P, kSetup, "bare.keep_extensions_alive", kBool, AnyBool},
++
++    // Languages and translation.
++    {P, kSetup, "intl.selected_languages", kString, LanguageCodeCsv},
++    {P, kSetup, "translate.enabled", kBool, AnyBool},
++    {P, kSetup, "translate_recent_target", kString, LanguageCodeOrEmpty},
++    {P, kSetup, "translate_blocked_languages", kList, LanguageCodeList},
++    {P, kSetup, "translate_allowlists", kDict, LanguageCodeMap},
++    {A, kSetup, "Bare.Translate.PageTranslation", kBool, AnyBool},
++    {A, kSetup, "Bare.Translate.Target", kString, StringIn<kTranslateTargets>},
++
++    // User agent.
++    {A, kSetup, "Bare.UserAgent.Preset", kString, StringIn<kUserAgentPresets>,
++     kRestart},
++    {A, kSetup, "Bare.UserAgent.FitPhone", kBool, AnyBool, kRestart},
++
++    // Updates: the user's choice only.
++    {A, kSetup, "Chrome.Bare.UpdateMode", kInt, IntRange<0, 1>},
++    {A, kSetup, "Chrome.Bare.UpdateReminder", kBool, AnyBool},
++
++    // Personal.
++    {A, kPersonal, "Bare.Translate.OwnServer", kBool, AnyBool},
++    {A, kPersonal, "Bare.Translate.Endpoint", kString, TranslateEndpoint},
++    {A, kPersonal, "Bare.Translate.ApiKey", kString, AnyString},
++    {A, kPersonal, "Bare.Translate.ConsentHost", kString, Hostname},
++    {A, kPersonal, "Bare.UserAgent.Custom", kString, UserAgent, kRestart},
++    {A, kPersonal, "homepage", kBool, AnyBool},
++    {A, kPersonal, "Chrome.Homepage.UseNTP", kBool, AnyBool},
++    {A, kPersonal, "homepage_partner_enabled", kBool, AnyBool},
++    {A, kPersonal, "Chrome.Homepage.CustomGurl", kString, HomepageGurl},
++    {L, kPersonal, "dns_over_https.templates", kString, DohTemplates, false,
++     BuiltInDohTemplates},
++};
++
++const char* StoreName(SettingStore store) {
++  switch (store) {
++    case SettingStore::kAndroid:
++      return "android";
++    case SettingStore::kProfile:
++      return "profile";
++    case SettingStore::kLocalState:
++      return "local_state";
++  }
++}
++
++constexpr std::array<SettingStore, 3> kStores = {
++    SettingStore::kAndroid, SettingStore::kProfile, SettingStore::kLocalState};
++
++bool HasType(const base::Value& value, SettingType type) {
++  switch (type) {
++    case SettingType::kBool:
++      return value.is_bool();
++    case SettingType::kInt:
++      return value.is_int();
++    case SettingType::kDouble:
++      return value.is_double() || value.is_int();
++    case SettingType::kString:
++      return value.is_string();
++    case SettingType::kStringSet:
++    case SettingType::kList:
++      return value.is_list();
++    case SettingType::kDict:
++      return value.is_dict();
++  }
++}
++
++bool IsValid(const Setting& setting, const base::Value& value) {
++  return HasType(value, setting.type) && setting.is_valid(value);
++}
++
++// The listed setting for `key` that `group` may carry with `value`.
++const Setting* Find(SettingStore store,
++                    SettingGroup group,
++                    SV key,
++                    const base::Value& value) {
++  for (const Setting& setting : kSettings) {
++    if (setting.store != store || key != setting.key) {
++      continue;
++    }
++    if (setting.group == group) {
++      return &setting;
++    }
++    if (group == SettingGroup::kSetup && setting.also_setup_if &&
++        HasType(value, setting.type) && setting.also_setup_if(value)) {
++      return &setting;
++    }
++  }
++  return nullptr;
++}
++
++PrefService* PrefsFor(SettingStore store, const SettingsStores& stores) {
++  return store == SettingStore::kProfile ? stores.profile.get()
++                                         : stores.local_state.get();
++}
++
++// The current value, or nullopt at the default. Sets `readable` to false when
++// this phone has no such setting.
++std::optional<base::Value> Current(const Setting& setting,
++                                   const SettingsStores& stores,
++                                   bool& readable) {
++  readable = true;
++  if (setting.store == SettingStore::kAndroid) {
++    if (!stores.android) {
++      readable = false;
++      return std::nullopt;
++    }
++    return stores.android->Get(setting.key, setting.type);
++  }
++  PrefService* prefs = PrefsFor(setting.store, stores);
++  const PrefService::Preference* pref =
++      prefs ? prefs->FindPreference(setting.key) : nullptr;
++  if (!pref) {
++    readable = false;
++    return std::nullopt;
++  }
++  if (pref->IsDefaultValue()) {
++    return std::nullopt;
++  }
++  return pref->GetValue()->Clone();
++}
++
++}  // namespace
++
++base::span<const Setting> AllSettings() {
++  return kSettings;
++}
++
++SettingsWriteResult SettingsToJson(SettingGroup group,
++                                   const SettingsStores& stores) {
++  SettingsWriteResult result;
++  for (SettingStore store : kStores) {
++    base::DictValue values;
++    for (const Setting& setting : kSettings) {
++      const bool shared_value =
++          group == SettingGroup::kSetup && setting.also_setup_if;
++      if (setting.store != store ||
++          (setting.group != group && !shared_value)) {
++        continue;
++      }
++      bool readable = false;
++      std::optional<base::Value> value = Current(setting, stores, readable);
++      if (!readable) {
++        continue;
++      }
++      if (shared_value && setting.group != group &&
++          (!value || !HasType(*value, setting.type) ||
++           !setting.also_setup_if(*value))) {
++        continue;
++      }
++      if (!value) {
++        values.Set(setting.key, base::Value());
++      } else if (IsValid(setting, *value)) {
++        values.Set(setting.key, std::move(*value));
++      } else {
++        // Not a value this build would accept back, so it isn't written.
++        continue;
++      }
++      ++result.count;
++    }
++    result.json.Set(StoreName(store), std::move(values));
++  }
++  return result;
++}
++
++SettingsRestoreResult RestoreSettings(SettingGroup group,
++                                      const base::DictValue& json,
++                                      const SettingsStores& stores) {
++  SettingsRestoreResult result;
++  for (const auto [name, section] : json) {
++    const auto store = std::ranges::find_if(
++        kStores, [&](SettingStore s) { return name == StoreName(s); });
++    if (store == kStores.end() || !section.is_dict()) {
++      result.unknown.push_back(name);
++      continue;
++    }
++    for (const auto [key, value] : section.GetDict()) {
++      const std::string label = name + ":" + key;
++      const Setting* setting = Find(*store, group, key, value);
++      if (!setting) {
++        result.unknown.push_back(label);
++        continue;
++      }
++      bool readable = false;
++      const std::optional<base::Value> before =
++          Current(*setting, stores, readable);
++      if (!readable || (!value.is_none() && !IsValid(*setting, value))) {
++        result.skipped.push_back(label);
++        continue;
++      }
++      // Secure mode without a server would stop every lookup.
++      if (std::string_view(setting->key) == "dns_over_https.mode" &&
++          value.is_string() && value.GetString() == "secure" &&
++          stores.local_state->FindPreference("dns_over_https.templates") &&
++          stores.local_state->GetString("dns_over_https.templates").empty() &&
++          !section.GetDict().FindString("dns_over_https.templates")) {
++        result.skipped.push_back(label);
++        continue;
++      }
++      if (*store == SettingStore::kAndroid) {
++        if (value.is_none()) {
++          stores.android->Remove(key);
++        } else {
++          stores.android->Set(key, value);
++        }
++      } else {
++        PrefService* prefs = PrefsFor(*store, stores);
++        if (value.is_none()) {
++          prefs->ClearPref(key);
++        } else if (prefs->FindPreference(key)->GetType() == value.type() ||
++                   setting->type == SettingType::kDouble) {
++          prefs->Set(key, value);
++        } else {
++          result.skipped.push_back(label);
++          continue;
++        }
++      }
++      ++result.applied;
++      const bool changed =
++          before ? value != *before : !value.is_none();
++      result.needs_restart |= setting->needs_restart && changed;
++    }
++  }
++
++  // Bare's two translation services exclude each other; the setters write
++  // the other one off. A restore that turns one on does the same.
++  if (stores.android) {
++    const base::DictValue* android = json.FindDict("android");
++    const auto turned_on = [&](SV key) {
++      return android && android->FindBool(key).value_or(false) &&
++             Find(SettingStore::kAndroid, group, key, *android->Find(key));
++    };
++    if (turned_on("Bare.Translate.PageTranslation")) {
++      stores.android->Set("Bare.Translate.OwnServer", base::Value(false));
++    } else if (turned_on("Bare.Translate.OwnServer")) {
++      stores.android->Set("Bare.Translate.PageTranslation",
++                          base::Value(false));
++    }
++  }
++  return result;
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_settings.h b/chrome/browser/bare/backup/backup_settings.h
+new file mode 100644
+index 00000000000..27cdbd7d7c6
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_settings.h
+@@ -0,0 +1,119 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKUP_BACKUP_SETTINGS_H_
++#define CHROME_BROWSER_BARE_BACKUP_BACKUP_SETTINGS_H_
++
++#include <stddef.h>
++
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "base/containers/span.h"
++#include "base/memory/raw_ptr.h"
++#include "base/values.h"
++#include "url/gurl.h"
++
++class PrefService;
++
++// The settings a backup may carry. Only keys in AllSettings() are ever read,
++// written or restored, each with the values it accepts; anything else in a
++// file is reported and left alone.
++//
++// In a package, each group is one JSON file:
++//
++//   {"android": {"Bare.Glass": false, "Bare.Haptics": null},
++//    "profile": {"enable_do_not_track": true},
++//    "local_state": {"dns_over_https.mode": "secure"}}
++//
++// null means the setting was at its default, so a restore clears it on the
++// new phone rather than pinning today's default.
++namespace bare::backup {
++
++// What Java's GURL.serialize() writes for `url`, which is how
++// Chrome.Homepage.CustomGurl is stored. Empty for a URL with an inner URL
++// (filesystem:), which a homepage never is.
++std::string SerializeGurlForAndroid(const GURL& url);
++
++enum class SettingStore {
++  // The app's default SharedPreferences.
++  kAndroid,
++  kProfile,
++  kLocalState,
++};
++
++enum class SettingGroup {
++  kSetup,
++  kPersonal,
++};
++
++enum class SettingType {
++  kBool,
++  kInt,
++  kDouble,
++  kString,
++  // An Android string set, as a list of strings.
++  kStringSet,
++  kList,
++  kDict,
++};
++
++struct Setting {
++  SettingStore store;
++  SettingGroup group;
++  const char* key;
++  SettingType type;
++  // Checks a value already known to be of `type`.
++  bool (*is_valid)(const base::Value& value);
++  // Read once per process, so a change needs a restart.
++  bool needs_restart = false;
++  // For a personal setting: values that may also travel in Setup. Null
++  // means personal only.
++  bool (*also_setup_if)(const base::Value& value) = nullptr;
++};
++
++base::span<const Setting> AllSettings();
++
++// Bare's Java side reads and writes the app's SharedPreferences through this.
++class AndroidPrefs {
++ public:
++  virtual ~AndroidPrefs() = default;
++  // nullopt when the key isn't set.
++  virtual std::optional<base::Value> Get(const std::string& key,
++                                         SettingType type) const = 0;
++  virtual void Set(const std::string& key, const base::Value& value) = 0;
++  virtual void Remove(const std::string& key) = 0;
++};
++
++struct SettingsStores {
++  raw_ptr<AndroidPrefs> android = nullptr;
++  raw_ptr<PrefService> profile = nullptr;
++  raw_ptr<PrefService> local_state = nullptr;
++};
++
++struct SettingsWriteResult {
++  base::DictValue json;
++  size_t count = 0;
++};
++
++SettingsWriteResult SettingsToJson(SettingGroup group,
++                                   const SettingsStores& stores);
++
++struct SettingsRestoreResult {
++  size_t applied = 0;
++  // "store:key" of listed settings whose value was refused.
++  std::vector<std::string> skipped;
++  // "store:key" of keys that aren't on the list for this group.
++  std::vector<std::string> unknown;
++  bool needs_restart = false;
++};
++
++SettingsRestoreResult RestoreSettings(SettingGroup group,
++                                      const base::DictValue& json,
++                                      const SettingsStores& stores);
++
++}  // namespace bare::backup
++
++#endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_SETTINGS_H_
+diff --git a/chrome/browser/bare/backup/backup_settings_unittest.cc b/chrome/browser/bare/backup/backup_settings_unittest.cc
+new file mode 100644
+index 00000000000..33adaebc477
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_settings_unittest.cc
+@@ -0,0 +1,354 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_settings.h"
++
++#include <set>
++#include <string>
++
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "chrome/browser/bare/backup/backup_test_util.h"
++#include "components/prefs/pref_registry_simple.h"
++#include "components/prefs/testing_pref_service.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace bare::backup {
++namespace {
++
++base::DictValue Parse(std::string_view json) {
++  return *base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
++}
++
++struct Phone {
++  Phone() {
++    RegisterSettingsForTest(profile.registry(), SettingStore::kProfile);
++    RegisterSettingsForTest(local_state.registry(),
++                            SettingStore::kLocalState);
++  }
++  SettingsStores stores() { return {&android, &profile, &local_state}; }
++
++  FakeAndroidPrefs android;
++  TestingPrefServiceSimple profile;
++  TestingPrefServiceSimple local_state;
++};
++
++TEST(BackupSettingsTest, ListIsWellFormed) {
++  std::set<std::pair<SettingStore, std::string>> seen;
++  for (const Setting& setting : AllSettings()) {
++    EXPECT_TRUE(seen.insert({setting.store, setting.key}).second)
++        << setting.key;
++    EXPECT_TRUE(setting.is_valid);
++  }
++  // Session, device and bookkeeping state never goes in a backup.
++  for (const char* never :
++       {"Bare.Push.Distributor", "Bare.Push.Subscriptions",
++        "Chrome.Bare.UpdateLatestTag", "Chrome.Bare.UpdateLastCheckMs",
++        "Chrome.Bare.UpdateAckedTag", "Chrome.Bare.UpdateBadge",
++        "Chrome.Bare.UpdateOnboarded", "Bare.Incognito.FailedAttempts",
++        "Bare.ClearOnExit.VeilPending", "bare.clear_on_exit_pending",
++        "Bare.AppMenu.EditTipCount", "Chrome.Bare.NewIconUnlocked",
++        "Chrome.Bare.NewIconInUse", "Chrome.Download.ExternalManagerPackage",
++        "background_media_playback", "external_download_manager_enabled",
++        "external_download_manager_app", "incognito.incognito_reauthentication",
++        "shown_for_install", "draft_first_button"}) {
++    for (const Setting& setting : AllSettings()) {
++      EXPECT_NE(std::string(setting.key), never);
++    }
++  }
++}
++
++TEST(BackupSettingsTest, HomepageMustBeAWebPage) {
++  const std::string web =
++      SerializeGurlForAndroid(GURL("https://example.org/start?x=1"));
++  ASSERT_FALSE(web.empty());
++
++  auto restore = [](const std::string& serialized) {
++    Phone target;
++    base::DictValue android;
++    android.Set("Chrome.Homepage.CustomGurl", serialized);
++    base::DictValue json;
++    json.Set("android", std::move(android));
++    return RestoreSettings(SettingGroup::kPersonal, json, target.stores())
++        .applied;
++  };
++  EXPECT_EQ(restore(web), 1u);
++  EXPECT_EQ(restore(SerializeGurlForAndroid(GURL("http://example.org/"))), 1u);
++
++  // Not a web page.
++  EXPECT_EQ(restore(SerializeGurlForAndroid(GURL("javascript:alert(1)"))), 0u);
++  EXPECT_EQ(restore(SerializeGurlForAndroid(GURL("file:///sdcard/a.html"))),
++            0u);
++  EXPECT_EQ(restore(SerializeGurlForAndroid(GURL("data:text/html,hi"))), 0u);
++
++  // Offsets that don't belong to the spec, which Java would trust as written.
++  std::string moved = web;
++  const std::string host = std::string(1, '\0') + "8" + '\0' + "11" + '\0';
++  const size_t at = moved.find(host);
++  ASSERT_NE(at, std::string::npos);
++  moved.replace(at, host.size(), std::string(1, '\0') + "0" + '\0' + "11" +
++                                     '\0');
++  EXPECT_EQ(restore(moved), 0u);
++
++  // The spec swapped for another web page whose parts sit elsewhere, offsets
++  // left as they were.
++  std::string swapped = web;
++  swapped.replace(swapped.rfind('\0') + 1, std::string::npos,
++                  "https://an.example.net/start?x=1");
++  EXPECT_EQ(restore(swapped), 0u);
++
++  // Only the spec, without the rest.
++  EXPECT_EQ(restore("https://example.org/"), 0u);
++}
++
++TEST(BackupSettingsTest, RoundTrip) {
++  Phone source;
++  source.android.Set("Bare.Glass", base::Value(false));
++  source.android.Set("ui_theme_setting", base::Value(3));
++  source.android.Set("Chrome.Bare.AppMenuOrder",
++                     base::Value("reload,history,new_tab"));
++  base::ListValue hidden;
++  hidden.Append("lens");
++  hidden.Append("ai_mode");
++  source.android.Set("Bare.AppMenu.OrderAll",
++                     base::Value("immersive,task_manager,print"));
++  source.android.Set("Bare.Extensions.QuickCrx", base::Value(true));
++  source.android.Set("Bare.AppMenu.HiddenItems", base::Value(hidden.Clone()));
++  source.android.Set("Bare.Translate.ApiKey", base::Value("secret"));
++  source.profile.SetBoolean("enable_do_not_track", true);
++  source.profile.SetInteger("bare.clear_on_exit_types", 7);
++  source.profile.SetString("intl.selected_languages", "en-US,de,pt-BR");
++  base::DictValue zoom;
++  zoom.Set("x", 1.5);
++  source.profile.SetDict("partition.default_zoom_level.android", zoom.Clone());
++  source.local_state.SetString("dns_over_https.mode", "off");
++
++  // The new phone has its own values; setup replaces them, including the
++  // ones the old phone left at their default.
++  Phone target;
++  target.android.Set("Bare.Haptics", base::Value(false));
++  target.profile.SetBoolean("https_only_mode_enabled", true);
++
++  SettingsWriteResult setup = SettingsToJson(SettingGroup::kSetup,
++                                             source.stores());
++  const base::DictValue json = Parse(*base::WriteJson(setup.json));
++  EXPECT_FALSE(json.FindDict("android")->contains("Bare.Translate.ApiKey"));
++  SettingsRestoreResult result =
++      RestoreSettings(SettingGroup::kSetup, json, target.stores());
++  EXPECT_TRUE(result.skipped.empty());
++  EXPECT_TRUE(result.unknown.empty());
++  EXPECT_EQ(result.applied, setup.count);
++  EXPECT_TRUE(result.needs_restart);  // the zoom level
++
++  EXPECT_EQ(target.android.values_.at("Bare.Glass"), base::Value(false));
++  EXPECT_EQ(target.android.values_.at("ui_theme_setting"), base::Value(3));
++  EXPECT_EQ(target.android.values_.at("Bare.AppMenu.HiddenItems"),
++            base::Value(std::move(hidden)));
++  EXPECT_EQ(target.android.values_.at("Bare.AppMenu.OrderAll"),
++            base::Value("immersive,task_manager,print"));
++  EXPECT_EQ(target.android.values_.at("Bare.Extensions.QuickCrx"),
++            base::Value(true));
++  EXPECT_FALSE(target.android.values_.contains("Bare.Haptics"));
++  EXPECT_FALSE(target.android.values_.contains("Bare.Translate.ApiKey"));
++  EXPECT_TRUE(target.profile.GetBoolean("enable_do_not_track"));
++  EXPECT_FALSE(target.profile.GetBoolean("https_only_mode_enabled"));
++  EXPECT_EQ(target.profile.GetInteger("bare.clear_on_exit_types"), 7);
++  EXPECT_EQ(target.profile.GetString("intl.selected_languages"),
++            "en-US,de,pt-BR");
++  EXPECT_EQ(target.profile.GetDict("partition.default_zoom_level.android"),
++            zoom);
++  EXPECT_EQ(target.local_state.GetString("dns_over_https.mode"), "off");
++
++  // Personal carries only the personal keys.
++  SettingsWriteResult personal =
++      SettingsToJson(SettingGroup::kPersonal, source.stores());
++  result = RestoreSettings(SettingGroup::kPersonal, personal.json,
++                           target.stores());
++  EXPECT_TRUE(result.unknown.empty());
++  EXPECT_EQ(target.android.values_.at("Bare.Translate.ApiKey"),
++            base::Value("secret"));
++}
++
++TEST(BackupSettingsTest, BadValuesSkipped) {
++  Phone target;
++  SettingsRestoreResult result = RestoreSettings(
++      SettingGroup::kSetup, Parse(R"j({
++        "android": {
++          "ui_theme_setting": 9,
++          "Bare.Glass": "yes",
++          "Chrome.Bare.TabView": "carousel",
++          "Chrome.Bare.AppMenuOrder": "reload,format_disk",
++          "Bare.AppMenu.OrderAll": "print,format_disk",
++          "Bare.Extensions.QuickCrx": "yes",
++          "Bare.AppMenu.HiddenItems": ["lens", 3],
++          "Bare.Incognito.WipeAfter": 2,
++          "Chrome.BottomBar.SlotSecondaryAction.0": 1,
++          "Bare.Translate.Target": "klingon",
++          "Bare.Haptics": true
++        },
++        "profile": {
++          "intl.selected_languages": "en,../../etc",
++          "translate_blocked_languages": ["fr", ""],
++          "partition.default_zoom_level.android": {"x": 50.0},
++          "webrtc.ip_handling_policy": "leak_everything",
++          "bare.clear_on_exit_types": 64
++        },
++        "local_state": {"dns_over_https.mode": "always"}
++      })j"),
++      target.stores());
++  EXPECT_EQ(result.applied, 1u);
++  EXPECT_EQ(result.skipped.size(), 16u);
++  EXPECT_TRUE(result.unknown.empty());
++  EXPECT_EQ(target.android.values_.size(), 1u);
++  EXPECT_EQ(target.profile.GetString("intl.selected_languages"), "");
++}
++
++TEST(BackupSettingsTest, UnknownKeysListed) {
++  Phone target;
++  SettingsRestoreResult result = RestoreSettings(
++      SettingGroup::kSetup, Parse(R"j({
++        "android": {"Bare.Push.Distributor": "org.example",
++                    "Bare.Translate.ApiKey": "in the wrong file",
++                    "Chrome.Bare.UpdateLastCheckMs": 1},
++        "profile": {"homepage": "https://example.org/"},
++        "registry": {}
++      })j"),
++      target.stores());
++  EXPECT_EQ(result.applied, 0u);
++  EXPECT_EQ(result.unknown,
++            (std::vector<std::string>{
++                "android:Bare.Push.Distributor",
++                "android:Bare.Translate.ApiKey",
++                "android:Chrome.Bare.UpdateLastCheckMs", "profile:homepage",
++                "registry"}));
++  EXPECT_TRUE(target.android.values_.empty());
++}
++
++TEST(BackupSettingsTest, PrefMissingOnThisPhone) {
++  Phone target;
++  TestingPrefServiceSimple empty_profile;
++  SettingsStores stores = target.stores();
++  stores.profile = &empty_profile;
++  SettingsRestoreResult result = RestoreSettings(
++      SettingGroup::kSetup,
++      Parse(R"j({"profile": {"enable_do_not_track": true}})j"), stores);
++  EXPECT_EQ(result.skipped,
++            (std::vector<std::string>{"profile:enable_do_not_track"}));
++}
++
++TEST(BackupSettingsTest, TranslationServicesExcludeEachOther) {
++  Phone target;
++  target.android.Set("Bare.Translate.OwnServer", base::Value(true));
++  RestoreSettings(SettingGroup::kSetup,
++                  Parse(R"j({"android": {"Bare.Translate.PageTranslation": true}})j"),
++                  target.stores());
++  EXPECT_EQ(target.android.values_.at("Bare.Translate.OwnServer"),
++            base::Value(false));
++
++  RestoreSettings(SettingGroup::kPersonal,
++                  Parse(R"j({"android": {"Bare.Translate.OwnServer": true}})j"),
++                  target.stores());
++  EXPECT_EQ(target.android.values_.at("Bare.Translate.PageTranslation"),
++            base::Value(false));
++}
++
++TEST(BackupSettingsTest, SecureDnsNeedsAServer) {
++  Phone target;
++  SettingsRestoreResult result = RestoreSettings(
++      SettingGroup::kSetup,
++      Parse(R"j({"local_state": {"dns_over_https.mode": "secure"}})j"),
++      target.stores());
++  EXPECT_EQ(result.skipped,
++            (std::vector<std::string>{"local_state:dns_over_https.mode"}));
++  EXPECT_EQ(target.local_state.GetString("dns_over_https.mode"), "");
++
++  target.local_state.SetString("dns_over_https.templates",
++                               "https://dns.test/dns-query{?dns}");
++  result = RestoreSettings(
++      SettingGroup::kSetup,
++      Parse(R"j({"local_state": {"dns_over_https.mode": "secure"}})j"),
++      target.stores());
++  EXPECT_EQ(result.applied, 1u);
++  EXPECT_EQ(target.local_state.GetString("dns_over_https.mode"), "secure");
++}
++
++TEST(BackupSettingsTest, PublicDnsServerTravelsInSetup) {
++  // Cloudflare's template, one of Chromium's built-in providers.
++  constexpr char kPublic[] = "https://chrome.cloudflare-dns.com/dns-query";
++  constexpr char kCustom[] = "https://dns.nextdns.test/abc123";
++
++  Phone source;
++  source.local_state.SetString("dns_over_https.mode", "secure");
++  source.local_state.SetString("dns_over_https.templates", kPublic);
++  base::DictValue setup =
++      SettingsToJson(SettingGroup::kSetup, source.stores()).json;
++  EXPECT_EQ(*setup.FindDict("local_state")
++                 ->FindString("dns_over_https.templates"),
++            kPublic);
++
++  Phone target;
++  SettingsRestoreResult result =
++      RestoreSettings(SettingGroup::kSetup, setup, target.stores());
++  EXPECT_TRUE(result.skipped.empty());
++  EXPECT_EQ(target.local_state.GetString("dns_over_https.templates"),
++            kPublic);
++  EXPECT_EQ(target.local_state.GetString("dns_over_https.mode"), "secure");
++
++  // A custom server stays out of setup, and a setup file can't bring one in.
++  source.local_state.SetString("dns_over_https.templates", kCustom);
++  setup = SettingsToJson(SettingGroup::kSetup, source.stores()).json;
++  EXPECT_FALSE(setup.FindDict("local_state")
++                   ->contains("dns_over_https.templates"));
++  result = RestoreSettings(
++      SettingGroup::kSetup,
++      Parse(R"j({"local_state": {"dns_over_https.templates":
++                 "https://dns.nextdns.test/abc123"}})j"),
++      target.stores());
++  EXPECT_EQ(result.unknown,
++            (std::vector<std::string>{"local_state:dns_over_https.templates"}));
++  EXPECT_EQ(target.local_state.GetString("dns_over_https.templates"),
++            kPublic);
++
++  // Full backups carry it either way.
++  base::DictValue personal =
++      SettingsToJson(SettingGroup::kPersonal, source.stores()).json;
++  EXPECT_EQ(*personal.FindDict("local_state")
++                 ->FindString("dns_over_https.templates"),
++            kCustom);
++}
++
++TEST(BackupSettingsTest, PersonalValueChecks) {
++  Phone target;
++  SettingsRestoreResult result = RestoreSettings(
++      SettingGroup::kPersonal, Parse(R"j({
++        "android": {
++          "Bare.Translate.Endpoint": "http://203.0.113.5/translate",
++          "Bare.UserAgent.Custom": "Mozilla\n",
++          "Bare.Translate.ConsentHost": "a host/with/slashes",
++          "Chrome.Homepage.CustomGurl": ""
++        },
++        "local_state": {"dns_over_https.templates": "http://dns.test/q"}
++      })j"),
++      target.stores());
++  EXPECT_EQ(result.applied, 0u);
++  EXPECT_EQ(result.skipped.size(), 5u);
++
++  result = RestoreSettings(
++      SettingGroup::kPersonal, Parse(R"j({
++        "android": {
++          "Bare.Translate.Endpoint": "http://192.168.1.20:5000/translate",
++          "Bare.UserAgent.Custom": "Mozilla/5.0 (X11; Linux x86_64)",
++          "Bare.Translate.ConsentHost": "192.168.1.20"
++        },
++        "local_state": {"dns_over_https.templates":
++            "https://a.test/dns-query{?dns} https://b.test/dns-query"}
++      })j"),
++      target.stores());
++  EXPECT_EQ(result.applied, 4u);
++  EXPECT_TRUE(result.skipped.empty());
++  EXPECT_TRUE(result.needs_restart);
++}
++
++}  // namespace
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_site_settings.cc b/chrome/browser/bare/backup/backup_site_settings.cc
+new file mode 100644
+index 00000000000..5ad6eeb6264
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_site_settings.cc
+@@ -0,0 +1,239 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_site_settings.h"
++
++#include <algorithm>
++#include <array>
++#include <string>
++#include <utility>
++
++#include "components/content_settings/core/browser/content_settings_info.h"
++#include "components/content_settings/core/browser/content_settings_registry.h"
++#include "components/content_settings/core/browser/content_settings_utils.h"
++#include "components/content_settings/core/browser/host_content_settings_map.h"
++#include "components/content_settings/core/browser/website_settings_info.h"
++#include "components/content_settings/core/browser/website_settings_registry.h"
++#include "components/content_settings/core/common/content_settings.h"
++#include "components/content_settings/core/common/content_settings_pattern.h"
++#include "components/content_settings/core/common/content_settings_types.h"
++#include "components/content_settings/core/common/content_settings_utils.h"
++
++namespace bare::backup {
++
++namespace {
++
++// The types a backup carries. A permission's default can only be Ask or
++// Block in Bare's Settings, so a file can't make it Allow for every site; the
++// others are on/off switches there.
++struct Listed {
++  ContentSettingsType type;
++  bool permission;
++};
++
++constexpr auto kListed = std::to_array<Listed>({
++    {ContentSettingsType::ADS, false},
++    {ContentSettingsType::AR, true},
++    {ContentSettingsType::AUTO_DARK_WEB_CONTENT, false},
++    {ContentSettingsType::AUTOMATIC_DOWNLOADS, true},
++    {ContentSettingsType::BACKGROUND_SYNC, false},
++    {ContentSettingsType::CLIPBOARD_READ_WRITE, true},
++    {ContentSettingsType::COOKIES, false},
++    {ContentSettingsType::GEOLOCATION, true},
++    {ContentSettingsType::IDLE_DETECTION, true},
++    {ContentSettingsType::IMAGES, false},
++    {ContentSettingsType::JAVASCRIPT, false},
++    {ContentSettingsType::JAVASCRIPT_JIT, false},
++    {ContentSettingsType::JAVASCRIPT_OPTIMIZER, false},
++    {ContentSettingsType::MEDIASTREAM_CAMERA, true},
++    {ContentSettingsType::MEDIASTREAM_MIC, true},
++    {ContentSettingsType::MIDI_SYSEX, true},
++    {ContentSettingsType::NOTIFICATIONS, true},
++    {ContentSettingsType::POPUPS, false},
++    {ContentSettingsType::PROTECTED_MEDIA_IDENTIFIER, true},
++    {ContentSettingsType::REQUEST_DESKTOP_SITE, false},
++    {ContentSettingsType::SENSORS, false},
++    {ContentSettingsType::SOUND, false},
++});
++
++constexpr auto kTypes = [] {
++  std::array<ContentSettingsType, kListed.size()> types{};
++  for (size_t i = 0; i < kListed.size(); ++i) {
++    types[i] = kListed[i].type;
++  }
++  return types;
++}();
++
++bool IsListed(ContentSettingsType type) {
++  return std::ranges::find(kTypes, type) != kTypes.end();
++}
++
++// The registry entry for a listed type, or null if this build doesn't
++// register it (some types are desktop only).
++const content_settings::ContentSettingsInfo* InfoFor(ContentSettingsType type) {
++  return content_settings::ContentSettingsRegistry::GetInstance()->Get(type);
++}
++
++std::optional<ContentSettingsType> TypeFromName(const std::string* name) {
++  if (!name) {
++    return std::nullopt;
++  }
++  const content_settings::WebsiteSettingsInfo* info =
++      content_settings::WebsiteSettingsRegistry::GetInstance()->GetByName(
++          *name);
++  if (!info || !IsListed(info->type()) || !InfoFor(info->type())) {
++    return std::nullopt;
++  }
++  return info->type();
++}
++
++// Whether Settings could have left `setting` as the default for `type`: the
++// type's own starting value, Ask or Block for a permission, Allow or Block
++// for a switch.
++bool IsSettableDefault(ContentSettingsType type, ContentSetting setting) {
++  const content_settings::ContentSettingsInfo* info = InfoFor(type);
++  if (!info || !info->IsDefaultSettingValid(setting)) {
++    return false;
++  }
++  if (setting == content_settings::ValueToContentSetting(
++                     info->website_settings_info()->initial_default_value())) {
++    return true;
++  }
++  const auto listed = std::ranges::find(kListed, type, &Listed::type);
++  if (listed == kListed.end()) {
++    return false;
++  }
++  return listed->permission
++             ? setting == CONTENT_SETTING_ASK || setting == CONTENT_SETTING_BLOCK
++             : setting == CONTENT_SETTING_ALLOW ||
++                   setting == CONTENT_SETTING_BLOCK;
++}
++
++std::optional<ContentSetting> SettingFromName(const std::string* name) {
++  ContentSetting setting = CONTENT_SETTING_DEFAULT;
++  if (!name || !content_settings::ContentSettingFromString(*name, &setting) ||
++      setting == CONTENT_SETTING_DEFAULT) {
++    return std::nullopt;
++  }
++  return setting;
++}
++
++}  // namespace
++
++base::DictValue SiteDefaultsToJson(const HostContentSettingsMap& map) {
++  base::DictValue defaults;
++  for (ContentSettingsType type : kTypes) {
++    const content_settings::ContentSettingsInfo* info = InfoFor(type);
++    if (!info) {
++      continue;
++    }
++    defaults.Set(info->website_settings_info()->name(),
++                 content_settings::ContentSettingToString(
++                     map.GetDefaultContentSetting(type)));
++  }
++  base::DictValue json;
++  json.Set("defaults", std::move(defaults));
++  return json;
++}
++
++SiteSettingsRestoreResult RestoreSiteDefaults(HostContentSettingsMap& map,
++                                              const base::DictValue& json) {
++  SiteSettingsRestoreResult result;
++  const base::DictValue* defaults = json.FindDict("defaults");
++  if (!defaults) {
++    return result;
++  }
++  for (const auto [name, value] : *defaults) {
++    const std::optional<ContentSettingsType> type = TypeFromName(&name);
++    const std::optional<ContentSetting> setting =
++        SettingFromName(value.GetIfString());
++    if (!type || !setting || !IsSettableDefault(*type, *setting)) {
++      ++result.skipped;
++      continue;
++    }
++    map.SetDefaultContentSetting(*type, *setting);
++    ++result.applied;
++  }
++  return result;
++}
++
++SiteExceptionsWriteResult SiteExceptionsToJson(
++    const HostContentSettingsMap& map) {
++  SiteExceptionsWriteResult result;
++  base::ListValue exceptions;
++  for (ContentSettingsType type : kTypes) {
++    const content_settings::ContentSettingsInfo* info = InfoFor(type);
++    if (!info) {
++      continue;
++    }
++    for (const ContentSettingPatternSource& rule :
++         map.GetSettingsForOneType(type)) {
++      if (rule.source != content_settings::mojom::ProviderType::kPrefProvider ||
++          rule.incognito || !rule.metadata.expiration().is_null() ||
++          rule.metadata.session_model() !=
++              content_settings::mojom::SessionModel::DURABLE ||
++          rule.primary_pattern == ContentSettingsPattern::Wildcard() ||
++          !rule.setting_value.is_int()) {
++        continue;
++      }
++      if (result.exceptions >= kMaxSiteExceptions) {
++        break;
++      }
++      base::DictValue exception;
++      exception.Set("type", info->website_settings_info()->name());
++      exception.Set("primary", rule.primary_pattern.ToString());
++      exception.Set("secondary", rule.secondary_pattern.ToString());
++      exception.Set("setting", content_settings::ContentSettingToString(
++                                   rule.GetContentSetting()));
++      exceptions.Append(std::move(exception));
++      ++result.exceptions;
++    }
++  }
++  result.json.Set("exceptions", std::move(exceptions));
++  return result;
++}
++
++std::optional<SiteSettingsRestoreResult> RestoreSiteExceptions(
++    HostContentSettingsMap& map,
++    const base::DictValue& json) {
++  const base::ListValue* exceptions = json.FindList("exceptions");
++  if (!exceptions || exceptions->size() > kMaxSiteExceptions) {
++    return std::nullopt;
++  }
++  SiteSettingsRestoreResult result;
++  for (const base::Value& value : *exceptions) {
++    const base::DictValue* exception = value.GetIfDict();
++    if (!exception) {
++      ++result.skipped;
++      continue;
++    }
++    const std::optional<ContentSettingsType> type =
++        TypeFromName(exception->FindString("type"));
++    const std::optional<ContentSetting> setting =
++        SettingFromName(exception->FindString("setting"));
++    const std::string* primary_text = exception->FindString("primary");
++    const std::string* secondary_text = exception->FindString("secondary");
++    if (!type || !setting || !primary_text || !secondary_text ||
++        !InfoFor(*type)->IsSettingValid(*setting)) {
++      ++result.skipped;
++      continue;
++    }
++    const ContentSettingsPattern primary =
++        ContentSettingsPattern::FromString(*primary_text);
++    const ContentSettingsPattern secondary =
++        ContentSettingsPattern::FromString(*secondary_text);
++    if (!primary.IsValid() || !secondary.IsValid() ||
++        primary == ContentSettingsPattern::Wildcard() ||
++        (secondary != ContentSettingsPattern::Wildcard() &&
++         !InfoFor(*type)->website_settings_info()->SupportsSecondaryPattern())) {
++      ++result.skipped;
++      continue;
++    }
++    map.SetContentSettingCustomScope(primary, secondary, *type, *setting);
++    ++result.applied;
++  }
++  return result;
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_site_settings.h b/chrome/browser/bare/backup/backup_site_settings.h
+new file mode 100644
+index 00000000000..7b91e94e8b4
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_site_settings.h
+@@ -0,0 +1,57 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKUP_BACKUP_SITE_SETTINGS_H_
++#define CHROME_BROWSER_BARE_BACKUP_BACKUP_SITE_SETTINGS_H_
++
++#include <stddef.h>
++
++#include <optional>
++
++#include "base/values.h"
++
++class HostContentSettingsMap;
++
++// Site settings for a fixed list of types (cookies, JavaScript, pop-ups,
++// location, camera, microphone, notifications and similar). Chooser grants
++// such as USB devices are not content settings and aren't on the list.
++// Types are stored by their registry name, settings as "allow", "block",
++// "ask" or "session_only".
++//
++// - Setup: the global default of each type ({"defaults": {"popups": "block"}}).
++// - Personal (personal/site_settings.json): the per-site exceptions the user
++//   set, without expiring or one-time grants.
++namespace bare::backup {
++
++inline constexpr size_t kMaxSiteExceptions = 10000;
++
++struct SiteSettingsRestoreResult {
++  size_t applied = 0;
++  // Unknown type, a type not on the list, a bad pattern or a value the type
++  // doesn't take.
++  size_t skipped = 0;
++};
++
++base::DictValue SiteDefaultsToJson(const HostContentSettingsMap& map);
++
++SiteSettingsRestoreResult RestoreSiteDefaults(HostContentSettingsMap& map,
++                                              const base::DictValue& json);
++
++struct SiteExceptionsWriteResult {
++  base::DictValue json;
++  size_t exceptions = 0;
++};
++
++SiteExceptionsWriteResult SiteExceptionsToJson(
++    const HostContentSettingsMap& map);
++
++// The backup wins where it and the phone set the same site and type. Returns
++// nullopt, changing nothing, if `json` isn't an exception list.
++std::optional<SiteSettingsRestoreResult> RestoreSiteExceptions(
++    HostContentSettingsMap& map,
++    const base::DictValue& json);
++
++}  // namespace bare::backup
++
++#endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_SITE_SETTINGS_H_
+diff --git a/chrome/browser/bare/backup/backup_site_settings_unittest.cc b/chrome/browser/bare/backup/backup_site_settings_unittest.cc
+new file mode 100644
+index 00000000000..6d6437bd3e3
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_site_settings_unittest.cc
+@@ -0,0 +1,186 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_site_settings.h"
++
++#include <string>
++
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/memory/scoped_refptr.h"
++#include "base/test/task_environment.h"
++#include "base/time/time.h"
++#include "components/content_settings/core/browser/host_content_settings_map.h"
++#include "components/content_settings/core/common/content_settings.h"
++#include "components/content_settings/core/common/content_settings_constraints.h"
++#include "components/content_settings/core/common/content_settings_pattern.h"
++#include "components/content_settings/core/common/content_settings_types.h"
++#include "components/sync_preferences/testing_pref_service_syncable.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace bare::backup {
++namespace {
++
++base::DictValue Parse(std::string_view json) {
++  return *base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
++}
++
++class TestMap {
++ public:
++  TestMap() {
++    HostContentSettingsMap::RegisterProfilePrefs(prefs_.registry());
++    map_ = base::MakeRefCounted<HostContentSettingsMap>(
++        &prefs_, /*is_off_the_record=*/false, /*store_last_modified=*/true,
++        /*restore_session=*/false, /*should_record_metrics=*/false);
++  }
++  ~TestMap() { map_->ShutdownOnUIThread(); }
++
++  HostContentSettingsMap& operator*() { return *map_; }
++  HostContentSettingsMap* operator->() { return map_.get(); }
++
++ private:
++  sync_preferences::TestingPrefServiceSyncable prefs_;
++  scoped_refptr<HostContentSettingsMap> map_;
++};
++
++ContentSetting Get(TestMap& map, const char* url, ContentSettingsType type) {
++  return map->GetContentSetting(GURL(url), GURL(url), type);
++}
++
++class BackupSiteSettingsTest : public testing::Test {
++ protected:
++  base::test::SingleThreadTaskEnvironment task_environment_;
++  TestMap source_;
++  TestMap target_;
++};
++
++TEST_F(BackupSiteSettingsTest, DefaultsRoundTrip) {
++  source_->SetDefaultContentSetting(ContentSettingsType::POPUPS,
++                                    CONTENT_SETTING_ALLOW);
++  source_->SetDefaultContentSetting(ContentSettingsType::GEOLOCATION,
++                                    CONTENT_SETTING_BLOCK);
++  source_->SetDefaultContentSetting(ContentSettingsType::JAVASCRIPT_OPTIMIZER,
++                                    CONTENT_SETTING_BLOCK);
++  const base::DictValue json = SiteDefaultsToJson(*source_);
++  EXPECT_EQ(*json.FindDict("defaults")->FindString("popups"), "allow");
++
++  SiteSettingsRestoreResult result =
++      RestoreSiteDefaults(*target_, Parse(*base::WriteJson(json)));
++  EXPECT_EQ(result.skipped, 0u);
++  EXPECT_GT(result.applied, 5u);
++  EXPECT_EQ(target_->GetDefaultContentSetting(ContentSettingsType::POPUPS),
++            CONTENT_SETTING_ALLOW);
++  EXPECT_EQ(target_->GetDefaultContentSetting(ContentSettingsType::GEOLOCATION),
++            CONTENT_SETTING_BLOCK);
++  EXPECT_EQ(target_->GetDefaultContentSetting(
++                ContentSettingsType::JAVASCRIPT_OPTIMIZER),
++            CONTENT_SETTING_BLOCK);
++}
++
++TEST_F(BackupSiteSettingsTest, BadDefaultsSkipped) {
++  SiteSettingsRestoreResult result = RestoreSiteDefaults(*target_, Parse(R"({
++      "defaults": {"popups": "sometimes", "no-such-type": "allow",
++                   "geolocation": 1, "notifications": "default",
++                   "javascript": "block"}})"));
++  EXPECT_EQ(result.applied, 1u);
++  EXPECT_EQ(result.skipped, 4u);
++  EXPECT_EQ(target_->GetDefaultContentSetting(ContentSettingsType::JAVASCRIPT),
++            CONTENT_SETTING_BLOCK);
++}
++
++// A file can't make a permission Allow for every site: Settings only offers
++// Ask or Block there, so such a default is refused and the phone's stays.
++TEST_F(BackupSiteSettingsTest, NoAllowDefaultForPermissions) {
++  SiteSettingsRestoreResult result = RestoreSiteDefaults(*target_, Parse(R"({
++      "defaults": {"clipboard": "allow", "geolocation": "allow",
++                   "notifications": "allow", "midi-sysex": "allow",
++                   "media-stream-camera": "allow", "popups": "allow"}})"));
++  EXPECT_EQ(result.applied, 1u);  // Pop-ups: a switch in Settings.
++  EXPECT_EQ(result.skipped, 5u);
++  for (ContentSettingsType type :
++       {ContentSettingsType::CLIPBOARD_READ_WRITE,
++        ContentSettingsType::GEOLOCATION, ContentSettingsType::NOTIFICATIONS,
++        ContentSettingsType::MIDI_SYSEX,
++        ContentSettingsType::MEDIASTREAM_CAMERA}) {
++    EXPECT_EQ(target_->GetDefaultContentSetting(type), CONTENT_SETTING_ASK)
++        << static_cast<int>(type);
++  }
++  // Block and Ask still come back.
++  result = RestoreSiteDefaults(*target_, Parse(R"({
++      "defaults": {"geolocation": "block", "notifications": "ask"}})"));
++  EXPECT_EQ(result.applied, 2u);
++  EXPECT_EQ(target_->GetDefaultContentSetting(ContentSettingsType::GEOLOCATION),
++            CONTENT_SETTING_BLOCK);
++}
++
++TEST_F(BackupSiteSettingsTest, ExceptionsRoundTrip) {
++  const auto site = ContentSettingsPattern::FromString("https://a.test:443");
++  const auto wild = ContentSettingsPattern::Wildcard();
++  source_->SetContentSettingCustomScope(site, wild,
++                                        ContentSettingsType::GEOLOCATION,
++                                        CONTENT_SETTING_ALLOW);
++  source_->SetContentSettingCustomScope(
++      ContentSettingsPattern::FromString("[*.]b.test"), wild,
++      ContentSettingsType::JAVASCRIPT, CONTENT_SETTING_BLOCK);
++  // A temporary grant is not exported.
++  content_settings::ContentSettingConstraints temporary;
++  temporary.set_lifetime(base::Hours(1));
++  source_->SetContentSettingCustomScope(
++      ContentSettingsPattern::FromString("https://c.test:443"), wild,
++      ContentSettingsType::MEDIASTREAM_CAMERA, CONTENT_SETTING_ALLOW,
++      temporary);
++
++  SiteExceptionsWriteResult written = SiteExceptionsToJson(*source_);
++  EXPECT_EQ(written.exceptions, 2u);
++
++  // The phone already blocks location for a.test; the backup wins.
++  target_->SetContentSettingCustomScope(site, wild,
++                                        ContentSettingsType::GEOLOCATION,
++                                        CONTENT_SETTING_BLOCK);
++  auto result = RestoreSiteExceptions(*target_,
++                                      Parse(*base::WriteJson(written.json)));
++  ASSERT_TRUE(result);
++  EXPECT_EQ(result->applied, 2u);
++  EXPECT_EQ(result->skipped, 0u);
++  EXPECT_EQ(Get(target_, "https://a.test/", ContentSettingsType::GEOLOCATION),
++            CONTENT_SETTING_ALLOW);
++  EXPECT_EQ(Get(target_, "https://x.b.test/", ContentSettingsType::JAVASCRIPT),
++            CONTENT_SETTING_BLOCK);
++  EXPECT_NE(Get(target_, "https://c.test/",
++                ContentSettingsType::MEDIASTREAM_CAMERA),
++            CONTENT_SETTING_ALLOW);
++
++  // Running it again changes nothing.
++  result = RestoreSiteExceptions(*target_, written.json);
++  EXPECT_EQ(SiteExceptionsToJson(*target_).exceptions, 2u);
++}
++
++TEST_F(BackupSiteSettingsTest, BadExceptionsSkipped) {
++  auto result = RestoreSiteExceptions(*target_, Parse(R"({"exceptions": [
++      {"type": "geolocation", "primary": "*", "secondary": "*", "setting": "allow"},
++      {"type": "geolocation", "primary": "not a [pattern", "secondary": "*", "setting": "allow"},
++      {"type": "geolocation", "primary": "https://a.test:443", "secondary": "https://b.test:443", "setting": "allow"},
++      {"type": "usb-chooser-data", "primary": "https://a.test:443", "secondary": "*", "setting": "allow"},
++      {"type": "popups", "primary": "https://a.test:443", "secondary": "*", "setting": "default"},
++      {"type": "popups", "primary": "https://a.test:443", "secondary": "*"},
++      "not an exception",
++      {"type": "popups", "primary": "https://a.test:443", "secondary": "*", "setting": "allow"}
++  ]})"));
++  ASSERT_TRUE(result);
++  EXPECT_EQ(result->applied, 1u);
++  EXPECT_EQ(result->skipped, 7u);
++  EXPECT_EQ(Get(target_, "https://a.test/", ContentSettingsType::POPUPS),
++            CONTENT_SETTING_ALLOW);
++  EXPECT_NE(Get(target_, "https://z.test/", ContentSettingsType::GEOLOCATION),
++            CONTENT_SETTING_ALLOW);
++}
++
++TEST_F(BackupSiteSettingsTest, NotAList) {
++  EXPECT_FALSE(RestoreSiteExceptions(*target_, Parse(R"({"exceptions": 3})")));
++  EXPECT_FALSE(RestoreSiteExceptions(*target_, Parse(R"({})")));
++}
++
++}  // namespace
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_test_util.cc b/chrome/browser/bare/backup/backup_test_util.cc
+new file mode 100644
+index 00000000000..26e8b366be5
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_test_util.cc
+@@ -0,0 +1,77 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_test_util.h"
++
++#include "base/strings/string_number_conversions.h"
++#include "components/prefs/pref_registry_simple.h"
++
++namespace bare::backup {
++
++ScopedTestStrings::ScopedTestStrings() : bundle_(&delegate_) {
++  ON_CALL(delegate_, GetLocalizedString(testing::_, testing::_))
++      .WillByDefault([](int id, std::u16string* value) {
++        *value = u"Folder " + base::NumberToString16(id);
++        return true;
++      });
++  old_ = ui::ResourceBundle::SwapSharedInstanceForTesting(&bundle_, {},
++                                                          &old_packs_);
++}
++
++ScopedTestStrings::~ScopedTestStrings() {
++  std::vector<ui::ResourceBundle::FdAndRegion> unused;
++  ui::ResourceBundle::SwapSharedInstanceForTesting(old_, old_packs_, &unused);
++}
++
++FakeAndroidPrefs::FakeAndroidPrefs() = default;
++FakeAndroidPrefs::~FakeAndroidPrefs() = default;
++
++std::optional<base::Value> FakeAndroidPrefs::Get(const std::string& key,
++                                                 SettingType type) const {
++  auto it = values_.find(key);
++  if (it == values_.end()) {
++    return std::nullopt;
++  }
++  return it->second.Clone();
++}
++
++void FakeAndroidPrefs::Set(const std::string& key, const base::Value& value) {
++  values_[key] = value.Clone();
++}
++
++void FakeAndroidPrefs::Remove(const std::string& key) {
++  values_.erase(key);
++}
++
++void RegisterSettingsForTest(PrefRegistrySimple* registry,
++                             SettingStore store) {
++  for (const Setting& setting : AllSettings()) {
++    if (setting.store != store) {
++      continue;
++    }
++    switch (setting.type) {
++      case SettingType::kBool:
++        registry->RegisterBooleanPref(setting.key, false);
++        break;
++      case SettingType::kInt:
++        registry->RegisterIntegerPref(setting.key, 0);
++        break;
++      case SettingType::kDouble:
++        registry->RegisterDoublePref(setting.key, 0);
++        break;
++      case SettingType::kString:
++        registry->RegisterStringPref(setting.key, "");
++        break;
++      case SettingType::kStringSet:
++      case SettingType::kList:
++        registry->RegisterListPref(setting.key);
++        break;
++      case SettingType::kDict:
++        registry->RegisterDictionaryPref(setting.key);
++        break;
++    }
++  }
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_test_util.h b/chrome/browser/bare/backup/backup_test_util.h
+new file mode 100644
+index 00000000000..e41871b06dd
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_test_util.h
+@@ -0,0 +1,57 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKUP_BACKUP_TEST_UTIL_H_
++#define CHROME_BROWSER_BARE_BACKUP_BACKUP_TEST_UTIL_H_
++
++#include <map>
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "base/values.h"
++#include "chrome/browser/bare/backup/backup_settings.h"
++#include "testing/gmock/include/gmock/gmock.h"
++#include "ui/base/resource/mock_resource_bundle_delegate.h"
++#include "ui/base/resource/resource_bundle.h"
++
++class PrefRegistrySimple;
++
++namespace bare::backup {
++
++// Bookmark permanent folders take their titles from the resource bundle,
++// which a test process doesn't have. This one answers every string lookup
++// with "Folder <id>".
++class ScopedTestStrings {
++ public:
++  ScopedTestStrings();
++  ~ScopedTestStrings();
++
++ private:
++  testing::NiceMock<ui::MockResourceBundleDelegate> delegate_;
++  ui::ResourceBundle bundle_;
++  raw_ptr<ui::ResourceBundle> old_ = nullptr;
++  std::vector<ui::ResourceBundle::FdAndRegion> old_packs_;
++};
++
++class FakeAndroidPrefs : public AndroidPrefs {
++ public:
++  FakeAndroidPrefs();
++  ~FakeAndroidPrefs() override;
++
++  std::optional<base::Value> Get(const std::string& key,
++                                 SettingType type) const override;
++  void Set(const std::string& key, const base::Value& value) override;
++  void Remove(const std::string& key) override;
++
++  std::map<std::string, base::Value> values_;
++};
++
++// Registers every listed setting of `store`, at false, 0, "" or empty.
++void RegisterSettingsForTest(PrefRegistrySimple* registry, SettingStore store);
++
++}  // namespace bare::backup
++
++#endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_TEST_UTIL_H_

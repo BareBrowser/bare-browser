@@ -1,0 +1,177 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index 43932a810d2..5235cff3ec8 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assertNonNull;
+ import static org.chromium.build.NullUtil.assumeNonNull;
+ import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.ADAPTIVE_TOOLBAR_CUSTOMIZATION_SETTINGS;
+ 
++import android.animation.ValueAnimator;
+ import android.app.Activity;
+ import android.content.ComponentCallbacks;
+ import android.content.Context;
+@@ -283,10 +284,12 @@ import org.chromium.content_public.browser.LoadUrlParams;
+ import org.chromium.content_public.browser.NavigationController;
+ import org.chromium.content_public.browser.NavigationEntry;
+ import org.chromium.content_public.browser.NavigationHandle;
++import org.chromium.content_public.browser.RenderCoordinates;
+ import org.chromium.content_public.browser.WebContents;
+ import org.chromium.content_public.browser.back_forward_transition.AnimationStage;
+ import org.chromium.content_public.browser.selection.SelectionDropdownMenuDelegate;
+ import org.chromium.net.NetError;
++import org.chromium.ui.interpolators.Interpolators;
+ import org.chromium.ui.UiUtils;
+ import org.chromium.ui.animation.transition.ShrinkTransition;
+ import org.chromium.ui.base.ActivityResultTracker;
+@@ -386,6 +389,8 @@ public class ToolbarManager
+     private MonotonicObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
+     private ActivityTabProvider.ActivityTabTabObserver mActivityTabTabObserver;
+     private final ActivityTabProvider mActivityTabProvider;
++    // Bare: the page gliding to its top after Scroll to top.
++    private @Nullable ValueAnimator mScrollToTopAnimator;
+     private final ActivityResultTracker mActivityResultTracker;
+     private final SnackbarManager mSnackbarManager;
+     private final LocationBarModel mLocationBarModel;
+@@ -1233,6 +1238,8 @@ public class ToolbarManager
+                         () -> getUrlBarViewRectProvider(),
+                         this::isSendTabToSelfAvailable,
+                         this::onSendTabToSelfClicked);
++        // Bare: "Scroll to top" in the address bar's long-press menu.
++        mToolbarLongPressMenuHandler.setScrollToTop(this::scrollActiveTabToTop);
+         OnLongClickListener onLongClickListener =
+                 mToolbarLongPressMenuHandler.getOnLongClickListener();
+ 
+@@ -2579,6 +2586,48 @@ public class ToolbarManager
+         return ((LocationBarCoordinator) mLocationBar).getUrlBarTextWithoutAutocomplete();
+     }
+ 
++    /**
++     * Bare: glides the page in the current tab to its top, fast at first and slowing into it, as
++     * a status bar tap does on other phones. Keeps the page's sideways position.
++     */
++    private void scrollActiveTabToTop() {
++        if (mScrollToTopAnimator != null) mScrollToTopAnimator.cancel();
++        Tab tab = mActivityTabProvider.get();
++        if (tab == null || tab.isNativePage()) return;
++        WebContents webContents = tab.getWebContents();
++        if (webContents == null) return;
++        RenderCoordinates coordinates = RenderCoordinates.fromWebContents(webContents);
++        int x = coordinates.getScrollXPixInt();
++        int from = coordinates.getScrollYPixInt();
++        if (from <= 0) return;
++        // From far down, skip to two screens above the top first: gliding past pages of
++        // content in a third of a second shows nothing but blank tiles.
++        int glide = Math.max(1, coordinates.getLastFrameViewportHeightPixInt()) * 2;
++        if (from > glide) {
++            webContents.getEventForwarder().scrollTo(x, glide);
++            from = glide;
++        }
++        float density = mActivity.getResources().getDisplayMetrics().density;
++        // About a third of a second, a little longer for a long way, never slow.
++        long duration = Math.min(450, 250 + Math.round(from / density / 40f));
++        ValueAnimator animator = ValueAnimator.ofInt(from, 0);
++        animator.setDuration(duration);
++        animator.setInterpolator(Interpolators.EMPHASIZED_DECELERATE);
++        animator.addUpdateListener(
++                animation -> {
++                    // The tab changed or went away while it was moving.
++                    if (mActivityTabProvider.get() != tab || tab.getWebContents() != webContents) {
++                        animation.cancel();
++                        return;
++                    }
++                    webContents
++                            .getEventForwarder()
++                            .scrollTo(x, (int) animation.getAnimatedValue());
++                });
++        mScrollToTopAnimator = animator;
++        animator.start();
++    }
++
+     /** Returns the {@link ViewRectProvider} for the UrlBar. */
+     public ViewRectProvider getUrlBarViewRectProvider() {
+         assert mLocationBar instanceof LocationBarCoordinator
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 966ef0cdb66..7406ab5e775 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4678,6 +4678,9 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_MINIMAL_LAYOUT_USE_MINIMAL" desc="Address bar long press menu item that switches to the minimal toolbar. [CHAR_LIMIT=40]">
+         Use minimal toolbar
+       </message>
++      <message name="IDS_BARE_TOOLBAR_SCROLL_TO_TOP" desc="Address bar long press menu item that scrolls the current page back to its top. [CHAR_LIMIT=40]">
++        Scroll to top
++      </message>
+       <message name="IDS_BARE_MINIMAL_LAYOUT_USE_FULL" desc="Address bar long press menu item that switches back to the full toolbar. [CHAR_LIMIT=40]">
+         Use full toolbar
+       </message>
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java
+index 665812c85fa..c51f8084dac 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java
+@@ -61,13 +61,15 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+         MenuItemType.MOVE_ADDRESS_BAR_TO,
+         MenuItemType.COPY_LINK,
+         MenuItemType.SEND_TAB_TO_SELF,
+-        MenuItemType.TOGGLE_MINIMAL_LAYOUT
++        MenuItemType.TOGGLE_MINIMAL_LAYOUT,
++        MenuItemType.SCROLL_TO_TOP
+     })
+     public @interface MenuItemType {
+         int MOVE_ADDRESS_BAR_TO = 0;
+         int COPY_LINK = 1;
+         int SEND_TAB_TO_SELF = 2;
+         int TOGGLE_MINIMAL_LAYOUT = 3;
++        int SCROLL_TO_TOP = 4;
+     }
+ 
+     private @Nullable PopupWindow mPopupMenu;
+@@ -89,6 +91,8 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+     private final ActivityLifecycleDispatcher mLifecycleDispatcher;
+     private final Predicate<GURL> mIsSendTabToSelfAvailable;
+     private final Runnable mOnSendTabToSelfClicked;
++    // Bare: scrolls the page in the current tab to its top, set by the toolbar.
++    private @Nullable Runnable mScrollToTop;
+ 
+     /**
+      * Creates a new {@link ToolbarLongPressMenuHandler}.
+@@ -195,6 +199,11 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+         return mOnLongClickListener;
+     }
+ 
++    /** Bare: what "Scroll to top" does. Without it the menu doesn't offer the item. */
++    public void setScrollToTop(@Nullable Runnable scrollToTop) {
++        mScrollToTop = scrollToTop;
++    }
++
+     private void displayMenu(View view) {
+         boolean onTop = AddressBarPreference.isToolbarConfiguredToShowOnTop();
+ 
+@@ -247,6 +256,18 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+     @VisibleForTesting
+     ModelList buildMenuItems(boolean onTop) {
+         ModelList itemList = new ModelList();
++        // Bare: first, since it is what the menu is opened for most. Only on a web page; the
++        // New Tab Page and Bare's own pages have nothing to scroll to.
++        GURL page = mUrlSupplier.get();
++        String pageSpec = page == null ? "" : page.getSpec();
++        if (mScrollToTop != null
++                && (pageSpec.startsWith("http://") || pageSpec.startsWith("https://"))) {
++            itemList.add(
++                    new ListItemBuilder()
++                            .withTitleRes(R.string.bare_toolbar_scroll_to_top)
++                            .withMenuId(MenuItemType.SCROLL_TO_TOP)
++                            .build());
++        }
+         if (mIsBottomToolbarEnabled) {
+             itemList.add(
+                     new ListItemBuilder()
+@@ -315,6 +336,9 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+         } else if (id == MenuItemType.TOGGLE_MINIMAL_LAYOUT) {
+             BareMinimalLayoutToggle.toggle(mContext);
+             return;
++        } else if (id == MenuItemType.SCROLL_TO_TOP) {
++            if (mScrollToTop != null) mScrollToTop.run();
++            return;
+         }
+     }
+ 

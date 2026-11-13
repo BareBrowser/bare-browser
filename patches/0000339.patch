@@ -1,0 +1,84 @@
+diff --git a/chrome/android/java/res/xml/bare_security_preferences.xml b/chrome/android/java/res/xml/bare_security_preferences.xml
+index 4f78df0d34d..2d4b74ced4e 100644
+--- a/chrome/android/java/res/xml/bare_security_preferences.xml
++++ b/chrome/android/java/res/xml/bare_security_preferences.xml
+@@ -40,4 +40,9 @@ found in the LICENSE file.
+         android:title="@string/bare_security_hardened_title"
+         android:summary="@string/bare_security_hardened_summary" />
+ 
++    <org.chromium.components.browser_ui.settings.TextMessagePreference
++        android:key="bare_security_phishing"
++        android:order="5"
++        android:summary="@string/bare_security_phishing_note" />
++
+ </PreferenceScreen>
+diff --git a/chrome/browser/extensions/bare_filter_subscriber.cc b/chrome/browser/extensions/bare_filter_subscriber.cc
+index 6d800bee8a6..61873af601d 100644
+--- a/chrome/browser/extensions/bare_filter_subscriber.cc
++++ b/chrome/browser/extensions/bare_filter_subscriber.cc
+@@ -86,6 +86,41 @@ constexpr char kScript[] = R"(
+ })();
+ )";
+ 
++// Runs inside uBlock Origin's background page once its filters are ready, the
++// first time only: turns on its phishing list for users who still have its two
++// default malware lists on. The list is recorded as offered before anything
++// else, so a failure can't repeat it and a list the user later turns off is
++// never turned back on.
++constexpr char kPhishingScript[] = R"(
++(function() {
++  var list = 'curben-phishing';
++  var tries = 0;
++  var timer = setInterval(function() {
++    var ub = window['µBlock'];
++    if (++tries > 120) { clearInterval(timer); return; }
++    if (!ub || !ub.readyToFilter) { return; }
++    clearInterval(timer);
++    chrome.storage.local.get('bareSeededLists', function(got) {
++      var seeded = got && Array.isArray(got.bareSeededLists) ?
++          got.bareSeededLists : [];
++      if (seeded.indexOf(list) !== -1) { return; }
++      seeded.push(list);
++      chrome.storage.local.set({ bareSeededLists: seeded }, function() {
++        var selected = ub.selectedFilterLists || [];
++        if (selected.indexOf(list) !== -1) { return; }
++        if (selected.indexOf('urlhaus-1') === -1 ||
++            selected.indexOf('ublock-badware') === -1) { return; }
++        if (!ub.availableFilterLists || !ub.availableFilterLists[list]) {
++          return;
++        }
++        ub.applyFilterListSelection({ toSelect: [list], merge: true });
++        ub.loadFilterLists();
++      });
++    });
++  }, 500);
++})();
++)";
++
+ std::string BuildScript(bool want) {
+   std::string script = kScript;
+   size_t at = script.find("%URL%");
+@@ -123,6 +158,9 @@ class BareFilterSubscriber : public ExtensionHostRegistry::Observer {
+     host->host_contents()->GetPrimaryMainFrame()->ExecuteJavaScriptForTests(
+         base::UTF8ToUTF16(BuildScript(want)), base::NullCallback(),
+         content::ISOLATED_WORLD_ID_GLOBAL);
++    host->host_contents()->GetPrimaryMainFrame()->ExecuteJavaScriptForTests(
++        base::UTF8ToUTF16(std::string(kPhishingScript)), base::NullCallback(),
++        content::ISOLATED_WORLD_ID_GLOBAL);
+   }
+ 
+   base::ScopedObservation<ExtensionHostRegistry,
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 7406ab5e775..e8b8d2b0208 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4648,6 +4648,9 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_SECURITY_HARDENED_SUMMARY" desc="Summary of the security option that turns off the JavaScript optimizer.">
+         Turns off the JavaScript optimizer for every site. A whole class of browser exploits depends on it, at the cost of slower pages and heavier sites. You can allow it for a site in Site settings.
+       </message>
++      <message name="IDS_BARE_SECURITY_PHISHING_NOTE" desc="Note on the security options screen about the malware and phishing lists uBlock Origin uses in place of Safe Browsing.">
++        Bare checks addresses against uBlock Origin's lists of malware and phishing sites. These lists are smaller than Google Safe Browsing, so some dangerous sites will still get through.
++      </message>
+       <message name="IDS_BARE_CRX_OFFER_TITLE" desc="Title of the dialog offered when an extension file has finished downloading. [CHAR_LIMIT=40]">
+         Install this extension?
+       </message>

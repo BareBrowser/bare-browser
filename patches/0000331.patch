@@ -1,0 +1,2344 @@
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+index 35c9055783d..b5877c488ff 100644
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -2253,6 +2253,7 @@ if (_is_default_toolchain) {
+       "java/src/org/chromium/chrome/browser/DeferredStartupHandler.java",
+       "java/src/org/chromium/chrome/browser/GracefulShutdownService.java",
+       "java/src/org/chromium/chrome/browser/actor/ActorForegroundService.java",
++      "java/src/org/chromium/chrome/browser/bare/backup/BareDirectService.java",
+       "java/src/org/chromium/chrome/browser/app/bluetooth/BluetoothNotificationService.java",
+       "java/src/org/chromium/chrome/browser/app/serial/SerialNotificationService.java",
+       "java/src/org/chromium/chrome/browser/app/usb/UsbNotificationService.java",
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 2e92f611667..95eac33fc03 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -479,6 +479,7 @@ chrome_java_resources = [
+   "java/res/layout/bare_welcome_chooser_row.xml",
+   "java/res/layout/bare_backup_button.xml",
+   "java/res/layout/bare_backup_kind.xml",
++  "java/res/layout/bare_direct_modes.xml",
+   "java/res/layout/bare_welcome_option_row.xml",
+   "java/res/layout/bare_welcome_overlay.xml",
+   "java/res/layout/bare_clear_veil.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 1183e97252a..b976e1a16dc 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -257,6 +257,15 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupKindPreference.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupSettingsFragment.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareBringOverFragment.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareDirectFragment.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareDirectGate.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareDirectModePreference.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareDirectReceiveFragment.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareDirectSendFragment.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareDirectServiceImpl.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareDirectSession.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareDirectTls.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareScreenLock.java",
+   "java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java",
+diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/AndroidManifest.xml
+index 89510b82c01..a3579b00580 100644
+--- a/chrome/android/java/AndroidManifest.xml
++++ b/chrome/android/java/AndroidManifest.xml
+@@ -38,6 +38,10 @@ by a child template that "extends" this file.
+ 
+     <uses-permission-sdk-23 android:name="android.permission.ACCESS_WIFI_STATE" />
+     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
++    <!-- Bare: phone-to-phone transfer over Wi-Fi Direct. -->
++    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
++    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
++        android:usesPermissionFlags="neverForLocation" tools:targetApi="33" />
+ 
+     <uses-permission-sdk-23 android:name="android.permission.ACCESS_ADSERVICES_ATTRIBUTION" />
+     <uses-permission-sdk-23 android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
+@@ -73,6 +77,7 @@ by a child template that "extends" this file.
+     <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
++    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+     {% set enable_screen_capture = enable_screen_capture|default(0) %}
+     {% if enable_screen_capture == "true" %}
+@@ -1083,6 +1088,11 @@ by a child template that "extends" this file.
+            android:foregroundServiceType="dataSync" android:exported="false">
+         </service>
+ 
++        <!-- Bare: keeps a phone-to-phone transfer running. -->
++        <service android:name="org.chromium.chrome.browser.bare.backup.BareDirectService"
++            android:foregroundServiceType="connectedDevice" android:exported="false">
++        </service>
++
+         <!-- Download broadcast manager service -->
+         <service android:name="org.chromium.chrome.browser.download.DownloadBroadcastManager"
+             android:exported="false">
+diff --git a/chrome/android/java/res/layout/bare_direct_modes.xml b/chrome/android/java/res/layout/bare_direct_modes.xml
+new file mode 100644
+index 00000000000..7deaf71ffbc
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_direct_modes.xml
+@@ -0,0 +1,63 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Copyright 2026 The Chromium Authors
++     Use of this source code is governed by a BSD-style license that can be
++     found in the LICENSE file. -->
++<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content"
++    android:orientation="vertical"
++    android:paddingStart="16dp"
++    android:paddingEnd="16dp"
++    android:paddingTop="8dp"
++    android:paddingBottom="8dp">
++
++    <LinearLayout
++        android:id="@+id/bare_direct_mode_setup"
++        style="@style/BareBackupCard">
++        <RadioButton
++            android:id="@+id/bare_direct_mode_setup_radio"
++            style="@style/BareBackupCardRadio" />
++        <LinearLayout style="@style/BareBackupCardText">
++            <TextView
++                style="@style/BareBackupCardTitle"
++                android:text="@string/bare_direct_mode_setup" />
++            <TextView
++                style="@style/BareBackupCardBody"
++                android:text="@string/bare_direct_mode_setup_summary" />
++        </LinearLayout>
++    </LinearLayout>
++
++    <LinearLayout
++        android:id="@+id/bare_direct_mode_copy"
++        style="@style/BareBackupCard"
++        android:layout_marginTop="12dp">
++        <RadioButton
++            android:id="@+id/bare_direct_mode_copy_radio"
++            style="@style/BareBackupCardRadio" />
++        <LinearLayout style="@style/BareBackupCardText">
++            <TextView
++                style="@style/BareBackupCardTitle"
++                android:text="@string/bare_direct_mode_copy" />
++            <TextView
++                style="@style/BareBackupCardBody"
++                android:text="@string/bare_direct_mode_copy_summary" />
++        </LinearLayout>
++    </LinearLayout>
++
++    <LinearLayout
++        android:id="@+id/bare_direct_mode_move"
++        style="@style/BareBackupCard"
++        android:layout_marginTop="12dp">
++        <RadioButton
++            android:id="@+id/bare_direct_mode_move_radio"
++            style="@style/BareBackupCardRadio" />
++        <LinearLayout style="@style/BareBackupCardText">
++            <TextView
++                style="@style/BareBackupCardTitle"
++                android:text="@string/bare_direct_mode_move" />
++            <TextView
++                style="@style/BareBackupCardBody"
++                android:text="@string/bare_direct_mode_move_summary" />
++        </LinearLayout>
++    </LinearLayout>
++</LinearLayout>
+diff --git a/chrome/android/java/res/values/bare_backup_strings.xml b/chrome/android/java/res/values/bare_backup_strings.xml
+index 8a6fe0eb93b..a85489d1fd1 100644
+--- a/chrome/android/java/res/values/bare_backup_strings.xml
++++ b/chrome/android/java/res/values/bare_backup_strings.xml
+@@ -103,4 +103,56 @@
+     <string name="bare_backup_report_stopped" translatable="false">The restore stopped at %1$s. What came before it was restored; running the restore again is safe.</string>
+     <string name="bare_backup_report_restart" translatable="false">Some restored settings take effect after a restart.</string>
+     <string name="bare_backup_done" translatable="false">Done</string>
++
++    <!-- Phone to phone. -->
++    <string name="bare_direct_send" translatable="false">Send to another device</string>
++    <string name="bare_direct_send_summary" translatable="false">Phone or tablet nearby</string>
++    <string name="bare_direct_receive" translatable="false">Receive from another device</string>
++    <string name="bare_direct_receive_summary" translatable="false">Get a setup from another phone</string>
++    <string name="bare_direct_mode_setup" translatable="false">Share my setup</string>
++    <string name="bare_direct_mode_setup_summary" translatable="false">Settings and extensions. No personal data.</string>
++    <string name="bare_direct_mode_copy" translatable="false">Copy everything</string>
++    <string name="bare_direct_mode_copy_summary" translatable="false">Setup, bookmarks and site settings. This phone keeps its own.</string>
++    <string name="bare_direct_mode_move" translatable="false">Move everything</string>
++    <string name="bare_direct_mode_move_summary" translatable="false">Copies everything, then offers to erase Bare on this phone.</string>
++    <string name="bare_direct_find" translatable="false">Find the other phone</string>
++    <string name="bare_direct_looking" translatable="false">Looking for phones nearby…</string>
++    <string name="bare_direct_looking_body" translatable="false">On the other phone, open Bare and choose Receive from another device. Keep both phones close. Nothing goes online.</string>
++    <string name="bare_direct_tap_to_connect" translatable="false">Tap to connect</string>
++    <string name="bare_direct_waiting" translatable="false">Waiting for the other phone</string>
++    <string name="bare_direct_waiting_body" translatable="false">On the other phone, open Bare and choose Send to another device. Keep both phones close. Nothing goes online.</string>
++    <string name="bare_direct_this_phone" translatable="false">This phone: %1$s</string>
++    <string name="bare_direct_the_other_phone" translatable="false">the other phone</string>
++    <string name="bare_direct_connecting" translatable="false">Connecting to %1$s…</string>
++    <string name="bare_direct_accept_hint" translatable="false">If Android asks to accept a connection, accept it.</string>
++    <string name="bare_direct_code_title" translatable="false">Check the code</string>
++    <string name="bare_direct_code_message" translatable="false">Make sure %1$s shows the same code.</string>
++    <string name="bare_direct_code_matches" translatable="false">It matches</string>
++    <string name="bare_direct_code_differs" translatable="false">It doesn\'t match</string>
++    <string name="bare_direct_waiting_confirm" translatable="false">Waiting for %1$s to confirm…</string>
++    <string name="bare_direct_connected" translatable="false">Connected to %1$s</string>
++    <string name="bare_direct_both_confirmed" translatable="false">Both phones confirmed the code.</string>
++    <string name="bare_direct_nothing_sent" translatable="false">Nothing was sent.</string>
++    <string name="bare_direct_try_again" translatable="false">Try again</string>
++    <string name="bare_direct_stopped" translatable="false">The transfer was stopped.</string>
++    <string name="bare_direct_lost" translatable="false">The connection was lost.</string>
++    <string name="bare_direct_not_confirmed" translatable="false">The other phone didn\'t confirm the code.</string>
++    <string name="bare_direct_security" translatable="false">Something interfered with the connection.</string>
++    <string name="bare_direct_timeout" translatable="false">Nothing happened for 10 minutes, so the transfer was stopped.</string>
++    <string name="bare_direct_couldnt_start" translatable="false">Bare couldn\'t start Wi-Fi Direct. Turn Wi-Fi off and on, then try again.</string>
++    <string name="bare_direct_unsupported" translatable="false">This phone doesn\'t support Wi-Fi Direct.</string>
++    <string name="bare_direct_wifi_off" translatable="false">Turn on Wi-Fi to find nearby phones. You don\'t need to join a network.</string>
++    <string name="bare_direct_location_off" translatable="false">Turn on Location so Android can find nearby phones. Bare doesn\'t use your location.</string>
++    <string name="bare_direct_location_why" translatable="false">Android needs location permission to find nearby phones. Bare doesn\'t use your location.</string>
++    <string name="bare_direct_permission_denied" translatable="false">Without this permission, Bare can\'t find nearby phones.</string>
++    <string name="bare_direct_continue" translatable="false">Continue</string>
++    <string name="bare_direct_open_settings" translatable="false">Open settings</string>
++    <string name="bare_direct_notification_title" translatable="false">Bare transfer</string>
++    <string name="bare_direct_notification_text" translatable="false">Connected to a phone nearby</string>
++
++    <string name="bare_bring_over_title" translatable="false">Bring your Bare over</string>
++    <string name="bare_bring_from_phone" translatable="false">From another phone</string>
++    <string name="bare_bring_from_phone_summary" translatable="false">Keep both phones close. Nothing goes online.</string>
++    <string name="bare_bring_from_file" translatable="false">From a backup file</string>
++    <string name="bare_bring_from_file_summary" translatable="false">Open a Bare backup or setup file you saved.</string>
+ </resources>
+diff --git a/chrome/android/java/res/xml/bare_backup_preferences.xml b/chrome/android/java/res/xml/bare_backup_preferences.xml
+index 2936c78ab91..76f4a50ace7 100644
+--- a/chrome/android/java/res/xml/bare_backup_preferences.xml
++++ b/chrome/android/java/res/xml/bare_backup_preferences.xml
+@@ -3,6 +3,16 @@
+      Use of this source code is governed by a BSD-style license that can be
+      found in the LICENSE file. -->
+ <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
++    <org.chromium.components.browser_ui.settings.ChromeBasePreference
++        android:key="bare_direct_send"
++        android:title="@string/bare_direct_send"
++        android:summary="@string/bare_direct_send_summary"
++        android:fragment="org.chromium.chrome.browser.bare.backup.BareDirectSendFragment" />
++    <org.chromium.components.browser_ui.settings.ChromeBasePreference
++        android:key="bare_direct_receive"
++        android:title="@string/bare_direct_receive"
++        android:summary="@string/bare_direct_receive_summary"
++        android:fragment="org.chromium.chrome.browser.bare.backup.BareDirectReceiveFragment" />
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
+         android:key="bare_backup_create"
+         android:title="@string/bare_backup_create"
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
+index 8fdfde0b444..54883e2d7fd 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
+@@ -47,6 +47,20 @@ public final class BareBackupBridge {
+         return BareBackupBridgeJni.get().isAcceptablePassphrase(passphrase);
+     }
+ 
++    /** The sender's commitment to {@code a} and the receiver's certificate. */
++    static byte[] transferCommitment(byte[] a, byte[] cert) {
++        return BareBackupBridgeJni.get().transferCommitment(a, cert);
++    }
++
++    static boolean verifyTransferCommitment(byte[] a, byte[] cert, byte[] commitment) {
++        return BareBackupBridgeJni.get().verifyTransferCommitment(a, cert, commitment);
++    }
++
++    /** The six digits both phones show, or an empty string for bad input. */
++    static String matchingCode(byte[] a, byte[] b) {
++        return BareBackupBridgeJni.get().matchingCode(a, b);
++    }
++
+     /** The host of this phone's own Secure DNS server, or an empty string if it uses a built-in one. */
+     public static String customDnsHost() {
+         return BareBackupBridgeJni.get().customDnsHost();
+@@ -216,6 +230,21 @@ public final class BareBackupBridge {
+         @JniType("std::string")
+         String generateRecoveryCode();
+ 
++        @JniType("std::vector<uint8_t>")
++        byte[] transferCommitment(
++                @JniType("std::vector<uint8_t>") byte[] a,
++                @JniType("std::vector<uint8_t>") byte[] cert);
++
++        boolean verifyTransferCommitment(
++                @JniType("std::vector<uint8_t>") byte[] a,
++                @JniType("std::vector<uint8_t>") byte[] cert,
++                @JniType("std::vector<uint8_t>") byte[] commitment);
++
++        @JniType("std::string")
++        String matchingCode(
++                @JniType("std::vector<uint8_t>") byte[] a,
++                @JniType("std::vector<uint8_t>") byte[] b);
++
+         @JniType("std::string")
+         String normalizeRecoveryCode(@JniType("std::string") String typed);
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBringOverFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBringOverFragment.java
+new file mode 100644
+index 00000000000..431936610a0
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBringOverFragment.java
+@@ -0,0 +1,82 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.net.Uri;
++import android.os.Bundle;
++
++import androidx.activity.result.ActivityResultLauncher;
++import androidx.activity.result.contract.ActivityResultContracts;
++import androidx.preference.PreferenceScreen;
++
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
++import org.chromium.components.browser_ui.settings.ChromeBasePreference;
++
++/** "Bring your Bare over": the welcome's Restore or transfer. */
++public class BareBringOverFragment extends ChromeBaseSettingsFragment {
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++            ObservableSuppliers.createMonotonic();
++    private ActivityResultLauncher<String[]> mOpenDocument;
++
++    @Override
++    public void onCreate(@Nullable Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        mOpenDocument =
++                registerForActivityResult(
++                        new ActivityResultContracts.OpenDocument(), this::onFileChosen);
++    }
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        mPageTitle.set(getContext().getString(R.string.bare_bring_over_title));
++        PreferenceScreen screen = getPreferenceManager().createPreferenceScreen(getContext());
++        setPreferenceScreen(screen);
++
++        ChromeBasePreference phone = new ChromeBasePreference(getContext());
++        phone.setTitle(R.string.bare_bring_from_phone);
++        phone.setSummary(R.string.bare_bring_from_phone_summary);
++        phone.setOnPreferenceClickListener(
++                preference -> {
++                    Bundle args = new Bundle();
++                    args.putBoolean(BareDirectReceiveFragment.ARG_FROM_WELCOME, true);
++                    SettingsNavigationFactory.createSettingsNavigation()
++                            .startSettings(getContext(), BareDirectReceiveFragment.class, args);
++                    return true;
++                });
++        screen.addPreference(phone);
++
++        ChromeBasePreference file = new ChromeBasePreference(getContext());
++        file.setTitle(R.string.bare_bring_from_file);
++        file.setSummary(R.string.bare_bring_from_file_summary);
++        file.setOnPreferenceClickListener(
++                preference -> {
++                    // Android doesn't know .bare, so any type is offered.
++                    mOpenDocument.launch(new String[] {"*/*"});
++                    return true;
++                });
++        screen.addPreference(file);
++    }
++
++    private void onFileChosen(@Nullable Uri uri) {
++        if (uri == null || getContext() == null) return;
++        BareBackupRestoreFragment.openFile(getContext(), uri, /* fromWelcome= */ true);
++    }
++
++    @Override
++    public MonotonicObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectFragment.java
+new file mode 100644
+index 00000000000..7aa18950a91
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectFragment.java
+@@ -0,0 +1,207 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.app.AlertDialog;
++import android.content.Context;
++import android.graphics.Typeface;
++import android.os.Bundle;
++import android.util.TypedValue;
++import android.view.Gravity;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
++import androidx.annotation.StringRes;
++import androidx.preference.PreferenceScreen;
++
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.components.browser_ui.settings.TextMessagePreference;
++
++/** What the Send and Receive pages share: the checks, the code dialog and failure. */
++abstract class BareDirectFragment extends ChromeBaseSettingsFragment
++        implements BareDirectSession.Observer {
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++            ObservableSuppliers.createMonotonic();
++    protected BareDirectGate mGate;
++    protected @Nullable BareDirectSession mSession;
++    private @Nullable AlertDialog mCodeDialog;
++
++    protected abstract @StringRes int title();
++
++    /** Rebuilds the page for the session's state. */
++    protected abstract void render();
++
++    @Override
++    public void onCreate(@Nullable Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        mGate = new BareDirectGate(this);
++    }
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        mPageTitle.set(getContext().getString(title()));
++        setPreferenceScreen(getPreferenceManager().createPreferenceScreen(getContext()));
++        BareDirectSession running = BareDirectSession.current();
++        if (running != null && running.isSending() == isSending()) attach(running);
++    }
++
++    protected abstract boolean isSending();
++
++    protected void attach(BareDirectSession session) {
++        if (mSession != null) mSession.removeObserver(this);
++        mSession = session;
++        session.addObserver(this);
++        onChanged();
++    }
++
++    @Override
++    public void onChanged() {
++        if (getContext() == null) return;
++        BareDirectSession session = mSession;
++        if (session != null && session.getState() == BareDirectSession.State.CHECKING) {
++            showCode(session);
++        } else {
++            dismissCode();
++        }
++        render();
++    }
++
++    private void showCode(BareDirectSession session) {
++        if (mCodeDialog != null || session.isConfirmedHere()) return;
++        Context context = getContext();
++        String code = session.getCode();
++        TextView codeView = new TextView(context);
++        codeView.setText(code.substring(0, 3) + " " + code.substring(3));
++        codeView.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
++        codeView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 34);
++        codeView.setGravity(Gravity.CENTER);
++        codeView.setContentDescription(String.join(" ", code.split("")));
++        LinearLayout layout = BareBackupDialogs.padded(context);
++        layout.addView(codeView);
++        String other =
++                session.getPeerModel().isEmpty()
++                        ? context.getString(R.string.bare_direct_the_other_phone)
++                        : session.getPeerModel();
++        mCodeDialog =
++                BareBackupDialogs.showSecure(
++                BareBackupDialogs.builder(context)
++                        .setTitle(R.string.bare_direct_code_title)
++                        .setMessage(context.getString(R.string.bare_direct_code_message, other))
++                        .setView(layout)
++                        .setCancelable(false)
++                        .setNegativeButton(
++                                R.string.bare_direct_code_differs,
++                                (d, w) -> {
++                                    mCodeDialog = null;
++                                    session.cancel();
++                                })
++                        .setPositiveButton(
++                                R.string.bare_direct_code_matches,
++                                (d, w) -> {
++                                    mCodeDialog = null;
++                                    session.confirmCode();
++                                })
++                        .create());
++    }
++
++    private void dismissCode() {
++        if (mCodeDialog == null) return;
++        mCodeDialog.dismiss();
++        mCodeDialog = null;
++    }
++
++    // Rows.
++
++    protected PreferenceScreen clear() {
++        PreferenceScreen screen = getPreferenceManager().createPreferenceScreen(getContext());
++        setPreferenceScreen(screen);
++        return screen;
++    }
++
++    protected void heading(
++            PreferenceScreen screen, CharSequence title, @Nullable CharSequence body) {
++        TextMessagePreference row = new TextMessagePreference(getContext(), null);
++        row.setTitle(title);
++        if (body != null) row.setSummary(body);
++        screen.addPreference(row);
++    }
++
++    protected void button(PreferenceScreen screen, @StringRes int title, Runnable onClick) {
++        BareBackupButtonPreference button = new BareBackupButtonPreference(getContext());
++        button.setTitle(title);
++        button.setOnClick(onClick);
++        screen.addPreference(button);
++    }
++
++    /** The row for the states both sides share. False if the state is one the page draws. */
++    protected boolean renderShared(PreferenceScreen screen, Runnable tryAgain) {
++        BareDirectSession session = mSession;
++        if (session == null) return false;
++        Context context = getContext();
++        String other =
++                session.getPeerModel().isEmpty()
++                        ? context.getString(R.string.bare_direct_the_other_phone)
++                        : session.getPeerModel();
++        switch (session.getState()) {
++            case BareDirectSession.State.CONNECTING:
++                heading(
++                        screen,
++                        context.getString(R.string.bare_direct_connecting, other),
++                        context.getString(R.string.bare_direct_accept_hint));
++                return true;
++            case BareDirectSession.State.CHECKING:
++                heading(
++                        screen,
++                        context.getString(R.string.bare_direct_code_title),
++                        session.isConfirmedHere()
++                                ? context.getString(R.string.bare_direct_waiting_confirm, other)
++                                : null);
++                return true;
++            case BareDirectSession.State.CONFIRMED:
++                heading(
++                        screen,
++                        context.getString(R.string.bare_direct_connected, other),
++                        context.getString(R.string.bare_direct_both_confirmed));
++                return true;
++            case BareDirectSession.State.FAILED:
++                int error = session.getError();
++                heading(
++                        screen,
++                        context.getString(error == 0 ? R.string.bare_direct_stopped : error),
++                        context.getString(R.string.bare_direct_nothing_sent));
++                button(screen, R.string.bare_direct_try_again, tryAgain);
++                return true;
++            default:
++                return false;
++        }
++    }
++
++    @Override
++    public void onDestroy() {
++        dismissCode();
++        BareDirectSession session = mSession;
++        if (session != null) {
++            session.removeObserver(this);
++            // Leaving the page ends the transfer; a rotation doesn't.
++            if (getActivity() == null || getActivity().isFinishing()) session.cancel();
++        }
++        super.onDestroy();
++    }
++
++    @Override
++    public MonotonicObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectGate.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectGate.java
+new file mode 100644
+index 00000000000..21f2e019ffa
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectGate.java
+@@ -0,0 +1,138 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.Manifest;
++import android.content.Context;
++import android.content.Intent;
++import android.content.pm.PackageManager;
++import android.location.LocationManager;
++import android.net.wifi.WifiManager;
++import android.os.Build;
++import android.provider.Settings;
++
++import androidx.activity.result.ActivityResultLauncher;
++import androidx.activity.result.contract.ActivityResultContracts;
++import androidx.annotation.StringRes;
++import androidx.core.content.ContextCompat;
++import androidx.fragment.app.Fragment;
++
++import org.chromium.base.Callback;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++
++import java.util.Map;
++
++/**
++ * What a phone needs before it can look for, or be found by, another phone: Wi-Fi Direct, Wi-Fi
++ * turned on, and Android's permission for nearby devices. On Android 10 to 12 that permission is
++ * location, and Location must be on as well. Nothing is asked until Send or Receive is tapped.
++ */
++final class BareDirectGate {
++    private final Fragment mFragment;
++    private final ActivityResultLauncher<String[]> mAsk;
++    private @Nullable Runnable mThen;
++    private @Nullable Callback<Integer> mBlocked;
++
++    /** Call from the fragment's onCreate. */
++    BareDirectGate(Fragment fragment) {
++        mFragment = fragment;
++        mAsk =
++                fragment.registerForActivityResult(
++                        new ActivityResultContracts.RequestMultiplePermissions(), this::onAnswer);
++    }
++
++    /**
++     * Runs {@code then} once everything is in place. Otherwise explains what's missing, offers
++     * Android's page for it, and passes the reason to {@code blocked}.
++     */
++    void check(Runnable then, Callback<Integer> blocked) {
++        Context context = mFragment.getContext();
++        if (context == null) return;
++        mThen = then;
++        mBlocked = blocked;
++        if (!context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI_DIRECT)) {
++            block(R.string.bare_direct_unsupported, null);
++            return;
++        }
++        WifiManager wifi = context.getSystemService(WifiManager.class);
++        if (wifi == null || !wifi.isWifiEnabled()) {
++            block(R.string.bare_direct_wifi_off, new Intent(Settings.Panel.ACTION_WIFI));
++            return;
++        }
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
++            LocationManager location = context.getSystemService(LocationManager.class);
++            if (location == null || !location.isLocationEnabled()) {
++                block(
++                        R.string.bare_direct_location_off,
++                        new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS));
++                return;
++            }
++        }
++        String permission = permission();
++        if (ContextCompat.checkSelfPermission(context, permission)
++                == PackageManager.PERMISSION_GRANTED) {
++            run();
++            return;
++        }
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
++            // Android's own prompt says "location", which needs saying why first.
++            BareBackupDialogs.builder(context)
++                    .setMessage(R.string.bare_direct_location_why)
++                    .setNegativeButton(
++                            android.R.string.cancel,
++                            (d, w) -> blocked(R.string.bare_direct_permission_denied))
++                    .setPositiveButton(
++                            R.string.bare_direct_continue,
++                            (d, w) -> mAsk.launch(new String[] {permission}))
++                    .setCancelable(false)
++                    .show();
++            return;
++        }
++        mAsk.launch(new String[] {permission});
++    }
++
++    private static String permission() {
++        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
++                ? Manifest.permission.NEARBY_WIFI_DEVICES
++                : Manifest.permission.ACCESS_FINE_LOCATION;
++    }
++
++    private void onAnswer(Map<String, Boolean> granted) {
++        if (Boolean.TRUE.equals(granted.get(permission()))) {
++            run();
++        } else {
++            blocked(R.string.bare_direct_permission_denied);
++        }
++    }
++
++    private void run() {
++        Runnable then = mThen;
++        mThen = null;
++        if (then != null) then.run();
++    }
++
++    private void block(@StringRes int reason, @Nullable Intent settings) {
++        Context context = mFragment.getContext();
++        if (context == null) return;
++        if (settings == null) {
++            BareBackupDialogs.message(context, reason);
++        } else {
++            BareBackupDialogs.builder(context)
++                    .setMessage(reason)
++                    .setNegativeButton(android.R.string.cancel, null)
++                    .setPositiveButton(
++                            R.string.bare_direct_open_settings,
++                            (d, w) -> mFragment.startActivity(settings))
++                    .show();
++        }
++        blocked(reason);
++    }
++
++    private void blocked(@StringRes int reason) {
++        Callback<Integer> blocked = mBlocked;
++        if (blocked != null) blocked.onResult(reason);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectModePreference.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectModePreference.java
+new file mode 100644
+index 00000000000..7d34766a70f
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectModePreference.java
+@@ -0,0 +1,57 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.content.Context;
++import android.util.AttributeSet;
++import android.widget.RadioButton;
++
++import androidx.preference.Preference;
++import androidx.preference.PreferenceViewHolder;
++
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++
++/** The three option cards on the Send page: Share my setup, Copy everything, Move everything. */
++public class BareDirectModePreference extends Preference {
++    private static final int[] CARDS = {
++        R.id.bare_direct_mode_setup, R.id.bare_direct_mode_copy, R.id.bare_direct_mode_move
++    };
++    private static final int[] RADIOS = {
++        R.id.bare_direct_mode_setup_radio,
++        R.id.bare_direct_mode_copy_radio,
++        R.id.bare_direct_mode_move_radio
++    };
++
++    private @BareDirectSession.Mode int mMode = BareDirectSession.Mode.SETUP;
++
++    public BareDirectModePreference(Context context, @Nullable AttributeSet attrs) {
++        super(context, attrs);
++        setLayoutResource(R.layout.bare_direct_modes);
++        setSelectable(false);
++    }
++
++    @BareDirectSession.Mode
++    int getMode() {
++        return mMode;
++    }
++
++    @Override
++    public void onBindViewHolder(PreferenceViewHolder holder) {
++        super.onBindViewHolder(holder);
++        for (int i = 0; i < CARDS.length; i++) {
++            int mode = i;
++            RadioButton radio = (RadioButton) holder.findViewById(RADIOS[i]);
++            radio.setChecked(mMode == mode);
++            radio.setOnClickListener(v -> choose(mode));
++            holder.findViewById(CARDS[i]).setOnClickListener(v -> choose(mode));
++        }
++    }
++
++    private void choose(int mode) {
++        mMode = mode;
++        notifyChanged();
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectReceiveFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectReceiveFragment.java
+new file mode 100644
+index 00000000000..19bcaa60294
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectReceiveFragment.java
+@@ -0,0 +1,72 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.content.Context;
++
++import androidx.preference.PreferenceScreen;
++
++import org.chromium.chrome.R;
++
++/**
++ * Settings > Backup and transfer > Receive from another device, and the welcome's "From another
++ * phone".
++ */
++public class BareDirectReceiveFragment extends BareDirectFragment {
++    /** Set when opened from the welcome, which the restore then completes. */
++    public static final String ARG_FROM_WELCOME = "from_welcome";
++
++    private boolean mStarted;
++
++    @Override
++    protected int title() {
++        return R.string.bare_direct_receive;
++    }
++
++    @Override
++    protected boolean isSending() {
++        return false;
++    }
++
++    boolean fromWelcome() {
++        return getArguments() != null && getArguments().getBoolean(ARG_FROM_WELCOME);
++    }
++
++    @Override
++    public void onStart() {
++        super.onStart();
++        if (mStarted || mSession != null) return;
++        mStarted = true;
++        begin();
++    }
++
++    private void begin() {
++        mGate.check(
++                () -> attach(BareDirectSession.start(/* sending= */ false)),
++                reason -> showBlocked(reason));
++    }
++
++    private void showBlocked(int reason) {
++        if (getContext() == null) return;
++        PreferenceScreen screen = clear();
++        heading(screen, getContext().getString(reason), null);
++        button(screen, R.string.bare_direct_try_again, this::begin);
++    }
++
++    @Override
++    protected void render() {
++        Context context = getContext();
++        PreferenceScreen screen = clear();
++        if (renderShared(screen, this::begin)) return;
++        heading(
++                screen,
++                context.getString(R.string.bare_direct_waiting),
++                context.getString(R.string.bare_direct_waiting_body));
++        heading(
++                screen,
++                context.getString(R.string.bare_direct_this_phone, BareDirectSession.thisModel()),
++                null);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSendFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSendFragment.java
+new file mode 100644
+index 00000000000..79a37052994
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSendFragment.java
+@@ -0,0 +1,109 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.content.Context;
++import android.os.Bundle;
++
++import androidx.preference.Preference;
++import androidx.preference.PreferenceScreen;
++
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.components.browser_ui.settings.ChromeBasePreference;
++
++import java.util.List;
++
++/** Settings > Backup and transfer > Send to another device. */
++public class BareDirectSendFragment extends BareDirectFragment {
++    private BareScreenLock mScreenLock;
++    private BareDirectModePreference mModes;
++
++    @Override
++    public void onCreate(@Nullable Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        mScreenLock = new BareScreenLock(this);
++    }
++
++    @Override
++    protected int title() {
++        return R.string.bare_direct_send;
++    }
++
++    @Override
++    protected boolean isSending() {
++        return true;
++    }
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        super.onCreatePreferences(savedInstanceState, rootKey);
++        if (mSession == null) choose();
++    }
++
++    /** The mode cards and the button. */
++    private void choose() {
++        PreferenceScreen screen = clear();
++        if (mModes == null) mModes = new BareDirectModePreference(getContext(), null);
++        screen.addPreference(mModes);
++        button(screen, R.string.bare_direct_find, this::find);
++    }
++
++    private void find() {
++        int mode = mModes.getMode();
++        Runnable search =
++                () ->
++                        mGate.check(
++                                () -> {
++                                    BareDirectSession session =
++                                            BareDirectSession.start(/* sending= */ true);
++                                    session.setMode(mode);
++                                    attach(session);
++                                },
++                                reason -> {});
++        if (mode == BareDirectSession.Mode.SETUP || !BareScreenLock.isSet(getContext())) {
++            search.run();
++            return;
++        }
++        mScreenLock.confirm(
++                ok -> {
++                    if (ok && getContext() != null) search.run();
++                });
++    }
++
++    @Override
++    protected void render() {
++        Context context = getContext();
++        PreferenceScreen screen = clear();
++        if (renderShared(screen, this::again)) return;
++        BareDirectSession session = mSession;
++        if (session == null) {
++            choose();
++            return;
++        }
++        heading(
++                screen,
++                context.getString(R.string.bare_direct_looking),
++                context.getString(R.string.bare_direct_looking_body));
++        List<BareDirectSession.Peer> peers = session.getPeers();
++        for (BareDirectSession.Peer peer : peers) {
++            Preference row = new ChromeBasePreference(context);
++            row.setTitle(peer.model);
++            row.setSummary(R.string.bare_direct_tap_to_connect);
++            row.setOnPreferenceClickListener(
++                    preference -> {
++                        session.connect(peer);
++                        return true;
++                    });
++            screen.addPreference(row);
++        }
++    }
++
++    private void again() {
++        if (mSession != null) mSession.removeObserver(this);
++        mSession = null;
++        choose();
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectService.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectService.java
+new file mode 100644
+index 00000000000..69b8f10ecc0
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectService.java
+@@ -0,0 +1,21 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import org.chromium.base.SplitCompatService;
++import org.chromium.build.annotations.IdentifierNameString;
++import org.chromium.build.annotations.NullMarked;
++
++/** Keeps Bare running while a phone-to-phone transfer is under way. Loads the Impl. */
++@NullMarked
++public class BareDirectService extends SplitCompatService {
++    @SuppressWarnings("FieldCanBeFinal") // @IdentifierNameString requires non-final
++    private static @IdentifierNameString String sImplClassName =
++            "org.chromium.chrome.browser.bare.backup.BareDirectServiceImpl";
++
++    public BareDirectService() {
++        super(sImplClassName);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectServiceImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectServiceImpl.java
+new file mode 100644
+index 00000000000..9c47844898e
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectServiceImpl.java
+@@ -0,0 +1,89 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.app.Notification;
++import android.content.Context;
++import android.content.Intent;
++import android.content.pm.ServiceInfo;
++import android.os.IBinder;
++
++import androidx.core.app.ServiceCompat;
++
++import org.chromium.base.SplitCompatService;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.notifications.NotificationUmaTracker;
++import org.chromium.chrome.browser.notifications.NotificationWrapperBuilderFactory;
++import org.chromium.chrome.browser.notifications.channels.ChromeChannelDefinitions;
++import org.chromium.components.browser_ui.notifications.ForegroundServiceUtils;
++import org.chromium.components.browser_ui.notifications.NotificationMetadata;
++
++/**
++ * The foreground service for a phone-to-phone transfer. It only holds Bare in the foreground with
++ * an ongoing notification; {@link BareDirectSession} does the work.
++ */
++public class BareDirectServiceImpl extends SplitCompatService.Impl {
++    private static final String NOTIFICATION_TAG = "bare_direct";
++    private static final int NOTIFICATION_ID = 0x62646972;
++
++    private static boolean sRunning;
++
++    static void begin(Context context) {
++        if (sRunning) return;
++        sRunning = true;
++        ForegroundServiceUtils.getInstance()
++                .startForegroundService(new Intent(context, BareDirectService.class));
++    }
++
++    static void end(Context context) {
++        if (!sRunning) return;
++        sRunning = false;
++        context.stopService(new Intent(context, BareDirectService.class));
++    }
++
++    @Override
++    public int onStartCommand(@Nullable Intent intent, int flags, int startId) {
++        if (!sRunning) {
++            getService().stopSelf();
++            return android.app.Service.START_NOT_STICKY;
++        }
++        ForegroundServiceUtils.getInstance()
++                .startForeground(
++                        getService(),
++                        NOTIFICATION_ID,
++                        notification(getService()),
++                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
++        // A transfer can't be picked up again after Android ends it.
++        return android.app.Service.START_NOT_STICKY;
++    }
++
++    @Override
++    public void onDestroy() {
++        ForegroundServiceUtils.getInstance()
++                .stopForeground(getService(), ServiceCompat.STOP_FOREGROUND_REMOVE);
++        super.onDestroy();
++    }
++
++    @Override
++    public @Nullable IBinder onBind(Intent intent) {
++        return null;
++    }
++
++    private static Notification notification(Context context) {
++        return NotificationWrapperBuilderFactory.createNotificationWrapperBuilder(
++                        ChromeChannelDefinitions.ChannelId.BROWSER,
++                        new NotificationMetadata(
++                                NotificationUmaTracker.SystemNotificationType.UNKNOWN,
++                                NOTIFICATION_TAG,
++                                NOTIFICATION_ID))
++                .setSmallIcon(R.drawable.ic_archive)
++                .setOngoing(true)
++                .setLocalOnly(true)
++                .setContentTitle(context.getString(R.string.bare_direct_notification_title))
++                .setContentText(context.getString(R.string.bare_direct_notification_text))
++                .build();
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSession.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSession.java
+new file mode 100644
+index 00000000000..90772659929
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSession.java
+@@ -0,0 +1,742 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.annotation.SuppressLint;
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++import android.content.IntentFilter;
++import android.net.wifi.WpsInfo;
++import android.net.wifi.p2p.WifiP2pConfig;
++import android.net.wifi.p2p.WifiP2pDevice;
++import android.net.wifi.p2p.WifiP2pInfo;
++import android.net.wifi.p2p.WifiP2pManager;
++import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceInfo;
++import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceRequest;
++import android.os.Build;
++import android.os.Handler;
++import android.os.Looper;
++
++import androidx.annotation.IntDef;
++import androidx.annotation.StringRes;
++
++import org.chromium.base.ContextUtils;
++import org.chromium.base.ObserverList;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import java.io.Closeable;
++import java.io.DataInputStream;
++import java.io.DataOutputStream;
++import java.io.IOException;
++import java.lang.annotation.Retention;
++import java.lang.annotation.RetentionPolicy;
++import java.net.InetAddress;
++import java.net.InetSocketAddress;
++import java.net.ServerSocket;
++import java.net.Socket;
++import java.nio.charset.StandardCharsets;
++import java.security.GeneralSecurityException;
++import java.security.SecureRandom;
++import java.util.ArrayList;
++import java.util.HashMap;
++import java.util.LinkedHashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++
++/**
++ * One phone-to-phone transfer, from either side, up to both people confirming the matching code.
++ * It outlives the page that started it, so a rotation or a trip to the notification shade doesn't
++ * break the connection.
++ *
++ * <p>The receiver advertises a Wi-Fi Direct service. The sender finds it and connects, which makes
++ * Android ask on the receiver. Whichever phone Android makes group owner listens on {@link #PORT};
++ * the other connects to it. TLS runs over that connection with the receiver as server.
++ */
++public final class BareDirectSession {
++    private static final String SERVICE_TYPE = "_baredirect._tcp";
++    private static final String PROTOCOL_VERSION = "1";
++    static final int PORT = 51747;
++
++    private static final int CONNECT_TIMEOUT_MS = 10_000;
++    private static final int CONNECT_ATTEMPTS = 6;
++    private static final long REDISCOVER_MS = 20_000;
++    private static final long GIVE_UP_MS = 10 * 60 * 1000;
++
++    // Frame types. Each frame is a type byte, a 4-byte big-endian length and the payload.
++    static final int FRAME_HELLO = 1;
++    static final int FRAME_HELLO_BACK = 2;
++    static final int FRAME_REVEAL = 3;
++    static final int FRAME_CONFIRM = 4;
++    static final int FRAME_CANCEL = 5;
++    private static final int MAX_CONTROL_FRAME = 16 * 1024;
++
++    @IntDef({
++        State.STARTING,
++        State.WAITING,
++        State.LOOKING,
++        State.CONNECTING,
++        State.CHECKING,
++        State.CONFIRMED,
++        State.FAILED
++    })
++    @Retention(RetentionPolicy.SOURCE)
++    @interface State {
++        int STARTING = 0;
++        // The receiver is advertising.
++        int WAITING = 1;
++        // The sender is listing receivers.
++        int LOOKING = 2;
++        int CONNECTING = 3;
++        // Both phones show the code.
++        int CHECKING = 4;
++        int CONFIRMED = 5;
++        int FAILED = 6;
++    }
++
++    /** What the sender chose to send. */
++    @IntDef({Mode.SETUP, Mode.COPY, Mode.MOVE})
++    @Retention(RetentionPolicy.SOURCE)
++    @interface Mode {
++        int SETUP = 0;
++        int COPY = 1;
++        int MOVE = 2;
++    }
++
++    /** A receiver the sender has found. */
++    static final class Peer {
++        final String address;
++        final String model;
++
++        Peer(String address, String model) {
++            this.address = address;
++            this.model = model;
++        }
++    }
++
++    interface Observer {
++        void onChanged();
++    }
++
++    private static @Nullable BareDirectSession sCurrent;
++
++    private final boolean mSending;
++    private final Context mContext;
++    private final Handler mHandler = new Handler(Looper.getMainLooper());
++    private final ObserverList<Observer> mObservers = new ObserverList<>();
++    private final ExecutorService mIo = Executors.newSingleThreadExecutor();
++    private final ExecutorService mWriter = Executors.newSingleThreadExecutor();
++    private final Map<String, Peer> mPeers = new LinkedHashMap<>();
++    private final SecureRandom mRandom = new SecureRandom();
++
++    private @Nullable WifiP2pManager mManager;
++    private WifiP2pManager.@Nullable Channel mChannel;
++    private @Nullable BroadcastReceiver mReceiver;
++
++    private @State int mState = State.STARTING;
++    private @Mode int mMode = Mode.SETUP;
++    private @StringRes int mError;
++    private String mPeerModel = "";
++    private String mCode = "";
++    // Read on the IO thread to refuse frames that came too early.
++    private volatile boolean mConfirmedHere;
++    private volatile boolean mAcceptedHere;
++    private boolean mConfirmedThere;
++    private boolean mLinking;
++    private boolean mEnded;
++
++    private BareDirectTls.@Nullable Identity mIdentity;
++    private @Nullable ServerSocket mServer;
++    private @Nullable Socket mSocket;
++    private @Nullable DataOutputStream mOut;
++
++    private final Runnable mGiveUp = () -> fail(R.string.bare_direct_timeout);
++    private final Runnable mRediscover = this::rediscover;
++
++    private BareDirectSession(Context context, boolean sending) {
++        mContext = context;
++        mSending = sending;
++    }
++
++    /** The transfer under way, if any. */
++    static @Nullable BareDirectSession current() {
++        return sCurrent;
++    }
++
++    /** Ends any earlier transfer and starts a new one. */
++    static BareDirectSession start(boolean sending) {
++        if (sCurrent != null) sCurrent.cancel();
++        BareDirectSession session =
++                new BareDirectSession(ContextUtils.getApplicationContext(), sending);
++        sCurrent = session;
++        session.begin();
++        return session;
++    }
++
++    void addObserver(Observer observer) {
++        mObservers.addObserver(observer);
++    }
++
++    void removeObserver(Observer observer) {
++        mObservers.removeObserver(observer);
++    }
++
++    boolean isSending() {
++        return mSending;
++    }
++
++    void setMode(@Mode int mode) {
++        mMode = mode;
++    }
++
++    @Mode
++    int getMode() {
++        return mMode;
++    }
++
++    @State
++    int getState() {
++        return mState;
++    }
++
++    @StringRes
++    int getError() {
++        return mError;
++    }
++
++    String getPeerModel() {
++        return mPeerModel;
++    }
++
++    String getCode() {
++        return mCode;
++    }
++
++    boolean isConfirmedHere() {
++        return mConfirmedHere;
++    }
++
++    List<Peer> getPeers() {
++        return new ArrayList<>(mPeers.values());
++    }
++
++    /** This phone's name as the other phone sees it. */
++    static String thisModel() {
++        return Build.MODEL;
++    }
++
++    // ---------------------------------------------------------------------------------------
++    // Wi-Fi Direct.
++
++    @SuppressLint("MissingPermission") // The pages ask before starting a session.
++    private void begin() {
++        mManager = (WifiP2pManager) mContext.getSystemService(Context.WIFI_P2P_SERVICE);
++        if (mManager == null) {
++            fail(R.string.bare_direct_unsupported);
++            return;
++        }
++        mChannel =
++                mManager.initialize(
++                        mContext, Looper.getMainLooper(), () -> fail(R.string.bare_direct_lost));
++        if (mChannel == null) {
++            fail(R.string.bare_direct_unsupported);
++            return;
++        }
++        IntentFilter filter = new IntentFilter();
++        filter.addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION);
++        filter.addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION);
++        mReceiver =
++                new BroadcastReceiver() {
++                    @Override
++                    public void onReceive(Context context, Intent intent) {
++                        onBroadcast(intent);
++                    }
++                };
++        ContextUtils.registerProtectedBroadcastReceiver(mContext, mReceiver, filter);
++        BareDirectServiceImpl.begin(mContext);
++        mHandler.postDelayed(mGiveUp, GIVE_UP_MS);
++
++        // A group left over from an earlier transfer would make this phone look busy.
++        mManager.removeGroup(
++                mChannel,
++                new Done(
++                        () -> {
++                            if (mSending) {
++                                look();
++                            } else {
++                                advertise();
++                            }
++                        }));
++    }
++
++    @SuppressLint("MissingPermission")
++    private void advertise() {
++        if (mEnded || mManager == null || mChannel == null) return;
++        Map<String, String> record = new HashMap<>();
++        record.put("v", PROTOCOL_VERSION);
++        record.put("m", thisModel());
++        WifiP2pDnsSdServiceInfo info =
++                WifiP2pDnsSdServiceInfo.newInstance("Bare", SERVICE_TYPE, record);
++        WifiP2pManager manager = mManager;
++        WifiP2pManager.Channel channel = mChannel;
++        manager.clearLocalServices(
++                channel,
++                new Done(
++                        () ->
++                                manager.addLocalService(
++                                        channel,
++                                        info,
++                                        new Step(
++                                                () -> {
++                                                    setState(State.WAITING);
++                                                    rediscover();
++                                                }))));
++    }
++
++    @SuppressLint("MissingPermission")
++    private void look() {
++        if (mEnded || mManager == null || mChannel == null) return;
++        WifiP2pManager manager = mManager;
++        WifiP2pManager.Channel channel = mChannel;
++        // A request for one service type only returns names, never the text record that
++        // carries the model, so ask for every service and pick Bare out of the answers.
++        manager.setDnsSdResponseListeners(
++                channel,
++                (instance, type, device) -> onNamed(type, device),
++                (domain, record, device) -> onFound(domain, record, device));
++        manager.clearServiceRequests(
++                channel,
++                new Done(
++                        () ->
++                                manager.addServiceRequest(
++                                        channel,
++                                        WifiP2pDnsSdServiceRequest.newInstance(),
++                                        new Step(
++                                                () -> {
++                                                    setState(State.LOOKING);
++                                                    rediscover();
++                                                }))));
++    }
++
++    /**
++     * Keeps this phone findable (receiver) or keeps looking (sender). Android stops either after
++     * a while on its own.
++     */
++    @SuppressLint("MissingPermission")
++    private void rediscover() {
++        mHandler.removeCallbacks(mRediscover);
++        if (mEnded || mManager == null || mChannel == null) return;
++        if (mState != State.WAITING && mState != State.LOOKING) return;
++        if (mSending) {
++            mManager.discoverServices(mChannel, new Done(() -> {}));
++        } else {
++            mManager.discoverPeers(mChannel, new Done(() -> {}));
++        }
++        mHandler.postDelayed(mRediscover, REDISCOVER_MS);
++    }
++
++    /** A receiver that answered with its name only, listed by device name until its record. */
++    private void onNamed(String type, WifiP2pDevice device) {
++        if (mEnded || !type.contains(SERVICE_TYPE)) return;
++        if (mPeers.containsKey(device.deviceAddress)) return;
++        mPeers.put(device.deviceAddress, new Peer(device.deviceAddress, device.deviceName));
++        notifyObservers();
++    }
++
++    private void onFound(String domain, Map<String, String> record, WifiP2pDevice device) {
++        if (mEnded || !domain.contains(SERVICE_TYPE)) return;
++        if (!PROTOCOL_VERSION.equals(record.get("v"))) return;
++        String model = record.get("m");
++        if (model == null || model.isEmpty()) model = device.deviceName;
++        mPeers.put(device.deviceAddress, new Peer(device.deviceAddress, model));
++        notifyObservers();
++    }
++
++    /** The sender picked a receiver. */
++    @SuppressLint("MissingPermission")
++    void connect(Peer peer) {
++        if (mEnded || !mSending || mState != State.LOOKING) return;
++        if (mManager == null || mChannel == null) return;
++        mPeerModel = peer.model;
++        setState(State.CONNECTING);
++        WifiP2pConfig config = new WifiP2pConfig();
++        config.deviceAddress = peer.address;
++        config.wps.setup = WpsInfo.PBC;
++        // Lets the receiver be group owner where Android agrees.
++        config.groupOwnerIntent = 0;
++        mManager.connect(mChannel, config, new Step(() -> {}));
++    }
++
++    private void onBroadcast(Intent intent) {
++        if (mEnded || mManager == null || mChannel == null) return;
++        String action = intent.getAction();
++        if (WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION.equals(action)) {
++            int p2p = intent.getIntExtra(WifiP2pManager.EXTRA_WIFI_STATE, -1);
++            if (p2p == WifiP2pManager.WIFI_P2P_STATE_DISABLED) fail(R.string.bare_direct_wifi_off);
++            return;
++        }
++        if (WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION.equals(action)) {
++            mManager.requestConnectionInfo(mChannel, this::onConnectionInfo);
++        }
++    }
++
++    private void onConnectionInfo(@Nullable WifiP2pInfo info) {
++        if (mEnded || info == null) return;
++        if (!info.groupFormed) {
++            // The group went away after the link was up: the other phone left or moved off.
++            if (mLinking) fail(R.string.bare_direct_lost);
++            return;
++        }
++        if (mLinking || info.groupOwnerAddress == null) return;
++        mLinking = true;
++        if (!mSending) setState(State.CONNECTING);
++        InetAddress owner = info.groupOwnerAddress;
++        boolean listen = info.isGroupOwner;
++        mIo.execute(() -> link(owner, listen));
++    }
++
++    // ---------------------------------------------------------------------------------------
++    // The connection, on the IO thread.
++
++    private void link(InetAddress owner, boolean listen) {
++        try {
++            Socket plain = listen ? accept(owner) : dial(owner);
++            plain.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
++            Socket tls;
++            byte[] receiverCertificate;
++            if (mSending) {
++                BareDirectTls.Pinning pinning = new BareDirectTls.Pinning();
++                tls = pinning.connect(plain);
++                receiverCertificate = pinning.seen();
++                if (receiverCertificate == null) throw new IOException("no certificate");
++            } else {
++                BareDirectTls.Identity identity = BareDirectTls.Identity.create();
++                mIdentity = identity;
++                tls = identity.serve(plain);
++                receiverCertificate = identity.certificateBytes();
++            }
++            mSocket = tls;
++            DataInputStream in = new DataInputStream(tls.getInputStream());
++            DataOutputStream out = new DataOutputStream(tls.getOutputStream());
++            mOut = out;
++            tls.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
++            String code = mSending ? pairAsSender(in, out, receiverCertificate)
++                    : pairAsReceiver(in, out, receiverCertificate);
++            if (code.isEmpty()) throw new SecurityException("bad code");
++            // From here the phones wait for people, and for the package itself, which can be
++            // large. The give-up timers cover those waits.
++            tls.setSoTimeout(0);
++            mHandler.post(
++                    () -> {
++                        mCode = code;
++                        setState(State.CHECKING);
++                    });
++            awaitConfirmation(in);
++        } catch (SecurityException e) {
++            mHandler.post(() -> fail(R.string.bare_direct_security));
++        } catch (IOException | GeneralSecurityException | JSONException e) {
++            mHandler.post(() -> fail(R.string.bare_direct_lost));
++        }
++    }
++
++    private Socket accept(InetAddress owner) throws IOException {
++        ServerSocket server = new ServerSocket();
++        mServer = server;
++        server.setReuseAddress(true);
++        server.bind(new InetSocketAddress(owner, PORT));
++        server.setSoTimeout(CONNECT_TIMEOUT_MS * CONNECT_ATTEMPTS);
++        try {
++            return server.accept();
++        } finally {
++            server.close();
++            mServer = null;
++        }
++    }
++
++    private Socket dial(InetAddress owner) throws IOException {
++        IOException last = new IOException("no attempt");
++        for (int i = 0; i < CONNECT_ATTEMPTS && !mEnded; i++) {
++            Socket socket = new Socket();
++            try {
++                socket.connect(new InetSocketAddress(owner, PORT), CONNECT_TIMEOUT_MS);
++                return socket;
++            } catch (IOException e) {
++                last = e;
++                socket.close();
++                // The group owner may not be listening yet.
++                try {
++                    Thread.sleep(1000);
++                } catch (InterruptedException interrupted) {
++                    throw new IOException(interrupted);
++                }
++            }
++        }
++        throw last;
++    }
++
++    private String pairAsSender(DataInputStream in, DataOutputStream out, byte[] certificate)
++            throws IOException, JSONException {
++        byte[] a = randomNonce();
++        JSONObject hello = new JSONObject();
++        hello.put("v", PROTOCOL_VERSION);
++        hello.put("model", thisModel());
++        hello.put("commit", hex(BareBackupBridge.transferCommitment(a, certificate)));
++        write(out, FRAME_HELLO, hello);
++
++        JSONObject back = read(in, FRAME_HELLO_BACK);
++        if (!PROTOCOL_VERSION.equals(back.optString("v"))) throw new IOException("version");
++        byte[] b = unhex(back.optString("b"));
++        String model = back.optString("model");
++        mHandler.post(() -> mPeerModel = model.isEmpty() ? mPeerModel : model);
++
++        JSONObject reveal = new JSONObject();
++        reveal.put("a", hex(a));
++        write(out, FRAME_REVEAL, reveal);
++        return BareBackupBridge.matchingCode(a, b);
++    }
++
++    private String pairAsReceiver(DataInputStream in, DataOutputStream out, byte[] certificate)
++            throws IOException, JSONException {
++        JSONObject hello = read(in, FRAME_HELLO);
++        if (!PROTOCOL_VERSION.equals(hello.optString("v"))) throw new IOException("version");
++        byte[] commitment = unhex(hello.optString("commit"));
++        String model = hello.optString("model");
++        mHandler.post(() -> mPeerModel = model);
++
++        byte[] b = randomNonce();
++        JSONObject back = new JSONObject();
++        back.put("v", PROTOCOL_VERSION);
++        back.put("model", thisModel());
++        back.put("b", hex(b));
++        write(out, FRAME_HELLO_BACK, back);
++
++        byte[] a = unhex(read(in, FRAME_REVEAL).optString("a"));
++        // The sender committed to a certificate before seeing b. If it isn't this phone's, a
++        // phone in the middle took part.
++        if (!BareBackupBridge.verifyTransferCommitment(a, certificate, commitment)) {
++            throw new SecurityException("commitment");
++        }
++        return BareBackupBridge.matchingCode(a, b);
++    }
++
++    private void awaitConfirmation(DataInputStream in) throws IOException {
++        int type = in.readUnsignedByte();
++        int length = in.readInt();
++        if (length < 0 || length > MAX_CONTROL_FRAME) throw new IOException("frame");
++        in.skipBytes(length);
++        if (type == FRAME_CONFIRM) {
++            mHandler.post(
++                    () -> {
++                        mConfirmedThere = true;
++                        maybeConfirmed();
++                    });
++        } else {
++            mHandler.post(() -> fail(R.string.bare_direct_not_confirmed));
++        }
++    }
++
++    // ---------------------------------------------------------------------------------------
++    // The person's answer.
++
++    /** This phone's person says the codes match. */
++    void confirmCode() {
++        if (mEnded || mState != State.CHECKING || mConfirmedHere) return;
++        mConfirmedHere = true;
++        send(FRAME_CONFIRM);
++        notifyObservers();
++        maybeConfirmed();
++    }
++
++    /** This phone's person says they don't, or backs out. */
++    void cancel() {
++        if (mEnded) return;
++        if (mOut != null) send(FRAME_CANCEL);
++        end(State.FAILED, 0);
++    }
++
++    private void maybeConfirmed() {
++        if (mEnded || !mConfirmedHere || !mConfirmedThere) return;
++        mHandler.removeCallbacks(mGiveUp);
++        setState(State.CONFIRMED);
++    }
++
++    private void send(int type) {
++        DataOutputStream out = mOut;
++        if (out == null) return;
++        mWriter.execute(
++                () -> {
++                    try {
++                        synchronized (out) {
++                            out.writeByte(type);
++                            out.writeInt(0);
++                            out.flush();
++                        }
++                    } catch (IOException e) {
++                        // The other side has gone; its own error says so.
++                    }
++                });
++    }
++
++    // ---------------------------------------------------------------------------------------
++    // Ending.
++
++    private void fail(@StringRes int error) {
++        end(State.FAILED, error);
++    }
++
++    @SuppressLint("MissingPermission")
++    private void end(@State int state, @StringRes int error) {
++        if (mEnded) return;
++        mEnded = true;
++        mError = error;
++        mHandler.removeCallbacks(mGiveUp);
++        mHandler.removeCallbacks(mRediscover);
++        closeQuietly(mServer);
++        closeQuietly(mSocket);
++        mIo.shutdownNow();
++        mWriter.shutdown();
++        if (mIdentity != null) mIdentity.delete();
++        if (mReceiver != null) {
++            try {
++                mContext.unregisterReceiver(mReceiver);
++            } catch (IllegalArgumentException e) {
++                // Not registered.
++            }
++        }
++        if (mManager != null && mChannel != null) {
++            WifiP2pManager.Channel channel = mChannel;
++            mManager.clearLocalServices(channel, null);
++            mManager.clearServiceRequests(channel, null);
++            mManager.stopPeerDiscovery(channel, null);
++            mManager.cancelConnect(channel, null);
++            mManager.removeGroup(channel, null);
++            channel.close();
++        }
++        BareDirectServiceImpl.end(mContext);
++        if (sCurrent == this) sCurrent = null;
++        setState(state);
++    }
++
++    private void setState(@State int state) {
++        mState = state;
++        notifyObservers();
++    }
++
++    private void notifyObservers() {
++        for (Observer observer : mObservers) observer.onChanged();
++    }
++
++    // ---------------------------------------------------------------------------------------
++    // Helpers.
++
++    private byte[] randomNonce() {
++        byte[] nonce = new byte[32];
++        mRandom.nextBytes(nonce);
++        return nonce;
++    }
++
++    private static void write(DataOutputStream out, int type, JSONObject message)
++            throws IOException {
++        byte[] bytes = message.toString().getBytes(StandardCharsets.UTF_8);
++        synchronized (out) {
++            out.writeByte(type);
++            out.writeInt(bytes.length);
++            out.write(bytes);
++            out.flush();
++        }
++    }
++
++    private static JSONObject read(DataInputStream in, int expected)
++            throws IOException, JSONException {
++        return readBody(in, in.readUnsignedByte(), expected);
++    }
++
++    /** The rest of a frame whose type byte has been read. */
++    private static JSONObject readBody(DataInputStream in, int type, int expected)
++            throws IOException, JSONException {
++        int length = in.readInt();
++        if (type == FRAME_CANCEL) throw new IOException("cancelled");
++        if (type != expected || length < 0 || length > MAX_CONTROL_FRAME) {
++            throw new IOException("frame");
++        }
++        byte[] bytes = new byte[length];
++        in.readFully(bytes);
++        return new JSONObject(new String(bytes, StandardCharsets.UTF_8));
++    }
++
++    private static String hex(byte[] bytes) {
++        StringBuilder out = new StringBuilder(bytes.length * 2);
++        for (byte b : bytes) out.append(String.format("%02x", b & 0xff));
++        return out.toString();
++    }
++
++    private static byte[] unhex(String hex) throws IOException {
++        if (hex.length() % 2 != 0 || hex.length() > 128) throw new IOException("hex");
++        byte[] out = new byte[hex.length() / 2];
++        for (int i = 0; i < out.length; i++) {
++            int high = Character.digit(hex.charAt(2 * i), 16);
++            int low = Character.digit(hex.charAt(2 * i + 1), 16);
++            if (high < 0 || low < 0) throw new IOException("hex");
++            out[i] = (byte) ((high << 4) | low);
++        }
++        return out;
++    }
++
++    private static void closeQuietly(@Nullable Closeable closeable) {
++        if (closeable == null) return;
++        try {
++            closeable.close();
++        } catch (IOException e) {
++            // Already closed.
++        }
++    }
++
++    /** A Wi-Fi Direct call whose failure ends the transfer. */
++    private final class Step implements WifiP2pManager.ActionListener {
++        private final Runnable mNext;
++
++        Step(Runnable next) {
++            mNext = next;
++        }
++
++        @Override
++        public void onSuccess() {
++            if (!mEnded) mNext.run();
++        }
++
++        @Override
++        public void onFailure(int reason) {
++            fail(
++                    reason == WifiP2pManager.P2P_UNSUPPORTED
++                            ? R.string.bare_direct_unsupported
++                            : R.string.bare_direct_couldnt_start);
++        }
++    }
++
++    /** A Wi-Fi Direct call whose result doesn't matter: clean-up, or a retry that comes again. */
++    private final class Done implements WifiP2pManager.ActionListener {
++        private final Runnable mNext;
++
++        Done(Runnable next) {
++            mNext = next;
++        }
++
++        @Override
++        public void onSuccess() {
++            if (!mEnded) mNext.run();
++        }
++
++        @Override
++        public void onFailure(int reason) {
++            if (!mEnded) mNext.run();
++        }
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectTls.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectTls.java
+new file mode 100644
+index 00000000000..1baf8625843
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectTls.java
+@@ -0,0 +1,244 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.security.keystore.KeyGenParameterSpec;
++import android.security.keystore.KeyProperties;
++
++import org.chromium.build.annotations.Nullable;
++
++import java.io.IOException;
++import java.math.BigInteger;
++import java.net.Socket;
++import java.security.GeneralSecurityException;
++import java.security.KeyPairGenerator;
++import java.security.KeyStore;
++import java.security.Principal;
++import java.security.PrivateKey;
++import java.security.SecureRandom;
++import java.security.cert.CertificateException;
++import java.security.cert.X509Certificate;
++import java.security.spec.ECGenParameterSpec;
++import java.util.Date;
++
++import javax.net.ssl.KeyManager;
++import javax.net.ssl.SSLContext;
++import javax.net.ssl.SSLEngine;
++import javax.net.ssl.SSLSocket;
++import javax.net.ssl.TrustManager;
++import javax.net.ssl.X509ExtendedKeyManager;
++import javax.net.ssl.X509ExtendedTrustManager;
++import javax.security.auth.x500.X500Principal;
++
++/**
++ * TLS for a phone-to-phone transfer. The receiver is the TLS server, with a key pair and
++ * self-signed certificate made in Android Keystore for this transfer and deleted after it. The
++ * sender accepts whatever single certificate it is shown and keeps its bytes; the matching code
++ * is what proves it was the right one.
++ */
++final class BareDirectTls {
++    private static final String KEYSTORE = "AndroidKeyStore";
++    private static final String PROTOCOL = "TLSv1.3";
++
++    private BareDirectTls() {}
++
++    /** The receiver's key and certificate for one transfer. */
++    static final class Identity {
++        private final String mAlias;
++        private final PrivateKey mKey;
++        private final X509Certificate mCertificate;
++
++        private Identity(String alias, PrivateKey key, X509Certificate certificate) {
++            mAlias = alias;
++            mKey = key;
++            mCertificate = certificate;
++        }
++
++        static Identity create() throws GeneralSecurityException, IOException {
++            byte[] random = new byte[8];
++            new SecureRandom().nextBytes(random);
++            String alias = "bare_direct_" + new BigInteger(1, random).toString(16);
++            long now = System.currentTimeMillis();
++            KeyPairGenerator generator =
++                    KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, KEYSTORE);
++            generator.initialize(
++                    new KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
++                            .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1"))
++                            .setDigests(
++                                    KeyProperties.DIGEST_NONE,
++                                    KeyProperties.DIGEST_SHA256,
++                                    KeyProperties.DIGEST_SHA384,
++                                    KeyProperties.DIGEST_SHA512)
++                            .setCertificateSubject(new X500Principal("CN=Bare"))
++                            .setCertificateSerialNumber(new BigInteger(1, random))
++                            .setCertificateNotBefore(new Date(now - 24L * 3600 * 1000))
++                            .setCertificateNotAfter(new Date(now + 24L * 3600 * 1000))
++                            .build());
++            generator.generateKeyPair();
++            KeyStore store = KeyStore.getInstance(KEYSTORE);
++            store.load(null);
++            PrivateKey key = (PrivateKey) store.getKey(alias, null);
++            X509Certificate certificate = (X509Certificate) store.getCertificate(alias);
++            return new Identity(alias, key, certificate);
++        }
++
++        byte[] certificateBytes() throws CertificateException {
++            return mCertificate.getEncoded();
++        }
++
++        void delete() {
++            try {
++                KeyStore store = KeyStore.getInstance(KEYSTORE);
++                store.load(null);
++                store.deleteEntry(mAlias);
++            } catch (GeneralSecurityException | IOException e) {
++                // The key is useless without the transfer it was made for.
++            }
++        }
++
++        /** Wraps a connected socket as the TLS server. */
++        SSLSocket serve(Socket socket) throws GeneralSecurityException, IOException {
++            SSLContext context = SSLContext.getInstance("TLS");
++            context.init(new KeyManager[] {new OneKey(mAlias, mKey, mCertificate)}, null, null);
++            return start(context, socket, /* client= */ false);
++        }
++    }
++
++    /** The sender's side: trusts the one certificate it is shown, and remembers it. */
++    static final class Pinning {
++        private byte @Nullable [] mSeen;
++
++        SSLSocket connect(Socket socket) throws GeneralSecurityException, IOException {
++            SSLContext context = SSLContext.getInstance("TLS");
++            context.init(null, new TrustManager[] {new RememberOne()}, null);
++            return start(context, socket, /* client= */ true);
++        }
++
++        /** The receiver's certificate as sent, or null before the handshake. */
++        byte @Nullable [] seen() {
++            return mSeen;
++        }
++
++        private final class RememberOne extends X509ExtendedTrustManager {
++            @Override
++            public void checkServerTrusted(X509Certificate[] chain, String authType)
++                    throws CertificateException {
++                if (chain == null || chain.length != 1) {
++                    throw new CertificateException("expected one certificate");
++                }
++                mSeen = chain[0].getEncoded();
++            }
++
++            @Override
++            public void checkServerTrusted(
++                    X509Certificate[] chain, String authType, Socket socket)
++                    throws CertificateException {
++                checkServerTrusted(chain, authType);
++            }
++
++            @Override
++            public void checkServerTrusted(
++                    X509Certificate[] chain, String authType, SSLEngine engine)
++                    throws CertificateException {
++                checkServerTrusted(chain, authType);
++            }
++
++            @Override
++            public void checkClientTrusted(X509Certificate[] chain, String authType)
++                    throws CertificateException {
++                throw new CertificateException("no client certificates");
++            }
++
++            @Override
++            public void checkClientTrusted(
++                    X509Certificate[] chain, String authType, Socket socket)
++                    throws CertificateException {
++                throw new CertificateException("no client certificates");
++            }
++
++            @Override
++            public void checkClientTrusted(
++                    X509Certificate[] chain, String authType, SSLEngine engine)
++                    throws CertificateException {
++                throw new CertificateException("no client certificates");
++            }
++
++            @Override
++            public X509Certificate[] getAcceptedIssuers() {
++                return new X509Certificate[0];
++            }
++        }
++    }
++
++    private static SSLSocket start(SSLContext context, Socket socket, boolean client)
++            throws IOException {
++        SSLSocket tls =
++                (SSLSocket)
++                        context.getSocketFactory()
++                                .createSocket(
++                                        socket,
++                                        socket.getInetAddress().getHostAddress(),
++                                        socket.getPort(),
++                                        /* autoClose= */ true);
++        tls.setUseClientMode(client);
++        tls.setEnabledProtocols(new String[] {PROTOCOL});
++        tls.startHandshake();
++        if (!PROTOCOL.equals(tls.getSession().getProtocol())) {
++            tls.close();
++            throw new IOException("not TLS 1.3");
++        }
++        return tls;
++    }
++
++    /** Offers the transfer's key and nothing else Bare keeps in Keystore. */
++    private static final class OneKey extends X509ExtendedKeyManager {
++        private final String mAlias;
++        private final PrivateKey mKey;
++        private final X509Certificate mCertificate;
++
++        OneKey(String alias, PrivateKey key, X509Certificate certificate) {
++            mAlias = alias;
++            mKey = key;
++            mCertificate = certificate;
++        }
++
++        @Override
++        public String[] getServerAliases(String keyType, Principal[] issuers) {
++            return new String[] {mAlias};
++        }
++
++        @Override
++        public String chooseServerAlias(String keyType, Principal[] issuers, Socket socket) {
++            return mAlias;
++        }
++
++        @Override
++        public String chooseEngineServerAlias(
++                String keyType, Principal[] issuers, SSLEngine engine) {
++            return mAlias;
++        }
++
++        @Override
++        public String @Nullable [] getClientAliases(String keyType, Principal[] issuers) {
++            return null;
++        }
++
++        @Override
++        public @Nullable String chooseClientAlias(
++                String[] keyType, Principal[] issuers, Socket socket) {
++            return null;
++        }
++
++        @Override
++        public X509Certificate[] getCertificateChain(String alias) {
++            return new X509Certificate[] {mCertificate};
++        }
++
++        @Override
++        public PrivateKey getPrivateKey(String alias) {
++            return mKey;
++        }
++    }
++}
+diff --git a/chrome/browser/bare/backup/BUILD.gn b/chrome/browser/bare/backup/BUILD.gn
+index 86fcde09894..e8e864addf5 100644
+--- a/chrome/browser/bare/backup/BUILD.gn
++++ b/chrome/browser/bare/backup/BUILD.gn
+@@ -12,6 +12,8 @@ static_library("backup") {
+     "backup_package.h",
+     "backup_recovery_code.cc",
+     "backup_recovery_code.h",
++    "backup_transfer_code.cc",
++    "backup_transfer_code.h",
+   ]
+   public_deps = [ "//base" ]
+   deps = [
+@@ -81,6 +83,7 @@ _format_test_sources = [
+   "backup_file_unittest.cc",
+   "backup_package_unittest.cc",
+   "backup_recovery_code_unittest.cc",
++  "backup_transfer_code_unittest.cc",
+ ]
+ _format_test_deps = [
+   ":backup",
+diff --git a/chrome/browser/bare/backup/backup_transfer_code.cc b/chrome/browser/bare/backup/backup_transfer_code.cc
+new file mode 100644
+index 00000000000..01eab2a1ba9
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_transfer_code.cc
+@@ -0,0 +1,59 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_transfer_code.h"
++
++#include <openssl/hmac.h>
++#include <openssl/mem.h>
++
++#include "base/check.h"
++#include "base/check_op.h"
++#include "base/strings/stringprintf.h"
++
++namespace bare::backup {
++
++namespace {
++
++std::array<uint8_t, 32> HmacSha256(base::span<const uint8_t> key,
++                                   base::span<const uint8_t> message) {
++  std::array<uint8_t, 32> out{};
++  unsigned int length = 0;
++  CHECK(HMAC(EVP_sha256(), key.data(), key.size(), message.data(),
++             message.size(), out.data(), &length));
++  CHECK_EQ(length, out.size());
++  return out;
++}
++
++}  // namespace
++
++std::array<uint8_t, 32> TransferCommitment(base::span<const uint8_t> a,
++                                           base::span<const uint8_t> cert) {
++  return HmacSha256(a, cert);
++}
++
++bool VerifyTransferCommitment(base::span<const uint8_t> a,
++                              base::span<const uint8_t> cert,
++                              base::span<const uint8_t> commitment) {
++  if (a.size() != kTransferNonceLength || commitment.size() != 32) {
++    return false;
++  }
++  const std::array<uint8_t, 32> expected = HmacSha256(a, cert);
++  return CRYPTO_memcmp(expected.data(), commitment.data(), expected.size()) ==
++         0;
++}
++
++std::string MatchingCode(base::span<const uint8_t> a,
++                         base::span<const uint8_t> b) {
++  if (a.size() != kTransferNonceLength || b.size() != kTransferNonceLength) {
++    return std::string();
++  }
++  const std::array<uint8_t, 32> mac = HmacSha256(a, b);
++  // 2^32 isn't a multiple of a million, so a few codes come up about 0.02%
++  // more often than the rest. That doesn't help anyone guess one.
++  const uint32_t value = (uint32_t{mac[0]} << 24) | (uint32_t{mac[1]} << 16) |
++                         (uint32_t{mac[2]} << 8) | uint32_t{mac[3]};
++  return base::StringPrintf("%06u", value % 1000000u);
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_transfer_code.h b/chrome/browser/bare/backup/backup_transfer_code.h
+new file mode 100644
+index 00000000000..d74defb847a
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_transfer_code.h
+@@ -0,0 +1,43 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKUP_BACKUP_TRANSFER_CODE_H_
++#define CHROME_BROWSER_BARE_BACKUP_BACKUP_TRANSFER_CODE_H_
++
++#include <stddef.h>
++#include <stdint.h>
++
++#include <array>
++#include <string>
++
++#include "base/containers/span.h"
++
++// The matching code two phones show before a transfer. Inside TLS, the sender
++// commits to a random `a` and the receiver's certificate before it sees the
++// receiver's random `b`, so a phone in the middle can't pick values that make
++// both screens agree.
++//
++//   sender -> receiver: Commitment(a, certificate)
++//   receiver -> sender: b
++//   sender -> receiver: a   (receiver checks it against the commitment)
++//   both show:          MatchingCode(a, b)
++namespace bare::backup {
++
++inline constexpr size_t kTransferNonceLength = 32;
++
++std::array<uint8_t, 32> TransferCommitment(base::span<const uint8_t> a,
++                                           base::span<const uint8_t> cert);
++
++// Constant time. False if `a` is the wrong length.
++bool VerifyTransferCommitment(base::span<const uint8_t> a,
++                              base::span<const uint8_t> cert,
++                              base::span<const uint8_t> commitment);
++
++// Six digits, "000000" to "999999". Empty if either nonce is the wrong length.
++std::string MatchingCode(base::span<const uint8_t> a,
++                         base::span<const uint8_t> b);
++
++}  // namespace bare::backup
++
++#endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_TRANSFER_CODE_H_
+diff --git a/chrome/browser/bare/backup/backup_transfer_code_unittest.cc b/chrome/browser/bare/backup/backup_transfer_code_unittest.cc
+new file mode 100644
+index 00000000000..cf5aa128b41
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_transfer_code_unittest.cc
+@@ -0,0 +1,63 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_transfer_code.h"
++
++#include <set>
++#include <string>
++#include <vector>
++
++#include "base/strings/string_util.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace bare::backup {
++namespace {
++
++std::vector<uint8_t> Bytes(uint8_t fill, size_t size = kTransferNonceLength) {
++  return std::vector<uint8_t>(size, fill);
++}
++
++TEST(BackupTransferCodeTest, CommitmentChecksOut) {
++  const std::vector<uint8_t> a = Bytes(1);
++  const std::vector<uint8_t> cert = {0x30, 0x82, 0x01, 0x0a};
++  const std::array<uint8_t, 32> commitment = TransferCommitment(a, cert);
++  EXPECT_TRUE(VerifyTransferCommitment(a, cert, commitment));
++
++  // Another certificate, as a phone in the middle would present.
++  const std::vector<uint8_t> other_cert = {0x30, 0x82, 0x01, 0x0b};
++  EXPECT_FALSE(VerifyTransferCommitment(a, other_cert, commitment));
++  // Another `a` revealed after the fact.
++  EXPECT_FALSE(VerifyTransferCommitment(Bytes(2), cert, commitment));
++  // Wrong sizes.
++  EXPECT_FALSE(VerifyTransferCommitment(Bytes(1, 31), cert, commitment));
++  EXPECT_FALSE(VerifyTransferCommitment(
++      a, cert, base::span(commitment).first(31u)));
++}
++
++TEST(BackupTransferCodeTest, CodeIsSixDigitsAndSameOnBothSides) {
++  const std::string code = MatchingCode(Bytes(1), Bytes(2));
++  ASSERT_EQ(code.size(), 6u);
++  for (char c : code) {
++    EXPECT_TRUE(base::IsAsciiDigit(c));
++  }
++  EXPECT_EQ(MatchingCode(Bytes(1), Bytes(2)), code);
++  // The order of a and b matters: only the sender's a is the key.
++  EXPECT_NE(MatchingCode(Bytes(2), Bytes(1)), code);
++}
++
++TEST(BackupTransferCodeTest, CodesSpread) {
++  std::set<std::string> codes;
++  for (int i = 0; i < 200; ++i) {
++    codes.insert(MatchingCode(Bytes(static_cast<uint8_t>(i)), Bytes(7)));
++  }
++  EXPECT_GT(codes.size(), 195u);
++}
++
++TEST(BackupTransferCodeTest, WrongNonceSizes) {
++  EXPECT_EQ(MatchingCode(Bytes(1, 16), Bytes(2)), "");
++  EXPECT_EQ(MatchingCode(Bytes(1), Bytes(2, 33)), "");
++}
++
++}  // namespace
++}  // namespace bare::backup
+diff --git a/chrome/browser/ui/android/bare_backup_bridge.cc b/chrome/browser/ui/android/bare_backup_bridge.cc
+index 275793b57ab..d6645f9d2a0 100644
+--- a/chrome/browser/ui/android/bare_backup_bridge.cc
++++ b/chrome/browser/ui/android/bare_backup_bridge.cc
+@@ -32,6 +32,7 @@
+ #include "chrome/browser/bare/backup/backup_package.h"
+ #include "chrome/browser/bare/backup/backup_recovery_code.h"
+ #include "chrome/browser/bare/backup/backup_settings.h"
++#include "chrome/browser/bare/backup/backup_transfer_code.h"
+ #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+@@ -519,6 +520,29 @@ static std::string JNI_BareBackupBridge_GenerateRecoveryCode(JNIEnv* env) {
+   return bare_backup::GenerateRecoveryCode();
+ }
+ 
++static std::vector<uint8_t> JNI_BareBackupBridge_TransferCommitment(
++    JNIEnv* env,
++    std::vector<uint8_t> a,
++    std::vector<uint8_t> cert) {
++  const std::array<uint8_t, 32> commitment =
++      bare_backup::TransferCommitment(a, cert);
++  return std::vector<uint8_t>(commitment.begin(), commitment.end());
++}
++
++static bool JNI_BareBackupBridge_VerifyTransferCommitment(
++    JNIEnv* env,
++    std::vector<uint8_t> a,
++    std::vector<uint8_t> cert,
++    std::vector<uint8_t> commitment) {
++  return bare_backup::VerifyTransferCommitment(a, cert, commitment);
++}
++
++static std::string JNI_BareBackupBridge_MatchingCode(JNIEnv* env,
++                                                     std::vector<uint8_t> a,
++                                                     std::vector<uint8_t> b) {
++  return bare_backup::MatchingCode(a, b);
++}
++
+ static std::string JNI_BareBackupBridge_NormalizeRecoveryCode(
+     JNIEnv* env,
+     std::string typed) {

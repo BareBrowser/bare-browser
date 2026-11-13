@@ -1,0 +1,1718 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index e61be9f22d4..86cc61e4e73 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -392,6 +392,8 @@ group("gn_all") {
+         "//build/private_code_test:private_paths",
+         "//chrome/android/webapk/shell_apk:webapk",
+         "//chrome/android/webapk/shell_apk/prepare_upload_dir:prepare_webapk_shell_upload_dir",
++        "//chrome/browser/bare/backup:bare_backup_host_unittests",
++        "//chrome/browser/bare/backup:bare_backup_unittests",
+         "//chrome/test:android_browsertests",
+         "//components:components_junit_tests",
+         "//content/public/android:content_junit_tests",
+diff --git a/chrome/browser/bare/backup/BUILD.gn b/chrome/browser/bare/backup/BUILD.gn
+new file mode 100644
+index 00000000000..7035317ea0c
+--- /dev/null
++++ b/chrome/browser/bare/backup/BUILD.gn
+@@ -0,0 +1,50 @@
++# Copyright 2026 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++import("//testing/test.gni")
++
++static_library("backup") {
++  sources = [
++    "backup_file.cc",
++    "backup_file.h",
++    "backup_package.cc",
++    "backup_package.h",
++  ]
++  public_deps = [ "//base" ]
++  deps = [
++    "//third_party/boringssl",
++    "//third_party/zlib/google:zip",
++  ]
++}
++
++_test_sources = [
++  "backup_file_unittest.cc",
++  "backup_package_unittest.cc",
++]
++_test_deps = [
++  ":backup",
++  "//base",
++  "//base/test:run_all_unittests",
++  "//testing/gtest",
++  "//third_party/zlib",
++]
++
++if (is_android) {
++  test("bare_backup_unittests") {
++    sources = _test_sources
++    deps = _test_deps + [ "//third_party/icu:icu_assets" ]
++  }
++
++  # The same tests as a Linux binary, built from the Android out dir with the
++  # host toolchain, so they run in the build container without a device.
++  group("bare_backup_host_unittests") {
++    testonly = true
++    deps = [ ":bare_backup_host_unittests($host_toolchain)" ]
++  }
++} else {
++  test("bare_backup_host_unittests") {
++    sources = _test_sources
++    deps = _test_deps
++  }
++}
+diff --git a/chrome/browser/bare/backup/DEPS b/chrome/browser/bare/backup/DEPS
+new file mode 100644
+index 00000000000..c6e9550543b
+--- /dev/null
++++ b/chrome/browser/bare/backup/DEPS
+@@ -0,0 +1,3 @@
++include_rules = [
++  "+third_party/zlib",
++]
+diff --git a/chrome/browser/bare/backup/backup_file.cc b/chrome/browser/bare/backup/backup_file.cc
+new file mode 100644
+index 00000000000..98aaa153afa
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_file.cc
+@@ -0,0 +1,472 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_file.h"
++
++#include <openssl/aead.h>
++#include <openssl/evp.h>
++#include <openssl/mem.h>
++#include <openssl/rand.h>
++#include <openssl/sha.h>
++
++#include <algorithm>
++#include <utility>
++
++#include "base/base64.h"
++#include "base/check.h"
++#include "base/containers/span_reader.h"
++#include "base/containers/span_writer.h"
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/numerics/byte_conversions.h"
++#include "base/numerics/safe_conversions.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_view_util.h"
++#include "base/values.h"
++
++namespace bare::backup {
++
++namespace {
++
++constexpr std::array<uint8_t, 8> kMagic = {'B', 'A', 'R', 'E',
++                                           'B', 'K', 'U', 'P'};
++
++constexpr size_t kNonceSize = 12;
++constexpr size_t kMaxJsonDepth = 4;
++constexpr size_t kMaxContentsEntries = 32;
++
++// Accepted scrypt range. The memory caps keep a hostile header from asking
++// for more than a phone has; scrypt needs 128 * r * N bytes for V and
++// 128 * r * p for B.
++constexpr uint8_t kMinLog2N = 14;
++constexpr uint8_t kMaxLog2N = 22;
++constexpr uint32_t kMaxR = 32;
++constexpr uint32_t kMaxP = 16;
++constexpr uint64_t kMaxScryptV = 256u * 1024 * 1024;
++constexpr uint64_t kMaxScryptB = 16u * 1024 * 1024;
++
++constexpr uint32_t kMinChunkSize = 1024;
++constexpr uint32_t kMaxChunkSize = 1024 * 1024;
++
++constexpr char kKdfName[] = "scrypt";
++constexpr char kAeadName[] = "aes-256-gcm";
++
++const char* KindName(Kind kind) {
++  return kind == Kind::kFull ? "full" : "setup";
++}
++
++bool KdfParamsInRange(const KdfParams& kdf) {
++  if (kdf.log2_n < kMinLog2N || kdf.log2_n > kMaxLog2N) {
++    return false;
++  }
++  if (kdf.r < 1 || kdf.r > kMaxR || kdf.p < 1 || kdf.p > kMaxP) {
++    return false;
++  }
++  const uint64_t n = uint64_t{1} << kdf.log2_n;
++  return 128 * uint64_t{kdf.r} * n <= kMaxScryptV &&
++         128 * uint64_t{kdf.r} * kdf.p <= kMaxScryptB;
++}
++
++bool AeadParamsInRange(const AeadParams& aead) {
++  return aead.chunk_size >= kMinChunkSize && aead.chunk_size <= kMaxChunkSize;
++}
++
++template <size_t N>
++bool DecodeFixed(const std::string* in, std::array<uint8_t, N>& out) {
++  if (!in) {
++    return false;
++  }
++  std::optional<std::vector<uint8_t>> bytes = base::Base64Decode(*in);
++  if (!bytes || bytes->size() != N) {
++    return false;
++  }
++  std::ranges::copy(*bytes, out.begin());
++  return true;
++}
++
++bool ReadDescription(const base::DictValue& json, Description& out) {
++  for (auto [key, field] : {std::pair{"created", &out.created},
++                            std::pair{"bare_version", &out.bare_version},
++                            std::pair{"device_label", &out.device_label}}) {
++    const base::Value* value = json.Find(key);
++    if (!value) {
++      continue;
++    }
++    if (!value->is_string()) {
++      return false;
++    }
++    *field = value->GetString();
++  }
++  if (const base::Value* code = json.Find("bare_version_code")) {
++    if (!code->is_int() || code->GetInt() < 0) {
++      return false;
++    }
++    out.bare_version_code = code->GetInt();
++  }
++  if (const base::Value* contents = json.Find("contents")) {
++    if (!contents->is_dict() ||
++        contents->GetDict().size() > kMaxContentsEntries) {
++      return false;
++    }
++    for (const auto [name, count] : contents->GetDict()) {
++      if (!count.is_int() || count.GetInt() < 0) {
++        return false;
++      }
++      out.contents[name] = count.GetInt();
++    }
++  }
++  return true;
++}
++
++bool ReadKdf(const base::DictValue* json, KdfParams& out) {
++  if (!json) {
++    return false;
++  }
++  const std::string* name = json->FindString("name");
++  std::optional<int> log2_n = json->FindInt("log2_n");
++  std::optional<int> r = json->FindInt("r");
++  std::optional<int> p = json->FindInt("p");
++  if (!name || *name != kKdfName || !log2_n || !r || !p || *log2_n < 0 ||
++      *log2_n > 255 || *r < 0 || *p < 0) {
++    return false;
++  }
++  out.log2_n = static_cast<uint8_t>(*log2_n);
++  out.r = static_cast<uint32_t>(*r);
++  out.p = static_cast<uint32_t>(*p);
++  return DecodeFixed(json->FindString("salt"), out.salt) &&
++         KdfParamsInRange(out);
++}
++
++bool ReadAead(const base::DictValue* json, AeadParams& out) {
++  if (!json) {
++    return false;
++  }
++  const std::string* name = json->FindString("name");
++  std::optional<int> chunk = json->FindInt("chunk");
++  if (!name || *name != kAeadName || !chunk || *chunk < 0) {
++    return false;
++  }
++  out.chunk_size = static_cast<uint32_t>(*chunk);
++  return DecodeFixed(json->FindString("nonce_prefix"), out.nonce_prefix) &&
++         AeadParamsInRange(out);
++}
++
++base::DictValue DescriptionToJson(const Description& description, Kind kind) {
++  base::DictValue contents;
++  for (const auto& [name, count] : description.contents) {
++    contents.Set(name, count);
++  }
++  base::DictValue json;
++  json.Set("created", description.created);
++  json.Set("bare_version", description.bare_version);
++  json.Set("bare_version_code", description.bare_version_code);
++  json.Set("device_label", description.device_label);
++  json.Set("kind", KindName(kind));
++  json.Set("contents", std::move(contents));
++  return json;
++}
++
++// Fixed header followed by the JSON.
++std::optional<std::vector<uint8_t>> BuildHeader(Kind kind,
++                                                const base::DictValue& json) {
++  std::optional<std::string> text = base::WriteJson(json);
++  if (!text || text->size() > kMaxHeaderJsonSize) {
++    return std::nullopt;
++  }
++  std::vector<uint8_t> out(kFixedHeaderSize + text->size());
++  auto writer = base::SpanWriter(base::span(out));
++  writer.Write(kMagic);
++  writer.WriteU16LittleEndian(kFormatVersion);
++  writer.WriteU8LittleEndian(static_cast<uint8_t>(kind));
++  writer.WriteU8LittleEndian(0);
++  writer.WriteU32LittleEndian(base::checked_cast<uint32_t>(text->size()));
++  writer.Write(base::as_byte_span(*text));
++  CHECK_EQ(writer.remaining(), 0u);
++  return out;
++}
++
++std::array<uint8_t, kNonceSize> ChunkNonce(const AeadParams& aead,
++                                           uint32_t index,
++                                           bool last) {
++  std::array<uint8_t, kNonceSize> nonce;
++  auto writer = base::SpanWriter(base::span(nonce));
++  writer.Write(aead.nonce_prefix);
++  writer.WriteU32BigEndian(index);
++  writer.WriteU8BigEndian(static_cast<uint8_t>(last));
++  return nonce;
++}
++
++// Number of chunks a body of `plain_size` bytes is cut into. An empty body is
++// one empty chunk, so a file always ends with a chunk marked last.
++size_t ChunkCount(size_t plain_size, size_t chunk_size) {
++  return std::max<size_t>(1, (plain_size + chunk_size - 1) / chunk_size);
++}
++
++}  // namespace
++
++ParsedFile::ParsedFile() = default;
++ParsedFile::ParsedFile(ParsedFile&&) = default;
++ParsedFile& ParsedFile::operator=(ParsedFile&&) = default;
++ParsedFile::~ParsedFile() = default;
++
++Key::Key() = default;
++
++Key::Key(Key&& other) : bytes_(other.bytes_) {
++  OPENSSL_cleanse(other.bytes_.data(), other.bytes_.size());
++}
++
++Key& Key::operator=(Key&& other) {
++  if (this != &other) {
++    bytes_ = other.bytes_;
++    OPENSSL_cleanse(other.bytes_.data(), other.bytes_.size());
++  }
++  return *this;
++}
++
++Key::~Key() {
++  OPENSSL_cleanse(bytes_.data(), bytes_.size());
++}
++
++KdfParams NewKdfParams() {
++  KdfParams kdf;
++  RAND_bytes(kdf.salt.data(), kdf.salt.size());
++  return kdf;
++}
++
++AeadParams NewAeadParams() {
++  AeadParams aead;
++  RAND_bytes(aead.nonce_prefix.data(), aead.nonce_prefix.size());
++  return aead;
++}
++
++std::optional<Key> DeriveKey(base::span<const uint8_t> passphrase,
++                             const KdfParams& params) {
++  if (!KdfParamsInRange(params)) {
++    return std::nullopt;
++  }
++  Key key;
++  const auto chars = base::as_chars(passphrase);
++  if (!EVP_PBE_scrypt(chars.data(), chars.size(), params.salt.data(),
++                      params.salt.size(), uint64_t{1} << params.log2_n,
++                      params.r, params.p,
++                      static_cast<size_t>(kMaxScryptV + 2 * kMaxScryptB),
++                      key.bytes_.data(), key.bytes_.size())) {
++    return std::nullopt;
++  }
++  return key;
++}
++
++base::expected<ParsedFile, ReadError> ParseFile(
++    base::span<const uint8_t> file) {
++  base::SpanReader reader(file);
++  std::optional<base::span<const uint8_t, 8>> magic = reader.Read<8>();
++  if (!magic || !std::ranges::equal(*magic, kMagic)) {
++    return base::unexpected(ReadError::kNotBare);
++  }
++  uint16_t version;
++  uint8_t kind_byte;
++  uint8_t flags;
++  uint32_t header_size;
++  if (!reader.ReadU16LittleEndian(version) ||
++      !reader.ReadU8LittleEndian(kind_byte) ||
++      !reader.ReadU8LittleEndian(flags) ||
++      !reader.ReadU32LittleEndian(header_size)) {
++    return base::unexpected(ReadError::kNotBare);
++  }
++  if (version > kFormatVersion) {
++    return base::unexpected(ReadError::kNewerVersion);
++  }
++  if (version == 0 || flags != 0 ||
++      (kind_byte != static_cast<uint8_t>(Kind::kSetup) &&
++       kind_byte != static_cast<uint8_t>(Kind::kFull)) ||
++      header_size == 0 || header_size > kMaxHeaderJsonSize) {
++    return base::unexpected(ReadError::kBadHeader);
++  }
++  std::optional<base::span<const uint8_t>> json_bytes =
++      reader.Read(header_size);
++  if (!json_bytes) {
++    return base::unexpected(ReadError::kBadHeader);
++  }
++
++  ParsedFile parsed;
++  parsed.kind = static_cast<Kind>(kind_byte);
++  parsed.format_version = version;
++  parsed.header = file.first(kFixedHeaderSize + header_size);
++  parsed.body = reader.remaining_span();
++
++  std::optional<base::DictValue> json = base::JSONReader::ReadDict(
++      base::as_string_view(*json_bytes), base::JSON_PARSE_RFC, kMaxJsonDepth);
++  if (!json) {
++    return base::unexpected(ReadError::kBadHeader);
++  }
++  const std::string* kind_name = json->FindString("kind");
++  if (!kind_name || *kind_name != KindName(parsed.kind) ||
++      !ReadDescription(*json, parsed.description)) {
++    return base::unexpected(ReadError::kBadHeader);
++  }
++
++  if (parsed.kind == Kind::kSetup) {
++    const std::string* sha = json->FindString("body_sha256");
++    if (!sha || sha->size() != 64 ||
++        !base::HexStringToSpan(*sha, parsed.body_sha256)) {
++      return base::unexpected(ReadError::kBadHeader);
++    }
++    if (parsed.body.size() > kMaxBodySize) {
++      return base::unexpected(ReadError::kTooLarge);
++    }
++    return parsed;
++  }
++
++  if (!ReadKdf(json->FindDict("kdf"), parsed.kdf) ||
++      !ReadAead(json->FindDict("aead"), parsed.aead)) {
++    return base::unexpected(ReadError::kBadHeader);
++  }
++  const size_t max_ciphertext =
++      kMaxBodySize +
++      ChunkCount(kMaxBodySize, parsed.aead.chunk_size) * kTagSize;
++  if (parsed.body.size() > max_ciphertext) {
++    return base::unexpected(ReadError::kTooLarge);
++  }
++  return parsed;
++}
++
++base::expected<std::string, ReadError> ReadSetupBody(const ParsedFile& file) {
++  CHECK(file.kind == Kind::kSetup);
++  std::array<uint8_t, SHA256_DIGEST_LENGTH> digest;
++  SHA256(file.body.data(), file.body.size(), digest.data());
++  if (digest != file.body_sha256) {
++    return base::unexpected(ReadError::kDamaged);
++  }
++  return std::string(base::as_string_view(file.body));
++}
++
++base::expected<std::string, ReadError> DecryptBody(const ParsedFile& file,
++                                                   const Key& key) {
++  CHECK(file.kind == Kind::kFull);
++  const size_t sealed_chunk = size_t{file.aead.chunk_size} + kTagSize;
++  const size_t whole = file.body.size() / sealed_chunk;
++  const size_t rest = file.body.size() % sealed_chunk;
++  if (file.body.empty() || (rest != 0 && rest < kTagSize)) {
++    return base::unexpected(ReadError::kDamaged);
++  }
++  const size_t chunks = whole + (rest ? 1 : 0);
++  const size_t plain_size = file.body.size() - chunks * kTagSize;
++  if (plain_size > kMaxBodySize) {
++    return base::unexpected(ReadError::kTooLarge);
++  }
++
++  bssl::ScopedEVP_AEAD_CTX ctx;
++  if (!EVP_AEAD_CTX_init(ctx.get(), EVP_aead_aes_256_gcm(), key.bytes().data(),
++                         key.bytes().size(), kTagSize, nullptr)) {
++    return base::unexpected(ReadError::kWrongCodeOrDamaged);
++  }
++
++  std::string out(plain_size, '\0');
++  base::span<uint8_t> out_span = base::as_writable_byte_span(out);
++  base::SpanReader reader(file.body);
++  for (size_t i = 0; i < chunks; ++i) {
++    const bool last = i + 1 == chunks;
++    base::span<const uint8_t> sealed =
++        *reader.Read(last ? reader.remaining() : sealed_chunk);
++    const auto nonce =
++        ChunkNonce(file.aead, base::checked_cast<uint32_t>(i), last);
++    base::span<uint8_t> dest =
++        out_span.subspan(i * file.aead.chunk_size, sealed.size() - kTagSize);
++    size_t written = 0;
++    if (!EVP_AEAD_CTX_open(ctx.get(), dest.data(), &written, dest.size(),
++                           nonce.data(), nonce.size(), sealed.data(),
++                           sealed.size(), file.header.data(),
++                           file.header.size()) ||
++        written != dest.size()) {
++      OPENSSL_cleanse(out.data(), out.size());
++      return base::unexpected(ReadError::kWrongCodeOrDamaged);
++    }
++  }
++  return out;
++}
++
++std::optional<std::vector<uint8_t>> WriteSetupFile(
++    const Description& description,
++    base::span<const uint8_t> zip) {
++  if (zip.size() > kMaxBodySize) {
++    return std::nullopt;
++  }
++  std::array<uint8_t, SHA256_DIGEST_LENGTH> digest;
++  SHA256(zip.data(), zip.size(), digest.data());
++  base::DictValue json = DescriptionToJson(description, Kind::kSetup);
++  json.Set("body_sha256", base::HexEncodeLower(digest));
++
++  std::optional<std::vector<uint8_t>> out = BuildHeader(Kind::kSetup, json);
++  if (!out) {
++    return std::nullopt;
++  }
++  out->insert(out->end(), zip.begin(), zip.end());
++  return out;
++}
++
++std::optional<std::vector<uint8_t>> WriteFullFile(
++    const Description& description,
++    const KdfParams& kdf,
++    const AeadParams& aead,
++    const Key& key,
++    base::span<const uint8_t> zip) {
++  if (zip.size() > kMaxBodySize || !KdfParamsInRange(kdf) ||
++      !AeadParamsInRange(aead)) {
++    return std::nullopt;
++  }
++  base::DictValue kdf_json;
++  kdf_json.Set("name", kKdfName);
++  kdf_json.Set("log2_n", static_cast<int>(kdf.log2_n));
++  kdf_json.Set("r", base::checked_cast<int>(kdf.r));
++  kdf_json.Set("p", base::checked_cast<int>(kdf.p));
++  kdf_json.Set("salt", base::Base64Encode(kdf.salt));
++  base::DictValue aead_json;
++  aead_json.Set("name", kAeadName);
++  aead_json.Set("chunk", base::checked_cast<int>(aead.chunk_size));
++  aead_json.Set("nonce_prefix", base::Base64Encode(aead.nonce_prefix));
++  base::DictValue json = DescriptionToJson(description, Kind::kFull);
++  json.Set("kdf", std::move(kdf_json));
++  json.Set("aead", std::move(aead_json));
++
++  std::optional<std::vector<uint8_t>> out = BuildHeader(Kind::kFull, json);
++  if (!out) {
++    return std::nullopt;
++  }
++  const size_t header_size = out->size();
++  const size_t chunks = ChunkCount(zip.size(), aead.chunk_size);
++  out->resize(header_size + zip.size() + chunks * kTagSize);
++
++  bssl::ScopedEVP_AEAD_CTX ctx;
++  if (!EVP_AEAD_CTX_init(ctx.get(), EVP_aead_aes_256_gcm(), key.bytes().data(),
++                         key.bytes().size(), kTagSize, nullptr)) {
++    return std::nullopt;
++  }
++  base::span<uint8_t> all(*out);
++  base::span<const uint8_t> header = all.first(header_size);
++  base::span<uint8_t> dest = all.subspan(header_size);
++  base::SpanReader plain(zip);
++  for (size_t i = 0; i < chunks; ++i) {
++    const bool last = i + 1 == chunks;
++    base::span<const uint8_t> in = *plain.Read(
++        last ? plain.remaining() : size_t{aead.chunk_size});
++    const auto nonce = ChunkNonce(aead, base::checked_cast<uint32_t>(i), last);
++    size_t written = 0;
++    if (!EVP_AEAD_CTX_seal(ctx.get(), dest.data(), &written, dest.size(),
++                           nonce.data(), nonce.size(), in.data(), in.size(),
++                           header.data(), header.size()) ||
++        written != in.size() + kTagSize) {
++      return std::nullopt;
++    }
++    dest = dest.subspan(written);
++  }
++  CHECK(dest.empty());
++  return out;
++}
++
++void WipeSecret(std::vector<uint8_t>& bytes) {
++  OPENSSL_cleanse(bytes.data(), bytes.size());
++  bytes.clear();
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_file.h b/chrome/browser/bare/backup/backup_file.h
+new file mode 100644
+index 00000000000..0a5c3f0bb68
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_file.h
+@@ -0,0 +1,180 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKUP_BACKUP_FILE_H_
++#define CHROME_BROWSER_BARE_BACKUP_BACKUP_FILE_H_
++
++#include <stddef.h>
++#include <stdint.h>
++
++#include <array>
++#include <map>
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "base/containers/span.h"
++#include "base/types/expected.h"
++
++// A .bare file:
++//
++//   offset  size  field
++//   0       8     magic "BAREBKUP"
++//   8       2     format version, little-endian
++//   10      1     kind: 1 = setup, 2 = full
++//   11      1     flags, 0
++//   12      4     header length H, little-endian
++//   16      H     header JSON, UTF-8
++//   16+H    ...   body: a zip for setup files, the encrypted zip for full ones
++//
++// The header can be read without the passphrase. In a full file the 16 fixed
++// bytes and the header JSON are the associated data of every body chunk, so a
++// change to any of them fails decryption.
++namespace bare::backup {
++
++enum class Kind : uint8_t {
++  kSetup = 1,
++  kFull = 2,
++};
++
++inline constexpr uint16_t kFormatVersion = 1;
++inline constexpr size_t kFixedHeaderSize = 16;
++inline constexpr size_t kMaxHeaderJsonSize = 64 * 1024;
++// Cap on the zip inside the file, before encryption.
++inline constexpr size_t kMaxBodySize = 64 * 1024 * 1024;
++
++inline constexpr size_t kKeySize = 32;
++inline constexpr size_t kSaltSize = 16;
++inline constexpr size_t kNoncePrefixSize = 7;
++inline constexpr size_t kTagSize = 16;
++inline constexpr size_t kDefaultChunkSize = 64 * 1024;
++inline constexpr uint8_t kDefaultLog2N = 15;
++inline constexpr uint32_t kDefaultR = 8;
++inline constexpr uint32_t kDefaultP = 1;
++
++enum class ReadError {
++  // Too short, or the magic is wrong.
++  kNotBare,
++  // The format version is newer than this build reads.
++  kNewerVersion,
++  // The fixed header or the header JSON is malformed or inconsistent.
++  kBadHeader,
++  // Larger than any file Bare writes.
++  kTooLarge,
++  // A full file failed to decrypt. A wrong passphrase and a damaged or edited
++  // file look the same here.
++  kWrongCodeOrDamaged,
++  // A setup file whose body doesn't match its checksum, or a full file whose
++  // body is not a whole number of chunks.
++  kDamaged,
++};
++
++struct KdfParams {
++  uint8_t log2_n = kDefaultLog2N;
++  uint32_t r = kDefaultR;
++  uint32_t p = kDefaultP;
++  std::array<uint8_t, kSaltSize> salt = {};
++};
++
++struct AeadParams {
++  uint32_t chunk_size = kDefaultChunkSize;
++  std::array<uint8_t, kNoncePrefixSize> nonce_prefix = {};
++};
++
++// What the restore screen shows before asking for anything.
++struct Description {
++  std::string created;
++  std::string bare_version;
++  int bare_version_code = 0;
++  // Build.MODEL only.
++  std::string device_label;
++  // Section name to item count, for example "bookmarks" -> 812.
++  std::map<std::string, int> contents;
++};
++
++struct ParsedFile {
++  ParsedFile();
++  ParsedFile(ParsedFile&&);
++  ParsedFile& operator=(ParsedFile&&);
++  ~ParsedFile();
++
++  Kind kind = Kind::kSetup;
++  uint16_t format_version = 0;
++  Description description;
++  // Full files only.
++  KdfParams kdf;
++  AeadParams aead;
++  // Setup files only: SHA-256 of the body.
++  std::array<uint8_t, 32> body_sha256 = {};
++
++  // Both point into the buffer given to ParseFile(), which must outlive this.
++  // `header` is the fixed part and the header JSON, the associated data.
++  base::span<const uint8_t> header;
++  base::span<const uint8_t> body;
++};
++
++// Holds a derived key and wipes it on destruction.
++class Key {
++ public:
++  Key();
++  Key(Key&& other);
++  Key& operator=(Key&& other);
++  Key(const Key&) = delete;
++  Key& operator=(const Key&) = delete;
++  ~Key();
++
++  base::span<const uint8_t, kKeySize> bytes() const { return bytes_; }
++
++ private:
++  friend std::optional<Key> DeriveKey(base::span<const uint8_t> passphrase,
++                                      const KdfParams& params);
++  std::array<uint8_t, kKeySize> bytes_ = {};
++};
++
++// Default cost with a fresh random salt.
++KdfParams NewKdfParams();
++
++// Fresh random nonce prefix, default chunk size.
++AeadParams NewAeadParams();
++
++// scrypt over `passphrase`. Returns nullopt if the parameters are out of the
++// range ParseFile() accepts or scrypt fails, for example on memory.
++std::optional<Key> DeriveKey(base::span<const uint8_t> passphrase,
++                             const KdfParams& params);
++
++// Reads the fixed header and the header JSON and checks them. Doesn't touch
++// the body beyond its size.
++base::expected<ParsedFile, ReadError> ParseFile(
++    base::span<const uint8_t> file);
++
++// Setup files: checks the body against its checksum and returns it.
++base::expected<std::string, ReadError> ReadSetupBody(const ParsedFile& file);
++
++// Full files: decrypts and authenticates every chunk. Returns the zip only if
++// all of them pass.
++base::expected<std::string, ReadError> DecryptBody(const ParsedFile& file,
++                                                   const Key& key);
++
++// Returns nullopt if `zip` is over kMaxBodySize.
++std::optional<std::vector<uint8_t>> WriteSetupFile(
++    const Description& description,
++    base::span<const uint8_t> zip);
++
++// `key` must come from DeriveKey() with `kdf`. Returns nullopt if `zip` is
++// over kMaxBodySize or the parameters are out of range.
++std::optional<std::vector<uint8_t>> WriteFullFile(
++    const Description& description,
++    const KdfParams& kdf,
++    const AeadParams& aead,
++    const Key& key,
++    base::span<const uint8_t> zip);
++
++// Clears a secret in place, then empties `bytes`. The vector keeps its
++// storage, so what it held is zeros rather than freed memory still holding
++// the secret.
++void WipeSecret(std::vector<uint8_t>& bytes);
++
++}  // namespace bare::backup
++
++#endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_FILE_H_
+diff --git a/chrome/browser/bare/backup/backup_file_unittest.cc b/chrome/browser/bare/backup/backup_file_unittest.cc
+new file mode 100644
+index 00000000000..646e6491fa4
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_file_unittest.cc
+@@ -0,0 +1,424 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_file.h"
++
++#include <string>
++#include <vector>
++
++#include "base/compiler_specific.h"
++#include "base/containers/span.h"
++#include "base/numerics/byte_conversions.h"
++#include "base/rand_util.h"
++#include "base/types/expected_macros.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace bare::backup {
++namespace {
++
++std::vector<uint8_t> Bytes(std::string_view s) {
++  auto span = base::as_byte_span(s);
++  return std::vector<uint8_t>(span.begin(), span.end());
++}
++
++Description TestDescription() {
++  Description d;
++  d.created = "2026-11-03T21:14:00Z";
++  d.bare_version = "2.1.0";
++  d.bare_version_code = 802100055;
++  d.device_label = "Pixel 3";
++  d.contents = {{"settings", 54}, {"bookmarks", 812}};
++  return d;
++}
++
++// A file with a hand-written header, for headers the writer never makes.
++std::vector<uint8_t> RawFile(uint16_t version,
++                             uint8_t kind,
++                             uint8_t flags,
++                             std::string_view json,
++                             std::string_view body = "") {
++  std::vector<uint8_t> out = Bytes("BAREBKUP");
++  auto u16 = base::U16ToLittleEndian(version);
++  out.insert(out.end(), u16.begin(), u16.end());
++  out.push_back(kind);
++  out.push_back(flags);
++  auto u32 = base::U32ToLittleEndian(static_cast<uint32_t>(json.size()));
++  out.insert(out.end(), u32.begin(), u32.end());
++  out.insert(out.end(), json.begin(), json.end());
++  out.insert(out.end(), body.begin(), body.end());
++  return out;
++}
++
++constexpr char kFullJson[] =
++    R"({"kind":"full","kdf":{"name":"scrypt","log2_n":15,"r":8,"p":1,)"
++    R"("salt":"AAAAAAAAAAAAAAAAAAAAAA=="},"aead":{"name":"aes-256-gcm",)"
++    R"("chunk":65536,"nonce_prefix":"AAAAAAAAAA=="}})";
++
++class BackupFileTest : public testing::Test {
++ protected:
++  static void SetUpTestSuite() {
++    kdf_ = new KdfParams(NewKdfParams());
++    key_ = new Key(*DeriveKey(Bytes(kPassphrase), *kdf_));
++  }
++  static void TearDownTestSuite() {
++    delete key_;
++    delete kdf_;
++  }
++
++  static std::vector<uint8_t> Full(base::span<const uint8_t> zip,
++                                   uint32_t chunk_size = kDefaultChunkSize) {
++    AeadParams aead = NewAeadParams();
++    aead.chunk_size = chunk_size;
++    return *WriteFullFile(TestDescription(), *kdf_, aead, *key_, zip);
++  }
++
++  // Opens `file` with `passphrase`. Without one, uses the suite's key when the
++  // file's KDF parameters are the suite's, since scrypt is slow on a phone.
++  static base::expected<std::string, ReadError> Open(
++      const std::vector<uint8_t>& file,
++      const char* passphrase = nullptr) {
++    ASSIGN_OR_RETURN(ParsedFile parsed, ParseFile(file));
++    const KdfParams& kdf = parsed.kdf;
++    if (!passphrase && kdf.log2_n == kdf_->log2_n && kdf.r == kdf_->r &&
++        kdf.p == kdf_->p && kdf.salt == kdf_->salt) {
++      return DecryptBody(parsed, *key_);
++    }
++    std::optional<Key> key =
++        DeriveKey(Bytes(passphrase ? passphrase : kPassphrase), kdf);
++    if (!key) {
++      return base::unexpected(ReadError::kBadHeader);
++    }
++    return DecryptBody(parsed, *key);
++  }
++
++  static size_t HeaderSize(const std::vector<uint8_t>& file) {
++    return ParseFile(file)->header.size();
++  }
++
++  static constexpr char kPassphrase[] = "ABCD-EFGH-JKMN-PQRS-TVWX-YZ23";
++  static inline KdfParams* kdf_ = nullptr;
++  static inline Key* key_ = nullptr;
++};
++
++TEST_F(BackupFileTest, SetupRoundTrip) {
++  const std::string zip = "PK not really a zip";
++  std::optional<std::vector<uint8_t>> file =
++      WriteSetupFile(TestDescription(), base::as_byte_span(zip));
++  ASSERT_TRUE(file);
++
++  auto parsed = ParseFile(*file);
++  ASSERT_TRUE(parsed.has_value());
++  EXPECT_EQ(parsed->kind, Kind::kSetup);
++  EXPECT_EQ(parsed->format_version, kFormatVersion);
++  EXPECT_EQ(parsed->description.created, "2026-11-03T21:14:00Z");
++  EXPECT_EQ(parsed->description.bare_version, "2.1.0");
++  EXPECT_EQ(parsed->description.bare_version_code, 802100055);
++  EXPECT_EQ(parsed->description.device_label, "Pixel 3");
++  EXPECT_EQ(parsed->description.contents.at("bookmarks"), 812);
++  EXPECT_EQ(ReadSetupBody(*parsed).value_or(""), zip);
++}
++
++TEST_F(BackupFileTest, SetupDamagedBody) {
++  std::vector<uint8_t> file =
++      *WriteSetupFile(TestDescription(), Bytes("zip bytes"));
++  file.back() ^= 1;
++  EXPECT_EQ(ReadSetupBody(*ParseFile(file)).error(), ReadError::kDamaged);
++
++  file.pop_back();
++  EXPECT_EQ(ReadSetupBody(*ParseFile(file)).error(), ReadError::kDamaged);
++}
++
++TEST_F(BackupFileTest, FullRoundTrip) {
++  // Empty, under one chunk, exactly two chunks, and a short last chunk.
++  for (size_t size : {size_t{0}, size_t{100}, 2 * kDefaultChunkSize,
++                      3 * kDefaultChunkSize + 17}) {
++    SCOPED_TRACE(size);
++    const std::vector<uint8_t> zip = base::RandBytesAsVector(size);
++    const std::vector<uint8_t> file = Full(zip);
++    auto parsed = ParseFile(file);
++    ASSERT_TRUE(parsed.has_value());
++    EXPECT_EQ(parsed->kind, Kind::kFull);
++    EXPECT_EQ(parsed->kdf.salt, kdf_->salt);
++    EXPECT_EQ(parsed->description.device_label, "Pixel 3");
++    auto body = DecryptBody(*parsed, *key_);
++    ASSERT_TRUE(body.has_value());
++    EXPECT_EQ(base::as_byte_span(*body), base::span(zip));
++  }
++}
++
++TEST_F(BackupFileTest, FullRoundTripRederivesKey) {
++  const std::vector<uint8_t> zip = Bytes("zip bytes");
++  EXPECT_EQ(Open(Full(zip), kPassphrase).value_or(""), "zip bytes");
++}
++
++TEST_F(BackupFileTest, WrongPassphrase) {
++  const std::vector<uint8_t> file = Full(Bytes("zip bytes"));
++  EXPECT_EQ(Open(file, "ABCD-EFGH-JKMN-PQRS-TVWX-YZ24").error(),
++            ReadError::kWrongCodeOrDamaged);
++  EXPECT_EQ(Open(file, "").error(), ReadError::kWrongCodeOrDamaged);
++}
++
++TEST_F(BackupFileTest, SaltChangesKey) {
++  KdfParams other = *kdf_;
++  other.salt[0] ^= 1;
++  std::optional<Key> key = DeriveKey(Bytes(kPassphrase), other);
++  ASSERT_TRUE(key);
++  EXPECT_NE(base::span(key->bytes()), base::span(key_->bytes()));
++
++  std::optional<Key> same = DeriveKey(Bytes(kPassphrase), *kdf_);
++  EXPECT_EQ(base::span(same->bytes()), base::span(key_->bytes()));
++}
++
++TEST_F(BackupFileTest, KeyMoveWipesSource) {
++  Key key = std::move(*DeriveKey(Bytes(kPassphrase), *kdf_));
++  Key moved(std::move(key));
++  const std::array<uint8_t, kKeySize> zero = {};
++  EXPECT_EQ(base::span(key.bytes()), base::span(zero));
++  EXPECT_NE(base::span(moved.bytes()), base::span(zero));
++}
++
++TEST_F(BackupFileTest, EveryHeaderByteIsAuthenticated) {
++  const std::vector<uint8_t> file = Full(Bytes("zip bytes"));
++  const size_t header_size = HeaderSize(file);
++  for (size_t i = 0; i < header_size; ++i) {
++    std::vector<uint8_t> edited = file;
++    edited[i] ^= 0x01;
++    // Either the header no longer parses, or the body no longer decrypts.
++    EXPECT_FALSE(Open(edited).has_value()) << "byte " << i;
++  }
++}
++
++TEST_F(BackupFileTest, HeaderEditKeepingValidJson) {
++  std::vector<uint8_t> file = Full(Bytes("zip bytes"));
++  std::string text(file.begin(), file.end());
++  const size_t at = text.find("Pixel 3");
++  ASSERT_NE(at, std::string::npos);
++  file[at + 6] = '4';
++  ASSERT_TRUE(ParseFile(file).has_value());
++  EXPECT_EQ(Open(file).error(), ReadError::kWrongCodeOrDamaged);
++}
++
++TEST_F(BackupFileTest, ChunksSwapped) {
++  const std::vector<uint8_t> file =
++      Full(base::RandBytesAsVector(3 * kDefaultChunkSize));
++  const size_t h = HeaderSize(file);
++  const size_t sealed = kDefaultChunkSize + kTagSize;
++  std::vector<uint8_t> swapped = file;
++  std::copy_n(file.begin() + h, sealed, swapped.begin() + h + sealed);
++  std::copy_n(file.begin() + h + sealed, sealed, swapped.begin() + h);
++  EXPECT_EQ(Open(swapped).error(), ReadError::kWrongCodeOrDamaged);
++}
++
++TEST_F(BackupFileTest, LastChunkMovedFirst) {
++  // Two full chunks, so both have the same size and only the nonce tells
++  // them apart.
++  const std::vector<uint8_t> file =
++      Full(base::RandBytesAsVector(2 * kDefaultChunkSize));
++  const size_t h = HeaderSize(file);
++  const size_t sealed = kDefaultChunkSize + kTagSize;
++  std::vector<uint8_t> swapped(file.begin(), file.begin() + h);
++  swapped.insert(swapped.end(), file.begin() + h + sealed, file.end());
++  swapped.insert(swapped.end(), file.begin() + h, file.begin() + h + sealed);
++  ASSERT_EQ(swapped.size(), file.size());
++  EXPECT_EQ(Open(swapped).error(), ReadError::kWrongCodeOrDamaged);
++}
++
++TEST_F(BackupFileTest, CutOff) {
++  const std::vector<uint8_t> file =
++      Full(base::RandBytesAsVector(2 * kDefaultChunkSize + 500));
++  const size_t h = HeaderSize(file);
++  const size_t sealed = kDefaultChunkSize + kTagSize;
++  // At a chunk boundary, so what is left is whole chunks, none marked last.
++  for (size_t keep : {h + 2 * sealed, h + sealed}) {
++    std::vector<uint8_t> cut(file.begin(), file.begin() + keep);
++    EXPECT_EQ(Open(cut).error(), ReadError::kWrongCodeOrDamaged) << keep;
++  }
++  // Inside the last chunk.
++  std::vector<uint8_t> cut(file.begin(), file.end() - 1);
++  EXPECT_EQ(Open(cut).error(), ReadError::kWrongCodeOrDamaged);
++  // Shorter than a tag after the last whole chunk.
++  cut.assign(file.begin(), file.begin() + h + 2 * sealed + 5);
++  EXPECT_EQ(Open(cut).error(), ReadError::kDamaged);
++  // Header only.
++  cut.assign(file.begin(), file.begin() + h);
++  EXPECT_EQ(Open(cut).error(), ReadError::kDamaged);
++  // Inside the header.
++  cut.assign(file.begin(), file.begin() + h - 1);
++  EXPECT_EQ(Open(cut).error(), ReadError::kBadHeader);
++}
++
++TEST_F(BackupFileTest, ExtraBytes) {
++  const std::vector<uint8_t> file =
++      Full(base::RandBytesAsVector(kDefaultChunkSize + 10));
++  for (size_t extra : {size_t{1}, kTagSize, kDefaultChunkSize + kTagSize}) {
++    std::vector<uint8_t> longer = file;
++    longer.resize(file.size() + extra, 0);
++    EXPECT_FALSE(Open(longer).has_value()) << extra;
++  }
++  // A copy of the last chunk appended.
++  std::vector<uint8_t> longer = file;
++  const size_t last = 10 + kTagSize;
++  longer.insert(longer.end(), file.end() - last, file.end());
++  EXPECT_FALSE(Open(longer).has_value());
++}
++
++TEST_F(BackupFileTest, BodyBitFlip) {
++  const std::vector<uint8_t> file =
++      Full(base::RandBytesAsVector(3 * kDefaultChunkSize));
++  for (size_t at : {HeaderSize(file), HeaderSize(file) + 100000,
++                    file.size() - 1}) {
++    std::vector<uint8_t> edited = file;
++    edited[at] ^= 0x80;
++    EXPECT_EQ(Open(edited).error(), ReadError::kWrongCodeOrDamaged) << at;
++  }
++}
++
++TEST_F(BackupFileTest, NotBare) {
++  EXPECT_EQ(ParseFile({}).error(), ReadError::kNotBare);
++  EXPECT_EQ(ParseFile(Bytes("BAREBKU")).error(), ReadError::kNotBare);
++  EXPECT_EQ(ParseFile(Bytes("BAREBKUP\x01")).error(), ReadError::kNotBare);
++  EXPECT_EQ(ParseFile(Bytes("PK\x03\x04 a zip file, not a backup")).error(),
++            ReadError::kNotBare);
++  EXPECT_EQ(ParseFile(base::RandBytesAsVector(4096)).error(),
++            ReadError::kNotBare);
++}
++
++TEST_F(BackupFileTest, Versions) {
++  EXPECT_EQ(ParseFile(RawFile(2, 2, 0, kFullJson)).error(),
++            ReadError::kNewerVersion);
++  EXPECT_EQ(ParseFile(RawFile(0xffff, 1, 0, "")).error(),
++            ReadError::kNewerVersion);
++  EXPECT_EQ(ParseFile(RawFile(0, 2, 0, kFullJson)).error(),
++            ReadError::kBadHeader);
++  EXPECT_TRUE(ParseFile(RawFile(1, 2, 0, kFullJson)).has_value());
++}
++
++TEST_F(BackupFileTest, BadFixedHeader) {
++  EXPECT_EQ(ParseFile(RawFile(1, 3, 0, kFullJson)).error(),
++            ReadError::kBadHeader);
++  EXPECT_EQ(ParseFile(RawFile(1, 0, 0, kFullJson)).error(),
++            ReadError::kBadHeader);
++  EXPECT_EQ(ParseFile(RawFile(1, 2, 1, kFullJson)).error(),
++            ReadError::kBadHeader);
++  // Kind byte says setup, JSON says full.
++  EXPECT_EQ(ParseFile(RawFile(1, 1, 0, kFullJson)).error(),
++            ReadError::kBadHeader);
++  // Empty header, and a length past the end of the file.
++  EXPECT_EQ(ParseFile(RawFile(1, 2, 0, "")).error(), ReadError::kBadHeader);
++  std::vector<uint8_t> file = RawFile(1, 2, 0, kFullJson);
++  file[12] += 1;
++  EXPECT_EQ(ParseFile(file).error(), ReadError::kBadHeader);
++  // Header over the limit.
++  std::string big = std::string(kFullJson);
++  big.insert(big.size() - 1, ",\"pad\":\"" +
++                                 std::string(kMaxHeaderJsonSize, 'x') + "\"");
++  EXPECT_EQ(ParseFile(RawFile(1, 2, 0, big)).error(), ReadError::kBadHeader);
++}
++
++TEST_F(BackupFileTest, BadHeaderJson) {
++  const char* const kBad[] = {
++      "not json",
++      "[]",
++      R"({"kind":"full"})",
++      R"({"kind":"full","kdf":{"name":"pbkdf2","log2_n":15,"r":8,"p":1,)"
++      R"("salt":"AAAAAAAAAAAAAAAAAAAAAA=="},"aead":{"name":"aes-256-gcm",)"
++      R"("chunk":65536,"nonce_prefix":"AAAAAAAAAA=="}})",
++      // N far too large for a phone.
++      R"({"kind":"full","kdf":{"name":"scrypt","log2_n":30,"r":8,"p":1,)"
++      R"("salt":"AAAAAAAAAAAAAAAAAAAAAA=="},"aead":{"name":"aes-256-gcm",)"
++      R"("chunk":65536,"nonce_prefix":"AAAAAAAAAA=="}})",
++      R"({"kind":"full","kdf":{"name":"scrypt","log2_n":15,"r":0,"p":1,)"
++      R"("salt":"AAAAAAAAAAAAAAAAAAAAAA=="},"aead":{"name":"aes-256-gcm",)"
++      R"("chunk":65536,"nonce_prefix":"AAAAAAAAAA=="}})",
++      // Salt one byte short.
++      R"({"kind":"full","kdf":{"name":"scrypt","log2_n":15,"r":8,"p":1,)"
++      R"("salt":"AAAAAAAAAAAAAAAAAAAA"},"aead":{"name":"aes-256-gcm",)"
++      R"("chunk":65536,"nonce_prefix":"AAAAAAAAAA=="}})",
++      R"({"kind":"full","kdf":{"name":"scrypt","log2_n":15,"r":8,"p":1,)"
++      R"("salt":"AAAAAAAAAAAAAAAAAAAAAA=="},"aead":{"name":"aes-256-gcm",)"
++      R"("chunk":10,"nonce_prefix":"AAAAAAAAAA=="}})",
++      R"({"kind":"full","kdf":{"name":"scrypt","log2_n":15,"r":8,"p":1,)"
++      R"("salt":"AAAAAAAAAAAAAAAAAAAAAA=="},"aead":{"name":"chacha",)"
++      R"("chunk":65536,"nonce_prefix":"AAAAAAAAAA=="}})",
++      // Description fields of the wrong type.
++      R"({"kind":"full","device_label":7,"kdf":{"name":"scrypt","log2_n":15,)"
++      R"("r":8,"p":1,"salt":"AAAAAAAAAAAAAAAAAAAAAA=="},"aead":{"name":)"
++      R"("aes-256-gcm","chunk":65536,"nonce_prefix":"AAAAAAAAAA=="}})",
++      R"({"kind":"full","contents":{"bookmarks":-1},"kdf":{"name":"scrypt",)"
++      R"("log2_n":15,"r":8,"p":1,"salt":"AAAAAAAAAAAAAAAAAAAAAA=="},"aead":)"
++      R"({"name":"aes-256-gcm","chunk":65536,"nonce_prefix":"AAAAAAAAAA=="}})",
++  };
++  for (const char* json : kBad) {
++    EXPECT_EQ(ParseFile(RawFile(1, 2, 0, json)).error(), ReadError::kBadHeader)
++        << json;
++  }
++  // A setup file needs its checksum.
++  EXPECT_EQ(ParseFile(RawFile(1, 1, 0, R"({"kind":"setup"})")).error(),
++            ReadError::kBadHeader);
++  EXPECT_EQ(ParseFile(RawFile(1, 1, 0,
++                              R"({"kind":"setup","body_sha256":"00"})"))
++                .error(),
++            ReadError::kBadHeader);
++}
++
++TEST_F(BackupFileTest, HeaderJsonDepth) {
++  std::string json = kFullJson;
++  json.insert(json.size() - 1, R"(,"x":{"a":1})");
++  EXPECT_TRUE(ParseFile(RawFile(1, 2, 0, json)).has_value());
++  json = kFullJson;
++  json.insert(json.size() - 1, R"(,"x":{"a":{"b":{"c":{"d":{"e":1}}}}})");
++  EXPECT_EQ(ParseFile(RawFile(1, 2, 0, json)).error(), ReadError::kBadHeader);
++}
++
++TEST_F(BackupFileTest, UnknownHeaderKeysIgnored) {
++  std::string json = kFullJson;
++  json.insert(json.size() - 1, R"(,"added_later":{"x":1})");
++  EXPECT_TRUE(ParseFile(RawFile(1, 2, 0, json)).has_value());
++}
++
++TEST_F(BackupFileTest, SizeLimits) {
++  std::vector<uint8_t> big(kMaxBodySize + 1);
++  EXPECT_FALSE(WriteSetupFile(TestDescription(), big));
++  EXPECT_FALSE(WriteFullFile(TestDescription(), *kdf_, NewAeadParams(), *key_,
++                             big));
++
++  constexpr char kSetupJson[] =
++      R"({"kind":"setup","body_sha256":)"
++      R"("0000000000000000000000000000000000000000000000000000000000000000"})";
++  std::string body(kMaxBodySize + 1, '\0');
++  EXPECT_EQ(ParseFile(RawFile(1, 1, 0, kSetupJson, body)).error(),
++            ReadError::kTooLarge);
++  body.resize(kMaxBodySize + 1025 * kTagSize + 1);
++  EXPECT_EQ(ParseFile(RawFile(1, 2, 0, kFullJson, body)).error(),
++            ReadError::kTooLarge);
++}
++
++TEST_F(BackupFileTest, KdfRange) {
++  KdfParams kdf = *kdf_;
++  kdf.log2_n = 23;
++  EXPECT_FALSE(DeriveKey(Bytes(kPassphrase), kdf));
++  kdf.log2_n = 13;
++  EXPECT_FALSE(DeriveKey(Bytes(kPassphrase), kdf));
++  kdf.log2_n = 15;
++  kdf.r = 0;
++  EXPECT_FALSE(DeriveKey(Bytes(kPassphrase), kdf));
++}
++
++}  // namespace
++TEST(BackupSecretTest, WipeSecretClearsTheCallersBytes) {
++  std::vector<uint8_t> secret = {'s', 'e', 'c', 'r', 'e', 't'};
++  const uint8_t* storage = secret.data();
++  const size_t size = secret.size();
++  WipeSecret(secret);
++  EXPECT_TRUE(secret.empty());
++  // clear() keeps the allocation, so the old bytes can still be looked at.
++  ASSERT_EQ(secret.data(), storage);
++  // SAFETY: clear() keeps the allocation, so `storage` still holds `size`
++  // bytes owned by `secret`.
++  for (uint8_t byte : UNSAFE_BUFFERS(base::span(storage, size))) {
++    EXPECT_EQ(byte, 0);
++  }
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_package.cc b/chrome/browser/bare/backup/backup_package.cc
+new file mode 100644
+index 00000000000..82d1248dc40
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_package.cc
+@@ -0,0 +1,131 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_package.h"
++
++#include <algorithm>
++
++#include "base/strings/string_util.h"
++#include "base/strings/string_split.h"
++#include "third_party/zlib/google/zip_reader.h"
++
++namespace bare::backup {
++
++namespace {
++
++constexpr size_t kMaxNameLength = 512;
++
++bool IsNameChar(char c) {
++  return base::IsAsciiAlphaNumeric(c) || c == '.' || c == '_' || c == '-' ||
++         c == '/';
++}
++
++base::unexpected<PackageReadError> Fail(PackageError error,
++                                        std::string entry = std::string()) {
++  return base::unexpected(PackageReadError{error, std::move(entry)});
++}
++
++bool IsExtensionNameChar(char c) {
++  const auto byte = static_cast<unsigned char>(c);
++  return byte >= 0x20 && byte != 0x7f && c != '\\';
++}
++
++}  // namespace
++
++bool IsSafeEntryName(std::string_view name) {
++  if (name.empty() || name.size() > kMaxNameLength || name.front() == '/') {
++    return false;
++  }
++  if (name.starts_with(kExtensionFilesPrefix)) {
++    if (!base::IsStringUTF8(name) ||
++        !std::ranges::all_of(name, IsExtensionNameChar)) {
++      return false;
++    }
++  } else if (!std::ranges::all_of(name, IsNameChar)) {
++    return false;
++  }
++  if (name.back() == '/') {
++    name.remove_suffix(1);
++  }
++  for (std::string_view part : base::SplitStringPiece(
++           name, "/", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL)) {
++    if (part.empty() || part == "." || part == "..") {
++      return false;
++    }
++  }
++  return true;
++}
++
++base::expected<Package, PackageReadError> ReadPackage(
++    const std::string& zip,
++    const PackageLimits& limits) {
++  zip::ZipReader reader;
++  if (!reader.OpenFromString(zip)) {
++    return Fail(PackageError::kNotZip);
++  }
++  if (reader.num_entries() < 0 ||
++      static_cast<size_t>(reader.num_entries()) > limits.max_entries) {
++    return Fail(PackageError::kTooManyEntries);
++  }
++
++  const uint64_t ratio_budget = limits.max_ratio * zip.size();
++  Package package;
++  size_t entries = 0;
++  uint64_t total = 0;
++  while (const zip::ZipReader::Entry* entry = reader.Next()) {
++    if (++entries > limits.max_entries) {
++      return Fail(PackageError::kTooManyEntries);
++    }
++    const std::string& name = entry->path_in_original_encoding;
++    if (!IsSafeEntryName(name) || entry->is_unsafe) {
++      return Fail(PackageError::kBadName);
++    }
++    if (entry->is_symbolic_link) {
++      return Fail(PackageError::kLink, name);
++    }
++    if (entry->is_encrypted) {
++      return Fail(PackageError::kEncrypted, name);
++    }
++    if (entry->is_directory) {
++      continue;
++    }
++    if (package.contains(name)) {
++      return Fail(PackageError::kDuplicate, name);
++    }
++
++    // Whichever limit is closest decides how much may be read, and which error
++    // is reported if the entry goes past it.
++    uint64_t max_read = limits.max_file_size;
++    PackageError over = PackageError::kFileTooLarge;
++    if (limits.max_total_size - total < max_read) {
++      max_read = limits.max_total_size - total;
++      over = PackageError::kTotalTooLarge;
++    }
++    if (ratio_budget - total < max_read) {
++      max_read = ratio_budget - total;
++      over = PackageError::kRatioTooHigh;
++    }
++
++    // One byte past the limit tells "too big" apart from "exactly at the
++    // limit", and ExtractCurrentEntryToString() reads nothing at all when
++    // asked for 0 bytes.
++    std::string contents;
++    const bool complete =
++        reader.ExtractCurrentEntryToString(max_read + 1, &contents);
++    if (contents.size() > max_read) {
++      return Fail(over, name);
++    }
++    if (!complete) {
++      return Fail(PackageError::kDamaged, name);
++    }
++    total += contents.size();
++    package.emplace(name, std::move(contents));
++  }
++  if (!reader.ok()) {
++    return Fail(PackageError::kDamaged);
++  }
++  return package;
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_package.h b/chrome/browser/bare/backup/backup_package.h
+new file mode 100644
+index 00000000000..b532d6a7ded
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_package.h
+@@ -0,0 +1,69 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKUP_BACKUP_PACKAGE_H_
++#define CHROME_BROWSER_BARE_BACKUP_BACKUP_PACKAGE_H_
++
++#include <stddef.h>
++#include <stdint.h>
++
++#include <map>
++#include <string>
++#include <string_view>
++
++#include "base/types/expected.h"
++
++// Reads the zip inside a .bare file into memory. The zip comes from a file the
++// user picked, so it is treated as hostile: names are checked, links and
++// encrypted entries are refused, and sizes are capped while extracting rather
++// than trusted from the zip's own metadata.
++namespace bare::backup {
++
++struct PackageLimits {
++  size_t max_entries = 2000;
++  uint64_t max_total_size = 64 * 1024 * 1024;
++  uint64_t max_file_size = 16 * 1024 * 1024;
++  // Unpacked bytes per byte of zip, over the whole package.
++  uint64_t max_ratio = 100;
++};
++
++enum class PackageError {
++  kNotZip,
++  kTooManyEntries,
++  kBadName,
++  kLink,
++  kEncrypted,
++  kDuplicate,
++  kFileTooLarge,
++  kTotalTooLarge,
++  kRatioTooHigh,
++  kDamaged,
++};
++
++struct PackageReadError {
++  PackageError error;
++  // The entry that failed, when there is one. Only names that passed
++  // IsSafeEntryName() are copied here.
++  std::string entry;
++};
++
++// Entry name to contents. Directory entries are left out.
++using Package = std::map<std::string, std::string>;
++
++// Holds the files of installed extensions, whose names Bare doesn't choose.
++inline constexpr char kExtensionFilesPrefix[] = "setup/extensions/";
++
++// Relative, no empty, "." or ".." part, at most 512 bytes, and a trailing "/"
++// only for a directory. Names are made of [A-Za-z0-9._/-], except under
++// kExtensionFilesPrefix, where any UTF-8 is allowed apart from control
++// characters and "\".
++bool IsSafeEntryName(std::string_view name);
++
++base::expected<Package, PackageReadError> ReadPackage(
++    const std::string& zip,
++    const PackageLimits& limits = PackageLimits());
++
++}  // namespace bare::backup
++
++#endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_PACKAGE_H_
+diff --git a/chrome/browser/bare/backup/backup_package_unittest.cc b/chrome/browser/bare/backup/backup_package_unittest.cc
+new file mode 100644
+index 00000000000..0acdd4f2f78
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_package_unittest.cc
+@@ -0,0 +1,328 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_package.h"
++
++#include <string>
++#include <vector>
++
++#include "base/check_op.h"
++#include "base/numerics/byte_conversions.h"
++#include "base/strings/string_number_conversions.h"
++#include "chrome/browser/bare/backup/backup_file.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "third_party/zlib/zlib.h"
++
++namespace bare::backup {
++namespace {
++
++// Writes zips by hand so the tests can make ones no zip tool would: unsafe
++// names, links, false sizes.
++struct TestEntry {
++  std::string name;
++  std::string data;
++  bool deflate = false;
++  uint16_t flags = 0;
++  // Unix mode in the high 16 bits, as Info-ZIP writes it.
++  uint32_t external_attr = 0100644u << 16;
++  // Overrides the uncompressed size written in the headers.
++  std::optional<uint32_t> claimed_size;
++  std::optional<uint32_t> claimed_crc;
++};
++
++std::string Deflate(const std::string& in) {
++  z_stream stream = {};
++  CHECK_EQ(deflateInit2(&stream, 9, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY),
++           Z_OK);
++  std::string out(deflateBound(&stream, in.size()), '\0');
++  stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(in.data()));
++  stream.avail_in = in.size();
++  stream.next_out = reinterpret_cast<Bytef*>(out.data());
++  stream.avail_out = out.size();
++  CHECK_EQ(deflate(&stream, Z_FINISH), Z_STREAM_END);
++  out.resize(stream.total_out);
++  deflateEnd(&stream);
++  return out;
++}
++
++void Put16(std::string& out, uint16_t v) {
++  auto b = base::U16ToLittleEndian(v);
++  out.append(b.begin(), b.end());
++}
++
++void Put32(std::string& out, uint32_t v) {
++  auto b = base::U32ToLittleEndian(v);
++  out.append(b.begin(), b.end());
++}
++
++std::string BuildZip(const std::vector<TestEntry>& entries) {
++  std::string out;
++  std::string central;
++  for (const TestEntry& e : entries) {
++    const std::string body = e.deflate ? Deflate(e.data) : e.data;
++    const uint32_t crc = e.claimed_crc.value_or(static_cast<uint32_t>(
++        crc32(0, reinterpret_cast<const Bytef*>(e.data.data()),
++              e.data.size())));
++    const uint32_t size =
++        e.claimed_size.value_or(static_cast<uint32_t>(e.data.size()));
++    const uint16_t method = e.deflate ? 8 : 0;
++    const uint32_t offset = out.size();
++
++    Put32(out, 0x04034b50);
++    Put16(out, 20);
++    Put16(out, e.flags);
++    Put16(out, method);
++    Put16(out, 0);       // time
++    Put16(out, 0x21);    // 1980-01-01
++    Put32(out, crc);
++    Put32(out, body.size());
++    Put32(out, size);
++    Put16(out, e.name.size());
++    Put16(out, 0);
++    out += e.name;
++    out += body;
++
++    Put32(central, 0x02014b50);
++    Put16(central, (3 << 8) | 20);  // made on Unix
++    Put16(central, 20);
++    Put16(central, e.flags);
++    Put16(central, method);
++    Put16(central, 0);
++    Put16(central, 0x21);
++    Put32(central, crc);
++    Put32(central, body.size());
++    Put32(central, size);
++    Put16(central, e.name.size());
++    Put16(central, 0);  // extra
++    Put16(central, 0);  // comment
++    Put16(central, 0);  // disk
++    Put16(central, 0);  // internal attributes
++    Put32(central, e.external_attr);
++    Put32(central, offset);
++    central += e.name;
++  }
++  const uint32_t central_offset = out.size();
++  out += central;
++  Put32(out, 0x06054b50);
++  Put16(out, 0);
++  Put16(out, 0);
++  Put16(out, entries.size());
++  Put16(out, entries.size());
++  Put32(out, central.size());
++  Put32(out, central_offset);
++  Put16(out, 0);
++  return out;
++}
++
++PackageError ErrorOf(const std::vector<TestEntry>& entries,
++                     const PackageLimits& limits = PackageLimits()) {
++  auto result = ReadPackage(BuildZip(entries), limits);
++  return result.has_value() ? static_cast<PackageError>(-1)
++                            : result.error().error;
++}
++
++TEST(BackupPackageTest, ReadsEntries) {
++  const std::string json(5000, 'a');
++  auto package = ReadPackage(BuildZip({
++      {.name = "manifest.json", .data = "{\"schema\":1}"},
++      {.name = "setup/", .external_attr = 040755u << 16},
++      {.name = "setup/settings.json", .data = json, .deflate = true},
++      {.name = "setup/extensions/abc/_locales/en_GB/messages.json",
++       .data = "{}"},
++      {.name = "personal/empty.json", .data = ""},
++  }));
++  ASSERT_TRUE(package.has_value());
++  EXPECT_EQ(package->size(), 4u);
++  EXPECT_EQ(package->at("manifest.json"), "{\"schema\":1}");
++  EXPECT_EQ(package->at("setup/settings.json"), json);
++  EXPECT_EQ(package->at("setup/extensions/abc/_locales/en_GB/messages.json"),
++            "{}");
++  EXPECT_EQ(package->at("personal/empty.json"), "");
++  EXPECT_FALSE(package->contains("setup/"));
++}
++
++TEST(BackupPackageTest, SafeNames) {
++  for (const char* name :
++       {"a", "a.json", "setup/settings.json", "dir/", "a-b_c.D9/e",
++        "setup/extensions/abcdefghijklmnop/1.2.3_0/manifest.json", "..a",
++        "a..", ".hidden"}) {
++    EXPECT_TRUE(IsSafeEntryName(name)) << name;
++  }
++  for (const char* name :
++       {"", "/", "/etc/passwd", "../a", "a/../b", "a/..", "..", ".", "./a",
++        "a/./b", "a//b", "a\\b", "..\\a", "C:/a", "a b", "a\n", "caf\xc3\xa9",
++        "a/b//", "a%2f..", "~/a", "a:b", "a*", "a\x01"}) {
++    EXPECT_FALSE(IsSafeEntryName(name)) << name;
++  }
++  // Extension files keep the names their authors gave them.
++  for (const char* name :
++       {"setup/extensions/abc/icon@2x.png", "setup/extensions/abc/a b+c.js",
++        "setup/extensions/abc/caf\xc3\xa9.json", "setup/extensions/abc/C:x",
++        "setup/extensions/abc/%2e%2e/x"}) {
++    EXPECT_TRUE(IsSafeEntryName(name)) << name;
++  }
++  for (const char* name :
++       {"setup/extensions/abc/../x", "setup/extensions/../settings.json",
++        "setup/extensions/abc//x", "setup/extensions/abc/./x",
++        "setup/extensions/abc\\..\\x", "setup/extensions/abc/a\n",
++        "setup/extensions/abc/\x7f", "setup/extensions/abc/\xff\xfe",
++        "setup/extensionsx/a b", "personal/a b", "setup/a@b"}) {
++    EXPECT_FALSE(IsSafeEntryName(name)) << name;
++  }
++  EXPECT_TRUE(IsSafeEntryName(std::string(512, 'a')));
++  EXPECT_FALSE(IsSafeEntryName(std::string(513, 'a')));
++}
++
++TEST(BackupPackageTest, Traversal) {
++  for (const char* name : {"../evil", "/abs/path", "setup/../../evil",
++                           "..\\evil", "a//b", "./x"}) {
++    EXPECT_EQ(ErrorOf({{.name = "ok.json", .data = "{}"},
++                       {.name = name, .data = "x"}}),
++              PackageError::kBadName)
++        << name;
++  }
++}
++
++TEST(BackupPackageTest, ExtensionFileNames) {
++  auto package = ReadPackage(BuildZip({
++      {.name = "setup/extensions/abc/img/icon@2x.png", .data = "png"},
++      {.name = "setup/extensions/abc/My File.js", .data = "js"},
++  }));
++  ASSERT_TRUE(package.has_value());
++  EXPECT_EQ(package->at("setup/extensions/abc/My File.js"), "js");
++  EXPECT_EQ(ErrorOf({{.name = "setup/extensions/abc/../../x", .data = "x"}}),
++            PackageError::kBadName);
++}
++
++TEST(BackupPackageTest, NulInName) {
++  // minizip ends the name at the NUL. Whatever comes out must be a safe name.
++  auto package =
++      ReadPackage(BuildZip({{.name = std::string("a\0/../b", 6), .data = "x"}}));
++  if (package.has_value()) {
++    for (const auto& [name, contents] : *package) {
++      EXPECT_TRUE(IsSafeEntryName(name)) << name;
++      EXPECT_EQ(name.find('\0'), std::string::npos);
++    }
++  }
++}
++
++TEST(BackupPackageTest, Symlink) {
++  EXPECT_EQ(ErrorOf({{.name = "link",
++                      .data = "/data/data/org.barebrowser",
++                      .external_attr = 0120777u << 16}}),
++            PackageError::kLink);
++}
++
++TEST(BackupPackageTest, Encrypted) {
++  EXPECT_EQ(ErrorOf({{.name = "a.json", .data = "xxxxxxxxxxxx", .flags = 1}}),
++            PackageError::kEncrypted);
++}
++
++TEST(BackupPackageTest, Duplicate) {
++  EXPECT_EQ(ErrorOf({{.name = "a.json", .data = "1"},
++                     {.name = "a.json", .data = "2"}}),
++            PackageError::kDuplicate);
++}
++
++TEST(BackupPackageTest, TooManyEntries) {
++  std::vector<TestEntry> entries;
++  for (int i = 0; i < 2001; ++i) {
++    entries.push_back({.name = "f" + base::NumberToString(i)});
++  }
++  EXPECT_EQ(ErrorOf(entries), PackageError::kTooManyEntries);
++  entries.pop_back();
++  EXPECT_TRUE(ReadPackage(BuildZip(entries)).has_value());
++}
++
++TEST(BackupPackageTest, Bomb) {
++  // 20 MB of zeros deflate to about 20 KB.
++  const std::string zeros(20 * 1024 * 1024, '\0');
++  EXPECT_EQ(ErrorOf({{.name = "bomb", .data = zeros, .deflate = true}}),
++            PackageError::kRatioTooHigh);
++  // The same with headers that claim it is small. minizip stops at the
++  // claimed size and the checksum fails, or the cap is hit first.
++  EXPECT_FALSE(ReadPackage(BuildZip({{.name = "bomb",
++                                      .data = zeros,
++                                      .deflate = true,
++                                      .claimed_size = 100}}))
++                   .has_value());
++  // Budget used up by earlier entries: a later non-empty entry still fails.
++  PackageLimits limits;
++  limits.max_total_size = 10;
++  EXPECT_EQ(ErrorOf({{.name = "a", .data = std::string(10, 'x')},
++                     {.name = "b", .data = "y"}},
++                    limits),
++            PackageError::kTotalTooLarge);
++}
++
++TEST(BackupPackageTest, FileTooLarge) {
++  // Random-looking data, so the ratio stays low and the file cap is hit.
++  std::string data(16 * 1024 * 1024 + 1, '\0');
++  for (size_t i = 0; i < data.size(); ++i) {
++    data[i] = static_cast<char>((i * 2654435761u) >> 13);
++  }
++  EXPECT_EQ(ErrorOf({{.name = "big", .data = data}}),
++            PackageError::kFileTooLarge);
++  data.pop_back();
++  EXPECT_TRUE(ReadPackage(BuildZip({{.name = "big", .data = data}})).has_value());
++}
++
++TEST(BackupPackageTest, TotalTooLarge) {
++  PackageLimits limits;
++  limits.max_total_size = 100;
++  EXPECT_EQ(ErrorOf({{.name = "a", .data = std::string(60, 'x')},
++                     {.name = "b", .data = std::string(60, 'y')}},
++                    limits),
++            PackageError::kTotalTooLarge);
++  EXPECT_TRUE(ReadPackage(BuildZip({{.name = "a", .data = std::string(50, 'x')},
++                                    {.name = "b", .data = std::string(50, 'y')}}),
++                          limits)
++                  .has_value());
++}
++
++TEST(BackupPackageTest, DamagedEntry) {
++  EXPECT_EQ(ErrorOf({{.name = "a", .data = "hello", .claimed_crc = 1234}}),
++            PackageError::kDamaged);
++}
++
++TEST(BackupPackageTest, NotZip) {
++  EXPECT_EQ(ReadPackage("").error().error, PackageError::kNotZip);
++  EXPECT_EQ(ReadPackage("hello, not a zip").error().error,
++            PackageError::kNotZip);
++  std::string cut = BuildZip({{.name = "a", .data = "hello"}});
++  cut.resize(cut.size() - 10);
++  EXPECT_FALSE(ReadPackage(cut).has_value());
++}
++
++// The whole path a full backup takes: package, encrypt, parse, decrypt, read.
++TEST(BackupPackageTest, ThroughFullFile) {
++  std::string bookmarks;
++  for (int i = 0; bookmarks.size() < 300000; ++i) {
++    bookmarks += "{\"title\":\"Page " + base::NumberToString(i * 7919) +
++                 "\",\"url\":\"https://example.org/" +
++                 base::NumberToString(i * 104729 % 99991) + "\"},";
++  }
++  const std::string zip = BuildZip({
++      {.name = "manifest.json", .data = "{\"schema\":1}"},
++      {.name = "personal/bookmarks.json", .data = bookmarks, .deflate = true},
++  });
++  ASSERT_LT(bookmarks.size() / zip.size(), 100u);
++  const KdfParams kdf = NewKdfParams();
++  std::optional<Key> key = DeriveKey(base::as_byte_span(std::string_view("passphrase")), kdf);
++  ASSERT_TRUE(key);
++  std::optional<std::vector<uint8_t>> file = WriteFullFile(
++      Description(), kdf, NewAeadParams(), *key, base::as_byte_span(zip));
++  ASSERT_TRUE(file);
++
++  auto parsed = ParseFile(*file);
++  ASSERT_TRUE(parsed.has_value());
++  auto body = DecryptBody(*parsed, *key);
++  ASSERT_TRUE(body.has_value());
++  auto package = ReadPackage(*body);
++  ASSERT_TRUE(package.has_value());
++  EXPECT_EQ(package->at("personal/bookmarks.json"), bookmarks);
++}
++
++}  // namespace
++}  // namespace bare::backup

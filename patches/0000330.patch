@@ -1,0 +1,4096 @@
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+index b33624d39b0..35c9055783d 100644
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -3099,6 +3099,7 @@ if (_is_default_toolchain) {
+       "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
+       "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
+       "java/src/org/chromium/chrome/browser/bare/BareUboUpdate.java",
++      "java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java",
+       "java/src/org/chromium/chrome/browser/browserservices/digitalgoods/SiteIsolator.java",
+       "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappBridge.java",
+       "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappGeolocationBridge.java",
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 04d6870c201..2e92f611667 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -447,6 +447,8 @@ chrome_java_resources = [
+   "java/res/drawable/bare_welcome_chooser_bg.xml",
+   "java/res/values-night/bare_welcome_colors.xml",
+   "java/res/values/bare_menu_strings.xml",
++  "java/res/values/bare_backup_strings.xml",
++  "java/res/values/bare_backup_styles.xml",
+   "java/res/values/bare_welcome_colors.xml",
+   "java/res/drawable/bare_settings_ic_palette.xml",
+   "java/res/drawable/bare_settings_ic_shield.xml",
+@@ -475,6 +477,8 @@ chrome_java_resources = [
+   "java/res/drawable/bare_wordmark_on_dark.xml",
+   "java/res/layout/bare_welcome_chooser.xml",
+   "java/res/layout/bare_welcome_chooser_row.xml",
++  "java/res/layout/bare_backup_button.xml",
++  "java/res/layout/bare_backup_kind.xml",
+   "java/res/layout/bare_welcome_option_row.xml",
+   "java/res/layout/bare_welcome_overlay.xml",
+   "java/res/layout/bare_clear_veil.xml",
+@@ -722,6 +726,8 @@ chrome_java_resources = [
+   "java/res/xml/bare_extensions_preferences.xml",
+   "java/res/xml/bare_push_preferences.xml",
+   "java/res/xml/bare_security_preferences.xml",
++  "java/res/xml/bare_backup_create_preferences.xml",
++  "java/res/xml/bare_backup_preferences.xml",
+   "java/res/xml/bare_translate_preferences.xml",
+   "java/res/xml/bare_toolbar_preferences.xml",
+   "java/res/xml/bookmark_bar_preferences.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 805b5205784..1183e97252a 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -249,6 +249,15 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java",
+   "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
+   "java/src/org/chromium/chrome/browser/bare/BareUboUpdate.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareBackupButtonPreference.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareBackupCreateFragment.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareBackupDialogs.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareBackupIo.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareBackupKindPreference.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareBackupSettingsFragment.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareScreenLock.java",
+   "java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java",
+diff --git a/chrome/android/java/res/layout/bare_backup_button.xml b/chrome/android/java/res/layout/bare_backup_button.xml
+new file mode 100644
+index 00000000000..ddeb8b985b6
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_backup_button.xml
+@@ -0,0 +1,28 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Copyright 2026 The Chromium Authors
++     Use of this source code is governed by a BSD-style license that can be
++     found in the LICENSE file. -->
++<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content"
++    android:paddingStart="16dp"
++    android:paddingEnd="16dp"
++    android:paddingTop="16dp"
++    android:paddingBottom="16dp">
++
++    <Button
++        android:id="@+id/bare_backup_button"
++        android:layout_width="wrap_content"
++        android:layout_height="wrap_content"
++        android:layout_gravity="end"
++        android:minWidth="112dp"
++        android:minHeight="48dp"
++        android:paddingStart="24dp"
++        android:paddingEnd="24dp"
++        android:background="@drawable/bare_welcome_button_primary"
++        android:stateListAnimator="@null"
++        android:textAllCaps="false"
++        android:textColor="@color/bare_welcome_on_accent"
++        android:textSize="15sp"
++        android:fontFamily="sans-serif-medium" />
++</FrameLayout>
+diff --git a/chrome/android/java/res/layout/bare_backup_kind.xml b/chrome/android/java/res/layout/bare_backup_kind.xml
+new file mode 100644
+index 00000000000..78bbbfd0a8b
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_backup_kind.xml
+@@ -0,0 +1,46 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Copyright 2026 The Chromium Authors
++     Use of this source code is governed by a BSD-style license that can be
++     found in the LICENSE file. -->
++<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content"
++    android:orientation="vertical"
++    android:paddingStart="16dp"
++    android:paddingEnd="16dp"
++    android:paddingTop="8dp"
++    android:paddingBottom="8dp">
++
++    <LinearLayout
++        android:id="@+id/bare_backup_kind_setup"
++        style="@style/BareBackupCard">
++        <RadioButton
++            android:id="@+id/bare_backup_kind_setup_radio"
++            style="@style/BareBackupCardRadio" />
++        <LinearLayout style="@style/BareBackupCardText">
++            <TextView
++                style="@style/BareBackupCardTitle"
++                android:text="@string/bare_backup_setup_only" />
++            <TextView
++                style="@style/BareBackupCardBody"
++                android:text="@string/bare_backup_setup_only_summary" />
++        </LinearLayout>
++    </LinearLayout>
++
++    <LinearLayout
++        android:id="@+id/bare_backup_kind_everything"
++        style="@style/BareBackupCard"
++        android:layout_marginTop="12dp">
++        <RadioButton
++            android:id="@+id/bare_backup_kind_everything_radio"
++            style="@style/BareBackupCardRadio" />
++        <LinearLayout style="@style/BareBackupCardText">
++            <TextView
++                style="@style/BareBackupCardTitle"
++                android:text="@string/bare_backup_everything" />
++            <TextView
++                style="@style/BareBackupCardBody"
++                android:text="@string/bare_backup_everything_summary" />
++        </LinearLayout>
++    </LinearLayout>
++</LinearLayout>
+diff --git a/chrome/android/java/res/values/bare_backup_strings.xml b/chrome/android/java/res/values/bare_backup_strings.xml
+new file mode 100644
+index 00000000000..8a6fe0eb93b
+--- /dev/null
++++ b/chrome/android/java/res/values/bare_backup_strings.xml
+@@ -0,0 +1,106 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Copyright 2026 The Chromium Authors
++     Use of this source code is governed by a BSD-style license that can be
++     found in the LICENSE file. -->
++<resources>
++    <string name="bare_backup_title" translatable="false">Backup and transfer</string>
++    <string name="bare_backup_create" translatable="false">Create backup</string>
++    <string name="bare_backup_create_summary" translatable="false">Save a file you control</string>
++    <string name="bare_backup_restore" translatable="false">Restore from backup</string>
++    <string name="bare_backup_restore_summary" translatable="false">Open a saved file</string>
++    <string name="bare_backup_footnote" translatable="false">Backups never include cookies, logins, history or open tabs.</string>
++
++    <string name="bare_backup_setup_only" translatable="false">Setup only</string>
++    <string name="bare_backup_setup_only_summary" translatable="false">Settings and extensions. No personal data. Safe to share.</string>
++    <string name="bare_backup_everything" translatable="false">Everything</string>
++    <string name="bare_backup_everything_summary" translatable="false">Setup, bookmarks and site settings. Protected with a recovery code.</string>
++    <string name="bare_backup_own_passphrase" translatable="false">Use my own passphrase</string>
++    <string name="bare_backup_own_passphrase_summary" translatable="false">Instead of a recovery code. At least 12 characters.</string>
++    <string name="bare_backup_include_dns" translatable="false">Include my DNS server</string>
++    <string name="bare_backup_save" translatable="false">Save backup</string>
++    <string name="bare_backup_file_setup" translatable="false">Bare setup %1$s.bare</string>
++    <string name="bare_backup_file_full" translatable="false">Bare backup %1$s.bare</string>
++
++    <string name="bare_backup_lock_title" translatable="false">Confirm it\'s you</string>
++    <string name="bare_backup_lock_subtitle" translatable="false">This backup includes your bookmarks and site settings</string>
++    <string name="bare_backup_no_lock" translatable="false">This phone has no screen lock, so Bare won\'t ask for one.</string>
++
++    <string name="bare_backup_code_title" translatable="false">Your recovery code</string>
++    <string name="bare_backup_code_message" translatable="false">Write this code down or store it in a password manager. Without it, this backup can\'t be opened, and Bare can\'t recover it for you.</string>
++    <string name="bare_backup_code_saved" translatable="false">I\'ve saved it</string>
++    <string name="bare_backup_code_confirm_title" translatable="false">Type the code</string>
++    <string name="bare_backup_code_confirm_message" translatable="false">So you know you have it right.</string>
++    <string name="bare_backup_code_mismatch" translatable="false">That doesn\'t match the code. Check it and try again.</string>
++    <string name="bare_backup_passphrase_title" translatable="false">Choose a passphrase</string>
++    <string name="bare_backup_passphrase_hint" translatable="false">Passphrase</string>
++    <string name="bare_backup_passphrase_again" translatable="false">Type it again</string>
++    <string name="bare_backup_passphrase_short" translatable="false">Use at least 12 characters.</string>
++    <string name="bare_backup_passphrase_mismatch" translatable="false">The two don\'t match.</string>
++
++    <string name="bare_backup_working" translatable="false">Making the backup…</string>
++    <string name="bare_backup_saved" translatable="false">Backup saved</string>
++    <string name="bare_backup_save_failed" translatable="false">Bare couldn\'t save the backup. Try again.</string>
++    <string name="bare_backup_check_failed" translatable="false">The saved file didn\'t check out. Try saving it again.</string>
++
++    <string name="bare_backup_reading" translatable="false">Opening the backup…</string>
++    <string name="bare_backup_kind_setup" translatable="false">Setup backup</string>
++    <string name="bare_backup_kind_full" translatable="false">Full backup</string>
++    <string name="bare_backup_made" translatable="false">Made %1$s with Bare %2$s on a %3$s</string>
++    <string name="bare_backup_enter_code" translatable="false">Enter the recovery code</string>
++    <string name="bare_backup_enter_passphrase" translatable="false">Enter the passphrase</string>
++    <string name="bare_backup_open" translatable="false">Open</string>
++    <string name="bare_backup_wrong_code" translatable="false">That code doesn\'t match this backup, or the file is damaged.</string>
++    <string name="bare_backup_newer" translatable="false">This backup was made by a newer Bare. Update Bare, then try again.</string>
++    <string name="bare_backup_not_bare" translatable="false">That file isn\'t a Bare backup.</string>
++    <string name="bare_backup_damaged" translatable="false">That file is damaged.</string>
++    <string name="bare_backup_unreadable" translatable="false">Bare couldn\'t read that file.</string>
++
++    <string name="bare_backup_what" translatable="false">What to restore</string>
++    <string name="bare_backup_section_settings" translatable="false">Settings</string>
++    <string name="bare_backup_section_settings_summary" translatable="false">Replaces this phone\'s settings</string>
++    <string name="bare_backup_section_search_engines" translatable="false">Search engines</string>
++    <string name="bare_backup_section_site_settings" translatable="false">Site settings</string>
++    <string name="bare_backup_section_bookmarks" translatable="false">Bookmarks and reading list</string>
++    <string name="bare_backup_section_bookmarks_summary" translatable="false">Added next to this phone\'s own</string>
++    <string name="bare_backup_dns_from_file" translatable="false">DNS server: %1$s</string>
++    <string name="bare_backup_dns_from_file_summary" translatable="false">Only turn this on if you trust whoever gave you this file.</string>
++    <string name="bare_backup_lowering" translatable="false">Security settings that lower protection</string>
++    <string name="bare_backup_lowering_summary" translatable="false">%1$s. Only turn this on if you trust whoever gave you this file.</string>
++    <string name="bare_backup_lowering_quick_crx" translatable="false">Install .crx files without asking</string>
++    <string name="bare_backup_lowering_external_sign_in" translatable="false">Send sign-in to your download app</string>
++    <string name="bare_backup_lowering_https_only" translatable="false">HTTPS-only mode weaker or off</string>
++    <string name="bare_backup_lowering_cookies" translatable="false">Fewer third-party cookies blocked</string>
++    <string name="bare_backup_lowering_webrtc" translatable="false">WebRTC shows more of your network</string>
++    <string name="bare_backup_lowering_dns" translatable="false">Secure DNS weaker or off</string>
++    <string name="bare_backup_lowering_ad_blocker" translatable="false">Ad blocker off</string>
++    <string name="bare_backup_lowering_barefilter" translatable="false">BareFilter off</string>
++    <string name="bare_backup_lowering_ubo_updates" translatable="false">uBlock Origin updates off</string>
++    <string name="bare_backup_lowering_incognito" translatable="false">Incognito lock weaker</string>
++    <string name="bare_backup_lowering_update_reminder" translatable="false">Update reminder off</string>
++    <string name="bare_backup_report_held_back" translatable="false">%1$d settings that lower protection were left as they are</string>
++    <string name="bare_backup_extensions" translatable="false">Extensions</string>
++    <string name="bare_backup_ext_permissions_none" translatable="false">No special permissions</string>
++    <string name="bare_backup_ext_get_again" translatable="false">Get it again from %1$s</string>
++    <string name="bare_backup_ext_get_again_unknown" translatable="false">Get it again from where you found it</string>
++    <string name="bare_backup_ext_by_hand" translatable="false">Reinstall this one by hand</string>
++    <string name="bare_backup_ext_installed" translatable="false">Already installed</string>
++    <string name="bare_backup_ext_cant" translatable="false">Can\'t be restored from this file</string>
++    <string name="bare_backup_ext_unverified" translatable="false">Bare can\'t check that an extension\'s code in this file is the real one. Turn on only extensions you put in this backup yourself.</string>
++    <string name="bare_backup_restore_button" translatable="false">Restore</string>
++    <string name="bare_backup_restoring" translatable="false">Restoring…</string>
++    <string name="bare_backup_restored_folder" translatable="false">Restored %1$s</string>
++
++    <string name="bare_backup_report_title" translatable="false">Restore finished</string>
++    <string name="bare_backup_report_settings" translatable="false">%1$d settings restored</string>
++    <string name="bare_backup_report_settings_skipped" translatable="false">%1$d settings restored, %2$d skipped</string>
++    <string name="bare_backup_report_bookmarks" translatable="false">%1$d bookmarks restored</string>
++    <string name="bare_backup_report_bookmarks_folder" translatable="false">%1$d bookmarks restored into \"%2$s\"</string>
++    <string name="bare_backup_report_reading_list" translatable="false">%1$d reading list pages added</string>
++    <string name="bare_backup_report_site_settings" translatable="false">%1$d site settings restored</string>
++    <string name="bare_backup_report_search_engines" translatable="false">%1$d search engines added</string>
++    <string name="bare_backup_report_extension_ok" translatable="false">%1$s installed</string>
++    <string name="bare_backup_report_extension_failed" translatable="false">%1$s wasn\'t installed: %2$s</string>
++    <string name="bare_backup_report_stopped" translatable="false">The restore stopped at %1$s. What came before it was restored; running the restore again is safe.</string>
++    <string name="bare_backup_report_restart" translatable="false">Some restored settings take effect after a restart.</string>
++    <string name="bare_backup_done" translatable="false">Done</string>
++</resources>
+diff --git a/chrome/android/java/res/values/bare_backup_styles.xml b/chrome/android/java/res/values/bare_backup_styles.xml
+new file mode 100644
+index 00000000000..49c8a6cb38c
+--- /dev/null
++++ b/chrome/android/java/res/values/bare_backup_styles.xml
+@@ -0,0 +1,42 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Copyright 2026 The Chromium Authors
++     Use of this source code is governed by a BSD-style license that can be
++     found in the LICENSE file. -->
++<resources>
++    <style name="BareBackupCard">
++        <item name="android:layout_width">match_parent</item>
++        <item name="android:layout_height">wrap_content</item>
++        <item name="android:orientation">horizontal</item>
++        <item name="android:padding">16dp</item>
++        <item name="android:background">@drawable/bare_welcome_group_bg</item>
++        <item name="android:clickable">true</item>
++        <item name="android:focusable">true</item>
++    </style>
++    <style name="BareBackupCardRadio">
++        <item name="android:layout_width">wrap_content</item>
++        <item name="android:layout_height">wrap_content</item>
++        <item name="android:layout_gravity">center_vertical</item>
++        <item name="android:buttonTint">@color/bare_welcome_accent</item>
++    </style>
++    <style name="BareBackupCardText">
++        <item name="android:layout_width">0dp</item>
++        <item name="android:layout_height">wrap_content</item>
++        <item name="android:layout_weight">1</item>
++        <item name="android:layout_marginStart">12dp</item>
++        <item name="android:orientation">vertical</item>
++    </style>
++    <style name="BareBackupCardTitle">
++        <item name="android:layout_width">wrap_content</item>
++        <item name="android:layout_height">wrap_content</item>
++        <item name="android:textColor">@color/bare_welcome_title</item>
++        <item name="android:textSize">16sp</item>
++        <item name="android:fontFamily">sans-serif-medium</item>
++    </style>
++    <style name="BareBackupCardBody">
++        <item name="android:layout_width">wrap_content</item>
++        <item name="android:layout_height">wrap_content</item>
++        <item name="android:layout_marginTop">2dp</item>
++        <item name="android:textColor">@color/bare_welcome_body</item>
++        <item name="android:textSize">14sp</item>
++    </style>
++</resources>
+diff --git a/chrome/android/java/res/xml/bare_backup_create_preferences.xml b/chrome/android/java/res/xml/bare_backup_create_preferences.xml
+new file mode 100644
+index 00000000000..b48f3821cb6
+--- /dev/null
++++ b/chrome/android/java/res/xml/bare_backup_create_preferences.xml
+@@ -0,0 +1,23 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Copyright 2026 The Chromium Authors
++     Use of this source code is governed by a BSD-style license that can be
++     found in the LICENSE file. -->
++<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
++    <org.chromium.chrome.browser.bare.backup.BareBackupKindPreference
++        android:key="bare_backup_kind" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_backup_own_passphrase"
++        android:title="@string/bare_backup_own_passphrase"
++        android:summary="@string/bare_backup_own_passphrase_summary"
++        android:persistent="false" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_backup_include_dns"
++        android:title="@string/bare_backup_include_dns"
++        android:persistent="false" />
++    <org.chromium.components.browser_ui.settings.TextMessagePreference
++        android:key="bare_backup_no_lock"
++        android:summary="@string/bare_backup_no_lock" />
++    <org.chromium.chrome.browser.bare.backup.BareBackupButtonPreference
++        android:key="bare_backup_save"
++        android:title="@string/bare_backup_save" />
++</PreferenceScreen>
+diff --git a/chrome/android/java/res/xml/bare_backup_preferences.xml b/chrome/android/java/res/xml/bare_backup_preferences.xml
+new file mode 100644
+index 00000000000..2936c78ab91
+--- /dev/null
++++ b/chrome/android/java/res/xml/bare_backup_preferences.xml
+@@ -0,0 +1,18 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Copyright 2026 The Chromium Authors
++     Use of this source code is governed by a BSD-style license that can be
++     found in the LICENSE file. -->
++<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
++    <org.chromium.components.browser_ui.settings.ChromeBasePreference
++        android:key="bare_backup_create"
++        android:title="@string/bare_backup_create"
++        android:summary="@string/bare_backup_create_summary"
++        android:fragment="org.chromium.chrome.browser.bare.backup.BareBackupCreateFragment" />
++    <org.chromium.components.browser_ui.settings.ChromeBasePreference
++        android:key="bare_backup_restore"
++        android:title="@string/bare_backup_restore"
++        android:summary="@string/bare_backup_restore_summary" />
++    <org.chromium.components.browser_ui.settings.TextMessagePreference
++        android:key="bare_backup_footnote"
++        android:summary="@string/bare_backup_footnote" />
++</PreferenceScreen>
+diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/java/res/xml/main_preferences.xml
+index 66ec8cec726..cfa7f71ead0 100644
+--- a/chrome/android/java/res/xml/main_preferences.xml
++++ b/chrome/android/java/res/xml/main_preferences.xml
+@@ -168,6 +168,11 @@ found in the LICENSE file.
+         android:key="developer"
+         android:order="30"
+         android:title="Developer options"/>
++    <org.chromium.components.browser_ui.settings.ChromeBasePreference
++        android:fragment="org.chromium.chrome.browser.bare.backup.BareBackupSettingsFragment"
++        android:key="bare_backup"
++        android:order="31"
++        android:title="@string/bare_backup_title"/>
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
+         android:fragment="org.chromium.chrome.browser.about_settings.AboutChromeSettings"
+         android:key="about_chrome"
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+index 40b663f0566..6b855948b1c 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+@@ -64,6 +64,7 @@ import androidx.core.view.WindowInsetsCompat;
+ import com.google.android.material.materialswitch.MaterialSwitch;
+ 
+ import org.chromium.base.Callback;
++import org.chromium.base.ContextUtils;
+ import org.chromium.base.shared_preferences.SharedPreferencesManager;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+@@ -219,6 +220,27 @@ public class BareWelcomeOverlay {
+         new Flow(activity, root, prefs, version, installed, choices).show(page);
+     }
+ 
++    /**
++     * Ends the welcome for a restore started from its first page, just before the restore runs.
++     * Writes what Start would on a first showing, so anything the backup doesn't carry gets Bare's
++     * defaults, and the restore then replaces the rest. The welcome closes when Bare comes back to
++     * the front.
++     */
++    public static void completeForRestore() {
++        Context context = ContextUtils.getApplicationContext();
++        SharedPreferences prefs = context.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE);
++        @Nullable PackageInfo info = packageInfo(context);
++        prefs.edit()
++                .putBoolean(KEY_SHOWN, true)
++                .putString(
++                        KEY_SHOWN_FOR_VERSION,
++                        info == null || info.versionName == null ? "" : info.versionName)
++                .putLong(KEY_SHOWN_FOR_INSTALL, info == null ? 0 : info.lastUpdateTime)
++                .apply();
++        clearDraft(prefs);
++        applyChoices(currentChoices(/* reviewing= */ false));
++    }
++
+     /** The choices offered, with the defaults they start on. */
+     @VisibleForTesting
+     static class Choices {
+@@ -1993,9 +2015,9 @@ public class BareWelcomeOverlay {
+     }
+ 
+     /** Bare's own version, or empty if it cannot be read. */
+-    private static @Nullable PackageInfo packageInfo(Activity activity) {
++    private static @Nullable PackageInfo packageInfo(Context context) {
+         try {
+-            return activity.getPackageManager().getPackageInfo(activity.getPackageName(), 0);
++            return context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
+         } catch (PackageManager.NameNotFoundException e) {
+             return null;
+         }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
+new file mode 100644
+index 00000000000..8fdfde0b444
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
+@@ -0,0 +1,271 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.jni_zero.CalledByNative;
++import org.jni_zero.JniType;
++import org.jni_zero.NativeMethods;
++
++import org.chromium.base.Callback;
++import org.chromium.base.shared_preferences.SharedPreferencesManager;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.profiles.Profile;
++
++import java.util.HashSet;
++import java.util.Set;
++
++/**
++ * Calls into the native backup code. Secrets go over as UTF-8 bytes so the caller can wipe its
++ * copy; results come back as bytes or small JSON strings.
++ */
++@NullMarked
++public final class BareBackupBridge {
++    // Must match TypeToJava() in bare_backup_bridge.cc.
++    private static final int TYPE_BOOLEAN = 0;
++    private static final int TYPE_INT = 1;
++    private static final int TYPE_STRING = 2;
++    private static final int TYPE_STRING_SET = 3;
++
++    private BareBackupBridge() {}
++
++    public static String generateRecoveryCode() {
++        return BareBackupBridgeJni.get().generateRecoveryCode();
++    }
++
++    /** The grouped code, or an empty string if {@code typed} isn't a recovery code. */
++    public static String normalizeRecoveryCode(String typed) {
++        return BareBackupBridgeJni.get().normalizeRecoveryCode(typed);
++    }
++
++    public static boolean isAcceptablePassphrase(byte[] passphrase) {
++        return BareBackupBridgeJni.get().isAcceptablePassphrase(passphrase);
++    }
++
++    /** The host of this phone's own Secure DNS server, or an empty string if it uses a built-in one. */
++    public static String customDnsHost() {
++        return BareBackupBridgeJni.get().customDnsHost();
++    }
++
++    /** Builds a backup. {@code done} gets the file's bytes, or an empty array on failure. */
++    public static void createBackup(
++            Profile profile,
++            boolean full,
++            byte[] secret,
++            boolean secretIsCode,
++            boolean includeCustomDns,
++            String deviceLabel,
++            String bareVersion,
++            int bareVersionCode,
++            Callback<byte[]> done) {
++        BareBackupBridgeJni.get()
++                .createBackup(
++                        profile,
++                        full,
++                        secret,
++                        secretIsCode,
++                        includeCustomDns,
++                        deviceLabel,
++                        bareVersion,
++                        bareVersionCode,
++                        done);
++    }
++
++    /** Opens {@code file} as a restore would, to check what was saved. */
++    public static void verifyBackup(
++            byte[] file, byte[] secret, boolean secretIsCode, Callback<Boolean> done) {
++        BareBackupBridgeJni.get().verifyBackup(file, secret, secretIsCode, done);
++    }
++
++    /** A backup being restored, held in native memory until {@link #close()}. */
++    public static final class Opened {
++        private long mHandle;
++
++        public Opened(byte[] file) {
++            mHandle = BareBackupBridgeJni.get().createOpened(file);
++        }
++
++        /** What the header says, as JSON; readable before any secret is asked for. */
++        public String describe() {
++            return BareBackupBridgeJni.get().describe(mHandle);
++        }
++
++        public void open(
++                Profile profile, byte[] secret, boolean secretIsCode, Callback<String> done) {
++            BareBackupBridgeJni.get().open(mHandle, profile, secret, secretIsCode, done);
++        }
++
++        public void restore(
++                Profile profile,
++                boolean settings,
++                boolean searchEngines,
++                boolean siteSettings,
++                boolean bookmarks,
++                boolean customDns,
++                boolean lowerProtection,
++                String[] approvedExtensions,
++                String bookmarkFolderTitle,
++                Callback<String> done) {
++            BareBackupBridgeJni.get()
++                    .restore(
++                            mHandle,
++                            profile,
++                            settings,
++                            searchEngines,
++                            siteSettings,
++                            bookmarks,
++                            customDns,
++                            lowerProtection,
++                            approvedExtensions,
++                            bookmarkFolderTitle,
++                            done);
++        }
++
++        public void close() {
++            if (mHandle != 0) {
++                BareBackupBridgeJni.get().close(mHandle);
++                mHandle = 0;
++            }
++        }
++    }
++
++    // The app's SharedPreferences, for the native allowlist.
++
++    @CalledByNative
++    private static boolean hasPref(@JniType("std::string") String key) {
++        return ChromeSharedPreferences.getInstance().contains(key);
++    }
++
++    @CalledByNative
++    private static @JniType("std::string") String readPref(
++            @JniType("std::string") String key, int type) {
++        SharedPreferencesManager prefs = ChromeSharedPreferences.getInstance();
++        try {
++            switch (type) {
++                case TYPE_BOOLEAN:
++                    return prefs.readBoolean(key, false) ? "true" : "false";
++                case TYPE_INT:
++                    return Integer.toString(prefs.readInt(key));
++                case TYPE_STRING_SET:
++                    return new JSONArray(prefs.readStringSet(key)).toString();
++                default:
++                    String value = prefs.readString(key, "");
++                    return value == null ? "" : value;
++            }
++        } catch (ClassCastException e) {
++            // Stored under another type than the list says; the native side
++            // then refuses the value.
++            return "";
++        }
++    }
++
++    @CalledByNative
++    private static void writePref(
++            @JniType("std::string") String key, int type, @JniType("std::string") String value) {
++        SharedPreferencesManager prefs = ChromeSharedPreferences.getInstance();
++        switch (type) {
++            case TYPE_BOOLEAN:
++                prefs.writeBoolean(key, "true".equals(value));
++                break;
++            case TYPE_INT:
++                prefs.writeInt(key, Integer.parseInt(value));
++                break;
++            case TYPE_STRING_SET:
++                Set<String> set = new HashSet<>();
++                try {
++                    JSONArray array = new JSONArray(value);
++                    for (int i = 0; i < array.length(); i++) set.add(array.getString(i));
++                } catch (JSONException e) {
++                    return;
++                }
++                prefs.writeStringSet(key, set);
++                break;
++            default:
++                prefs.writeString(key, value);
++        }
++    }
++
++    @CalledByNative
++    private static void removePref(@JniType("std::string") String key) {
++        ChromeSharedPreferences.getInstance().removeKey(key);
++    }
++
++    @CalledByNative
++    private static void onBytes(
++            Callback<byte[]> callback, @JniType("std::vector<uint8_t>") byte[] bytes) {
++        callback.onResult(bytes);
++    }
++
++    @CalledByNative
++    private static void onBoolean(Callback<Boolean> callback, boolean value) {
++        callback.onResult(value);
++    }
++
++    @CalledByNative
++    private static void onJson(Callback<String> callback, @JniType("std::string") String json) {
++        callback.onResult(json);
++    }
++
++    @NativeMethods
++    interface Natives {
++        @JniType("std::string")
++        String generateRecoveryCode();
++
++        @JniType("std::string")
++        String normalizeRecoveryCode(@JniType("std::string") String typed);
++
++        boolean isAcceptablePassphrase(@JniType("std::vector<uint8_t>") byte[] passphrase);
++
++        @JniType("std::string")
++        String customDnsHost();
++
++        void createBackup(
++                Profile profile,
++                boolean full,
++                @JniType("std::vector<uint8_t>") byte[] secret,
++                boolean secretIsCode,
++                boolean includeCustomDns,
++                @JniType("std::string") String deviceLabel,
++                @JniType("std::string") String bareVersion,
++                int bareVersionCode,
++                Callback<byte[]> done);
++
++        void verifyBackup(
++                @JniType("std::vector<uint8_t>") byte[] file,
++                @JniType("std::vector<uint8_t>") byte[] secret,
++                boolean secretIsCode,
++                Callback<Boolean> done);
++
++        long createOpened(@JniType("std::vector<uint8_t>") byte[] file);
++
++        @JniType("std::string")
++        String describe(long handle);
++
++        void open(
++                long handle,
++                Profile profile,
++                @JniType("std::vector<uint8_t>") byte[] secret,
++                boolean secretIsCode,
++                Callback<String> done);
++
++        void restore(
++                long handle,
++                Profile profile,
++                boolean settings,
++                boolean searchEngines,
++                boolean siteSettings,
++                boolean bookmarks,
++                boolean customDns,
++                boolean lowerProtection,
++                @JniType("std::vector<std::string>") String[] approvedExtensions,
++                @JniType("std::u16string") String bookmarkFolderTitle,
++                Callback<String> done);
++
++        void close(long handle);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupButtonPreference.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupButtonPreference.java
+new file mode 100644
+index 00000000000..96d6b253885
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupButtonPreference.java
+@@ -0,0 +1,45 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.content.Context;
++import android.util.AttributeSet;
++import android.widget.Button;
++
++import androidx.preference.Preference;
++import androidx.preference.PreferenceViewHolder;
++
++import org.chromium.chrome.R;
++
++/** A filled button in the welcome's style, for the step a page leads to. */
++public class BareBackupButtonPreference extends Preference {
++    private Runnable mOnClick;
++
++    public BareBackupButtonPreference(Context context, AttributeSet attrs) {
++        super(context, attrs);
++        setLayoutResource(R.layout.bare_backup_button);
++        setSelectable(false);
++    }
++
++    public BareBackupButtonPreference(Context context) {
++        this(context, null);
++    }
++
++    void setOnClick(Runnable onClick) {
++        mOnClick = onClick;
++    }
++
++    @Override
++    public void onBindViewHolder(PreferenceViewHolder holder) {
++        super.onBindViewHolder(holder);
++        Button button = (Button) holder.findViewById(R.id.bare_backup_button);
++        button.setText(getTitle());
++        button.setEnabled(isEnabled());
++        button.setOnClickListener(
++                v -> {
++                    if (mOnClick != null) mOnClick.run();
++                });
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupCreateFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupCreateFragment.java
+new file mode 100644
+index 00000000000..6b03d0bb520
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupCreateFragment.java
+@@ -0,0 +1,335 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.app.AlertDialog;
++import android.content.Context;
++import android.graphics.Typeface;
++import android.net.Uri;
++import android.os.Bundle;
++import android.text.Editable;
++import android.util.TypedValue;
++import android.widget.EditText;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++import android.widget.Toast;
++
++import androidx.activity.result.ActivityResultLauncher;
++import androidx.activity.result.contract.ActivityResultContracts;
++
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
++import org.chromium.components.browser_ui.settings.SettingsUtils;
++import org.chromium.components.browser_ui.settings.TextMessagePreference;
++
++import java.nio.charset.StandardCharsets;
++import java.util.Arrays;
++
++/** Settings > Backup and transfer > Create backup. */
++public class BareBackupCreateFragment extends ChromeBaseSettingsFragment {
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++            ObservableSuppliers.createMonotonic();
++    private ActivityResultLauncher<String> mCreateDocument;
++    private BareScreenLock mScreenLock;
++
++    private BareBackupKindPreference mKind;
++    private ChromeSwitchPreference mOwnPassphrase;
++    private ChromeSwitchPreference mIncludeDns;
++    private TextMessagePreference mNoLock;
++    private String mCustomDnsHost = "";
++
++    // The secret for the backup in progress, wiped when it is done.
++    private byte @Nullable [] mSecret;
++    private boolean mSecretIsCode;
++    private boolean mFull;
++
++    @Override
++    public void onCreate(@Nullable Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        mCreateDocument =
++                registerForActivityResult(
++                        new ActivityResultContracts.CreateDocument("application/octet-stream"),
++                        this::onDocumentChosen);
++        mScreenLock = new BareScreenLock(this);
++    }
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        mPageTitle.set(getContext().getString(R.string.bare_backup_create));
++        SettingsUtils.addPreferencesFromResource(this, R.xml.bare_backup_create_preferences);
++        mKind = findPreference("bare_backup_kind");
++        mOwnPassphrase = findPreference("bare_backup_own_passphrase");
++        mIncludeDns = findPreference("bare_backup_include_dns");
++        mNoLock = findPreference("bare_backup_no_lock");
++        BareBackupButtonPreference save = findPreference("bare_backup_save");
++
++        mCustomDnsHost = BareBackupBridge.customDnsHost();
++        mIncludeDns.setSummary(mCustomDnsHost);
++        mIncludeDns.setChecked(false);
++        mOwnPassphrase.setChecked(false);
++        mKind.setOnChange(everything -> updateRows());
++        save.setOnClick(this::start);
++        updateRows();
++    }
++
++    private void updateRows() {
++        boolean everything = mKind.isEverything();
++        mOwnPassphrase.setVisible(everything);
++        mIncludeDns.setVisible(!everything && !mCustomDnsHost.isEmpty());
++        mNoLock.setVisible(everything && !BareScreenLock.isSet(getContext()));
++    }
++
++    private void start() {
++        mFull = mKind.isEverything();
++        if (!mFull) {
++            mSecret = null;
++            chooseFile();
++            return;
++        }
++        if (!BareScreenLock.isSet(getContext())) {
++            askForSecret();
++            return;
++        }
++        mScreenLock.confirm(
++                ok -> {
++                    if (ok && getContext() != null) askForSecret();
++                });
++    }
++
++    private void askForSecret() {
++        if (mOwnPassphrase.isChecked()) {
++            askForPassphrase();
++        } else {
++            showRecoveryCode(BareBackupBridge.generateRecoveryCode());
++        }
++    }
++
++    // The recovery code: shown once, then typed back.
++
++    private void showRecoveryCode(String code) {
++        Context context = getContext();
++        TextView codeView = new TextView(context);
++        codeView.setText(code);
++        codeView.setTextIsSelectable(true);
++        codeView.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
++        codeView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
++        LinearLayout layout = BareBackupDialogs.padded(context);
++        layout.addView(codeView);
++        BareBackupDialogs.showSecure(
++                BareBackupDialogs.builder(context)
++                .setTitle(R.string.bare_backup_code_title)
++                .setMessage(R.string.bare_backup_code_message)
++                .setView(layout)
++                .setCancelable(false)
++                .setNegativeButton(android.R.string.cancel, null)
++                .setPositiveButton(R.string.bare_backup_code_saved, (d, w) -> confirmRecoveryCode(code))
++                .create());
++    }
++
++    private void confirmRecoveryCode(String code) {
++        Context context = getContext();
++        EditText field = BareBackupDialogs.secretField(context, R.string.bare_backup_code_title, true);
++        LinearLayout layout = BareBackupDialogs.padded(context);
++        layout.addView(field);
++        AlertDialog dialog =
++                BareBackupDialogs.builder(context)
++                        .setTitle(R.string.bare_backup_code_confirm_title)
++                        .setMessage(R.string.bare_backup_code_confirm_message)
++                        .setView(layout)
++                        .setNegativeButton(
++                                android.R.string.cancel, (d, w) -> showRecoveryCode(code))
++                        .setPositiveButton(android.R.string.ok, null)
++                        .create();
++        dialog.setOnShowListener(
++                d ->
++                        dialog.getButton(AlertDialog.BUTTON_POSITIVE)
++                                .setOnClickListener(
++                                        v -> {
++                                            String typed =
++                                                    BareBackupBridge.normalizeRecoveryCode(
++                                                            field.getText().toString());
++                                            if (!code.equals(typed)) {
++                                                field.setError(
++                                                        context.getString(
++                                                                R.string
++                                                                        .bare_backup_code_mismatch));
++                                                return;
++                                            }
++                                            clear(field);
++                                            dialog.dismiss();
++                                            mSecret = code.getBytes(StandardCharsets.UTF_8);
++                                            mSecretIsCode = true;
++                                            chooseFile();
++                                        }));
++        BareBackupDialogs.showSecure(dialog);
++    }
++
++    // The user's own passphrase: typed twice.
++
++    private void askForPassphrase() {
++        Context context = getContext();
++        EditText first =
++                BareBackupDialogs.secretField(context, R.string.bare_backup_passphrase_hint, false);
++        EditText second =
++                BareBackupDialogs.secretField(context, R.string.bare_backup_passphrase_again, false);
++        LinearLayout layout = BareBackupDialogs.padded(context);
++        layout.addView(first);
++        layout.addView(second);
++        AlertDialog dialog =
++                BareBackupDialogs.builder(context)
++                        .setTitle(R.string.bare_backup_passphrase_title)
++                        .setView(layout)
++                        .setNegativeButton(android.R.string.cancel, null)
++                        .setPositiveButton(android.R.string.ok, null)
++                        .create();
++        dialog.setOnShowListener(
++                d ->
++                        dialog.getButton(AlertDialog.BUTTON_POSITIVE)
++                                .setOnClickListener(
++                                        v -> {
++                                            byte[] one = bytesOf(first.getText());
++                                            byte[] two = bytesOf(second.getText());
++                                            boolean same = Arrays.equals(one, two);
++                                            Arrays.fill(two, (byte) 0);
++                                            if (!BareBackupBridge.isAcceptablePassphrase(one)) {
++                                                Arrays.fill(one, (byte) 0);
++                                                first.setError(
++                                                        context.getString(
++                                                                R.string
++                                                                        .bare_backup_passphrase_short));
++                                                return;
++                                            }
++                                            if (!same) {
++                                                Arrays.fill(one, (byte) 0);
++                                                second.setError(
++                                                        context.getString(
++                                                                R.string
++                                                                        .bare_backup_passphrase_mismatch));
++                                                return;
++                                            }
++                                            clear(first);
++                                            clear(second);
++                                            dialog.dismiss();
++                                            mSecret = one;
++                                            mSecretIsCode = false;
++                                            chooseFile();
++                                        }));
++        BareBackupDialogs.showSecure(dialog);
++    }
++
++    // Saving.
++
++    private void chooseFile() {
++        int name = mFull ? R.string.bare_backup_file_full : R.string.bare_backup_file_setup;
++        mCreateDocument.launch(getContext().getString(name, BareBackupIo.today()));
++    }
++
++    private void onDocumentChosen(@Nullable Uri uri) {
++        Context context = getContext();
++        if (uri == null || context == null) {
++            wipeSecret();
++            return;
++        }
++        AlertDialog progress = BareBackupDialogs.progress(context, R.string.bare_backup_working);
++        byte[] secret = mSecret == null ? new byte[0] : mSecret;
++        BareBackupBridge.createBackup(
++                getProfile(),
++                mFull,
++                secret,
++                mSecretIsCode,
++                !mFull && mIncludeDns.isVisible() && mIncludeDns.isChecked(),
++                BareBackupIo.deviceLabel(),
++                BareBackupIo.bareVersion(context),
++                BareBackupIo.bareVersionCode(context),
++                bytes -> {
++                    if (bytes == null || bytes.length == 0) {
++                        finish(progress, R.string.bare_backup_save_failed);
++                        return;
++                    }
++                    BareBackupIo.write(
++                            context,
++                            uri,
++                            bytes,
++                            written -> {
++                                if (!written) {
++                                    finish(progress, R.string.bare_backup_save_failed);
++                                    return;
++                                }
++                                checkSaved(context, uri, progress);
++                            });
++                });
++    }
++
++    // Reads the file back from where it was saved and opens it as a restore would.
++    private void checkSaved(Context context, Uri uri, AlertDialog progress) {
++        BareBackupIo.read(
++                context,
++                uri,
++                saved -> {
++                    if (saved == null) {
++                        finish(progress, R.string.bare_backup_check_failed);
++                        return;
++                    }
++                    byte[] secret = mSecret == null ? new byte[0] : mSecret;
++                    BareBackupBridge.verifyBackup(
++                            saved,
++                            secret,
++                            mSecretIsCode,
++                            ok ->
++                                    finish(
++                                            progress,
++                                            ok
++                                                    ? R.string.bare_backup_saved
++                                                    : R.string.bare_backup_check_failed));
++                });
++    }
++
++    private void finish(AlertDialog progress, int message) {
++        wipeSecret();
++        progress.dismiss();
++        Context context = getContext();
++        if (context == null) return;
++        if (message == R.string.bare_backup_saved) {
++            Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
++        } else {
++            BareBackupDialogs.message(context, message);
++        }
++    }
++
++    private void wipeSecret() {
++        if (mSecret != null) Arrays.fill(mSecret, (byte) 0);
++        mSecret = null;
++    }
++
++    private static byte[] bytesOf(Editable text) {
++        return text.toString().getBytes(StandardCharsets.UTF_8);
++    }
++
++    // Best effort: Android keeps its own copies of what was typed.
++    private static void clear(EditText field) {
++        field.getText().clear();
++    }
++
++    @Override
++    public void onDestroy() {
++        wipeSecret();
++        super.onDestroy();
++    }
++
++    @Override
++    public MonotonicObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupDialogs.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupDialogs.java
+new file mode 100644
+index 00000000000..f92ce949dfd
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupDialogs.java
+@@ -0,0 +1,99 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.app.AlertDialog;
++import android.content.Context;
++import android.text.InputType;
++import android.view.Gravity;
++import android.view.Window;
++import android.view.WindowManager;
++import android.widget.EditText;
++import android.widget.LinearLayout;
++import android.widget.ProgressBar;
++import android.widget.TextView;
++
++import androidx.annotation.StringRes;
++
++import org.chromium.chrome.R;
++
++/** The small dialogs the backup pages share. */
++final class BareBackupDialogs {
++    private BareBackupDialogs() {}
++
++    static AlertDialog.Builder builder(Context context) {
++        return new AlertDialog.Builder(context, R.style.ThemeOverlay_BrowserUI_AlertDialog);
++    }
++
++    /** A dialog with a spinner that the caller dismisses. */
++    static AlertDialog progress(Context context, @StringRes int message) {
++        LinearLayout row = new LinearLayout(context);
++        int padding = dp(context, 24);
++        row.setPadding(padding, padding, padding, padding);
++        row.setGravity(Gravity.CENTER_VERTICAL);
++        row.addView(new ProgressBar(context));
++        TextView text = new TextView(context);
++        text.setText(message);
++        text.setPadding(padding, 0, 0, 0);
++        row.addView(text);
++        AlertDialog dialog = builder(context).setView(row).setCancelable(false).create();
++        dialog.show();
++        return dialog;
++    }
++
++    /**
++     * Shows a dialog that holds a code or passphrase. Its window is left out of screenshots, screen
++     * recordings and the Recents thumbnail.
++     */
++    static AlertDialog showSecure(AlertDialog dialog) {
++        Window window = dialog.getWindow();
++        if (window != null) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE);
++        dialog.show();
++        return dialog;
++    }
++
++    static void message(Context context, @StringRes int message) {
++        builder(context).setMessage(message).setPositiveButton(android.R.string.ok, null).show();
++    }
++
++    /** A single-line field for a code or passphrase, hidden as typed unless {@code visible}. */
++    static EditText secretField(Context context, @StringRes int hint, boolean visible) {
++        EditText field = new EditText(context);
++        field.setHint(hint);
++        field.setSingleLine(true);
++        field.setInputType(
++                InputType.TYPE_CLASS_TEXT
++                        | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
++                        | (visible
++                                ? InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
++                                : InputType.TYPE_TEXT_VARIATION_PASSWORD));
++        return field;
++    }
++
++    static LinearLayout padded(Context context) {
++        LinearLayout layout = new LinearLayout(context);
++        layout.setOrientation(LinearLayout.VERTICAL);
++        int side = dp(context, 24);
++        layout.setPadding(side, dp(context, 8), side, 0);
++        return layout;
++    }
++
++    static @StringRes int errorMessage(String error) {
++        switch (error) {
++            case "wrong_code":
++                return R.string.bare_backup_wrong_code;
++            case "newer":
++                return R.string.bare_backup_newer;
++            case "not_bare":
++                return R.string.bare_backup_not_bare;
++            default:
++                return R.string.bare_backup_damaged;
++        }
++    }
++
++    static int dp(Context context, int dp) {
++        return Math.round(dp * context.getResources().getDisplayMetrics().density);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupIo.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupIo.java
+new file mode 100644
+index 00000000000..92b95fa13da
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupIo.java
+@@ -0,0 +1,104 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.content.Context;
++import android.content.pm.PackageInfo;
++import android.content.pm.PackageManager;
++import android.net.Uri;
++import android.os.Build;
++
++import org.chromium.base.Callback;
++import org.chromium.base.task.PostTask;
++import org.chromium.base.task.TaskTraits;
++
++import java.io.ByteArrayOutputStream;
++import java.io.IOException;
++import java.io.InputStream;
++import java.io.OutputStream;
++import java.text.SimpleDateFormat;
++import java.util.Date;
++import java.util.Locale;
++
++/** Reads and writes backup files through the document picker's Uri, off the UI thread. */
++final class BareBackupIo {
++    // A package is at most 64 MB, plus the header and 16 bytes per 64 KB chunk.
++    private static final int MAX_FILE_BYTES = 80 * 1024 * 1024;
++
++    private BareBackupIo() {}
++
++    static void write(Context context, Uri uri, byte[] bytes, Callback<Boolean> done) {
++        Context app = context.getApplicationContext();
++        PostTask.postTask(
++                TaskTraits.USER_BLOCKING_MAY_BLOCK,
++                () -> {
++                    boolean ok;
++                    try (OutputStream out = app.getContentResolver().openOutputStream(uri, "wt")) {
++                        if (out == null) throw new IOException();
++                        out.write(bytes);
++                        ok = true;
++                    } catch (IOException | SecurityException e) {
++                        ok = false;
++                    }
++                    final boolean result = ok;
++                    PostTask.postTask(TaskTraits.UI_DEFAULT, () -> done.onResult(result));
++                });
++    }
++
++    /** Passes the file's bytes, or null if it can't be read or is larger than any backup. */
++    static void read(Context context, Uri uri, Callback<byte[]> done) {
++        Context app = context.getApplicationContext();
++        PostTask.postTask(
++                TaskTraits.USER_BLOCKING_MAY_BLOCK,
++                () -> {
++                    byte[] bytes = null;
++                    try (InputStream in = app.getContentResolver().openInputStream(uri)) {
++                        if (in == null) throw new IOException();
++                        ByteArrayOutputStream out = new ByteArrayOutputStream();
++                        byte[] buffer = new byte[64 * 1024];
++                        int total = 0;
++                        int n;
++                        while ((n = in.read(buffer)) > 0) {
++                            total += n;
++                            if (total > MAX_FILE_BYTES) throw new IOException();
++                            out.write(buffer, 0, n);
++                        }
++                        bytes = out.toByteArray();
++                    } catch (IOException | SecurityException e) {
++                        bytes = null;
++                    }
++                    final byte[] result = bytes;
++                    PostTask.postTask(TaskTraits.UI_DEFAULT, () -> done.onResult(result));
++                });
++    }
++
++    static String today() {
++        return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
++    }
++
++    /** The phone's model, never the name its owner gave it. */
++    static String deviceLabel() {
++        return Build.MODEL;
++    }
++
++    // Bare's version is only in the manifest, so it comes from the package, as in BareUpdateCheck.
++    static String bareVersion(Context context) {
++        PackageInfo info = packageInfo(context);
++        return info == null || info.versionName == null ? "" : info.versionName;
++    }
++
++    static int bareVersionCode(Context context) {
++        PackageInfo info = packageInfo(context);
++        return info == null ? 0 : (int) info.getLongVersionCode();
++    }
++
++    private static PackageInfo packageInfo(Context context) {
++        try {
++            return context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
++        } catch (PackageManager.NameNotFoundException e) {
++            return null;
++        }
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupKindPreference.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupKindPreference.java
+new file mode 100644
+index 00000000000..84e52cefd77
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupKindPreference.java
+@@ -0,0 +1,62 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.content.Context;
++import android.util.AttributeSet;
++import android.view.View;
++import android.widget.RadioButton;
++
++import androidx.preference.Preference;
++import androidx.preference.PreferenceViewHolder;
++
++import org.chromium.base.Callback;
++import org.chromium.chrome.R;
++
++/** The two option cards on the create page: Setup only, and Everything. */
++public class BareBackupKindPreference extends Preference {
++    private boolean mEverything;
++    private Callback<Boolean> mOnChange;
++
++    public BareBackupKindPreference(Context context, AttributeSet attrs) {
++        super(context, attrs);
++        setLayoutResource(R.layout.bare_backup_kind);
++        setSelectable(false);
++    }
++
++    void setOnChange(Callback<Boolean> onChange) {
++        mOnChange = onChange;
++    }
++
++    boolean isEverything() {
++        return mEverything;
++    }
++
++    @Override
++    public void onBindViewHolder(PreferenceViewHolder holder) {
++        super.onBindViewHolder(holder);
++        View setup = holder.findViewById(R.id.bare_backup_kind_setup);
++        View everything = holder.findViewById(R.id.bare_backup_kind_everything);
++        RadioButton setupRadio = (RadioButton) holder.findViewById(R.id.bare_backup_kind_setup_radio);
++        RadioButton everythingRadio =
++                (RadioButton) holder.findViewById(R.id.bare_backup_kind_everything_radio);
++        setupRadio.setChecked(!mEverything);
++        everythingRadio.setChecked(mEverything);
++        setup.setOnClickListener(v -> choose(false));
++        everything.setOnClickListener(v -> choose(true));
++        setupRadio.setOnClickListener(v -> choose(false));
++        everythingRadio.setOnClickListener(v -> choose(true));
++    }
++
++    private void choose(boolean everything) {
++        if (mEverything == everything) {
++            notifyChanged();
++            return;
++        }
++        mEverything = everything;
++        notifyChanged();
++        if (mOnChange != null) mOnChange.onResult(everything);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java
+new file mode 100644
+index 00000000000..297e1839851
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java
+@@ -0,0 +1,656 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.app.Activity;
++import android.app.AlertDialog;
++import android.content.Context;
++import android.net.Uri;
++import android.os.Bundle;
++import android.widget.EditText;
++import android.widget.LinearLayout;
++
++import androidx.preference.Preference;
++import androidx.preference.PreferenceCategory;
++import androidx.preference.PreferenceScreen;
++
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.BareLauncherIcon;
++import org.chromium.chrome.browser.bare.BareWelcomeOverlay;
++import org.chromium.chrome.browser.homepage.HomepageManager;
++import org.chromium.chrome.browser.lifetime.ApplicationLifetime;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
++import org.chromium.components.browser_ui.settings.TextMessagePreference;
++import org.chromium.components.search_engines.TemplateUrlService;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import java.nio.charset.StandardCharsets;
++import java.text.DateFormat;
++import java.text.ParseException;
++import java.text.SimpleDateFormat;
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.Date;
++import java.util.HashMap;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Locale;
++import java.util.Map;
++import java.util.TimeZone;
++
++/** Settings > Backup and transfer > Restore from backup, once a file has been picked. */
++public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
++    // The file picked on the previous page. A page can't take an object as an argument.
++    private static BareBackupBridge.@Nullable Opened sPending;
++    private static boolean sPendingFromWelcome;
++
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++            ObservableSuppliers.createMonotonic();
++    private BareBackupBridge.@Nullable Opened mOpened;
++    private boolean mFromWelcome;
++    private boolean mRestoring;
++    private JSONObject mHeader = new JSONObject();
++
++    private final Map<String, ChromeSwitchPreference> mSections = new HashMap<>();
++    private @Nullable ChromeSwitchPreference mCustomDns;
++    private @Nullable ChromeSwitchPreference mLowering;
++    private final Map<String, ChromeSwitchPreference> mExtensions = new HashMap<>();
++    private final Map<String, String> mExtensionNames = new HashMap<>();
++
++    private static void setPending(BareBackupBridge.Opened opened, boolean fromWelcome) {
++        if (sPending != null) sPending.close();
++        sPending = opened;
++        sPendingFromWelcome = fromWelcome;
++    }
++
++    /**
++     * Reads a picked file and opens this page for it, or says why it can't. {@code fromWelcome}
++     * when it was picked on the welcome, which the restore then completes.
++     */
++    public static void openFile(Context context, Uri uri, boolean fromWelcome) {
++        AlertDialog progress = BareBackupDialogs.progress(context, R.string.bare_backup_reading);
++        BareBackupIo.read(
++                context,
++                uri,
++                bytes -> {
++                    progress.dismiss();
++                    if (context instanceof Activity activity
++                            && (activity.isFinishing() || activity.isDestroyed())) {
++                        return;
++                    }
++                    if (bytes == null) {
++                        BareBackupDialogs.message(context, R.string.bare_backup_unreadable);
++                        return;
++                    }
++                    BareBackupBridge.Opened opened = new BareBackupBridge.Opened(bytes);
++                    try {
++                        JSONObject header = new JSONObject(opened.describe());
++                        if (!header.optBoolean("ok")) {
++                            opened.close();
++                            BareBackupDialogs.message(
++                                    context,
++                                    BareBackupDialogs.errorMessage(header.optString("error")));
++                            return;
++                        }
++                    } catch (JSONException e) {
++                        opened.close();
++                        return;
++                    }
++                    setPending(opened, fromWelcome);
++                    SettingsNavigationFactory.createSettingsNavigation()
++                            .startSettings(context, BareBackupRestoreFragment.class, null);
++                });
++    }
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        mPageTitle.set(getContext().getString(R.string.bare_backup_restore));
++        mOpened = sPending;
++        mFromWelcome = sPendingFromWelcome;
++        sPending = null;
++        sPendingFromWelcome = false;
++        PreferenceScreen screen = getPreferenceManager().createPreferenceScreen(getContext());
++        setPreferenceScreen(screen);
++        if (mOpened == null) {
++            // Recreated after Android discarded the page; the file is gone with it.
++            return;
++        }
++        try {
++            mHeader = new JSONObject(mOpened.describe());
++        } catch (JSONException e) {
++            return;
++        }
++        showHeader();
++        if ("full".equals(mHeader.optString("kind"))) {
++            BareBackupButtonPreference enter = new BareBackupButtonPreference(getContext());
++            enter.setKey("enter");
++            enter.setTitle(
++                    "passphrase".equals(mHeader.optString("secret"))
++                            ? R.string.bare_backup_enter_passphrase
++                            : R.string.bare_backup_enter_code);
++            enter.setOnClick(this::askForSecret);
++            screen.addPreference(enter);
++        } else {
++            open(new byte[0], false);
++        }
++    }
++
++    private void showHeader() {
++        Context context = getContext();
++        PreferenceScreen screen = getPreferenceScreen();
++        TextMessagePreference about = new TextMessagePreference(context, null);
++        about.setTitle(
++                "full".equals(mHeader.optString("kind"))
++                        ? R.string.bare_backup_kind_full
++                        : R.string.bare_backup_kind_setup);
++        StringBuilder summary =
++                new StringBuilder(
++                        context.getString(
++                                R.string.bare_backup_made,
++                                localDate(mHeader.optString("created")),
++                                mHeader.optString("bare_version"),
++                                mHeader.optString("device_label")));
++        JSONObject contents = mHeader.optJSONObject("contents");
++        if (contents != null) {
++            List<String> parts = new ArrayList<>();
++            addCount(context, parts, contents, "settings", R.string.bare_backup_section_settings);
++            addCount(context, parts, contents, "bookmarks", R.string.bare_backup_section_bookmarks);
++            addCount(context, parts, contents, "site_settings", R.string.bare_backup_section_site_settings);
++            addCount(context, parts, contents, "extensions", R.string.bare_backup_extensions);
++            if (!parts.isEmpty()) summary.append("\n").append(String.join(" · ", parts));
++        }
++        about.setSummary(summary.toString());
++        screen.addPreference(about);
++    }
++
++    // The header has UTC; the user wants the day it was where they are.
++    private static String localDate(String created) {
++        SimpleDateFormat utc = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
++        utc.setTimeZone(TimeZone.getTimeZone("UTC"));
++        try {
++            Date date = utc.parse(created);
++            if (date != null) return DateFormat.getDateInstance(DateFormat.MEDIUM).format(date);
++        } catch (ParseException e) {
++            // Shown as written below.
++        }
++        return created;
++    }
++
++    private static void addCount(
++            Context context, List<String> parts, JSONObject contents, String key, int label) {
++        if (contents.has(key)) parts.add(context.getString(label) + ": " + contents.optInt(key));
++    }
++
++    private void askForSecret() {
++        Context context = getContext();
++        boolean passphrase = "passphrase".equals(mHeader.optString("secret"));
++        EditText field =
++                BareBackupDialogs.secretField(
++                        context,
++                        passphrase
++                                ? R.string.bare_backup_enter_passphrase
++                                : R.string.bare_backup_enter_code,
++                        !passphrase);
++        LinearLayout layout = BareBackupDialogs.padded(context);
++        layout.addView(field);
++        BareBackupDialogs.showSecure(
++                BareBackupDialogs.builder(context)
++                .setTitle(
++                        passphrase
++                                ? R.string.bare_backup_enter_passphrase
++                                : R.string.bare_backup_enter_code)
++                .setView(layout)
++                .setNegativeButton(android.R.string.cancel, null)
++                .setPositiveButton(
++                        R.string.bare_backup_open,
++                        (d, w) -> {
++                            String typed = field.getText().toString();
++                            field.getText().clear();
++                            // A file that doesn't say is taken as a code when it reads as one.
++                            boolean isCode =
++                                    !passphrase
++                                            && !BareBackupBridge.normalizeRecoveryCode(typed)
++                                                    .isEmpty();
++                            open(typed.getBytes(StandardCharsets.UTF_8), isCode);
++                        })
++                .create());
++    }
++
++    private void open(byte[] secret, boolean isCode) {
++        if (mOpened == null) return;
++        AlertDialog progress = BareBackupDialogs.progress(getContext(), R.string.bare_backup_reading);
++        mOpened.open(
++                getProfile(),
++                secret,
++                isCode,
++                json -> {
++                    Arrays.fill(secret, (byte) 0);
++                    progress.dismiss();
++                    if (getContext() == null) return;
++                    try {
++                        JSONObject result = new JSONObject(json);
++                        if (!result.optBoolean("ok")) {
++                            BareBackupDialogs.message(
++                                    getContext(),
++                                    BareBackupDialogs.errorMessage(result.optString("error")));
++                            return;
++                        }
++                        showChoices(result);
++                    } catch (JSONException e) {
++                        BareBackupDialogs.message(getContext(), R.string.bare_backup_damaged);
++                    }
++                });
++    }
++
++    private void showChoices(JSONObject result) throws JSONException {
++        Context context = getContext();
++        PreferenceScreen screen = getPreferenceScreen();
++        Preference enter = screen.findPreference("enter");
++        if (enter != null) screen.removePreference(enter);
++
++        PreferenceCategory what = new PreferenceCategory(context);
++        what.setTitle(R.string.bare_backup_what);
++        screen.addPreference(what);
++        JSONArray sections = result.getJSONArray("sections");
++        for (int i = 0; i < sections.length(); i++) {
++            String section = sections.getString(i);
++            int title;
++            int summary = 0;
++            switch (section) {
++                case "settings":
++                    title = R.string.bare_backup_section_settings;
++                    summary = R.string.bare_backup_section_settings_summary;
++                    break;
++                case "search_engines":
++                    title = R.string.bare_backup_section_search_engines;
++                    break;
++                case "site_settings":
++                    title = R.string.bare_backup_section_site_settings;
++                    break;
++                case "bookmarks":
++                    title = R.string.bare_backup_section_bookmarks;
++                    summary = R.string.bare_backup_section_bookmarks_summary;
++                    break;
++                default:
++                    continue;
++            }
++            ChromeSwitchPreference row = new ChromeSwitchPreference(context);
++            row.setPersistent(false);
++            row.setTitle(title);
++            if (summary != 0) row.setSummary(summary);
++            row.setChecked(true);
++            what.addPreference(row);
++            mSections.put(section, row);
++        }
++        String dnsHost = result.optString("custom_dns_host");
++        if (!dnsHost.isEmpty()) {
++            mCustomDns = new ChromeSwitchPreference(context);
++            mCustomDns.setPersistent(false);
++            mCustomDns.setTitle(context.getString(R.string.bare_backup_dns_from_file, dnsHost));
++            mCustomDns.setSummary(R.string.bare_backup_dns_from_file_summary);
++            mCustomDns.setChecked(false);
++            what.addPreference(mCustomDns);
++        }
++
++        // Settings in the file that would leave this phone less protected wait for their own
++        // row. In a Move, which brings everything and then erases the other phone, it is on
++        // and locked like the rest, with the same warning.
++        String lowering = loweringNames(result.optJSONArray("lowering"));
++        if (!lowering.isEmpty() && mSections.containsKey("settings")) {
++            mLowering = new ChromeSwitchPreference(context);
++            mLowering.setPersistent(false);
++            mLowering.setTitle(R.string.bare_backup_lowering);
++            mLowering.setSummary(context.getString(R.string.bare_backup_lowering_summary, lowering));
++            mLowering.setChecked(mMove != null);
++            mLowering.setEnabled(mMove == null);
++            what.addPreference(mLowering);
++        }
++
++        JSONArray extensions = result.optJSONArray("extensions");
++        if (extensions != null && extensions.length() > 0) {
++            PreferenceCategory list = new PreferenceCategory(context);
++            list.setTitle(R.string.bare_backup_extensions);
++            screen.addPreference(list);
++            Preference unverified = new Preference(context);
++            unverified.setSummary(R.string.bare_backup_ext_unverified);
++            unverified.setSelectable(false);
++            list.addPreference(unverified);
++            for (int i = 0; i < extensions.length(); i++) {
++                addExtension(list, extensions.getJSONObject(i));
++            }
++        }
++
++        BareBackupButtonPreference restore = new BareBackupButtonPreference(context);
++        restore.setTitle(R.string.bare_backup_restore_button);
++        restore.setOnClick(this::restore);
++        screen.addPreference(restore);
++    }
++
++    private void addExtension(PreferenceCategory list, JSONObject extension) {
++        Context context = getContext();
++        String id = extension.optString("id");
++        String name = extension.optString("name");
++        mExtensionNames.put(id, name);
++        if (extension.optBoolean("can_install")) {
++            ChromeSwitchPreference row = new ChromeSwitchPreference(context);
++            row.setPersistent(false);
++            row.setTitle(name);
++            JSONArray permissions = extension.optJSONArray("permissions");
++            List<String> lines = new ArrayList<>();
++            for (int i = 0; permissions != null && i < permissions.length(); i++) {
++                lines.add(permissions.optString(i));
++            }
++            row.setSummary(
++                    lines.isEmpty()
++                            ? context.getString(R.string.bare_backup_ext_permissions_none)
++                            : String.join("\n", lines));
++            row.setChecked(true);
++            list.addPreference(row);
++            mExtensions.put(id, row);
++            return;
++        }
++        Preference row = new Preference(context);
++        row.setTitle(name);
++        row.setSelectable(false);
++        String host = extension.optString("update_host");
++        if (extension.optBoolean("installed_here")) {
++            row.setSummary(R.string.bare_backup_ext_installed);
++        } else if (extension.optBoolean("unpacked")) {
++            row.setSummary(R.string.bare_backup_ext_by_hand);
++        } else if (extension.optBoolean("problem")) {
++            row.setSummary(R.string.bare_backup_ext_cant);
++        } else if (!host.isEmpty()) {
++            row.setSummary(context.getString(R.string.bare_backup_ext_get_again, host));
++        } else {
++            row.setSummary(R.string.bare_backup_ext_get_again_unknown);
++        }
++        list.addPreference(row);
++    }
++
++    // Plain names for the "store:key" labels native lists, one per kind of change.
++    private String loweringNames(@Nullable JSONArray labels) {
++        List<String> names = new ArrayList<>();
++        for (int i = 0; labels != null && i < labels.length(); i++) {
++            String label = labels.optString(i);
++            String key = label.substring(label.indexOf(':') + 1);
++            int name =
++                    switch (key) {
++                        case "Bare.Extensions.QuickCrx" -> R.string.bare_backup_lowering_quick_crx;
++                        case "Bare.Downloads.ExternalSignIn" -> R.string
++                                .bare_backup_lowering_external_sign_in;
++                        case "https_only_mode_enabled" -> R.string.bare_backup_lowering_https_only;
++                        case "profile.cookie_controls_mode" -> R.string.bare_backup_lowering_cookies;
++                        case "webrtc.ip_handling_policy" -> R.string.bare_backup_lowering_webrtc;
++                        case "dns_over_https.mode" -> R.string.bare_backup_lowering_dns;
++                        case "Chrome.Bare.BundledAdBlockerEnabled" -> R.string
++                                .bare_backup_lowering_ad_blocker;
++                        case "Chrome.Bare.BareFilterEnabled" -> R.string
++                                .bare_backup_lowering_barefilter;
++                        case "bare.ubo_auto_update" -> R.string.bare_backup_lowering_ubo_updates;
++                        case "Bare.Incognito.BiometricOnly",
++                                "Bare.Incognito.BlockScreenshots",
++                                "Bare.Incognito.WipeAfter" -> R.string
++                                .bare_backup_lowering_incognito;
++                        case "Chrome.Bare.UpdateReminder" -> R.string
++                                .bare_backup_lowering_update_reminder;
++                        default -> 0;
++                    };
++            if (name == 0) continue;
++            String text = getContext().getString(name);
++            // Later items are mid-sentence: "Install" becomes "install", while names such as
++            // BareFilter, HTTPS-only or WebRTC keep their capitals.
++            if (!names.isEmpty()) {
++                String word = text.split(" ", 2)[0];
++                if (word.substring(1).equals(word.substring(1).toLowerCase(Locale.ROOT))) {
++                    text = Character.toLowerCase(text.charAt(0)) + text.substring(1);
++                }
++            }
++            if (!names.contains(text)) names.add(text);
++        }
++        return String.join(", ", names);
++    }
++
++    private boolean chosen(String section) {
++        ChromeSwitchPreference row = mSections.get(section);
++        return row != null && row.isChecked();
++    }
++
++    private void restore() {
++        if (mOpened == null || mRestoring) return;
++        mRestoring = true;
++        if (mFromWelcome) BareWelcomeOverlay.completeForRestore();
++        // Search engines are restored straight into the service, so it has to be loaded first.
++        // From the welcome this also puts the restore after the default engine just written.
++        TemplateUrlService service = TemplateUrlServiceFactory.getForProfile(getProfile());
++        if (service.isLoaded()) {
++            runRestore();
++            return;
++        }
++        service.registerLoadListener(
++                new TemplateUrlService.LoadListener() {
++                    @Override
++                    public void onTemplateUrlServiceLoaded() {
++                        service.unregisterLoadListener(this);
++                        if (getContext() != null) runRestore();
++                    }
++                });
++        service.load();
++    }
++
++    private void runRestore() {
++        if (mOpened == null) return;
++        Context context = getContext();
++        List<String> approved = new ArrayList<>();
++        for (Map.Entry<String, ChromeSwitchPreference> entry : mExtensions.entrySet()) {
++            if (entry.getValue().isChecked()) approved.add(entry.getKey());
++        }
++        AlertDialog progress = BareBackupDialogs.progress(context, R.string.bare_backup_restoring);
++        mOpened.restore(
++                getProfile(),
++                chosen("settings"),
++                chosen("search_engines"),
++                chosen("site_settings"),
++                chosen("bookmarks"),
++                mCustomDns != null && mCustomDns.isChecked(),
++                mLowering != null && mLowering.isChecked(),
++                approved.toArray(new String[0]),
++                context.getString(R.string.bare_backup_restored_folder, BareBackupIo.today()),
++                json -> {
++                    progress.dismiss();
++                    if (mOpened != null) {
++                        mOpened.close();
++                        mOpened = null;
++                    }
++                    if (getContext() == null) return;
++                    try {
++                        JSONObject report = new JSONObject(json);
++                        applyAfterRestore(report.optJSONArray("android_changed"));
++                        showReport(report);
++                    } catch (JSONException e) {
++                        BareBackupDialogs.message(getContext(), R.string.bare_backup_damaged);
++                    }
++                });
++    }
++
++    // Settings that other parts of Bare only pick up through their own setters.
++    private void applyAfterRestore(@Nullable JSONArray changed) {
++        if (changed == null) return;
++        List<String> keys = new ArrayList<>();
++        for (int i = 0; i < changed.length(); i++) keys.add(changed.optString(i));
++        if (keys.contains("Chrome.Bare.LauncherIcon")) {
++            BareLauncherIcon.setChoice(
++                    getContext(),
++                    ChromeSharedPreferences.getInstance().readInt("Chrome.Bare.LauncherIcon"));
++        }
++        boolean homepage = false;
++        for (String key : keys) {
++            homepage |= key.equals("homepage") || key.startsWith("Chrome.Homepage.")
++                    || key.equals("homepage_partner_enabled");
++        }
++        if (homepage) {
++            HomepageManager manager = HomepageManager.getInstance();
++            manager.setPrefHomepageEnabled(
++                    ChromeSharedPreferences.getInstance().readBoolean("homepage", true));
++            manager.setHomepageSelection(
++                    manager.getPrefHomepageUseChromeNtp(),
++                    manager.getPrefHomepageUseDefaultUri(),
++                    manager.getPrefHomepageCustomGurl());
++        }
++    }
++
++    private void showReport(JSONObject report) {
++        Context context = getContext();
++        PreferenceScreen screen = getPreferenceManager().createPreferenceScreen(context);
++        setPreferenceScreen(screen);
++        TextMessagePreference heading = new TextMessagePreference(context, null);
++        heading.setTitle(R.string.bare_backup_report_title);
++        screen.addPreference(heading);
++
++        List<String> applied = new ArrayList<>();
++        JSONArray appliedJson = report.optJSONArray("applied");
++        for (int i = 0; appliedJson != null && i < appliedJson.length(); i++) {
++            applied.add(appliedJson.optString(i));
++        }
++        if (applied.contains("settings")) {
++            int skipped = report.optInt("settings_skipped");
++            line(
++                    skipped == 0
++                            ? context.getString(
++                                    R.string.bare_backup_report_settings,
++                                    report.optInt("settings_applied"))
++                            : context.getString(
++                                    R.string.bare_backup_report_settings_skipped,
++                                    report.optInt("settings_applied"),
++                                    skipped));
++        }
++        if (applied.contains("settings") && report.optInt("settings_held_back") > 0) {
++            line(
++                    context.getString(
++                            R.string.bare_backup_report_held_back,
++                            report.optInt("settings_held_back")));
++        }
++        if (applied.contains("search_engines") && report.optInt("search_engines") > 0) {
++            line(
++                    context.getString(
++                            R.string.bare_backup_report_search_engines,
++                            report.optInt("search_engines")));
++        }
++        if (applied.contains("site_settings") && report.optInt("site_settings") > 0) {
++            line(
++                    context.getString(
++                            R.string.bare_backup_report_site_settings,
++                            report.optInt("site_settings")));
++        }
++        if (applied.contains("bookmarks") && report.optInt("bookmarks") > 0) {
++            String folder = report.optString("bookmarks_folder");
++            line(
++                    folder.isEmpty()
++                            ? context.getString(
++                                    R.string.bare_backup_report_bookmarks,
++                                    report.optInt("bookmarks"))
++                            : context.getString(
++                                    R.string.bare_backup_report_bookmarks_folder,
++                                    report.optInt("bookmarks"),
++                                    folder));
++        }
++        if (applied.contains("bookmarks")) {
++            if (report.optInt("reading_list") > 0) {
++                line(
++                        context.getString(
++                                R.string.bare_backup_report_reading_list,
++                                report.optInt("reading_list")));
++            }
++        }
++        JSONObject extensions = report.optJSONObject("extensions");
++        if (extensions != null) {
++            Iterator<String> ids = extensions.keys();
++            while (ids.hasNext()) {
++                String id = ids.next();
++                String name = mExtensionNames.containsKey(id) ? mExtensionNames.get(id) : id;
++                String error = extensions.optString(id);
++                line(
++                        error.isEmpty()
++                                ? context.getString(R.string.bare_backup_report_extension_ok, name)
++                                : context.getString(
++                                        R.string.bare_backup_report_extension_failed,
++                                        name,
++                                        error));
++            }
++        }
++        int failed = sectionLabel(report.optString("failed"));
++        if (failed != 0) {
++            line(context.getString(R.string.bare_backup_report_stopped, context.getString(failed)));
++        }
++
++        BareBackupButtonPreference done = new BareBackupButtonPreference(context);
++        done.setTitle(R.string.bare_backup_done);
++        done.setOnClick(
++                () -> {
++                    if (getActivity() != null) getActivity().finish();
++                });
++        screen.addPreference(done);
++
++        if (report.optBoolean("needs_restart")) {
++            BareBackupDialogs.builder(context)
++                    .setMessage(R.string.bare_backup_report_restart)
++                    .setPositiveButton(
++                            R.string.bare_user_agent_restart,
++                            (d, w) -> ApplicationLifetime.terminate(/* restart= */ true))
++                    .setNegativeButton(R.string.bare_user_agent_later, null)
++                    .show();
++        }
++    }
++
++    private static int sectionLabel(String section) {
++        switch (section) {
++            case "settings":
++                return R.string.bare_backup_section_settings;
++            case "search_engines":
++                return R.string.bare_backup_section_search_engines;
++            case "site_settings":
++                return R.string.bare_backup_section_site_settings;
++            case "bookmarks":
++                return R.string.bare_backup_section_bookmarks;
++            default:
++                return 0;
++        }
++    }
++
++    private void line(String text) {
++        TextMessagePreference row = new TextMessagePreference(getContext(), null);
++        row.setSummary(text);
++        getPreferenceScreen().addPreference(row);
++    }
++
++    @Override
++    public void onDestroy() {
++        if (mOpened != null) {
++            mOpened.close();
++            mOpened = null;
++        }
++        super.onDestroy();
++    }
++
++    @Override
++    public MonotonicObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupSettingsFragment.java
+new file mode 100644
+index 00000000000..7762716b24e
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupSettingsFragment.java
+@@ -0,0 +1,78 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.content.Context;
++import android.net.Uri;
++import android.os.Bundle;
++
++import androidx.activity.result.ActivityResultLauncher;
++import androidx.activity.result.contract.ActivityResultContracts;
++import androidx.preference.Preference;
++
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
++import org.chromium.components.browser_ui.settings.SettingsUtils;
++
++/** Settings > Backup and transfer. */
++public class BareBackupSettingsFragment extends ChromeBaseSettingsFragment {
++    public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
++            new ChromeBaseSearchIndexProvider(
++                    BareBackupSettingsFragment.class.getName(), R.xml.bare_backup_preferences);
++
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++            ObservableSuppliers.createMonotonic();
++    private ActivityResultLauncher<String[]> mOpenDocument;
++
++    @Override
++    public void onCreate(@Nullable Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        mOpenDocument =
++                registerForActivityResult(
++                        new ActivityResultContracts.OpenDocument(), this::onFileChosen);
++    }
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        mPageTitle.set(getTitle(getContext()));
++        SettingsUtils.addPreferencesFromResource(this, R.xml.bare_backup_preferences);
++        Preference restore = findPreference("bare_backup_restore");
++        restore.setOnPreferenceClickListener(
++                preference -> {
++                    // Android doesn't know .bare, so any type is offered.
++                    mOpenDocument.launch(new String[] {"*/*"});
++                    return true;
++                });
++    }
++
++    private void onFileChosen(@Nullable Uri uri) {
++        if (uri == null || getContext() == null) return;
++        BareBackupRestoreFragment.openFile(getContext(), uri, /* fromWelcome= */ false);
++    }
++
++    @Override
++    public MonotonicObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    public static String getTitle(Context context) {
++        return context.getString(R.string.bare_backup_title);
++    }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++
++    @Override
++    public @Nullable String getMainMenuKey() {
++        return "bare_backup";
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareScreenLock.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareScreenLock.java
+new file mode 100644
+index 00000000000..7d19c4b6249
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareScreenLock.java
+@@ -0,0 +1,94 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.app.Activity;
++import android.app.KeyguardManager;
++import android.content.Context;
++import android.content.Intent;
++import android.hardware.biometrics.BiometricManager;
++import android.hardware.biometrics.BiometricPrompt;
++import android.os.Build;
++import android.os.CancellationSignal;
++
++import androidx.activity.result.ActivityResultLauncher;
++import androidx.activity.result.contract.ActivityResultContracts;
++import androidx.fragment.app.Fragment;
++
++import org.chromium.base.Callback;
++import org.chromium.chrome.R;
++
++/**
++ * Asks for the phone's screen lock before personal data is written to a file. Android 11 and up
++ * use BiometricPrompt with the device credential; Android 10 uses the keyguard's confirm screen.
++ * Create it in the fragment's onCreate, since it registers for an activity result.
++ */
++final class BareScreenLock {
++    private final Fragment mFragment;
++    private final ActivityResultLauncher<Intent> mKeyguardLauncher;
++    private Callback<Boolean> mPending;
++
++    BareScreenLock(Fragment fragment) {
++        mFragment = fragment;
++        mKeyguardLauncher =
++                fragment.registerForActivityResult(
++                        new ActivityResultContracts.StartActivityForResult(),
++                        result -> finish(result.getResultCode() == Activity.RESULT_OK));
++    }
++
++    /** Whether the phone has a screen lock at all. Without one there is nothing to ask for. */
++    static boolean isSet(Context context) {
++        KeyguardManager keyguard = context.getSystemService(KeyguardManager.class);
++        return keyguard != null && keyguard.isDeviceSecure();
++    }
++
++    /** Runs {@code done} with true once the user has confirmed the lock. */
++    void confirm(Callback<Boolean> done) {
++        Context context = mFragment.requireContext();
++        mPending = done;
++        String title = context.getString(R.string.bare_backup_lock_title);
++        String subtitle = context.getString(R.string.bare_backup_lock_subtitle);
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
++            BiometricPrompt prompt =
++                    new BiometricPrompt.Builder(context)
++                            .setTitle(title)
++                            .setSubtitle(subtitle)
++                            .setAllowedAuthenticators(
++                                    BiometricManager.Authenticators.BIOMETRIC_WEAK
++                                            | BiometricManager.Authenticators.DEVICE_CREDENTIAL)
++                            .build();
++            prompt.authenticate(
++                    new CancellationSignal(),
++                    context.getMainExecutor(),
++                    new BiometricPrompt.AuthenticationCallback() {
++                        @Override
++                        public void onAuthenticationSucceeded(
++                                BiometricPrompt.AuthenticationResult result) {
++                            finish(true);
++                        }
++
++                        @Override
++                        public void onAuthenticationError(int code, CharSequence message) {
++                            finish(false);
++                        }
++                    });
++            return;
++        }
++        KeyguardManager keyguard = context.getSystemService(KeyguardManager.class);
++        Intent intent =
++                keyguard == null ? null : keyguard.createConfirmDeviceCredentialIntent(title, subtitle);
++        if (intent == null) {
++            finish(false);
++            return;
++        }
++        mKeyguardLauncher.launch(intent);
++    }
++
++    private void finish(boolean ok) {
++        Callback<Boolean> done = mPending;
++        mPending = null;
++        if (done != null) done.onResult(ok);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
+index bbe2bf0c600..ba5d238a75a 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
+@@ -178,6 +178,12 @@ public final class BareSettingsLayout {
+                                             R.string.bare_settings_cat_developer,
+                                             0,
+                                             R.drawable.bare_settings_ic_code),
++                                    Entry.direct(
++                                            "backup",
++                                            R.string.bare_backup_title,
++                                            0,
++                                            R.drawable.ic_archive,
++                                            "bare_backup"),
+                                     new Entry(
+                                             "about",
+                                             R.string.bare_settings_cat_about,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
+index 085481f49fe..e827d5c6711 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
+@@ -28,6 +28,7 @@ import org.chromium.chrome.browser.bare.settings.BareExtensionsSettingsFragment;
+ import org.chromium.chrome.browser.bare.settings.BarePushSettingsFragment;
+ import org.chromium.chrome.browser.bare.settings.BareSecuritySettingsFragment;
+ import org.chromium.chrome.browser.bare.settings.BareToolbarSettingsFragment;
++import org.chromium.chrome.browser.bare.backup.BareBackupSettingsFragment;
+ import org.chromium.chrome.browser.bare.translate.BareTranslateSettingsFragment;
+ import org.chromium.chrome.browser.browsing_data.ClearBrowsingDataFragment;
+ import org.chromium.chrome.browser.commerce.PriceNotificationSettingsFragment;
+@@ -141,5 +142,6 @@ public final class SearchIndexProviderRegistry {
+                     BarePushSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
+                     BareSecuritySettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
+                     BareToolbarSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
++                    BareBackupSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
+                     BareTranslateSettingsFragment.SEARCH_INDEX_DATA_PROVIDER);
+ }
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayoutUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayoutUnitTest.java
+index b6198645fea..7194a478452 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayoutUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayoutUnitTest.java
+@@ -100,6 +100,7 @@ public class BareSettingsLayoutUnitTest {
+                         "notifications",
+                         "accessibility",
+                         "developer",
++                        "backup",
+                         "about",
+                         "updates"),
+                 rows);
+diff --git a/chrome/browser/bare/backup/BUILD.gn b/chrome/browser/bare/backup/BUILD.gn
+index a6fc40c232b..86fcde09894 100644
+--- a/chrome/browser/bare/backup/BUILD.gn
++++ b/chrome/browser/bare/backup/BUILD.gn
+@@ -10,6 +10,8 @@ static_library("backup") {
+     "backup_file.h",
+     "backup_package.cc",
+     "backup_package.h",
++    "backup_recovery_code.cc",
++    "backup_recovery_code.h",
+   ]
+   public_deps = [ "//base" ]
+   deps = [
+@@ -78,6 +80,7 @@ source_set("browser") {
+ _format_test_sources = [
+   "backup_file_unittest.cc",
+   "backup_package_unittest.cc",
++  "backup_recovery_code_unittest.cc",
+ ]
+ _format_test_deps = [
+   ":backup",
+diff --git a/chrome/browser/bare/backup/backup_contents.cc b/chrome/browser/bare/backup/backup_contents.cc
+index e27724e5b2f..6b2d490ac42 100644
+--- a/chrome/browser/bare/backup/backup_contents.cc
++++ b/chrome/browser/bare/backup/backup_contents.cc
+@@ -136,8 +136,8 @@ std::optional<BuiltPackage> BuildPackage(Kind kind, const Sources& from) {
+   base::ListValue sections;
+ 
+   // Setup group.
+-  SettingsWriteResult setup = SettingsToJson(SettingGroup::kSetup,
+-                                             from.settings);
++  SettingsWriteResult setup = SettingsToJson(
++      SettingGroup::kSetup, from.settings, from.settings_options);
+   base::DictValue setup_json;
+   setup_json.Set("prefs", std::move(setup.json));
+   if (from.site_settings) {
+@@ -281,6 +281,34 @@ base::expected<PackageSummary, ContentsError> ReadManifest(
+   return summary;
+ }
+ 
++std::vector<std::string> LoweringSettingsInPackage(
++    const Package& package,
++    const PackageSummary& summary,
++    const SettingsStores& stores) {
++  if (!std::ranges::contains(summary.sections, kSectionSettings)) {
++    return {};
++  }
++  std::vector<std::string> lowering;
++  for (const char* name : {kSetupSettings, kPersonalSettings}) {
++    if (name == kPersonalSettings && summary.kind != Kind::kFull) {
++      continue;
++    }
++    std::optional<base::DictValue> json = ReadJson(package, name);
++    const base::DictValue* prefs = json ? json->FindDict("prefs") : nullptr;
++    if (prefs) {
++      std::ranges::move(LoweringSettings(*prefs, stores),
++                        std::back_inserter(lowering));
++    }
++  }
++  return lowering;
++}
++
++std::optional<std::string> CustomDnsHostInPackage(const Package& package) {
++  std::optional<base::DictValue> setup = ReadJson(package, kSetupSettings);
++  const base::DictValue* prefs = setup ? setup->FindDict("prefs") : nullptr;
++  return prefs ? CustomDnsHostIn(*prefs) : std::nullopt;
++}
++
+ std::vector<ExtensionRecord> ReadExtensionList(const Package& package,
+                                                const PackageSummary& summary,
+                                                size_t& skipped) {
+@@ -342,8 +370,11 @@ RestoreReport RestorePackage(const Package& package,
+       ok = setup && (summary.kind != Kind::kFull || personal);
+       if (ok) {
+         if (const base::DictValue* prefs = setup->FindDict("prefs")) {
+-          report.settings =
+-              RestoreSettings(SettingGroup::kSetup, *prefs, to.settings);
++          SettingsOptions options;
++          options.custom_dns_in_setup = choices.custom_dns_from_setup;
++          options.lower_protection = choices.lower_protection;
++          report.settings = RestoreSettings(SettingGroup::kSetup, *prefs,
++                                            to.settings, options);
+         }
+         if (const base::DictValue* defaults = setup->FindDict("site_defaults");
+             defaults && to.site_settings) {
+@@ -360,14 +391,18 @@ RestoreReport RestorePackage(const Package& package,
+         }
+         if (personal) {
+           if (const base::DictValue* prefs = personal->FindDict("prefs")) {
+-            SettingsRestoreResult more =
+-                RestoreSettings(SettingGroup::kPersonal, *prefs, to.settings);
++            SettingsOptions options;
++            options.lower_protection = choices.lower_protection;
++            SettingsRestoreResult more = RestoreSettings(
++                SettingGroup::kPersonal, *prefs, to.settings, options);
+             report.settings.applied += more.applied;
+             report.settings.needs_restart |= more.needs_restart;
+             std::ranges::move(more.skipped,
+                               std::back_inserter(report.settings.skipped));
+             std::ranges::move(more.unknown,
+                               std::back_inserter(report.settings.unknown));
++            std::ranges::move(more.held_back,
++                              std::back_inserter(report.settings.held_back));
+           }
+         }
+       }
+diff --git a/chrome/browser/bare/backup/backup_contents.h b/chrome/browser/bare/backup/backup_contents.h
+index 2e0b5950ee9..7546dcd1e58 100644
+--- a/chrome/browser/bare/backup/backup_contents.h
++++ b/chrome/browser/bare/backup/backup_contents.h
+@@ -63,6 +63,7 @@ struct Sources {
+   raw_ptr<ReadingListModel> reading_list = nullptr;
+   // Collected beforehand, since reading extension folders is file work.
+   raw_ptr<const CollectedExtensions> extensions = nullptr;
++  SettingsOptions settings_options;
+ };
+ 
+ struct BuiltPackage {
+@@ -111,6 +112,13 @@ base::expected<PackageSummary, ContentsError> ReadManifest(
+     Kind file_kind);
+ 
+ struct RestoreChoices {
++  // Apply a custom DNS server that a setup package carries. Off unless the
++  // user turns it on: a setup file has no passphrase, so this is the one
++  // value in it that could send the phone's lookups somewhere else.
++  bool custom_dns_from_setup = false;
++  // Apply settings that give less protection than this phone has now
++  // (LoweringSettings()). Off unless the user turns that row on.
++  bool lower_protection = false;
+   bool settings = true;
+   bool search_engines = true;
+   bool site_settings = true;
+@@ -143,6 +151,16 @@ struct RestoreReport {
+   std::vector<std::string> ignored_entries;
+ };
+ 
++// "store:key" of the package's settings that would give less protection than
++// this phone has now, for the restore page's row.
++std::vector<std::string> LoweringSettingsInPackage(
++    const Package& package,
++    const PackageSummary& summary,
++    const SettingsStores& stores);
++
++// The host of a custom DNS server the package's Setup group carries.
++std::optional<std::string> CustomDnsHostInPackage(const Package& package);
++
+ // The extension list of a package whose manifest passed ReadManifest().
+ std::vector<ExtensionRecord> ReadExtensionList(const Package& package,
+                                                const PackageSummary& summary,
+diff --git a/chrome/browser/bare/backup/backup_file.cc b/chrome/browser/bare/backup/backup_file.cc
+index 98aaa153afa..742d119c11e 100644
+--- a/chrome/browser/bare/backup/backup_file.cc
++++ b/chrome/browser/bare/backup/backup_file.cc
+@@ -88,7 +88,8 @@ bool DecodeFixed(const std::string* in, std::array<uint8_t, N>& out) {
+ bool ReadDescription(const base::DictValue& json, Description& out) {
+   for (auto [key, field] : {std::pair{"created", &out.created},
+                             std::pair{"bare_version", &out.bare_version},
+-                            std::pair{"device_label", &out.device_label}}) {
++                            std::pair{"device_label", &out.device_label},
++                            std::pair{"secret", &out.secret}}) {
+     const base::Value* value = json.Find(key);
+     if (!value) {
+       continue;
+@@ -98,6 +99,10 @@ bool ReadDescription(const base::DictValue& json, Description& out) {
+     }
+     *field = value->GetString();
+   }
++  if (!out.secret.empty() && out.secret != "code" &&
++      out.secret != "passphrase") {
++    out.secret.clear();
++  }
+   if (const base::Value* code = json.Find("bare_version_code")) {
+     if (!code->is_int() || code->GetInt() < 0) {
+       return false;
+@@ -164,6 +169,9 @@ base::DictValue DescriptionToJson(const Description& description, Kind kind) {
+   json.Set("device_label", description.device_label);
+   json.Set("kind", KindName(kind));
+   json.Set("contents", std::move(contents));
++  if (kind == Kind::kFull && !description.secret.empty()) {
++    json.Set("secret", description.secret);
++  }
+   return json;
+ }
+ 
+diff --git a/chrome/browser/bare/backup/backup_file.h b/chrome/browser/bare/backup/backup_file.h
+index 0a5c3f0bb68..607dbecdf65 100644
+--- a/chrome/browser/bare/backup/backup_file.h
++++ b/chrome/browser/bare/backup/backup_file.h
+@@ -91,6 +91,10 @@ struct Description {
+   std::string device_label;
+   // Section name to item count, for example "bookmarks" -> 812.
+   std::map<std::string, int> contents;
++  // Full files: what protects them, so a restore asks for the right thing.
++  // "code" for a recovery code, "passphrase" for the user's own, empty if a
++  // file doesn't say.
++  std::string secret;
+ };
+ 
+ struct ParsedFile {
+diff --git a/chrome/browser/bare/backup/backup_file_unittest.cc b/chrome/browser/bare/backup/backup_file_unittest.cc
+index 646e6491fa4..3089cb9c3b0 100644
+--- a/chrome/browser/bare/backup/backup_file_unittest.cc
++++ b/chrome/browser/bare/backup/backup_file_unittest.cc
+@@ -147,6 +147,21 @@ TEST_F(BackupFileTest, FullRoundTrip) {
+   }
+ }
+ 
++TEST_F(BackupFileTest, SecretKind) {
++  Description description = TestDescription();
++  description.secret = "code";
++  auto file = WriteFullFile(description, *kdf_, NewAeadParams(), *key_,
++                            Bytes("zip"));
++  EXPECT_EQ(ParseFile(*file)->description.secret, "code");
++  // Setup files have no secret to describe.
++  file = WriteSetupFile(description, Bytes("zip"));
++  EXPECT_EQ(ParseFile(*file)->description.secret, "");
++  // An unknown value reads as "doesn't say".
++  std::string json = kFullJson;
++  json.insert(json.size() - 1, R"(,"secret":"pin")");
++  EXPECT_EQ(ParseFile(RawFile(1, 2, 0, json))->description.secret, "");
++}
++
+ TEST_F(BackupFileTest, FullRoundTripRederivesKey) {
+   const std::vector<uint8_t> zip = Bytes("zip bytes");
+   EXPECT_EQ(Open(Full(zip), kPassphrase).value_or(""), "zip bytes");
+diff --git a/chrome/browser/bare/backup/backup_recovery_code.cc b/chrome/browser/bare/backup/backup_recovery_code.cc
+new file mode 100644
+index 00000000000..fb2945dc694
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_recovery_code.cc
+@@ -0,0 +1,82 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_recovery_code.h"
++
++#include <openssl/rand.h>
++
++#include <array>
++
++#include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
++
++namespace bare::backup {
++
++namespace {
++
++constexpr char kAlphabet[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
++constexpr size_t kGroupSize = 4;
++
++std::string Group(std::string_view code) {
++  std::string grouped;
++  for (size_t i = 0; i < code.size(); ++i) {
++    if (i && i % kGroupSize == 0) {
++      grouped += '-';
++    }
++    grouped += code[i];
++  }
++  return grouped;
++}
++
++}  // namespace
++
++std::string GenerateRecoveryCode() {
++  std::array<uint8_t, kRecoveryCodeLength * 5 / 8> bytes;
++  RAND_bytes(bytes.data(), bytes.size());
++  std::string code;
++  uint32_t buffer = 0;
++  int bits = 0;
++  for (uint8_t byte : bytes) {
++    buffer = (buffer << 8) | byte;
++    bits += 8;
++    while (bits >= 5) {
++      bits -= 5;
++      code += kAlphabet[(buffer >> bits) & 31];
++    }
++  }
++  return Group(code);
++}
++
++std::optional<std::string> NormalizeRecoveryCode(std::string_view typed) {
++  std::string code;
++  for (char c : typed) {
++    if (c == ' ' || c == '-' || c == '\t' || c == '\n') {
++      continue;
++    }
++    c = base::ToUpperASCII(c);
++    if (c == 'O') {
++      c = '0';
++    } else if (c == 'I' || c == 'L') {
++      c = '1';
++    }
++    if (std::string_view(kAlphabet).find(c) == std::string_view::npos) {
++      return std::nullopt;
++    }
++    code += c;
++  }
++  if (code.size() != kRecoveryCodeLength) {
++    return std::nullopt;
++  }
++  return Group(code);
++}
++
++bool IsAcceptablePassphrase(std::string_view passphrase) {
++  if (!base::IsStringUTF8(passphrase) ||
++      base::TrimWhitespaceASCII(passphrase, base::TRIM_ALL).empty()) {
++    return false;
++  }
++  return base::UTF8ToUTF16(passphrase).size() >= kMinPassphraseLength;
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_recovery_code.h b/chrome/browser/bare/backup/backup_recovery_code.h
+new file mode 100644
+index 00000000000..77abecaf653
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_recovery_code.h
+@@ -0,0 +1,35 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKUP_BACKUP_RECOVERY_CODE_H_
++#define CHROME_BROWSER_BARE_BACKUP_BACKUP_RECOVERY_CODE_H_
++
++#include <stddef.h>
++
++#include <optional>
++#include <string>
++#include <string_view>
++
++// The code Bare generates for a full backup: 24 characters of Crockford
++// base32 (no I, L, O or U), 120 bits, shown as six groups of four:
++// "7KQ2-M9XD-...". The grouped form is what goes into scrypt.
++namespace bare::backup {
++
++inline constexpr size_t kRecoveryCodeLength = 24;
++inline constexpr size_t kMinPassphraseLength = 12;
++
++std::string GenerateRecoveryCode();
++
++// The grouped form of what someone typed, forgiving case, spaces, dashes and
++// the look-alikes O for 0 and I or L for 1. nullopt if it isn't 24 code
++// characters.
++std::optional<std::string> NormalizeRecoveryCode(std::string_view typed);
++
++// A passphrase of the user's own: at least 12 characters, counted as Unicode
++// code points, and not only spaces.
++bool IsAcceptablePassphrase(std::string_view passphrase);
++
++}  // namespace bare::backup
++
++#endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_RECOVERY_CODE_H_
+diff --git a/chrome/browser/bare/backup/backup_recovery_code_unittest.cc b/chrome/browser/bare/backup/backup_recovery_code_unittest.cc
+new file mode 100644
+index 00000000000..db327611bf6
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_recovery_code_unittest.cc
+@@ -0,0 +1,62 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_recovery_code.h"
++
++#include <set>
++#include <string>
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace bare::backup {
++namespace {
++
++TEST(BackupRecoveryCodeTest, Shape) {
++  std::set<std::string> seen;
++  for (int i = 0; i < 200; ++i) {
++    const std::string code = GenerateRecoveryCode();
++    ASSERT_EQ(code.size(), 29u) << code;
++    for (size_t j = 0; j < code.size(); ++j) {
++      if (j % 5 == 4) {
++        EXPECT_EQ(code[j], '-') << code;
++      } else {
++        EXPECT_NE(std::string("0123456789ABCDEFGHJKMNPQRSTVWXYZ").find(code[j]),
++                  std::string::npos)
++            << code;
++      }
++    }
++    EXPECT_EQ(NormalizeRecoveryCode(code), code);
++    seen.insert(code);
++  }
++  EXPECT_EQ(seen.size(), 200u);
++}
++
++TEST(BackupRecoveryCodeTest, ForgivingInput) {
++  const std::string code = "7KQ2-M9XD-0011-ABCD-EFGH-JKMN";
++  for (const char* typed :
++       {"7KQ2-M9XD-0011-ABCD-EFGH-JKMN", "7kq2m9xd0011abcdefghjkmn",
++        " 7KQ2 M9XD OOIL ABCD EFGH JKMN ", "7kq2-m9xd-oo11-abcd-efgh-jkmn\n"}) {
++    EXPECT_EQ(NormalizeRecoveryCode(typed), code) << typed;
++  }
++  for (const char* typed :
++       {"", "7KQ2-M9XD-0011-ABCD-EFGH-JKM", "7KQ2-M9XD-0011-ABCD-EFGH-JKMNP",
++        "7KQ2-M9XD-0011-ABCD-EFGH-JKMU", "my own passphrase here",
++        "7KQ2_M9XD_0011_ABCD_EFGH_JKMN"}) {
++    EXPECT_FALSE(NormalizeRecoveryCode(typed)) << typed;
++  }
++}
++
++TEST(BackupRecoveryCodeTest, Passphrase) {
++  EXPECT_TRUE(IsAcceptablePassphrase("correct horse"));
++  EXPECT_TRUE(IsAcceptablePassphrase("éééééé"
++                                     "éééééé"));
++  EXPECT_FALSE(IsAcceptablePassphrase("short"));
++  EXPECT_FALSE(IsAcceptablePassphrase("elevenchars"));
++  EXPECT_FALSE(IsAcceptablePassphrase("              "));
++  EXPECT_FALSE(IsAcceptablePassphrase("\xff\xfe\xfd\xfc\xfb\xfa\xf9\xf8\xf7"
++                                      "\xf6\xf5\xf4"));
++}
++
++}  // namespace
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_settings.cc b/chrome/browser/bare/backup/backup_settings.cc
+index 67b92886c4c..13b60c827a6 100644
+--- a/chrome/browser/bare/backup/backup_settings.cc
++++ b/chrome/browser/bare/backup/backup_settings.cc
+@@ -436,7 +436,81 @@ constexpr Setting kSettings[] = {
+     {A, kPersonal, "homepage_partner_enabled", kBool, AnyBool},
+     {A, kPersonal, "Chrome.Homepage.CustomGurl", kString, HomepageGurl},
+     {L, kPersonal, "dns_over_https.templates", kString, DohTemplates, false,
+-     BuiltInDohTemplates},
++     BuiltInDohTemplates, /*setup_on_request=*/true},
++};
++
++// Settings that can give less protection. `rank` orders a valid value from
++// weakest (0) up; `android_default` is what Bare reads when an Android key is
++// unset (profile and local state prefs have their own defaults).
++int TrueIsStronger(const base::Value& value) {
++  return value.GetBool() ? 1 : 0;
++}
++int FalseIsStronger(const base::Value& value) {
++  return value.GetBool() ? 0 : 1;
++}
++// 0 allows third-party cookies, 1 blocks them in Incognito, 2 everywhere.
++int CookieControls(const base::Value& value) {
++  return value.GetInt();
++}
++template <const auto& kOrder>
++int IndexIn(const base::Value& value) {
++  const auto it = std::ranges::find(kOrder, value.GetString());
++  return it == kOrder.end() ? 0 : static_cast<int>(it - kOrder.begin());
++}
++// Wipe Incognito after this many failed unlocks: 0 never, then fewer is
++// stronger.
++int WipeAfter(const base::Value& value) {
++  switch (value.GetInt()) {
++    case 1:
++      return 3;
++    case 3:
++      return 2;
++    case 5:
++      return 1;
++    default:
++      return 0;
++  }
++}
++
++struct Protection {
++  SettingStore store;
++  const char* key;
++  int (*rank)(const base::Value& value);
++  base::Value (*android_default)() = nullptr;
++};
++
++base::Value False() {
++  return base::Value(false);
++}
++base::Value True() {
++  return base::Value(true);
++}
++base::Value Zero() {
++  return base::Value(0);
++}
++
++// kWebRtcPolicies and kSecureDnsModes are already weakest first.
++const Protection kProtections[] = {
++    {SettingStore::kAndroid, "Bare.Extensions.QuickCrx", FalseIsStronger, False},
++    {SettingStore::kAndroid, "Bare.Downloads.ExternalSignIn", FalseIsStronger,
++     False},
++    {SettingStore::kProfile, "https_only_mode_enabled", TrueIsStronger},
++    {SettingStore::kProfile, "profile.cookie_controls_mode", CookieControls},
++    {SettingStore::kProfile, "webrtc.ip_handling_policy",
++     IndexIn<kWebRtcPolicies>},
++    {SettingStore::kLocalState, "dns_over_https.mode", IndexIn<kSecureDnsModes>},
++    {SettingStore::kAndroid, "Chrome.Bare.BundledAdBlockerEnabled",
++     TrueIsStronger, True},
++    {SettingStore::kAndroid, "Chrome.Bare.BareFilterEnabled", TrueIsStronger,
++     True},
++    {SettingStore::kProfile, "bare.ubo_auto_update", TrueIsStronger},
++    {SettingStore::kAndroid, "Bare.Incognito.BiometricOnly", TrueIsStronger,
++     False},
++    {SettingStore::kAndroid, "Bare.Incognito.BlockScreenshots", TrueIsStronger,
++     False},
++    {SettingStore::kAndroid, "Bare.Incognito.WipeAfter", WipeAfter, Zero},
++    {SettingStore::kAndroid, "Chrome.Bare.UpdateReminder", TrueIsStronger,
++     False},
+ };
+ 
+ const char* StoreName(SettingStore store) {
+@@ -453,6 +527,13 @@ const char* StoreName(SettingStore store) {
+ constexpr std::array<SettingStore, 3> kStores = {
+     SettingStore::kAndroid, SettingStore::kProfile, SettingStore::kLocalState};
+ 
++// The order a restore writes the stores in. Local state goes before the
++// Android prefs: when Chrome.Toolbar.TopAnchored changes, the toolbar copies
++// omnibox.is_in_bottom_position over it if the two disagree, so that one has
++// to hold the restored position already.
++constexpr std::array<SettingStore, 3> kRestoreOrder = {
++    SettingStore::kLocalState, SettingStore::kProfile, SettingStore::kAndroid};
++
+ bool HasType(const base::Value& value, SettingType type) {
+   switch (type) {
+     case SettingType::kBool:
+@@ -475,11 +556,23 @@ bool IsValid(const Setting& setting, const base::Value& value) {
+   return HasType(value, setting.type) && setting.is_valid(value);
+ }
+ 
++// Whether Setup may carry `setting` with `value`, when it is a personal one.
++bool SetupMayCarry(const Setting& setting,
++                   const base::Value& value,
++                   const SettingsOptions& options) {
++  if (setting.setup_on_request && options.custom_dns_in_setup) {
++    return true;
++  }
++  return setting.also_setup_if && HasType(value, setting.type) &&
++         setting.also_setup_if(value);
++}
++
+ // The listed setting for `key` that `group` may carry with `value`.
+ const Setting* Find(SettingStore store,
+                     SettingGroup group,
+                     SV key,
+-                    const base::Value& value) {
++                    const base::Value& value,
++                    const SettingsOptions& options = {}) {
+   for (const Setting& setting : kSettings) {
+     if (setting.store != store || key != setting.key) {
+       continue;
+@@ -487,14 +580,26 @@ const Setting* Find(SettingStore store,
+     if (setting.group == group) {
+       return &setting;
+     }
+-    if (group == SettingGroup::kSetup && setting.also_setup_if &&
+-        HasType(value, setting.type) && setting.also_setup_if(value)) {
++    if (group == SettingGroup::kSetup && SetupMayCarry(setting, value, options)) {
+       return &setting;
+     }
+   }
+   return nullptr;
+ }
+ 
++std::optional<std::string> TemplateHost(const std::string& templates) {
++  const std::vector<SV> list = base::SplitStringPiece(
++      templates, " \t\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++  if (list.empty()) {
++    return std::nullopt;
++  }
++  const GURL url(list.front());
++  if (!url.is_valid()) {
++    return std::nullopt;
++  }
++  return url.GetHost();
++}
++
+ PrefService* PrefsFor(SettingStore store, const SettingsStores& stores) {
+   return store == SettingStore::kProfile ? stores.profile.get()
+                                          : stores.local_state.get();
+@@ -526,6 +631,51 @@ std::optional<base::Value> Current(const Setting& setting,
+   return pref->GetValue()->Clone();
+ }
+ 
++// Whether restoring `value` (none: back to the default) for `setting` would
++// give less protection than this phone has now.
++bool Lowers(const Setting& setting,
++            const base::Value& value,
++            const SettingsStores& stores) {
++  const auto protection = std::ranges::find_if(
++      kProtections, [&](const Protection& p) {
++        return p.store == setting.store && SV(p.key) == setting.key;
++      });
++  if (protection == std::end(kProtections)) {
++    return false;
++  }
++  std::optional<base::Value> now;
++  std::optional<base::Value> restored;
++  if (setting.store == SettingStore::kAndroid) {
++    if (!stores.android) {
++      return false;
++    }
++    now = stores.android->Get(setting.key, setting.type);
++    if (!now) {
++      now = protection->android_default();
++    }
++    restored = value.is_none() ? protection->android_default() : value.Clone();
++  } else {
++    PrefService* prefs = PrefsFor(setting.store, stores);
++    const PrefService::Preference* pref =
++        prefs ? prefs->FindPreference(setting.key) : nullptr;
++    if (!pref) {
++      return false;
++    }
++    now = pref->GetValue()->Clone();
++    const base::Value* fallback = prefs->GetDefaultPrefValue(setting.key);
++    if (value.is_none() && !fallback) {
++      return false;
++    }
++    restored = value.is_none() ? fallback->Clone() : value.Clone();
++  }
++  if (!IsValid(setting, *restored)) {
++    return false;
++  }
++  // A phone value Bare wouldn't write counts as the weakest.
++  const int before = IsValid(setting, *now) ? protection->rank(*now) : -1;
++  return protection->rank(*restored) < before;
++}
++
+ }  // namespace
+ 
+ base::span<const Setting> AllSettings() {
+@@ -533,13 +683,16 @@ base::span<const Setting> AllSettings() {
+ }
+ 
+ SettingsWriteResult SettingsToJson(SettingGroup group,
+-                                   const SettingsStores& stores) {
++                                   const SettingsStores& stores,
++                                   const SettingsOptions& options) {
+   SettingsWriteResult result;
+   for (SettingStore store : kStores) {
+     base::DictValue values;
+     for (const Setting& setting : kSettings) {
+       const bool shared_value =
+-          group == SettingGroup::kSetup && setting.also_setup_if;
++          group == SettingGroup::kSetup &&
++          (setting.also_setup_if ||
++           (setting.setup_on_request && options.custom_dns_in_setup));
+       if (setting.store != store ||
+           (setting.group != group && !shared_value)) {
+         continue;
+@@ -550,8 +703,7 @@ SettingsWriteResult SettingsToJson(SettingGroup group,
+         continue;
+       }
+       if (shared_value && setting.group != group &&
+-          (!value || !HasType(*value, setting.type) ||
+-           !setting.also_setup_if(*value))) {
++          (!value || !SetupMayCarry(setting, *value, options))) {
+         continue;
+       }
+       if (!value) {
+@@ -571,18 +723,26 @@ SettingsWriteResult SettingsToJson(SettingGroup group,
+ 
+ SettingsRestoreResult RestoreSettings(SettingGroup group,
+                                       const base::DictValue& json,
+-                                      const SettingsStores& stores) {
++                                      const SettingsStores& stores,
++                                      const SettingsOptions& options) {
+   SettingsRestoreResult result;
+   for (const auto [name, section] : json) {
+-    const auto store = std::ranges::find_if(
++    const bool known = std::ranges::any_of(
+         kStores, [&](SettingStore s) { return name == StoreName(s); });
+-    if (store == kStores.end() || !section.is_dict()) {
++    if (!known || !section.is_dict()) {
+       result.unknown.push_back(name);
++    }
++  }
++  for (const SettingStore store : kRestoreOrder) {
++    const base::DictValue* found = json.FindDict(StoreName(store));
++    if (!found) {
+       continue;
+     }
+-    for (const auto [key, value] : section.GetDict()) {
+-      const std::string label = name + ":" + key;
+-      const Setting* setting = Find(*store, group, key, value);
++    const base::DictValue& section = *found;
++    for (const auto [key, value] : section) {
++      const std::string label =
++          std::string(StoreName(store)) + ":" + key;
++      const Setting* setting = Find(store, group, key, value, options);
+       if (!setting) {
+         result.unknown.push_back(label);
+         continue;
+@@ -594,23 +754,27 @@ SettingsRestoreResult RestoreSettings(SettingGroup group,
+         result.skipped.push_back(label);
+         continue;
+       }
++      if (!options.lower_protection && Lowers(*setting, value, stores)) {
++        result.held_back.push_back(label);
++        continue;
++      }
+       // Secure mode without a server would stop every lookup.
+       if (std::string_view(setting->key) == "dns_over_https.mode" &&
+           value.is_string() && value.GetString() == "secure" &&
+           stores.local_state->FindPreference("dns_over_https.templates") &&
+           stores.local_state->GetString("dns_over_https.templates").empty() &&
+-          !section.GetDict().FindString("dns_over_https.templates")) {
++          !section.FindString("dns_over_https.templates")) {
+         result.skipped.push_back(label);
+         continue;
+       }
+-      if (*store == SettingStore::kAndroid) {
++      if (store == SettingStore::kAndroid) {
+         if (value.is_none()) {
+           stores.android->Remove(key);
+         } else {
+           stores.android->Set(key, value);
+         }
+       } else {
+-        PrefService* prefs = PrefsFor(*store, stores);
++        PrefService* prefs = PrefsFor(store, stores);
+         if (value.is_none()) {
+           prefs->ClearPref(key);
+         } else if (prefs->FindPreference(key)->GetType() == value.type() ||
+@@ -646,4 +810,46 @@ SettingsRestoreResult RestoreSettings(SettingGroup group,
+   return result;
+ }
+ 
++std::vector<std::string> LoweringSettings(const base::DictValue& json,
++                                          const SettingsStores& stores) {
++  std::vector<std::string> lowering;
++  for (const SettingStore store : kStores) {
++    const base::DictValue* section = json.FindDict(StoreName(store));
++    if (!section) {
++      continue;
++    }
++    for (const auto [key, value] : *section) {
++      const Setting* setting = Find(store, SettingGroup::kSetup, key, value);
++      if (setting && (value.is_none() || IsValid(*setting, value)) &&
++          Lowers(*setting, value, stores)) {
++        lowering.push_back(std::string(StoreName(store)) + ":" + key);
++      }
++    }
++  }
++  return lowering;
++}
++
++std::optional<std::string> CustomDnsHost(const SettingsStores& stores) {
++  const PrefService::Preference* pref =
++      stores.local_state
++          ? stores.local_state->FindPreference("dns_over_https.templates")
++          : nullptr;
++  if (!pref || !pref->GetValue()->is_string() ||
++      BuiltInDohTemplates(*pref->GetValue())) {
++    return std::nullopt;
++  }
++  return TemplateHost(pref->GetValue()->GetString());
++}
++
++std::optional<std::string> CustomDnsHostIn(const base::DictValue& json) {
++  const base::DictValue* local_state = json.FindDict("local_state");
++  const base::Value* templates =
++      local_state ? local_state->Find("dns_over_https.templates") : nullptr;
++  if (!templates || !templates->is_string() ||
++      BuiltInDohTemplates(*templates) || !DohTemplates(*templates)) {
++    return std::nullopt;
++  }
++  return TemplateHost(templates->GetString());
++}
++
+ }  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_settings.h b/chrome/browser/bare/backup/backup_settings.h
+index 27cdbd7d7c6..24f0cfdd724 100644
+--- a/chrome/browser/bare/backup/backup_settings.h
++++ b/chrome/browser/bare/backup/backup_settings.h
+@@ -72,6 +72,19 @@ struct Setting {
+   // For a personal setting: values that may also travel in Setup. Null
+   // means personal only.
+   bool (*also_setup_if)(const base::Value& value) = nullptr;
++  // For a personal setting: may travel in Setup when the user says so for
++  // this file (SettingsOptions::custom_dns_in_setup).
++  bool setup_on_request = false;
++};
++
++struct SettingsOptions {
++  // A custom Secure DNS server in Setup: on creating, the user chose to
++  // include it; on restoring, the user chose to apply it.
++  bool custom_dns_in_setup = false;
++  // On restoring: also apply values that give less protection than this
++  // phone has now (see LoweringSettings()). Off unless the user turns on
++  // the restore page's row for them.
++  bool lower_protection = false;
+ };
+ 
+ base::span<const Setting> AllSettings();
+@@ -99,7 +112,8 @@ struct SettingsWriteResult {
+ };
+ 
+ SettingsWriteResult SettingsToJson(SettingGroup group,
+-                                   const SettingsStores& stores);
++                                   const SettingsStores& stores,
++                                   const SettingsOptions& options = {});
+ 
+ struct SettingsRestoreResult {
+   size_t applied = 0;
+@@ -107,12 +121,33 @@ struct SettingsRestoreResult {
+   std::vector<std::string> skipped;
+   // "store:key" of keys that aren't on the list for this group.
+   std::vector<std::string> unknown;
++  // "store:key" of values left as they are because they would lower
++  // protection and the user didn't choose that.
++  std::vector<std::string> held_back;
+   bool needs_restart = false;
+ };
+ 
+ SettingsRestoreResult RestoreSettings(SettingGroup group,
+                                       const base::DictValue& json,
+-                                      const SettingsStores& stores);
++                                      const SettingsStores& stores,
++                                      const SettingsOptions& options = {});
++
++// The host of this phone's Secure DNS server when it is a custom one, for the
++// "Include my DNS server" switch.
++// "store:key" of the values in `json` (as SettingsToJson() writes it) that
++// would give less protection than this phone has now: HTTPS-only, third-party
++// cookie blocking, the WebRTC IP limit, Secure DNS, the ad blockers,
++// uBlock Origin's updates, the Incognito lock options and the update reminder
++// going weaker, and quick .crx installs or sign-in for download apps turning
++// on. A value equal to the phone's, or stronger, is not listed.
++std::vector<std::string> LoweringSettings(const base::DictValue& json,
++                                          const SettingsStores& stores);
++
++std::optional<std::string> CustomDnsHost(const SettingsStores& stores);
++
++// The host of a custom DNS server in a setup settings file, for the restore
++// screen's switch.
++std::optional<std::string> CustomDnsHostIn(const base::DictValue& json);
+ 
+ }  // namespace bare::backup
+ 
+diff --git a/chrome/browser/bare/backup/backup_settings_unittest.cc b/chrome/browser/bare/backup/backup_settings_unittest.cc
+index 33adaebc477..020450bc2be 100644
+--- a/chrome/browser/bare/backup/backup_settings_unittest.cc
++++ b/chrome/browser/bare/backup/backup_settings_unittest.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "base/json/json_reader.h"
+ #include "base/json/json_writer.h"
++#include "base/memory/raw_ptr.h"
+ #include "chrome/browser/bare/backup/backup_test_util.h"
+ #include "components/prefs/pref_registry_simple.h"
+ #include "components/prefs/testing_pref_service.h"
+@@ -134,8 +135,11 @@ TEST(BackupSettingsTest, RoundTrip) {
+                                              source.stores());
+   const base::DictValue json = Parse(*base::WriteJson(setup.json));
+   EXPECT_FALSE(json.FindDict("android")->contains("Bare.Translate.ApiKey"));
++  // With the row for weaker protection on: everything comes back.
++  SettingsOptions everything;
++  everything.lower_protection = true;
+   SettingsRestoreResult result =
+-      RestoreSettings(SettingGroup::kSetup, json, target.stores());
++      RestoreSettings(SettingGroup::kSetup, json, target.stores(), everything);
+   EXPECT_TRUE(result.skipped.empty());
+   EXPECT_TRUE(result.unknown.empty());
+   EXPECT_EQ(result.applied, setup.count);
+@@ -170,6 +174,145 @@ TEST(BackupSettingsTest, RoundTrip) {
+             base::Value("secret"));
+ }
+ 
++// One case per setting that can lower protection: the phone has the
++// stronger value, the file the weaker one.
++struct LoweringCase {
++  SettingStore store;
++  const char* key;
++  base::Value strong;
++  base::Value weak;
++};
++
++std::vector<LoweringCase> LoweringCases() {
++  std::vector<LoweringCase> cases;
++  const auto add = [&](SettingStore store, const char* key, base::Value strong,
++                       base::Value weak) {
++    cases.push_back({store, key, std::move(strong), std::move(weak)});
++  };
++  const SettingStore A = SettingStore::kAndroid;
++  const SettingStore P = SettingStore::kProfile;
++  add(A, "Bare.Extensions.QuickCrx", base::Value(false), base::Value(true));
++  add(A, "Bare.Downloads.ExternalSignIn", base::Value(false),
++      base::Value(true));
++  add(P, "https_only_mode_enabled", base::Value(true), base::Value(false));
++  add(P, "profile.cookie_controls_mode", base::Value(2), base::Value(0));
++  add(P, "profile.cookie_controls_mode", base::Value(1), base::Value(0));
++  add(P, "webrtc.ip_handling_policy", base::Value("disable_non_proxied_udp"),
++      base::Value("default"));
++  add(SettingStore::kLocalState, "dns_over_https.mode",
++      base::Value("automatic"), base::Value("off"));
++  add(A, "Chrome.Bare.BundledAdBlockerEnabled", base::Value(true),
++      base::Value(false));
++  add(A, "Chrome.Bare.BareFilterEnabled", base::Value(true),
++      base::Value(false));
++  add(P, "bare.ubo_auto_update", base::Value(true), base::Value(false));
++  add(A, "Bare.Incognito.BiometricOnly", base::Value(true),
++      base::Value(false));
++  add(A, "Bare.Incognito.BlockScreenshots", base::Value(true),
++      base::Value(false));
++  add(A, "Bare.Incognito.WipeAfter", base::Value(3), base::Value(5));
++  add(A, "Bare.Incognito.WipeAfter", base::Value(5), base::Value(0));
++  add(A, "Chrome.Bare.UpdateReminder", base::Value(true), base::Value(false));
++  return cases;
++}
++
++const char* StoreKey(SettingStore store) {
++  return store == SettingStore::kAndroid   ? "android"
++         : store == SettingStore::kProfile ? "profile"
++                                           : "local_state";
++}
++
++void SetOn(Phone& phone, SettingStore store, const char* key,
++           const base::Value& value) {
++  if (store == SettingStore::kAndroid) {
++    phone.android.Set(key, value);
++  } else if (store == SettingStore::kProfile) {
++    phone.profile.Set(key, value.Clone());
++  } else {
++    phone.local_state.Set(key, value.Clone());
++  }
++}
++
++base::Value ValueOn(Phone& phone, SettingStore store, const char* key) {
++  if (store == SettingStore::kAndroid) {
++    return phone.android.values_.at(key).Clone();
++  }
++  PrefService& prefs = store == SettingStore::kProfile
++                           ? static_cast<PrefService&>(phone.profile)
++                           : phone.local_state;
++  return prefs.GetValue(key).Clone();
++}
++
++base::DictValue FileWith(SettingStore store, const char* key,
++                         const base::Value& value) {
++  base::DictValue section;
++  section.Set(key, value.Clone());
++  base::DictValue json;
++  json.Set(StoreKey(store), std::move(section));
++  return json;
++}
++
++TEST(BackupSettingsTest, WeakerValuesHeldBack) {
++  for (const LoweringCase& c : LoweringCases()) {
++    SCOPED_TRACE(c.key);
++    // Weaker than the phone: held back, listed, the phone keeps its value.
++    {
++      Phone phone;
++      SetOn(phone, c.store, c.key, c.strong);
++      const base::DictValue file = FileWith(c.store, c.key, c.weak);
++      EXPECT_EQ(LoweringSettings(file, phone.stores()).size(), 1u);
++      SettingsRestoreResult result =
++          RestoreSettings(SettingGroup::kSetup, file, phone.stores());
++      EXPECT_EQ(result.applied, 0u);
++      ASSERT_EQ(result.held_back.size(), 1u);
++      EXPECT_EQ(result.held_back[0], std::string(StoreKey(c.store)) + ":" + c.key);
++      EXPECT_EQ(ValueOn(phone, c.store, c.key), c.strong);
++      // With the row on, it applies.
++      SettingsOptions lower;
++      lower.lower_protection = true;
++      result = RestoreSettings(SettingGroup::kSetup, file, phone.stores(), lower);
++      EXPECT_EQ(result.applied, 1u);
++      EXPECT_TRUE(result.held_back.empty());
++      EXPECT_EQ(ValueOn(phone, c.store, c.key), c.weak);
++    }
++    // Equal to the phone, or stronger: restores with the Settings row.
++    for (const base::Value* phone_value : {&c.strong, &c.weak}) {
++      Phone phone;
++      SetOn(phone, c.store, c.key, *phone_value);
++      const base::DictValue file = FileWith(c.store, c.key, c.strong);
++      EXPECT_TRUE(LoweringSettings(file, phone.stores()).empty());
++      SettingsRestoreResult result =
++          RestoreSettings(SettingGroup::kSetup, file, phone.stores());
++      EXPECT_EQ(result.applied, 1u);
++      EXPECT_TRUE(result.held_back.empty());
++      EXPECT_EQ(ValueOn(phone, c.store, c.key), c.strong);
++    }
++  }
++}
++
++// An Android key the phone never set counts at Bare's own default: the ad
++// blocker and BareFilter are on until turned off.
++TEST(BackupSettingsTest, UnsetAndroidKeysCountAtTheirDefault) {
++  Phone phone;
++  base::DictValue file = Parse(R"({"android": {
++      "Chrome.Bare.BareFilterEnabled": false,
++      "Chrome.Bare.BundledAdBlockerEnabled": true,
++      "Bare.Extensions.QuickCrx": false}})");
++  SettingsRestoreResult result =
++      RestoreSettings(SettingGroup::kSetup, file, phone.stores());
++  EXPECT_EQ(result.held_back,
++            std::vector<std::string>{"android:Chrome.Bare.BareFilterEnabled"});
++  EXPECT_EQ(result.applied, 2u);
++  // Back to the default (a null value) can't turn QuickCrx on.
++  phone.android.Set("Bare.Extensions.QuickCrx", base::Value(true));
++  result = RestoreSettings(
++      SettingGroup::kSetup,
++      Parse(R"({"android": {"Bare.Extensions.QuickCrx": null}})"),
++      phone.stores());
++  EXPECT_EQ(result.applied, 1u);
++  EXPECT_FALSE(phone.android.values_.contains("Bare.Extensions.QuickCrx"));
++}
++
+ TEST(BackupSettingsTest, BadValuesSkipped) {
+   Phone target;
+   SettingsRestoreResult result = RestoreSettings(
+@@ -218,13 +361,46 @@ TEST(BackupSettingsTest, UnknownKeysListed) {
+   EXPECT_EQ(result.applied, 0u);
+   EXPECT_EQ(result.unknown,
+             (std::vector<std::string>{
++                "registry", "profile:homepage",
+                 "android:Bare.Push.Distributor",
+                 "android:Bare.Translate.ApiKey",
+-                "android:Chrome.Bare.UpdateLastCheckMs", "profile:homepage",
+-                "registry"}));
++                "android:Chrome.Bare.UpdateLastCheckMs"}));
+   EXPECT_TRUE(target.android.values_.empty());
+ }
+ 
++// When Chrome.Toolbar.TopAnchored changes, the toolbar copies
++// omnibox.is_in_bottom_position over it if the two disagree.
++TEST(BackupSettingsTest, LocalStateWrittenBeforeAndroidPrefs) {
++  class Watching : public FakeAndroidPrefs {
++   public:
++    explicit Watching(PrefService* local_state) : local_state_(local_state) {}
++    void Set(const std::string& key, const base::Value& value) override {
++      if (key == "Chrome.Toolbar.TopAnchored") {
++        bottom_when_set_ =
++            local_state_->GetBoolean("omnibox.is_in_bottom_position");
++      }
++      FakeAndroidPrefs::Set(key, value);
++    }
++    bool bottom_when_set_ = false;
++
++   private:
++    raw_ptr<PrefService> local_state_;
++  };
++
++  Phone target;
++  Watching android(&target.local_state);
++  SettingsStores stores = target.stores();
++  stores.android = &android;
++  SettingsRestoreResult result = RestoreSettings(
++      SettingGroup::kSetup, Parse(R"j({
++        "android": {"Chrome.Toolbar.TopAnchored": 3},
++        "local_state": {"omnibox.is_in_bottom_position": true}
++      })j"),
++      stores);
++  EXPECT_EQ(result.applied, 2u);
++  EXPECT_TRUE(android.bottom_when_set_);
++}
++
+ TEST(BackupSettingsTest, PrefMissingOnThisPhone) {
+   Phone target;
+   TestingPrefServiceSimple empty_profile;
+@@ -318,6 +494,39 @@ TEST(BackupSettingsTest, PublicDnsServerTravelsInSetup) {
+             kCustom);
+ }
+ 
++TEST(BackupSettingsTest, CustomDnsServerOnlyWhenAsked) {
++  constexpr char kCustom[] = "https://dns.nextdns.test/abc123";
++  Phone source;
++  source.local_state.SetString("dns_over_https.templates", kCustom);
++  EXPECT_EQ(CustomDnsHost(source.stores()), "dns.nextdns.test");
++
++  SettingsOptions include;
++  include.custom_dns_in_setup = true;
++  base::DictValue setup =
++      SettingsToJson(SettingGroup::kSetup, source.stores(), include).json;
++  EXPECT_EQ(CustomDnsHostIn(setup), "dns.nextdns.test");
++
++  // Restoring it takes the restoring user's own yes too.
++  Phone target;
++  SettingsRestoreResult result =
++      RestoreSettings(SettingGroup::kSetup, setup, target.stores());
++  EXPECT_EQ(result.unknown,
++            (std::vector<std::string>{"local_state:dns_over_https.templates"}));
++  EXPECT_EQ(target.local_state.GetString("dns_over_https.templates"), "");
++  result =
++      RestoreSettings(SettingGroup::kSetup, setup, target.stores(), include);
++  EXPECT_TRUE(result.unknown.empty());
++  EXPECT_EQ(target.local_state.GetString("dns_over_https.templates"),
++            kCustom);
++
++  // Built-in providers are not "custom".
++  source.local_state.SetString("dns_over_https.templates",
++                               "https://chrome.cloudflare-dns.com/dns-query");
++  EXPECT_FALSE(CustomDnsHost(source.stores()));
++  EXPECT_FALSE(CustomDnsHostIn(
++      SettingsToJson(SettingGroup::kSetup, source.stores(), include).json));
++}
++
+ TEST(BackupSettingsTest, PersonalValueChecks) {
+   Phone target;
+   SettingsRestoreResult result = RestoreSettings(
+diff --git a/chrome/browser/ui/android/BUILD.gn b/chrome/browser/ui/android/BUILD.gn
+index 956955b0b94..411e076c037 100644
+--- a/chrome/browser/ui/android/BUILD.gn
++++ b/chrome/browser/ui/android/BUILD.gn
+@@ -26,6 +26,7 @@ if (is_android) {
+     deps = [
+       "//base",
+       "//chrome/android:chrome_jni_headers",
++      "//chrome/browser/bare/backup:browser",
+       "//chrome/browser/android:tabs_public",
+       "//chrome/browser/profiles",
+       "//chrome/browser/ssl",
+@@ -64,6 +65,7 @@ if (is_android) {
+       # and the content browser dependency it needs.
+       "bare_media_registry.cc",
+       "bare_media_registry.h",
++      "bare_backup_bridge.cc",
+       "bare_script_bridge.cc",
+       "bare_ubo_update.cc",
+       "context_menu_helper.cc",
+diff --git a/chrome/browser/ui/android/bare_backup_bridge.cc b/chrome/browser/ui/android/bare_backup_bridge.cc
+new file mode 100644
+index 00000000000..275793b57ab
+--- /dev/null
++++ b/chrome/browser/ui/android/bare_backup_bridge.cc
+@@ -0,0 +1,696 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// The native side of Settings > Backup and transfer. Files, secrets and
++// results cross JNI as bytes and small JSON strings; an opened backup stays
++// in memory here, behind a handle, until it is restored or closed.
++
++#include <openssl/mem.h>
++
++#include <memory>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/android/jni_android.h"
++#include "base/android/jni_array.h"
++#include "base/android/jni_string.h"
++#include "base/android/scoped_java_ref.h"
++#include "base/functional/bind.h"
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/stringprintf.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/thread_pool.h"
++#include "base/time/time.h"
++#include "base/values.h"
++#include "chrome/browser/bare/backup/backup_contents.h"
++#include "chrome/browser/bare/backup/backup_extensions_browser.h"
++#include "chrome/browser/bare/backup/backup_file.h"
++#include "chrome/browser/bare/backup/backup_package.h"
++#include "chrome/browser/bare/backup/backup_recovery_code.h"
++#include "chrome/browser/bare/backup/backup_settings.h"
++#include "chrome/browser/bookmarks/bookmark_model_factory.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/reading_list/reading_list_model_factory.h"
++#include "chrome/browser/search_engines/template_url_service_factory.h"
++#include "components/search_engines/template_url_service.h"
++#include "url/gurl.h"
++
++// Must come after all headers that specialize FromJniType() / ToJniType().
++#include "chrome/android/chrome_jni_headers/BareBackupBridge_jni.h"
++
++using base::android::AttachCurrentThread;
++using base::android::JavaRef;
++using base::android::ScopedJavaGlobalRef;
++using base::android::ScopedJavaLocalRef;
++
++namespace bare::backup {
++namespace {
++
++// Matches the type numbers BareBackupBridge.java uses.
++int TypeToJava(SettingType type) {
++  switch (type) {
++    case SettingType::kBool:
++      return 0;
++    case SettingType::kInt:
++      return 1;
++    case SettingType::kString:
++      return 2;
++    case SettingType::kStringSet:
++      return 3;
++    default:
++      return -1;
++  }
++}
++
++// The app's SharedPreferences, through Java.
++class JavaAndroidPrefs : public AndroidPrefs {
++ public:
++  std::optional<base::Value> Get(const std::string& key,
++                                 SettingType type) const override {
++    const int java_type = TypeToJava(type);
++    if (java_type < 0) {
++      return std::nullopt;
++    }
++    JNIEnv* env = AttachCurrentThread();
++    if (!Java_BareBackupBridge_hasPref(env, key)) {
++      return std::nullopt;
++    }
++    const std::optional<std::string> text =
++        Java_BareBackupBridge_readPref(env, key, java_type);
++    switch (type) {
++      case SettingType::kBool:
++        return base::Value(*text == "true");
++      case SettingType::kInt: {
++        int value = 0;
++        if (!base::StringToInt(*text, &value)) {
++          return std::nullopt;
++        }
++        return base::Value(value);
++      }
++      case SettingType::kStringSet: {
++        std::optional<base::Value> list = base::JSONReader::Read(*text, 0);
++        if (!list || !list->is_list()) {
++          return std::nullopt;
++        }
++        return list;
++      }
++      default:
++        return base::Value(*text);
++    }
++  }
++
++  void Set(const std::string& key, const base::Value& value) override {
++    JNIEnv* env = AttachCurrentThread();
++    std::string text;
++    int java_type = 2;
++    if (value.is_bool()) {
++      java_type = 0;
++      text = value.GetBool() ? "true" : "false";
++    } else if (value.is_int()) {
++      java_type = 1;
++      text = base::NumberToString(value.GetInt());
++    } else if (value.is_list()) {
++      java_type = 3;
++      text = base::WriteJson(value).value_or("[]");
++    } else if (value.is_string()) {
++      text = value.GetString();
++    } else {
++      return;
++    }
++    Java_BareBackupBridge_writePref(env, key, java_type, text);
++    changed_.push_back(key);
++  }
++
++  void Remove(const std::string& key) override {
++    Java_BareBackupBridge_removePref(AttachCurrentThread(), key);
++    changed_.push_back(key);
++  }
++
++  const std::vector<std::string>& changed() const { return changed_; }
++
++ private:
++  std::vector<std::string> changed_;
++};
++
++Sources SourcesFor(Profile* profile, AndroidPrefs* android) {
++  Sources sources;
++  sources.settings.android = android;
++  sources.settings.profile = profile->GetPrefs();
++  sources.settings.local_state = g_browser_process->local_state();
++  sources.site_settings = HostContentSettingsMapFactory::GetForProfile(profile);
++  sources.search_engines = TemplateURLServiceFactory::GetForProfile(profile);
++  sources.bookmarks = BookmarkModelFactory::GetForBrowserContext(profile);
++  sources.reading_list = ReadingListModelFactory::GetForBrowserContext(profile);
++  return sources;
++}
++
++// "2026-11-03T21:14:00Z".
++std::string UtcTimestamp(base::Time time) {
++  base::Time::Exploded utc;
++  time.UTCExplode(&utc);
++  return base::StringPrintf("%04d-%02d-%02dT%02d:%02d:%02dZ", utc.year,
++                            utc.month, utc.day_of_month, utc.hour, utc.minute,
++                            utc.second);
++}
++
++std::string ToJson(const base::Value& value) {
++  return base::WriteJson(value).value_or("{}");
++}
++
++// The bytes scrypt sees: the grouped form of a recovery code, or the user's
++// own passphrase exactly as typed.
++std::vector<uint8_t> SecretBytes(std::vector<uint8_t> typed, bool is_code) {
++  if (!is_code) {
++    return typed;
++  }
++  std::optional<std::string> code =
++      NormalizeRecoveryCode(base::as_string_view(typed));
++  WipeSecret(typed);
++  if (!code) {
++    return {};
++  }
++  std::vector<uint8_t> bytes(code->begin(), code->end());
++  OPENSSL_cleanse(code->data(), code->size());
++  return bytes;
++}
++
++const char* ReadErrorName(ReadError error) {
++  switch (error) {
++    case ReadError::kNotBare:
++      return "not_bare";
++    case ReadError::kNewerVersion:
++      return "newer";
++    case ReadError::kBadHeader:
++    case ReadError::kDamaged:
++      return "damaged";
++    case ReadError::kTooLarge:
++      return "too_large";
++    case ReadError::kWrongCodeOrDamaged:
++      return "wrong_code";
++  }
++}
++
++const char* ContentsErrorName(ContentsError error) {
++  return error == ContentsError::kNewerSchema ? "newer" : "damaged";
++}
++
++base::DictValue DescriptionJson(const ParsedFile& file) {
++  base::DictValue json;
++  json.Set("ok", true);
++  json.Set("kind", file.kind == Kind::kFull ? "full" : "setup");
++  json.Set("created", file.description.created);
++  json.Set("bare_version", file.description.bare_version);
++  json.Set("device_label", file.description.device_label);
++  json.Set("secret", file.description.secret);
++  base::DictValue contents;
++  for (const auto& [name, count] : file.description.contents) {
++    contents.Set(name, count);
++  }
++  json.Set("contents", std::move(contents));
++  return json;
++}
++
++base::DictValue ErrorJson(const char* error) {
++  base::DictValue json;
++  json.Set("ok", false);
++  json.Set("error", error);
++  return json;
++}
++
++// ---------------------------------------------------------------- creating
++
++struct BuiltFile {
++  std::vector<uint8_t> bytes;
++};
++
++std::vector<uint8_t> EncryptOffThread(Kind kind,
++                                      Description description,
++                                      std::string zip,
++                                      std::vector<uint8_t> secret) {
++  std::optional<std::vector<uint8_t>> file;
++  if (kind == Kind::kSetup) {
++    file = WriteSetupFile(description, base::as_byte_span(zip));
++  } else {
++    const KdfParams kdf = NewKdfParams();
++    std::optional<Key> key = DeriveKey(secret, kdf);
++    WipeSecret(secret);
++    if (key) {
++      file = WriteFullFile(description, kdf, NewAeadParams(), *key,
++                           base::as_byte_span(zip));
++    }
++  }
++  OPENSSL_cleanse(zip.data(), zip.size());
++  return file.value_or(std::vector<uint8_t>());
++}
++
++void OnCollected(base::WeakPtr<Profile> profile,
++                 Kind kind,
++                 bool include_custom_dns,
++                 Description description,
++                 std::vector<uint8_t> secret,
++                 ScopedJavaGlobalRef<jobject> callback,
++                 CollectedExtensions extensions) {
++  JNIEnv* env = AttachCurrentThread();
++  if (!profile) {
++    Java_BareBackupBridge_onBytes(env, callback, std::vector<uint8_t>());
++    return;
++  }
++  JavaAndroidPrefs android;
++  Sources sources = SourcesFor(profile.get(), &android);
++  sources.extensions = &extensions;
++  sources.settings_options.custom_dns_in_setup =
++      kind == Kind::kSetup && include_custom_dns;
++  std::optional<BuiltPackage> built = BuildPackage(kind, sources);
++  if (!built) {
++    Java_BareBackupBridge_onBytes(env, callback, std::vector<uint8_t>());
++    return;
++  }
++  for (const auto& [name, count] : built->counts) {
++    description.contents[name] = count;
++  }
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
++      base::BindOnce(&EncryptOffThread, kind, std::move(description),
++                     std::move(built->zip), std::move(secret)),
++      base::BindOnce(
++          [](ScopedJavaGlobalRef<jobject> callback,
++             std::vector<uint8_t> bytes) {
++            Java_BareBackupBridge_onBytes(AttachCurrentThread(), callback,
++                                          bytes);
++          },
++          std::move(callback)));
++}
++
++// Opens `file` the way a restore would and checks every part of it.
++bool VerifyOffThread(std::vector<uint8_t> file, std::vector<uint8_t> secret) {
++  auto parsed = ParseFile(file);
++  if (!parsed.has_value()) {
++    WipeSecret(secret);
++    return false;
++  }
++  base::expected<std::string, ReadError> body =
++      base::unexpected(ReadError::kDamaged);
++  if (parsed->kind == Kind::kFull) {
++    std::optional<Key> key = DeriveKey(secret, parsed->kdf);
++    if (key) {
++      body = DecryptBody(*parsed, *key);
++    }
++  } else {
++    body = ReadSetupBody(*parsed);
++  }
++  WipeSecret(secret);
++  if (!body.has_value()) {
++    return false;
++  }
++  auto package = ReadPackage(*body);
++  OPENSSL_cleanse(body->data(), body->size());
++  return package.has_value() &&
++         ReadManifest(*package, parsed->kind).has_value();
++}
++
++// ----------------------------------------------------------------- opening
++
++// A backup being restored. Lives until Java closes it.
++class OpenedBackup {
++ public:
++  explicit OpenedBackup(std::vector<uint8_t> file) : file_(std::move(file)) {}
++  ~OpenedBackup() { WipePackage(); }
++
++  base::expected<ParsedFile, ReadError> Parse() const {
++    return ParseFile(file_);
++  }
++
++  bool opened() const { return package_.has_value(); }
++  const Package& package() const { return *package_; }
++  const PackageSummary& summary() const { return summary_; }
++
++  void SetOpened(Package package, PackageSummary summary) {
++    package_ = std::move(package);
++    summary_ = std::move(summary);
++  }
++
++  const std::vector<uint8_t> file() const { return file_; }
++
++  base::WeakPtr<OpenedBackup> GetWeakPtr() {
++    return weak_factory_.GetWeakPtr();
++  }
++
++ private:
++  void WipePackage() {
++    if (!package_) {
++      return;
++    }
++    for (auto& [name, contents] : *package_) {
++      OPENSSL_cleanse(contents.data(), contents.size());
++    }
++    package_.reset();
++  }
++
++  std::vector<uint8_t> file_;
++  std::optional<Package> package_;
++  PackageSummary summary_;
++  base::WeakPtrFactory<OpenedBackup> weak_factory_{this};
++};
++
++struct OpenResult {
++  OpenResult() = default;
++  OpenResult(OpenResult&&) = default;
++  OpenResult& operator=(OpenResult&&) = default;
++
++  std::optional<Package> package;
++  PackageSummary summary;
++  const char* error = nullptr;
++};
++
++OpenResult OpenOffThread(std::vector<uint8_t> file,
++                         std::vector<uint8_t> secret) {
++  OpenResult result;
++  auto parsed = ParseFile(file);
++  if (!parsed.has_value()) {
++    WipeSecret(secret);
++    result.error = ReadErrorName(parsed.error());
++    return result;
++  }
++  base::expected<std::string, ReadError> body =
++      base::unexpected(ReadError::kWrongCodeOrDamaged);
++  if (parsed->kind == Kind::kFull) {
++    if (std::optional<Key> key = DeriveKey(secret, parsed->kdf)) {
++      body = DecryptBody(*parsed, *key);
++    }
++  } else {
++    body = ReadSetupBody(*parsed);
++  }
++  WipeSecret(secret);
++  if (!body.has_value()) {
++    result.error = ReadErrorName(body.error());
++    return result;
++  }
++  auto package = ReadPackage(*body);
++  OPENSSL_cleanse(body->data(), body->size());
++  if (!package.has_value()) {
++    result.error = "damaged";
++    return result;
++  }
++  auto summary = ReadManifest(*package, parsed->kind);
++  if (!summary.has_value()) {
++    result.error = ContentsErrorName(summary.error());
++    return result;
++  }
++  result.package = std::move(*package);
++  result.summary = std::move(*summary);
++  return result;
++}
++
++std::string UpdateHost(const std::string& update_url) {
++  const GURL url(update_url);
++  return url.is_valid() ? url.GetHost() : std::string();
++}
++
++void OnOpened(base::WeakPtr<OpenedBackup> backup,
++              base::WeakPtr<Profile> profile,
++              ScopedJavaGlobalRef<jobject> callback,
++              OpenResult result) {
++  JNIEnv* env = AttachCurrentThread();
++  if (!backup || !profile) {
++    return;
++  }
++  if (result.error) {
++    Java_BareBackupBridge_onJson(env, callback,
++                                 ToJson(base::Value(ErrorJson(result.error))));
++    return;
++  }
++  backup->SetOpened(std::move(*result.package), std::move(result.summary));
++
++  base::DictValue json = ErrorJson("");
++  json.Set("ok", true);
++  base::ListValue sections;
++  for (const std::string& section : backup->summary().sections) {
++    sections.Append(section);
++  }
++  json.Set("sections", std::move(sections));
++  if (std::optional<std::string> host =
++          CustomDnsHostInPackage(backup->package())) {
++    json.Set("custom_dns_host", *host);
++  }
++  {
++    JavaAndroidPrefs android;
++    base::ListValue lowering;
++    for (const std::string& label : LoweringSettingsInPackage(
++             backup->package(), backup->summary(),
++             SourcesFor(profile.get(), &android).settings)) {
++      lowering.Append(label);
++    }
++    json.Set("lowering", std::move(lowering));
++  }
++  base::ListValue extensions;
++  for (const ExtensionReviewItem& item : DescribeExtensionsForRestore(
++           profile.get(), backup->package(), backup->summary())) {
++    base::DictValue entry;
++    entry.Set("id", item.record.id);
++    entry.Set("name", item.record.name);
++    entry.Set("version", item.record.version);
++    entry.Set("unpacked", item.record.kind == ExtensionKind::kUnpacked);
++    entry.Set("files", item.record.files);
++    entry.Set("installed_here", item.installed_here);
++    entry.Set("can_install", item.CanInstall());
++    entry.Set("problem", item.problem.has_value());
++    entry.Set("update_host", UpdateHost(item.record.update_url));
++    base::ListValue permissions;
++    for (const std::u16string& permission : item.permissions) {
++      permissions.Append(base::UTF16ToUTF8(permission));
++    }
++    entry.Set("permissions", std::move(permissions));
++    extensions.Append(std::move(entry));
++  }
++  json.Set("extensions", std::move(extensions));
++  Java_BareBackupBridge_onJson(env, callback, ToJson(base::Value(std::move(json))));
++}
++
++// --------------------------------------------------------------- restoring
++
++base::DictValue ReportJson(const RestoreReport& report,
++                           const std::vector<std::string>& android_changed) {
++  base::DictValue json;
++  base::ListValue applied;
++  for (const std::string& section : report.sections_applied) {
++    applied.Append(section);
++  }
++  json.Set("applied", std::move(applied));
++  json.Set("failed", report.section_failed.value_or(""));
++  base::ListValue not_run;
++  for (const std::string& section : report.sections_not_run) {
++    not_run.Append(section);
++  }
++  json.Set("not_run", std::move(not_run));
++  json.Set("settings_applied", static_cast<int>(report.settings.applied));
++  json.Set("settings_skipped",
++           static_cast<int>(report.settings.skipped.size() +
++                            report.settings.unknown.size()));
++  json.Set("needs_restart", report.settings.needs_restart);
++  json.Set("bookmarks", static_cast<int>(report.bookmarks.urls));
++  json.Set("bookmark_folders", static_cast<int>(report.bookmarks.folders));
++  json.Set("bookmarks_skipped", static_cast<int>(report.bookmarks.skipped));
++  json.Set("bookmarks_folder", base::UTF16ToUTF8(report.bookmarks.folder_title));
++  json.Set("reading_list", static_cast<int>(report.reading_list.added));
++  json.Set("site_settings", static_cast<int>(report.site_exceptions.applied +
++                                             report.site_defaults.applied));
++  json.Set("search_engines", static_cast<int>(report.search_engines.added));
++  json.Set("ignored", static_cast<int>(report.ignored_entries.size()));
++  base::ListValue changed;
++  for (const std::string& key : android_changed) {
++    changed.Append(key);
++  }
++  json.Set("android_changed", std::move(changed));
++  return json;
++}
++
++}  // namespace
++}  // namespace bare::backup
++
++namespace bare_backup = bare::backup;
++
++static std::string JNI_BareBackupBridge_GenerateRecoveryCode(JNIEnv* env) {
++  return bare_backup::GenerateRecoveryCode();
++}
++
++static std::string JNI_BareBackupBridge_NormalizeRecoveryCode(
++    JNIEnv* env,
++    std::string typed) {
++  std::string code =
++      bare_backup::NormalizeRecoveryCode(typed).value_or(std::string());
++  OPENSSL_cleanse(typed.data(), typed.size());
++  return code;
++}
++
++static bool JNI_BareBackupBridge_IsAcceptablePassphrase(
++    JNIEnv* env,
++    std::vector<uint8_t> passphrase) {
++  const bool ok =
++      bare_backup::IsAcceptablePassphrase(base::as_string_view(passphrase));
++  OPENSSL_cleanse(passphrase.data(), passphrase.size());
++  return ok;
++}
++
++static std::string JNI_BareBackupBridge_CustomDnsHost(JNIEnv* env) {
++  bare_backup::SettingsStores stores;
++  stores.local_state = g_browser_process->local_state();
++  return bare_backup::CustomDnsHost(stores).value_or(std::string());
++}
++
++static void JNI_BareBackupBridge_CreateBackup(
++    JNIEnv* env,
++    const JavaRef<jobject>& jprofile,
++    jboolean full,
++    std::vector<uint8_t> secret,
++    jboolean secret_is_code,
++    jboolean include_custom_dns,
++    std::string device_label,
++    std::string bare_version,
++    jint bare_version_code,
++    const JavaRef<jobject>& jcallback) {
++  ScopedJavaGlobalRef<jobject> callback(jcallback);
++  Profile* profile = Profile::FromJavaObject(jprofile);
++  std::vector<uint8_t> key_input =
++      full ? bare_backup::SecretBytes(std::move(secret), secret_is_code)
++           : std::vector<uint8_t>();
++  if (!profile || (full && key_input.empty())) {
++    Java_BareBackupBridge_onBytes(env, callback, std::vector<uint8_t>());
++    return;
++  }
++  bare_backup::Description description;
++  description.created = bare_backup::UtcTimestamp(base::Time::Now());
++  description.bare_version = bare_version;
++  description.bare_version_code = bare_version_code;
++  description.device_label = device_label;
++  if (full) {
++    description.secret = secret_is_code ? "code" : "passphrase";
++  }
++  const bare_backup::Kind kind =
++      full ? bare_backup::Kind::kFull : bare_backup::Kind::kSetup;
++  bare_backup::CollectExtensions(
++      profile, /*with_files=*/full,
++      base::BindOnce(&bare_backup::OnCollected, profile->GetWeakPtr(), kind,
++                     static_cast<bool>(include_custom_dns),
++                     std::move(description), std::move(key_input),
++                     std::move(callback)));
++}
++
++static void JNI_BareBackupBridge_VerifyBackup(
++    JNIEnv* env,
++    std::vector<uint8_t> file,
++    std::vector<uint8_t> secret,
++    jboolean secret_is_code,
++    const JavaRef<jobject>& jcallback) {
++  ScopedJavaGlobalRef<jobject> callback(jcallback);
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
++      base::BindOnce(&bare_backup::VerifyOffThread, std::move(file),
++                     bare_backup::SecretBytes(std::move(secret),
++                                              secret_is_code)),
++      base::BindOnce(
++          [](ScopedJavaGlobalRef<jobject> callback, bool ok) {
++            Java_BareBackupBridge_onBoolean(AttachCurrentThread(), callback,
++                                            ok);
++          },
++          std::move(callback)));
++}
++
++static int64_t JNI_BareBackupBridge_CreateOpened(JNIEnv* env,
++                                               std::vector<uint8_t> file) {
++  return reinterpret_cast<intptr_t>(
++      new bare_backup::OpenedBackup(std::move(file)));
++}
++
++static std::string JNI_BareBackupBridge_Describe(JNIEnv* env, jlong handle) {
++  auto* backup = reinterpret_cast<bare_backup::OpenedBackup*>(handle);
++  auto parsed = backup->Parse();
++  base::DictValue json =
++      parsed.has_value()
++          ? bare_backup::DescriptionJson(*parsed)
++          : bare_backup::ErrorJson(bare_backup::ReadErrorName(parsed.error()));
++  return bare_backup::ToJson(base::Value(std::move(json)));
++}
++
++static void JNI_BareBackupBridge_Open(JNIEnv* env,
++                                      jlong handle,
++                                      const JavaRef<jobject>& jprofile,
++                                      std::vector<uint8_t> secret,
++                                      jboolean secret_is_code,
++                                      const JavaRef<jobject>& jcallback) {
++  auto* backup = reinterpret_cast<bare_backup::OpenedBackup*>(handle);
++  Profile* profile = Profile::FromJavaObject(jprofile);
++  ScopedJavaGlobalRef<jobject> callback(jcallback);
++  if (!profile) {
++    return;
++  }
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
++      base::BindOnce(&bare_backup::OpenOffThread, backup->file(),
++                     bare_backup::SecretBytes(std::move(secret),
++                                              secret_is_code)),
++      base::BindOnce(&bare_backup::OnOpened, backup->GetWeakPtr(),
++                     profile->GetWeakPtr(), std::move(callback)));
++}
++
++static void JNI_BareBackupBridge_Restore(
++    JNIEnv* env,
++    jlong handle,
++    const JavaRef<jobject>& jprofile,
++    jboolean settings,
++    jboolean search_engines,
++    jboolean site_settings,
++    jboolean bookmarks,
++    jboolean custom_dns,
++    jboolean lower_protection,
++    std::vector<std::string> approved_extensions,
++    std::u16string bookmark_folder_title,
++    const JavaRef<jobject>& jcallback) {
++  auto* backup = reinterpret_cast<bare_backup::OpenedBackup*>(handle);
++  Profile* profile = Profile::FromJavaObject(jprofile);
++  ScopedJavaGlobalRef<jobject> callback(jcallback);
++  if (!profile || !backup->opened()) {
++    Java_BareBackupBridge_onJson(env, callback, "{}");
++    return;
++  }
++  bare_backup::RestoreChoices choices;
++  choices.settings = settings;
++  choices.search_engines = search_engines;
++  choices.site_settings = site_settings;
++  choices.bookmarks = bookmarks;
++  choices.custom_dns_from_setup = custom_dns;
++  choices.lower_protection = lower_protection;
++
++  bare_backup::JavaAndroidPrefs android;
++  bare_backup::RestoreReport report = bare_backup::RestorePackage(
++      backup->package(), backup->summary(), choices,
++      bare_backup::SourcesFor(profile, &android), bookmark_folder_title);
++  base::DictValue json = bare_backup::ReportJson(report, android.changed());
++
++  bare_backup::InstallExtensions(
++      profile, backup->package(), backup->summary(), approved_extensions,
++      base::BindOnce(
++          [](ScopedJavaGlobalRef<jobject> callback, base::DictValue json,
++             bare_backup::ExtensionInstallResults results) {
++            base::DictValue extensions;
++            for (const auto& [id, error] : results) {
++              extensions.Set(id, error);
++            }
++            json.Set("extensions", std::move(extensions));
++            Java_BareBackupBridge_onJson(
++                AttachCurrentThread(), callback,
++                bare_backup::ToJson(base::Value(std::move(json))));
++          },
++          std::move(callback), std::move(json)));
++}
++
++static void JNI_BareBackupBridge_Close(JNIEnv* env, jlong handle) {
++  delete reinterpret_cast<bare_backup::OpenedBackup*>(handle);
++}
++
++DEFINE_JNI(BareBackupBridge)
