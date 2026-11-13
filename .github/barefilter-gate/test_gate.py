@@ -30,6 +30,8 @@ RULE_EXC = "@@ -4,0 +5 @@\n+reddit.com#@#div.a\n"
 RULE_MOVE = "@@ -2,0 +3 @@\n+reddit.com##div.a\n@@ -9 +10,0 @@\n-reddit.com##div.a\n"
 COMMENT = "@@ -1 +1 @@\n-! old\n+! new\n"
 BLANKS = "@@ -3,0 +4,2 @@\n+\n+\n"
+DIRECTIVE = "@@ -9,0 +10 @@\n+!#include more.txt\n"
+DIRECTIVE_IF = "@@ -2,0 +3 @@\n+!#if false\n@@ -4,0 +6 @@\n+!#endif\n"
 
 
 def iso(t):
@@ -207,6 +209,23 @@ class PatchParsing(unittest.TestCase):
         self.assertEqual(gate.patch_rule_lines("+ ! x\n"), (1, 0))
         self.assertEqual(gate.patch_rule_lines("+++x\n---y\n"), (1, 1))
 
+    def test_directives_count_as_rule_lines(self):
+        # every "!#" line counts; "! #" is still a comment
+        self.assertEqual(gate.patch_rule_lines(DIRECTIVE), (1, 0))
+        self.assertEqual(gate.patch_rule_lines(DIRECTIVE_IF), (2, 0))
+        self.assertEqual(gate.patch_rule_lines("-!#include more.txt\n"), (0, 1))
+        self.assertEqual(gate.patch_rule_lines("+! #1 note\n"), (0, 0))
+
+    def test_line_break_inside_a_comment_counts(self):
+        # uBlock Origin can start a new line at these, so a directive or a rule can follow
+        self.assertEqual(gate.patch_rule_lines("+! note\r!#include more.txt\n"), (1, 0))
+        self.assertEqual(gate.patch_rule_lines("+! note\rreddit.com##div.x\n"), (1, 0))
+        self.assertEqual(gate.patch_rule_lines("+! note\u2028!#if false\n"), (1, 0))
+        self.assertEqual(gate.patch_rule_lines("+! note\u2029!#include more.txt\n"), (1, 0))
+        # a CRLF file: the comment stays a comment, the directive still counts
+        self.assertEqual(gate.patch_rule_lines("@@ -1 +1 @@\n-! old\r\n+! new\r\n"), (0, 0))
+        self.assertEqual(gate.patch_rule_lines("+!#include more.txt\r\n"), (1, 0))
+
     def test_classify(self):
         f = lambda **kw: dict({"filename": PATH, "status": "modified"}, **kw)
         self.assertEqual(gate.classify_files([f(patch=COMMENT)], PATH), (True, False))
@@ -238,6 +257,13 @@ class Timing(unittest.TestCase):
         c = run(api, at(hours=500))
         self.assertEqual(verdict(c), "pending")
         self.assertEqual(c["output"]["title"], "Waiting for evidence")
+
+    def test_directive_only_pr_is_a_rule_proposal(self):
+        for name, patch in (("include", DIRECTIVE), ("conditional", DIRECTIVE_IF)):
+            with self.subTest(name):
+                api = FakeAPI()
+                api.rule_commit(patch); api.sync_pr_files()
+                self.assertEqual(run(api, at(minutes=1))["output"]["title"], "Waiting for evidence")
 
     def test_label_from_non_owner_is_ignored(self):
         api = base_scenario(evidence=False)
@@ -276,7 +302,8 @@ class Timing(unittest.TestCase):
 
     def test_any_rule_line_edit_restarts(self):
         for name, patch in (("addition", RULE_ADD), ("removal", RULE_DEL), ("whitespace", RULE_WS),
-                            ("selector", RULE_SEL), ("exception", RULE_EXC), ("move", RULE_MOVE)):
+                            ("selector", RULE_SEL), ("exception", RULE_EXC), ("move", RULE_MOVE),
+                            ("directive", DIRECTIVE)):
             with self.subTest(name):
                 api = base_scenario()
                 run(api, at(minutes=10))
@@ -564,6 +591,16 @@ class Urgent(unittest.TestCase):
         api.label(CFG["urgent_label"], at(minutes=5))
         self.explain(api, at(minutes=6))
         self.assertNotEqual(verdict(run(api, at(minutes=7))), "success")
+
+    def test_removal_plus_directive_cannot_use_it(self):
+        api = FakeAPI()
+        api.rule_commit(RULE_DEL + DIRECTIVE); api.sync_pr_files()
+        run(api, at(minutes=1))
+        api.label(CFG["urgent_label"], at(minutes=5))
+        self.explain(api, at(minutes=6))
+        c = run(api, at(minutes=7))
+        self.assertNotEqual(verdict(c), "success")
+        self.assertIn("not only rule removals", c["output"]["summary"])
 
     def test_label_from_non_owner_does_not_count(self):
         api = self.removal()
