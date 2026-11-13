@@ -1,0 +1,38 @@
+diff --git a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
+--- a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
++++ b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
+@@ -720,6 +720,13 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+     // Set while "Open anyway" starts a held launch. That navigation was answered long ago, so
+     // nothing the launch does afterwards may answer it again.
+     private boolean mOpeningHeldLaunch;
++    // A scriptlet can retry the same app launch without a user gesture after the prompt is
++    // dismissed. Do not ask again for that retry, but allow a later user gesture to ask again.
++    private @Nullable String mLastAskedAppUrl;
++    private long mLastAskedAppAtMs = -HELD_REPEAT_MS;
+ 
+     @VisibleForTesting
+     protected @Nullable DigitalCredentialsWarningDialogDelegate
+@@ -369,6 +376,20 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+             }
+         }
+         if (mDelegate.shouldAskBeforeLinkOpensApp()) {
++            GURL appUrl = !fallbackUrl.isEmpty() ? fallbackUrl : targetUrl;
++            long now = SystemClock.elapsedRealtime();
++            boolean repeat =
++                    !params.hasUserGesture()
++                            && now - mLastAskedAppAtMs < HELD_REPEAT_MS
++                            && mLastAskedAppUrl != null
++                            && UrlUtilities.urlsMatchIgnoringFragments(
++                                    mLastAskedAppUrl, appUrl.getSpec());
++            mLastAskedAppAtMs = now;
++            mLastAskedAppUrl = appUrl.getSpec();
++            if (repeat) {
++                if (debug()) Log.i(TAG, "Repeated app launch suppressed after user stayed here.");
++                mStayForHeldRepeat = true;
++                return OverrideUrlLoadingResult.forNoOverride();
++            }
+             return askBeforeLeavingForApp(
+                     intent,
+                     params,
+*** End Patch
+
