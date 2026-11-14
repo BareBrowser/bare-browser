@@ -1,0 +1,54 @@
+diff --git a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
+--- a/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
++++ b/components/external_intents/android/java/src/org/chromium/components/external_intents/ExternalNavigationHandler.java
+@@ -720,6 +720,9 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+     // Set while "Open anyway" starts a held launch. That navigation was answered long ago, so
+     // nothing the launch does afterwards may answer it again.
+     private boolean mOpeningHeldLaunch;
++    // The next browser navigation is the one resumed after the user chose Stay here.
++    private @Nullable GURL mStayInBrowserUrl;
+ 
+     @VisibleForTesting
+     protected @Nullable DigitalCredentialsWarningDialogDelegate
+@@ -739,6 +742,14 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+     public OverrideUrlLoadingResult shouldOverrideUrlLoading(ExternalNavigationParams params) {
+         if (debug()) Log.i(TAG, "shouldOverrideUrlLoading called on " + params.getUrl().getSpec());
+ 
++        // Resuming a declined app launch can arrive without a redirect chain. Allow that one
++        // browser navigation through directly, otherwise it is intercepted and asks again.
++        if (mStayInBrowserUrl != null) {
++            boolean isResumedNavigation =
++                    UrlUtilities.urlsMatchIgnoringFragments(
++                            mStayInBrowserUrl.getSpec(), params.getUrl().getSpec());
++            mStayInBrowserUrl = null;
++            if (isResumedNavigation) return OverrideUrlLoadingResult.forNoOverride();
++        }
++
+         Intent targetIntent;
+         boolean isIntentUrl = UrlUtilities.hasIntentScheme(params.getUrl());
+         // Perform generic parsing of the URI to turn it into an Intent.
+@@ -870,6 +881,14 @@ public class ExternalNavigationHandler implements ExternalNavigationHelper {
+         if (params.getRedirectHandler().isOnNavigation()) {
+             params.getRedirectHandler().setShouldNotOverrideUrlLoadingOnCurrentRedirectChain();
+         }
++        GURL resumeUrl = params.getUrl();
++        if (UrlUtilities.hasIntentScheme(resumeUrl)) {
++            if (browserFallbackUrl != null && !browserFallbackUrl.isEmpty()) {
++                resumeUrl = browserFallbackUrl;
++            } else if (intentTargetUrl != null && UrlUtilities.isHttpOrHttps(intentTargetUrl)) {
++                resumeUrl = intentTargetUrl;
++            }
++        }
++        if (UrlUtilities.isHttpOrHttps(resumeUrl)) mStayInBrowserUrl = resumeUrl;
+         // When the question was about a page wrapped in an intent: URL, the page is what to
+         // resume: its fallback address if the intent carried one, else the address it wrapped.
+-        GURL resumeUrl = params.getUrl();
+-        if (UrlUtilities.hasIntentScheme(resumeUrl)) {
+-            if (browserFallbackUrl != null && !browserFallbackUrl.isEmpty()) {
+-                resumeUrl = browserFallbackUrl;
+-            } else if (intentTargetUrl != null && UrlUtilities.isHttpOrHttps(intentTargetUrl)) {
+-                resumeUrl = intentTargetUrl;
+-            }
+-        }
+         callback.onResult(AsyncActionTakenParams.forNavigate(resumeUrl, params));
+     }
