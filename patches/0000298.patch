@@ -1,0 +1,541 @@
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 805b5205784f9..c73d49a619dcf 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -277,6 +277,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BareMinimalRightButton.java",
+   "java/src/org/chromium/chrome/browser/bare/BareNewTabRise.java",
+   "java/src/org/chromium/chrome/browser/bare/BarePullOffset.java",
++  "java/src/org/chromium/chrome/browser/bare/BareStatusBarLayer.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareMadeWithLovePreference.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareUpdatePreference.java",
+   "java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareStatusBarLayer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareStatusBarLayer.java
+new file mode 100644
+index 0000000000000..b62becd55d93d
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareStatusBarLayer.java
+@@ -0,0 +1,69 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.app.Activity;
++import android.os.Build;
++import android.view.View;
++import android.view.WindowInsets;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.browser_controls.TopControlLayer;
++import org.chromium.chrome.browser.browser_controls.TopControlsStacker;
++import org.chromium.chrome.browser.browser_controls.TopControlsStacker.TopControlType;
++import org.chromium.chrome.browser.browser_controls.TopControlsStacker.TopControlVisibility;
++
++/**
++ * An empty top control as tall as the status bar. The page lays out below it and scrolls it away
++ * with the other browser controls; the compositor fills it with the page background.
++ */
++@NullMarked
++public final class BareStatusBarLayer implements TopControlLayer {
++    private final Activity mActivity;
++    private int mHeight;
++
++    public BareStatusBarLayer(Activity activity, TopControlsStacker stacker) {
++        mActivity = activity;
++        mHeight = statusBarHeight(activity);
++        activity.getWindow()
++                .getDecorView()
++                .addOnLayoutChangeListener(
++                        (v, l, t, r, b, ol, ot, or, ob) -> {
++                            int height = statusBarHeight(mActivity);
++                            if (height == mHeight) return;
++                            mHeight = height;
++                            stacker.requestLayerUpdatePost(false);
++                        });
++    }
++
++    /** Returns the status bar height, also while the status bar is hidden. */
++    public static int statusBarHeight(Activity activity) {
++        View decor = activity.getWindow().getDecorView();
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
++            WindowInsets insets = decor.getRootWindowInsets();
++            if (insets != null) {
++                int top = insets.getInsetsIgnoringVisibility(WindowInsets.Type.statusBars()).top;
++                if (top > 0) return top;
++            }
++        }
++        int id = activity.getResources().getIdentifier("status_bar_height", "dimen", "android");
++        return id > 0 ? activity.getResources().getDimensionPixelSize(id) : 0;
++    }
++
++    @Override
++    public @TopControlType int getTopControlType() {
++        return TopControlType.BARE_STATUS_BAR;
++    }
++
++    @Override
++    public int getTopControlHeight() {
++        return mHeight;
++    }
++
++    @Override
++    public @TopControlVisibility int getTopControlVisibility() {
++        return mHeight > 0 ? TopControlVisibility.VISIBLE : TopControlVisibility.HIDDEN;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsActivity.java
+index 45efce26aef1c..991bbc93cd55a 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsActivity.java
+@@ -262,6 +262,22 @@ public class SettingsActivity extends ChromeBaseAppCompatActivity
+ 
+         super.onCreate(savedInstanceState);
+ 
++        if (org.chromium.chrome.browser.ui.actions.BareBarExperiment.enabled()) {
++            ensureEdgeToEdgeLayoutCoordinator().setLeaveBottomNavigationBarToContent(true);
++            getSupportFragmentManager()
++                    .registerFragmentLifecycleCallbacks(
++                            new androidx.fragment.app.FragmentManager.FragmentLifecycleCallbacks() {
++                                @Override
++                                public void onFragmentViewCreated(
++                                        androidx.fragment.app.FragmentManager fm,
++                                        androidx.fragment.app.Fragment f,
++                                        View v,
++                                        @Nullable Bundle state) {
++                                    padListForNavigationBar(v);
++                                }
++                            },
++                            /* recursive= */ true);
++        }
+         setContentView(R.layout.settings_activity);
+ 
+         Toolbar actionBar = findViewById(R.id.action_bar);
+@@ -382,6 +398,41 @@ public class SettingsActivity extends ChromeBaseAppCompatActivity
+                 appBar.getPaddingBottom());
+     }
+ 
++    /** Lets the first list in a settings page scroll behind the navigation bar and clear it. */
++    private static void padListForNavigationBar(View root) {
++        androidx.recyclerview.widget.RecyclerView list = findFirstList(root);
++        if (list == null || list.getTag(R.id.settings_content) != null) return;
++        list.setTag(R.id.settings_content, Boolean.TRUE);
++        int basePadding = list.getPaddingBottom();
++        list.setClipToPadding(false);
++        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(
++                list,
++                (view, insets) -> {
++                    int navBar =
++                            insets.getInsets(
++                                            androidx.core.view.WindowInsetsCompat.Type
++                                                    .navigationBars())
++                                    .bottom;
++                    view.setPadding(
++                            view.getPaddingLeft(),
++                            view.getPaddingTop(),
++                            view.getPaddingRight(),
++                            basePadding + navBar);
++                    return insets;
++                });
++        androidx.core.view.ViewCompat.requestApplyInsets(list);
++    }
++
++    private static androidx.recyclerview.widget.@Nullable RecyclerView findFirstList(View view) {
++        if (view instanceof androidx.recyclerview.widget.RecyclerView list) return list;
++        if (!(view instanceof ViewGroup group)) return null;
++        for (int i = 0; i < group.getChildCount(); i++) {
++            androidx.recyclerview.widget.RecyclerView list = findFirstList(group.getChildAt(i));
++            if (list != null) return list;
++        }
++        return null;
++    }
++
+     private boolean isForMainSettings() {
+         return getIntent().getStringExtra(EXTRA_SHOW_FRAGMENT) == null;
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabStateBrowserControlsVisibilityDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabStateBrowserControlsVisibilityDelegate.java
+index 65a176cf4e07e..23589481d687b 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabStateBrowserControlsVisibilityDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabStateBrowserControlsVisibilityDelegate.java
+@@ -342,7 +342,11 @@ public class TabStateBrowserControlsVisibilityDelegate extends BrowserControlsVi
+         }
+         // TODO(tedchoc): AccessibilityUtil and DeviceClassManager checks do not belong in Tab
+         //                logic.  They should be moved to application level checks.
+-        if (ChromeAccessibilityUtil.get().isAccessibilityEnabled()) {
++        // Bare: with the status bar experiment, only a screen reader locks the bars. Apps that
++        // may perform gestures, such as dictation or launcher tools, no longer do.
++        if (org.chromium.chrome.browser.ui.actions.BareBarExperiment.enabled()
++                ? org.chromium.ui.accessibility.AccessibilityState.isTouchExplorationEnabled()
++                : ChromeAccessibilityUtil.get().isAccessibilityEnabled()) {
+             enableHidingBrowserControls = false;
+             flags |= (1 << (int) LockReason.A11Y_ENABLED);
+         }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
+index 71781d2462c0f..6729c9f275d0e 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
+@@ -870,6 +870,12 @@ public class RootUiCoordinator
+                         getAppBrowserControlsVisibilityDelegate(),
+                         mActivity,
+                         mWindowAndroid);
++        if (org.chromium.chrome.browser.ui.actions.BareBarExperiment.enabled()) {
++            mTopControlsStacker.addControl(
++                    new org.chromium.chrome.browser.bare.BareStatusBarLayer(
++                            mActivity, mTopControlsStacker));
++            mTopControlsStacker.requestLayerUpdateSync(false);
++        }
+         mIncognitoStateProvider = new IncognitoStateProvider();
+         mBottomUiThemeColorProvider =
+                 new BottomUiThemeColorProvider(
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java b/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
+index af9cec4007dfd..382a517bcae25 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
+@@ -4,6 +4,9 @@
+ 
+ package org.chromium.chrome.browser.ui.system;
+ 
++import android.view.WindowInsets;
++import android.view.WindowInsetsController;
++import org.chromium.chrome.browser.ui.actions.BareBarExperiment;
+ import android.app.Activity;
+ import android.app.ActivityManager;
+ import android.content.Context;
+@@ -158,6 +161,13 @@ public class StatusBarColorController
+ 
+     private final LayoutStateObserver mLayoutStateObserver =
+             new LayoutStateObserver() {
++                @Override
++                public void onStartedShowing(@LayoutType int layoutType) {
++                    if (layoutType == LayoutType.HUB && BareBarExperiment.enabled()) {
++                        updateStatusBarColor();
++                    }
++                }
++
+                 @Override
+                 public void onFinishedHiding(@LayoutType int layoutType) {
+                     if (layoutType != LayoutType.HUB) {
+@@ -201,6 +211,9 @@ public class StatusBarColorController
+         mAllowToolbarColorOnTablets = false;
+         mOverviewColorSupplier = overviewColorSupplier;
+         mBrowserControlsStateProvider = browserControlsStateProvider;
++        if (BareBarExperiment.enabled()) {
++            mBrowserControlsStateProvider.addObserver(mBareControlsObserver);
++        }
+ 
+         mStandardDefaultThemeColor =
+                 ChromeColors.getDefaultThemeColor(activity, /* isIncognito= */ false);
+@@ -384,6 +397,7 @@ public class StatusBarColorController
+     @SuppressWarnings("NullAway")
+     public void onDestroy() {
+         mStatusBarColorTabObserver.destroy();
++        mBrowserControlsStateProvider.removeObserver(mBareControlsObserver);
+         if (mLayoutStateProvider != null) {
+             mLayoutStateProvider.removeObserver(mLayoutStateObserver);
+         }
+@@ -512,11 +526,19 @@ public class StatusBarColorController
+     public void updateStatusBarColor() {
+         @ColorInt int statusBarColor = calculateFinalStatusBarColor();
+         BarePullOffset.setGapColor(statusBarColor);
+-        setStatusBarColor(
+-                mEdgeToEdgeSystemBarColorHelper,
+-                mActivity,
+-                statusBarColor,
+-                mForceLightIconColorForNtp && isStandardNtp() && !mIsOmniboxFocused);
++        boolean forceLightIcons =
++                mForceLightIconColorForNtp && isStandardNtp() && !mIsOmniboxFocused;
++        boolean hubShowing =
++                mLayoutStateProvider != null
++                        && (mLayoutStateProvider.isLayoutVisible(LayoutType.HUB)
++                                || mLayoutStateProvider.isLayoutStartingToShow(LayoutType.HUB));
++        if (BareBarExperiment.enabled() && !hubShowing) {
++            applyBareStatusBar(statusBarColor, forceLightIcons);
++        } else {
++            if (BareBarExperiment.enabled()) setBareSystemStatusBarHidden(false);
++            setStatusBarColor(
++                    mEdgeToEdgeSystemBarColorHelper, mActivity, statusBarColor, forceLightIcons);
++        }
+ 
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+             @ColorInt
+@@ -757,6 +779,74 @@ public class StatusBarColorController
+         return mCurrentTab != null && mCurrentTab.getNativePage() instanceof NewTabPage;
+     }
+ 
++    private final BrowserControlsStateProvider.Observer mBareControlsObserver =
++            new BrowserControlsStateProvider.Observer() {
++                @Override
++                public void onControlsOffsetChanged(
++                        int topOffset,
++                        int topControlsMinHeightOffset,
++                        boolean topControlsMinHeightChanged,
++                        int bottomOffset,
++                        int bottomControlsMinHeightOffset,
++                        boolean bottomControlsMinHeightChanged,
++                        boolean requestNewFrame,
++                        boolean isVisibilityForced) {
++                    int height = mBrowserControlsStateProvider.getTopControlsHeight();
++                    int minHeight = mBrowserControlsStateProvider.getTopControlsMinHeight();
++                    boolean hidden = height > minHeight && topOffset <= minHeight - height;
++                    if (hidden == mBareStatusHidden) return;
++                    mBareStatusHidden = hidden;
++                    updateStatusBarColor();
++                }
++            };
++    private boolean mBareStatusHidden;
++    private boolean mBareStatusHiddenApplied;
++
++    /**
++     * Keeps the status bar transparent over the status bar top control, matches its icons to the
++     * page, and hides it while the top controls are scrolled away.
++     */
++    private void applyBareStatusBar(@ColorInt int themeColor, boolean forceLightIcons) {
++        @ColorInt int behind = themeColor;
++        if (mCurrentTab != null) {
++            @ColorInt
++            int pageColor =
++                    org.chromium.chrome.browser.theme.ThemeUtils.getBackgroundColor(mCurrentTab);
++            if (Color.alpha(pageColor) == 255) behind = pageColor;
++        }
++        // Alpha 1 draws nothing but keeps the RGB that the icon color is computed from, also when
++        // the edge-to-edge layout re-applies it after an inset change.
++        @ColorInt int nearlyClear = (behind & 0x00FFFFFF) | 0x01000000;
++        setStatusBarColor(mEdgeToEdgeSystemBarColorHelper, mActivity, nearlyClear, forceLightIcons);
++        mWindow.setStatusBarColor(Color.TRANSPARENT);
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
++            mWindow.setStatusBarContrastEnforced(false);
++        }
++        UiUtils.setStatusBarIconColor(
++                mWindow.getDecorView().getRootView(),
++                !forceLightIcons && !ColorUtils.shouldUseLightForegroundOnBackground(behind));
++        setBareSystemStatusBarHidden(mBareStatusHidden);
++    }
++
++    private void setBareSystemStatusBarHidden(boolean hide) {
++        if (hide != mBareStatusHiddenApplied) {
++            mBareStatusHiddenApplied = hide;
++            View decor = mWindow.getDecorView();
++            decor.post(
++                    () -> {
++                        WindowInsetsController controller = decor.getWindowInsetsController();
++                        if (controller == null) return;
++                        controller.setSystemBarsBehavior(
++                                WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
++                        if (hide) {
++                            controller.hide(WindowInsets.Type.statusBars());
++                        } else {
++                            controller.show(WindowInsets.Type.statusBars());
++                        }
++                    });
++        }
++    }
++
+     private boolean isBottomBarEnabledAndBottomControls() {
+         return mBrowserControlsStateProvider.getControlsPosition() == ControlsPosition.BOTTOM
+                 && BottomBarConfigUtils.isBottomBarEnabled(mActivity);
+diff --git a/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/TopControlsStacker.java b/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/TopControlsStacker.java
+index 36821eb64a60e..02b7881984950 100644
+--- a/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/TopControlsStacker.java
++++ b/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/TopControlsStacker.java
+@@ -54,6 +54,7 @@ public class TopControlsStacker implements BrowserControlsStateProvider.Observer
+         TopControlType.PROGRESS_BAR,
+         TopControlType.TAB_SHARING_TOOLBAR,
+         TopControlType.TOP_SCALP,
++        TopControlType.BARE_STATUS_BAR,
+     })
+     public @interface TopControlType {
+         int STATUS_INDICATOR = 0;
+@@ -64,6 +65,7 @@ public class TopControlsStacker implements BrowserControlsStateProvider.Observer
+         int PROGRESS_BAR = 5;
+         int TAB_SHARING_TOOLBAR = 6;
+         int TOP_SCALP = 7;
++        int BARE_STATUS_BAR = 8;
+     }
+ 
+     // LINT.ThenChange(:TopControlTypeName)
+@@ -128,6 +130,7 @@ public class TopControlsStacker implements BrowserControlsStateProvider.Observer
+     // The pre-defined stack order for different top controls.
+     private static final @TopControlType int[] STACK_ORDER =
+             new int[] {
++                TopControlType.BARE_STATUS_BAR,
+                 TopControlType.TOP_SCALP,
+                 TopControlType.STATUS_INDICATOR,
+                 TopControlType.TABSTRIP,
+@@ -859,6 +862,8 @@ public class TopControlsStacker implements BrowserControlsStateProvider.Observer
+     // LINT.IfChange(TopControlTypeName)
+     private static String getName(@TopControlType int type) {
+         switch (type) {
++            case TopControlType.BARE_STATUS_BAR:
++                return "BARE_STATUS_BAR";
+             case TopControlType.STATUS_INDICATOR:
+                 return "STATUS_INDICATOR";
+             case TopControlType.TABSTRIP:
+diff --git a/chrome/browser/ui/android/actions/BUILD.gn b/chrome/browser/ui/android/actions/BUILD.gn
+index e822b42c8e76b..6af21cab82201 100644
+--- a/chrome/browser/ui/android/actions/BUILD.gn
++++ b/chrome/browser/ui/android/actions/BUILD.gn
+@@ -10,6 +10,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/ui/actions/ActionButtonBinder.java",
+     "java/src/org/chromium/chrome/browser/ui/actions/ActionHaptics.java",
+     "java/src/org/chromium/chrome/browser/ui/actions/ActionId.java",
++    "java/src/org/chromium/chrome/browser/ui/actions/BareBarExperiment.java",
+     "java/src/org/chromium/chrome/browser/ui/actions/ActionProperties.java",
+     "java/src/org/chromium/chrome/browser/ui/actions/ActionRegistry.java",
+     "java/src/org/chromium/chrome/browser/ui/actions/ActionUtils.java",
+diff --git a/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/BareBarExperiment.java b/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/BareBarExperiment.java
+new file mode 100755
+index 0000000000000..453776a9a4cfb
+--- /dev/null
++++ b/chrome/browser/ui/android/actions/java/src/org/chromium/chrome/browser/ui/actions/BareBarExperiment.java
+@@ -0,0 +1,22 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.ui.actions;
++
++import org.chromium.build.annotations.NullMarked;
++
++/**
++ * Switch for the full screen status bar: the page draws under a transparent status bar, which
++ * hides with the toolbar on scroll.
++ */
++@NullMarked
++public final class BareBarExperiment {
++    private static final boolean ENABLED = true;
++
++    private BareBarExperiment() {}
++
++    public static boolean enabled() {
++        return ENABLED;
++    }
++}
+diff --git a/chrome/browser/ui/android/edge_to_edge/internal/BUILD.gn b/chrome/browser/ui/android/edge_to_edge/internal/BUILD.gn
+index a20d0d0c392da..d09a82f37f887 100644
+--- a/chrome/browser/ui/android/edge_to_edge/internal/BUILD.gn
++++ b/chrome/browser/ui/android/edge_to_edge/internal/BUILD.gn
+@@ -30,6 +30,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/ui/edge_to_edge/SimpleEdgeToEdgePadAdjuster.java",
+   ]
+   deps = [
++    "//chrome/browser/ui/android/actions:java",
+     "//base:base_java",
+     "//cc:cc_java",
+     "//chrome/browser/browser_controls/android:java",
+diff --git a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeControllerImpl.java b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeControllerImpl.java
+index f4bfcc5eb25ab..9abfae90a7ae6 100644
+--- a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeControllerImpl.java
++++ b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeControllerImpl.java
+@@ -102,6 +102,8 @@ public class EdgeToEdgeControllerImpl
+ 
+     private final @Nullable EdgeToEdgeOSWrapper mEdgeToEdgeOsWrapper;
+     private @Nullable LayoutManager mLayoutManager;
++    // Bare: the tab switcher keeps its top padding; only web pages draw under the status bar.
++    private boolean mBareHubShowing;
+ 
+     private @Nullable Tab mCurrentTab;
+     private @Nullable WebContentsObserver mWebContentsObserver;
+@@ -355,6 +357,9 @@ public class EdgeToEdgeControllerImpl
+ 
+     @Override
+     public boolean isDrawingToTopEdge() {
++        if (org.chromium.chrome.browser.ui.actions.BareBarExperiment.enabled() && !mBareHubShowing) {
++            return true;
++        }
+         // TODO(crbug.com/498302496): When top edge-to-edge expands to web pages, update this to
+         // also check top edge-to-edge page opt-in.
+         assert !mConsumeTopInset || mIsEdgeToEdgeRefactorEnabled
+@@ -543,6 +548,12 @@ public class EdgeToEdgeControllerImpl
+ 
+     @Override
+     public void onStartedShowing(int layoutType) {
++        boolean hubShowing = layoutType == LayoutType.HUB;
++        if (hubShowing != mBareHubShowing) {
++            mBareHubShowing = hubShowing;
++            adjustEdgePaddings();
++            if (mInsetObserver != null) mInsetObserver.retriggerOnApplyWindowInsets();
++        }
+         drawToBottomEdge(mIsPageOptedIntoBottomEdgeToEdge, false);
+     }
+ 
+@@ -788,9 +799,10 @@ public class EdgeToEdgeControllerImpl
+         }
+ 
+         boolean consumeTopInsets =
+-                mIsEdgeToEdgeRefactorEnabled
+-                        ? shouldConsumeTopInsets()
+-                        : (mAppliedContentViewPadding.top == 0);
++                (org.chromium.chrome.browser.ui.actions.BareBarExperiment.enabled() && !mBareHubShowing)
++                        || (mIsEdgeToEdgeRefactorEnabled
++                                ? shouldConsumeTopInsets()
++                                : (mAppliedContentViewPadding.top == 0));
+         boolean consumeBottomInsets = mAppliedContentViewPadding.bottom == 0;
+         return consumeWindowInsets(windowInsets, consumeTopInsets, consumeBottomInsets);
+     }
+diff --git a/ui/edge_to_edge/android/java/src/org/chromium/ui/edge_to_edge/layout/EdgeToEdgeLayoutCoordinator.java b/ui/edge_to_edge/android/java/src/org/chromium/ui/edge_to_edge/layout/EdgeToEdgeLayoutCoordinator.java
+index 520daaa9dc908..bc980bf0afd0b 100644
+--- a/ui/edge_to_edge/android/java/src/org/chromium/ui/edge_to_edge/layout/EdgeToEdgeLayoutCoordinator.java
++++ b/ui/edge_to_edge/android/java/src/org/chromium/ui/edge_to_edge/layout/EdgeToEdgeLayoutCoordinator.java
+@@ -48,6 +48,7 @@ public class EdgeToEdgeLayoutCoordinator extends BaseSystemBarColorHelper
+     private final @Nullable EdgeToEdgeFieldTrial mUseBackupNavbarInsetsFieldTrial;
+     private final boolean mCanUseMandatoryGesturesInsets;
+     private final boolean mEnableExtraEdgeToEdgeLogging;
++    private boolean mLeaveBottomNavigationBarToContent;
+ 
+     /**
+      * Construct the coordinator used to handle padding and color for the Edge to edge layout. If an
+@@ -98,6 +99,14 @@ public class EdgeToEdgeLayoutCoordinator extends BaseSystemBarColorHelper
+                 /* enableExtraEdgeToEdgeLogging= */ false);
+     }
+ 
++    /**
++     * Leaves the bottom navigation bar inset to the content instead of padding and coloring it, so
++     * that scrolling content can draw behind a transparent navigation bar.
++     */
++    public void setLeaveBottomNavigationBarToContent(boolean leave) {
++        mLeaveBottomNavigationBarToContent = leave;
++    }
++
+     /**
+      * @see Activity#setContentView(View)
+      */
+@@ -157,6 +166,12 @@ public class EdgeToEdgeLayoutCoordinator extends BaseSystemBarColorHelper
+         mView.setStatusBarInsets(statusBarInsets);
+ 
+         Insets navBarInsets = getNavigationBarInsets(windowInsets);
++        int contentNavBarBottom = 0;
++        if (mLeaveBottomNavigationBarToContent) {
++            contentNavBarBottom =
++                    windowInsets.getInsets(Type.ime()).bottom > 0 ? 0 : navBarInsets.bottom;
++            navBarInsets = Insets.of(navBarInsets.left, navBarInsets.top, navBarInsets.right, 0);
++        }
+         mView.setNavigationBarInsets(navBarInsets);
+ 
+         Insets captionBarInsets = windowInsets.getInsets(Type.captionBar());
+@@ -177,6 +192,16 @@ public class EdgeToEdgeLayoutCoordinator extends BaseSystemBarColorHelper
+         }
+ 
+         Insets overallInsets = windowInsets.getInsets(paddingInsetTypes);
++        if (mLeaveBottomNavigationBarToContent) {
++            Insets withoutNavBar =
++                    windowInsets.getInsets(paddingInsetTypes & ~Type.navigationBars());
++            overallInsets =
++                    Insets.of(
++                            overallInsets.left,
++                            overallInsets.top,
++                            overallInsets.right,
++                            withoutNavBar.bottom);
++        }
+         // Ensure backup navigation insets are also included.
+         overallInsets = Insets.max(overallInsets, navBarInsets);
+         mView.setPadding(
+@@ -185,7 +210,7 @@ public class EdgeToEdgeLayoutCoordinator extends BaseSystemBarColorHelper
+         // Consume the insets since the root view already adjusted their paddings.
+         return new WindowInsetsCompat.Builder(windowInsets)
+                 .setInsets(Type.statusBars(), Insets.NONE)
+-                .setInsets(Type.navigationBars(), Insets.NONE)
++                .setInsets(Type.navigationBars(), Insets.of(0, 0, 0, contentNavBarBottom))
+                 .setInsets(Type.captionBar(), Insets.NONE)
+                 .setInsets(Type.displayCutout(), Insets.NONE)
+                 .setInsets(Type.tappableElement(), Insets.NONE)
