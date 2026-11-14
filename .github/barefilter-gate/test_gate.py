@@ -317,6 +317,23 @@ class Timing(unittest.TestCase):
         self.assertIn("force-push", c["output"]["summary"])
         self.assertEqual(verdict(run(api, at(hours=20) + timedelta(hours=72))), "success")
 
+    def test_record_holds_only_the_current_commits(self):
+        api = base_scenario()
+        run(api, at(minutes=10))
+        old, old_files = api.commits[0], api.files
+        api.commits, api.files = [], {}                             # force-push to a new history
+        api.doc_commit(); api.pr_files = []
+        api.event("head_ref_force_pushed", at(hours=20))
+        self.assertEqual(verdict(run(api, at(hours=20, minutes=1))), "pending")    # still a rule proposal
+        state = json.loads(gate.STATE_RE.search(api.comments[0]["body"]).group(1))
+        self.assertEqual(list(state["commits"]), api.commits)      # the replaced commit has left the record
+        api.commits, api.files = [old], old_files                   # force-push back to the old commit
+        api.pr["head"]["sha"] = old
+        api.event("head_ref_force_pushed", at(hours=40))
+        run(api, at(hours=40, minutes=1))
+        state = json.loads(gate.STATE_RE.search(api.comments[0]["body"]).group(1))
+        self.assertEqual(state["commits"], {old: [iso(at(hours=40, minutes=1)), True, True]})   # first seen again
+
     def test_force_push_before_ready_does_not_count(self):
         api = FakeAPI()
         api.pr["draft"] = True
