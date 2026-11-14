@@ -99,5 +99,6 @@ it.
 Four separate behaviours turned out to be coming from that file rather than from
 the code: the navigation blur transition, the new tab page identity disc, the
 Google Password Manager settings row, and the bottom bar disappearing on the new
-tab page. Patches 0000106, 0000113, 0000114 and 0000117 deal with each. A feature default
+tab page. Patches 0000106, 0000113 and 0000114 deal with the first three. Patch 0000117 dealt
+with the fourth and is no longer in the series ([patches.md](patches.md)). A feature default
 changed in code is inert until that setting is on, so check the config first.
