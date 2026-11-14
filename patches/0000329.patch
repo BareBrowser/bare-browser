@@ -1,0 +1,1386 @@
+diff --git a/chrome/browser/bare/backup/BUILD.gn b/chrome/browser/bare/backup/BUILD.gn
+index 073eed217bb..a6fc40c232b 100644
+--- a/chrome/browser/bare/backup/BUILD.gn
++++ b/chrome/browser/bare/backup/BUILD.gn
+@@ -27,6 +27,8 @@ static_library("data") {
+     "backup_bookmarks.h",
+     "backup_contents.cc",
+     "backup_contents.h",
++    "backup_extensions.cc",
++    "backup_extensions.h",
+     "backup_reading_list.cc",
+     "backup_reading_list.h",
+     "backup_search_engines.cc",
+@@ -44,6 +46,7 @@ static_library("data") {
+     "//components/bookmarks/browser",
+     "//components/content_settings/core/browser",
+     "//components/content_settings/core/common",
++    "//components/crx_file",
+     "//components/prefs",
+     "//components/reading_list/core",
+     "//components/search_engines",
+@@ -52,6 +55,22 @@ static_library("data") {
+   ]
+ }
+ 
++# The part of extension backup that needs the profile's extension system.
++# Linked into Bare through //chrome/browser/ui/android/extensions.
++source_set("browser") {
++  sources = [
++    "backup_extensions_browser.cc",
++    "backup_extensions_browser.h",
++  ]
++  public_deps = [ ":data" ]
++  deps = [
++    "//base",
++    "//chrome/browser/profiles:profile",
++    "//extensions/browser",
++    "//extensions/common",
++  ]
++}
++
+ # The file format and zip tests need only base, BoringSSL and zlib, so they
+ # also build for the host and run in the build container. The data tests pull
+ # in components that the host side of an Android out dir hasn't built, and run
+@@ -73,6 +92,7 @@ if (is_android) {
+     sources = _format_test_sources + [
+                 "backup_bookmarks_unittest.cc",
+                 "backup_contents_unittest.cc",
++                "backup_extensions_unittest.cc",
+                 "backup_reading_list_unittest.cc",
+                 "backup_search_engines_unittest.cc",
+                 "backup_settings_unittest.cc",
+@@ -87,6 +107,7 @@ if (is_android) {
+              "//components/bookmarks/test",
+              "//components/content_settings/core/browser",
+              "//components/content_settings/core/common",
++             "//components/crx_file",
+              "//components/prefs:test_support",
+              "//components/reading_list/core",
+              "//components/reading_list/core:test_support",
+@@ -99,6 +120,7 @@ if (is_android) {
+              "//components/sync/base",
+              "//components/sync/model",
+              "//components/sync_preferences:test_support",
++             "//crypto",
+              "//testing/gmock",
+              "//third_party/icu:icu_assets",
+              "//ui/base:test_support",
+diff --git a/chrome/browser/bare/backup/DEPS b/chrome/browser/bare/backup/DEPS
+index 56b2c0197a8..63d171836fe 100644
+--- a/chrome/browser/bare/backup/DEPS
++++ b/chrome/browser/bare/backup/DEPS
+@@ -1,6 +1,10 @@
+ include_rules = [
+   "+components/bookmarks",
+   "+components/content_settings/core",
++  "+components/crx_file",
++  "+crypto",
++  "+extensions/browser",
++  "+extensions/common",
+   "+components/prefs",
+   "+components/reading_list/core",
+   "+components/sync/base",
+diff --git a/chrome/browser/bare/backup/backup_contents.cc b/chrome/browser/bare/backup/backup_contents.cc
+index 3edbd0b1de7..e27724e5b2f 100644
+--- a/chrome/browser/bare/backup/backup_contents.cc
++++ b/chrome/browser/bare/backup/backup_contents.cc
+@@ -22,6 +22,7 @@ constexpr char kPersonalSearchEngines[] = "personal/search_engines.json";
+ constexpr char kPersonalSiteSettings[] = "personal/site_settings.json";
+ constexpr char kPersonalBookmarks[] = "personal/bookmarks.json";
+ constexpr char kPersonalReadingList[] = "personal/reading_list.json";
++constexpr char kSetupExtensions[] = "setup/extensions.json";
+ 
+ constexpr size_t kMaxJsonDepth = 8;
+ 
+@@ -47,14 +48,15 @@ std::optional<base::DictValue> ReadJson(const Package& package,
+ }
+ 
+ bool IsKnownEntry(const std::string& name, Kind kind) {
+-  if (name == kManifest || name == kSetupSettings) {
++  if (name == kManifest || name == kSetupSettings || name == kSetupExtensions) {
+     return true;
+   }
+-  // Extension files and their list arrive with the extensions step; until
+-  // then they are listed as ignored like anything else.
+   if (kind != Kind::kFull) {
+     return false;
+   }
++  if (name.starts_with(kExtensionFilesPrefix)) {
++    return true;
++  }
+   for (const char* known :
+        {kPersonalSettings, kPersonalSearchEngines, kPersonalSiteSettings,
+         kPersonalBookmarks, kPersonalReadingList}) {
+@@ -65,8 +67,59 @@ bool IsKnownEntry(const std::string& name, Kind kind) {
+   return false;
+ }
+ 
++// Adds the files of each listed extension that has them, all or none per
++// extension, and the list. Returns false only if the list itself won't fit.
++bool AddExtensions(PackageWriter& writer,
++                   Kind kind,
++                   const CollectedExtensions& collected,
++                   BuiltPackage& built) {
++  std::vector<ExtensionRecord> records = collected.records;
++  for (ExtensionRecord& record : records) {
++    if (std::ranges::find(collected.too_large, record.id) !=
++        collected.too_large.end()) {
++      built.extensions_too_large.push_back(record.id);
++    }
++    if (kind != Kind::kFull || !record.files) {
++      record.files = false;
++      continue;
++    }
++    const std::string prefix = ExtensionFilesPrefix(record.id);
++    size_t count = 0;
++    uint64_t bytes = 0;
++    for (auto it = collected.files.lower_bound(prefix);
++         it != collected.files.end() && it->first.starts_with(prefix); ++it) {
++      ++count;
++      bytes += it->second.size();
++    }
++    // Leave room for the list and the manifest.
++    if (count == 0 || count + 2 > writer.entries_left() ||
++        bytes + 1024 * 1024 > writer.bytes_left()) {
++      record.files = false;
++      built.extensions_too_large.push_back(record.id);
++      continue;
++    }
++    for (auto it = collected.files.lower_bound(prefix);
++         it != collected.files.end() && it->first.starts_with(prefix); ++it) {
++      if (!writer.Add(it->first, it->second)) {
++        // A name the reader would refuse. The extension goes without files;
++        // the ones already added are harmless, as nothing reads them unless
++        // the record says so.
++        record.files = false;
++        break;
++      }
++    }
++  }
++  built.counts["extensions"] = static_cast<int>(records.size());
++  return AddJson(writer, kSetupExtensions, ExtensionListToJson(records));
++}
++
+ }  // namespace
+ 
++BuiltPackage::BuiltPackage() = default;
++BuiltPackage::BuiltPackage(BuiltPackage&&) = default;
++BuiltPackage& BuiltPackage::operator=(BuiltPackage&&) = default;
++BuiltPackage::~BuiltPackage() = default;
++
+ PackageSummary::PackageSummary() = default;
+ PackageSummary::PackageSummary(const PackageSummary&) = default;
+ PackageSummary& PackageSummary::operator=(const PackageSummary&) = default;
+@@ -151,6 +204,14 @@ std::optional<BuiltPackage> BuildPackage(Kind kind, const Sources& from) {
+   }
+   built.counts["settings"] = settings_count;
+ 
++  // Last, so the rest of the package always fits.
++  if (from.extensions) {
++    if (!AddExtensions(writer, kind, *from.extensions, built)) {
++      return std::nullopt;
++    }
++    sections.Append(kSectionExtensions);
++  }
++
+   base::DictValue counts;
+   for (const auto& [name, count] : built.counts) {
+     counts.Set(name, count);
+@@ -200,7 +261,7 @@ base::expected<PackageSummary, ContentsError> ReadManifest(
+     }
+     const std::string& name = section.GetString();
+     const bool known =
+-        name == kSectionSettings ||
++        name == kSectionSettings || name == kSectionExtensions ||
+         (file_kind == Kind::kFull &&
+          (name == kSectionSearchEngines || name == kSectionSiteSettings ||
+           name == kSectionBookmarks));
+@@ -220,6 +281,21 @@ base::expected<PackageSummary, ContentsError> ReadManifest(
+   return summary;
+ }
+ 
++std::vector<ExtensionRecord> ReadExtensionList(const Package& package,
++                                               const PackageSummary& summary,
++                                               size_t& skipped) {
++  skipped = 0;
++  if (std::ranges::find(summary.sections, kSectionExtensions) ==
++      summary.sections.end()) {
++    return {};
++  }
++  std::optional<base::DictValue> json = ReadJson(package, kSetupExtensions);
++  if (!json) {
++    return {};
++  }
++  return ExtensionListFromJson(*json, summary.kind, skipped);
++}
++
+ RestoreReport RestorePackage(const Package& package,
+                              const PackageSummary& summary,
+                              const RestoreChoices& choices,
+diff --git a/chrome/browser/bare/backup/backup_contents.h b/chrome/browser/bare/backup/backup_contents.h
+index a9bb748a7cd..2e0b5950ee9 100644
+--- a/chrome/browser/bare/backup/backup_contents.h
++++ b/chrome/browser/bare/backup/backup_contents.h
+@@ -13,6 +13,7 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/types/expected.h"
+ #include "chrome/browser/bare/backup/backup_bookmarks.h"
++#include "chrome/browser/bare/backup/backup_extensions.h"
+ #include "chrome/browser/bare/backup/backup_file.h"
+ #include "chrome/browser/bare/backup/backup_package.h"
+ #include "chrome/browser/bare/backup/backup_reading_list.h"
+@@ -39,8 +40,9 @@ class BookmarkModel;
+ //   personal/site_settings.json
+ //   personal/bookmarks.json
+ //   personal/reading_list.json
++//   setup/extensions.json, setup/extensions/<id>/...  see backup_extensions.h
+ //
+-// A setup package has the manifest and setup/ only.
++// A setup package has the manifest and setup/ only, and no extension files.
+ namespace bare::backup {
+ 
+ inline constexpr int kSchemaVersion = 1;
+@@ -50,6 +52,8 @@ inline constexpr char kSectionSettings[] = "settings";
+ inline constexpr char kSectionSearchEngines[] = "search_engines";
+ inline constexpr char kSectionSiteSettings[] = "site_settings";
+ inline constexpr char kSectionBookmarks[] = "bookmarks";
++// Restored on its own after the review screen, not by RestorePackage().
++inline constexpr char kSectionExtensions[] = "extensions";
+ 
+ struct Sources {
+   SettingsStores settings;
+@@ -57,10 +61,19 @@ struct Sources {
+   raw_ptr<TemplateURLService> search_engines = nullptr;
+   raw_ptr<bookmarks::BookmarkModel> bookmarks = nullptr;
+   raw_ptr<ReadingListModel> reading_list = nullptr;
++  // Collected beforehand, since reading extension folders is file work.
++  raw_ptr<const CollectedExtensions> extensions = nullptr;
+ };
+ 
+ struct BuiltPackage {
++  BuiltPackage();
++  BuiltPackage(BuiltPackage&&);
++  BuiltPackage& operator=(BuiltPackage&&);
++  ~BuiltPackage();
++
+   std::string zip;
++  // Extensions listed without their files because they didn't fit.
++  std::vector<std::string> extensions_too_large;
+   // For the file header: "settings", "bookmarks", "reading_list",
+   // "site_settings", "search_engines".
+   std::map<std::string, int> counts;
+@@ -130,6 +143,11 @@ struct RestoreReport {
+   std::vector<std::string> ignored_entries;
+ };
+ 
++// The extension list of a package whose manifest passed ReadManifest().
++std::vector<ExtensionRecord> ReadExtensionList(const Package& package,
++                                               const PackageSummary& summary,
++                                               size_t& skipped);
++
+ // Applies the chosen sections in order: settings, search engines, site
+ // settings, bookmarks with the reading list. A failed section stops the
+ // restore; what was applied stays, and running it again is safe (settings are
+diff --git a/chrome/browser/bare/backup/backup_contents_unittest.cc b/chrome/browser/bare/backup/backup_contents_unittest.cc
+index f7b211bb4df..8b2657e13b5 100644
+--- a/chrome/browser/bare/backup/backup_contents_unittest.cc
++++ b/chrome/browser/bare/backup/backup_contents_unittest.cc
+@@ -7,6 +7,8 @@
+ #include <memory>
+ #include <string>
+ 
++#include "base/base64.h"
++#include "base/json/json_writer.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/strings/string_util.h"
+ #include "base/test/simple_test_clock.h"
+@@ -15,6 +17,7 @@
+ #include "components/bookmarks/browser/bookmark_model.h"
+ #include "components/bookmarks/test/test_bookmark_client.h"
+ #include "components/content_settings/core/browser/host_content_settings_map.h"
++#include "components/crx_file/id_util.h"
+ #include "components/content_settings/core/common/content_settings_pattern.h"
+ #include "components/prefs/testing_pref_service.h"
+ #include "components/reading_list/core/fake_reading_list_model_storage.h"
+@@ -25,6 +28,7 @@
+ #include "components/search_engines/template_url_service.h"
+ #include "components/sync/base/storage_type.h"
+ #include "components/sync/model/wipe_model_upon_sync_disabled_behavior.h"
++#include "crypto/keypair.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "url/gurl.h"
+ 
+@@ -271,5 +275,91 @@ TEST_F(BackupContentsTest, ChoicesAreHonoured) {
+   EXPECT_TRUE(new_phone_.android_.values_.empty());
+ }
+ 
++// One CRX extension with its folder, one unpacked, as a backup collects them.
++CollectedExtensions TestExtensions(std::string& crx_id,
++                                   size_t big_file_size = 0) {
++  std::vector<uint8_t> spki =
++      crypto::keypair::PrivateKey::GenerateRsa2048().ToSubjectPublicKeyInfo();
++  crx_id = crx_file::id_util::GenerateId(spki);
++  CollectedExtensions collected;
++  ExtensionRecord crx;
++  crx.id = crx_id;
++  crx.name = "Crx";
++  crx.version = "1.0";
++  crx.files = true;
++  ExtensionRecord unpacked;
++  unpacked.id = std::string(32, 'p');
++  unpacked.name = "Unpacked";
++  unpacked.version = "0.1";
++  unpacked.kind = ExtensionKind::kUnpacked;
++  collected.records = {crx, unpacked};
++
++  base::DictValue manifest;
++  manifest.Set("name", "Crx");
++  manifest.Set("version", "1.0");
++  manifest.Set("key", base::Base64Encode(spki));
++  const std::string prefix = ExtensionFilesPrefix(crx_id);
++  collected.files[prefix + "manifest.json"] = *base::WriteJson(manifest);
++  collected.files[prefix + "a b/c.js"] = "x";
++  if (big_file_size) {
++    collected.files[prefix + "big.bin"] = std::string(big_file_size, 'z');
++  }
++  return collected;
++}
++
++TEST_F(BackupContentsTest, ExtensionsInPackages) {
++  std::string crx_id;
++  const CollectedExtensions collected = TestExtensions(crx_id);
++  Sources sources = old_phone_.sources();
++  sources.extensions = &collected;
++
++  // Full: the list, and the CRX extension's folder.
++  Package full =
++      ThroughFile(Kind::kFull, *BuildPackage(Kind::kFull, sources));
++  auto summary = ReadManifest(full, Kind::kFull);
++  ASSERT_TRUE(summary.has_value());
++  EXPECT_NE(std::ranges::find(summary->sections, "extensions"),
++            summary->sections.end());
++  size_t skipped = 0;
++  std::vector<ExtensionRecord> list =
++      ReadExtensionList(full, *summary, skipped);
++  ASSERT_EQ(list.size(), 2u);
++  EXPECT_TRUE(list[0].files);
++  EXPECT_FALSE(list[1].files);
++  EXPECT_TRUE(ExtensionFilesForRestore(full, Kind::kFull, list[0]).has_value());
++  RestoreReport report = RestorePackage(full, *summary, RestoreChoices(),
++                                        new_phone_.sources(), u"Restored");
++  EXPECT_TRUE(report.ignored_entries.empty());
++
++  // Setup: the list only.
++  Package setup =
++      ThroughFile(Kind::kSetup, *BuildPackage(Kind::kSetup, sources));
++  for (const auto& [name, contents] : setup) {
++    EXPECT_FALSE(name.starts_with("setup/extensions/")) << name;
++  }
++  summary = ReadManifest(setup, Kind::kSetup);
++  list = ReadExtensionList(setup, *summary, skipped);
++  ASSERT_EQ(list.size(), 2u);
++  EXPECT_FALSE(list[0].files);
++}
++
++TEST_F(BackupContentsTest, ExtensionTooBigGoesWithoutFiles) {
++  std::string crx_id;
++  // Over the 16 MB a single package entry may hold.
++  const CollectedExtensions collected =
++      TestExtensions(crx_id, 17 * 1024 * 1024);
++  Sources sources = old_phone_.sources();
++  sources.extensions = &collected;
++  std::optional<BuiltPackage> built = BuildPackage(Kind::kFull, sources);
++  ASSERT_TRUE(built);
++  Package package = ThroughFile(Kind::kFull, *built);
++  auto summary = ReadManifest(package, Kind::kFull);
++  size_t skipped = 0;
++  std::vector<ExtensionRecord> list =
++      ReadExtensionList(package, *summary, skipped);
++  ASSERT_EQ(list.size(), 2u);
++  EXPECT_FALSE(list[0].files);
++}
++
+ }  // namespace
+ }  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_extensions.cc b/chrome/browser/bare/backup/backup_extensions.cc
+new file mode 100644
+index 00000000000..3a2076fbf5e
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_extensions.cc
+@@ -0,0 +1,200 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_extensions.h"
++
++#include <set>
++#include <utility>
++
++#include "base/base64.h"
++#include "base/json/json_reader.h"
++#include "base/strings/strcat.h"
++#include "base/strings/string_util.h"
++#include "components/crx_file/id_util.h"
++#include "url/gurl.h"
++
++namespace bare::backup {
++
++namespace {
++
++constexpr char kMetadataFolder[] = "_metadata/";
++constexpr size_t kMaxNameLength = 1024;
++constexpr size_t kMaxPermissions = 100;
++constexpr size_t kMaxManifestDepth = 32;
++
++const char* KindName(ExtensionKind kind) {
++  return kind == ExtensionKind::kUnpacked ? "unpacked" : "crx";
++}
++
++// IdIsValid() also takes upper case, which Chromium never writes. Only the
++// lower-case form compares equal to the bundled uBO's ID and to the ID the
++// installer derives from the key.
++bool IsLowerCaseId(const std::string& id) {
++  return crx_file::id_util::IdIsValid(id) && id == base::ToLowerASCII(id);
++}
++
++bool IsShortString(const std::string* text) {
++  return text && text->size() <= kMaxNameLength;
++}
++
++}  // namespace
++
++ExtensionRecord::ExtensionRecord() = default;
++ExtensionRecord::ExtensionRecord(const ExtensionRecord&) = default;
++ExtensionRecord& ExtensionRecord::operator=(const ExtensionRecord&) = default;
++ExtensionRecord::~ExtensionRecord() = default;
++
++CollectedExtensions::CollectedExtensions() = default;
++CollectedExtensions::CollectedExtensions(CollectedExtensions&&) = default;
++CollectedExtensions& CollectedExtensions::operator=(CollectedExtensions&&) =
++    default;
++CollectedExtensions::~CollectedExtensions() = default;
++
++ExtensionFiles::ExtensionFiles() = default;
++ExtensionFiles::ExtensionFiles(ExtensionFiles&&) = default;
++ExtensionFiles& ExtensionFiles::operator=(ExtensionFiles&&) = default;
++ExtensionFiles::~ExtensionFiles() = default;
++
++bool ShouldCopyExtensionFile(std::string_view relative_path) {
++  return !relative_path.empty() && !relative_path.starts_with(kMetadataFolder);
++}
++
++std::string ExtensionFilesPrefix(std::string_view id) {
++  return base::StrCat({kExtensionFilesPrefix, id, "/"});
++}
++
++base::DictValue ExtensionListToJson(const std::vector<ExtensionRecord>& list) {
++  base::ListValue extensions;
++  for (const ExtensionRecord& record : list) {
++    base::ListValue permissions;
++    for (const std::string& permission : record.permissions) {
++      permissions.Append(permission);
++    }
++    base::DictValue json;
++    json.Set("id", record.id);
++    json.Set("name", record.name);
++    json.Set("version", record.version);
++    json.Set("kind", KindName(record.kind));
++    json.Set("update_url", record.update_url);
++    json.Set("from_webstore", record.from_webstore);
++    json.Set("files", record.files);
++    json.Set("permissions", std::move(permissions));
++    extensions.Append(std::move(json));
++  }
++  base::DictValue json;
++  json.Set("extensions", std::move(extensions));
++  return json;
++}
++
++std::vector<ExtensionRecord> ExtensionListFromJson(const base::DictValue& json,
++                                                   Kind package_kind,
++                                                   size_t& skipped) {
++  std::vector<ExtensionRecord> records;
++  skipped = 0;
++  const base::ListValue* list = json.FindList("extensions");
++  if (!list) {
++    return records;
++  }
++  std::set<std::string> seen;
++  for (const base::Value& value : *list) {
++    const base::DictValue* entry = value.GetIfDict();
++    const std::string* id = entry ? entry->FindString("id") : nullptr;
++    const std::string* name = entry ? entry->FindString("name") : nullptr;
++    const std::string* version =
++        entry ? entry->FindString("version") : nullptr;
++    const std::string* kind = entry ? entry->FindString("kind") : nullptr;
++    if (records.size() >= kMaxListedExtensions || !id ||
++        !IsLowerCaseId(*id) || *id == kBundledUboId ||
++        !seen.insert(*id).second || !IsShortString(name) ||
++        !IsShortString(version) || !kind ||
++        (*kind != "crx" && *kind != "unpacked")) {
++      ++skipped;
++      continue;
++    }
++    ExtensionRecord record;
++    record.id = *id;
++    record.name = *name;
++    record.version = *version;
++    record.kind =
++        *kind == "unpacked" ? ExtensionKind::kUnpacked : ExtensionKind::kCrx;
++    if (const std::string* url = entry->FindString("update_url")) {
++      const GURL update_url(*url);
++      if (update_url.is_valid() && update_url.SchemeIsHTTPOrHTTPS()) {
++        record.update_url = update_url.spec();
++      }
++    }
++    // Anyone can write a file, so it never decides that an extension came
++    // from the store. Restored extensions are installed as from elsewhere.
++    record.from_webstore = false;
++    record.files = package_kind == Kind::kFull &&
++                   record.kind == ExtensionKind::kCrx &&
++                   entry->FindBool("files").value_or(false);
++    if (const base::ListValue* permissions = entry->FindList("permissions")) {
++      for (const base::Value& permission : *permissions) {
++        if (permission.is_string() &&
++            IsShortString(&permission.GetString()) &&
++            record.permissions.size() < kMaxPermissions) {
++          record.permissions.push_back(permission.GetString());
++        }
++      }
++    }
++    records.push_back(std::move(record));
++  }
++  return records;
++}
++
++base::expected<ExtensionFiles, ExtensionFilesError> ExtensionFilesForRestore(
++    const Package& package,
++    Kind package_kind,
++    const ExtensionRecord& record) {
++  if (package_kind != Kind::kFull) {
++    return base::unexpected(ExtensionFilesError::kSetupPackage);
++  }
++  if (record.kind != ExtensionKind::kCrx) {
++    return base::unexpected(ExtensionFilesError::kNotCrx);
++  }
++  if (base::ToLowerASCII(record.id) == kBundledUboId) {
++    return base::unexpected(ExtensionFilesError::kBundled);
++  }
++
++  ExtensionFiles result;
++  const std::string prefix = ExtensionFilesPrefix(record.id);
++  for (auto it = package.lower_bound(prefix);
++       it != package.end() && it->first.starts_with(prefix); ++it) {
++    const std::string relative = it->first.substr(prefix.size());
++    if (ShouldCopyExtensionFile(relative)) {
++      result.files.emplace(relative, it->second);
++    }
++  }
++  if (result.files.empty()) {
++    return base::unexpected(ExtensionFilesError::kNoFiles);
++  }
++
++  auto manifest_file = result.files.find("manifest.json");
++  if (manifest_file == result.files.end()) {
++    return base::unexpected(ExtensionFilesError::kNoManifest);
++  }
++  std::optional<base::DictValue> manifest = base::JSONReader::ReadDict(
++      manifest_file->second, base::JSON_ALLOW_TRAILING_COMMAS,
++      kMaxManifestDepth);
++  if (!manifest) {
++    return base::unexpected(ExtensionFilesError::kBadManifest);
++  }
++  const std::string* key = manifest->FindString("key");
++  if (!key || key->empty()) {
++    return base::unexpected(ExtensionFilesError::kNoKey);
++  }
++  std::optional<std::vector<uint8_t>> key_bytes = base::Base64Decode(*key);
++  if (!key_bytes || crx_file::id_util::GenerateId(*key_bytes) != record.id) {
++    return base::unexpected(ExtensionFilesError::kKeyMismatch);
++  }
++  const std::string* version = manifest->FindString("version");
++  if (!version || *version != record.version) {
++    return base::unexpected(ExtensionFilesError::kVersionMismatch);
++  }
++  result.public_key = *key;
++  return result;
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_extensions.h b/chrome/browser/bare/backup/backup_extensions.h
+new file mode 100644
+index 00000000000..b667ea4c8ed
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_extensions.h
+@@ -0,0 +1,135 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKUP_BACKUP_EXTENSIONS_H_
++#define CHROME_BROWSER_BARE_BACKUP_BACKUP_EXTENSIONS_H_
++
++#include <stddef.h>
++
++#include <map>
++#include <string>
++#include <string_view>
++#include <vector>
++
++#include "base/types/expected.h"
++#include "base/values.h"
++#include "chrome/browser/bare/backup/backup_file.h"
++#include "chrome/browser/bare/backup/backup_package.h"
++
++// Extensions in a package:
++//
++//   setup/extensions.json       the list, in every kind of package:
++//     {"extensions": [{"id": "...", "name": "...", "version": "1.2",
++//                      "kind": "crx" | "unpacked", "update_url": "...",
++//                      "from_webstore": false, "files": true,
++//                      "permissions": ["Read your browsing history"]}]}
++//   setup/extensions/<id>/...   the installed folder of a "crx" extension, in
++//                               full packages only
++//
++// A restored folder isn't signature-checked: its ID comes from the key in its
++// manifest. So files are only taken from a full package, which the user's
++// code protects, and the key must hash to the listed ID. Extension storage
++// and settings are never in a package.
++namespace bare::backup {
++
++// The bundled uBlock Origin. Bare installs it itself, so a package never
++// carries it and a restore refuses anything claiming its ID.
++inline constexpr char kBundledUboId[] = "fkgkibajhfbepljeaefdnfnegdcjomkh";
++
++inline constexpr size_t kMaxListedExtensions = 500;
++
++enum class ExtensionKind {
++  // Installed from a CRX. Its folder can travel.
++  kCrx,
++  // Loaded from a folder in developer mode. Listed by name only.
++  kUnpacked,
++};
++
++struct ExtensionRecord {
++  ExtensionRecord();
++  ExtensionRecord(const ExtensionRecord&);
++  ExtensionRecord& operator=(const ExtensionRecord&);
++  ~ExtensionRecord();
++
++  std::string id;
++  std::string name;
++  std::string version;
++  ExtensionKind kind = ExtensionKind::kCrx;
++  // Where updates come from, which is also the best answer Bare has to
++  // "where did this come from": it doesn't record the download URL.
++  std::string update_url;
++  bool from_webstore = false;
++  // Whether the package carries the folder.
++  bool files = false;
++  // Permission messages when the backup was made, for a setup restore that
++  // can only list the extension.
++  std::vector<std::string> permissions;
++};
++
++// What a backup collected from the profile: the list, and for a full backup
++// the files, keyed by package path.
++struct CollectedExtensions {
++  CollectedExtensions();
++  CollectedExtensions(CollectedExtensions&&);
++  CollectedExtensions& operator=(CollectedExtensions&&);
++  ~CollectedExtensions();
++
++  std::vector<ExtensionRecord> records;
++  std::map<std::string, std::string> files;
++  // Extensions whose folder didn't fit in a package; listed without files.
++  std::vector<std::string> too_large;
++};
++
++// Whether a file of an installed folder goes in a package. Chromium's own
++// _metadata (hashes, verified contents, indexed rulesets) is rebuilt on
++// install and stays behind.
++bool ShouldCopyExtensionFile(std::string_view relative_path);
++
++// "setup/extensions/<id>/".
++std::string ExtensionFilesPrefix(std::string_view id);
++
++base::DictValue ExtensionListToJson(const std::vector<ExtensionRecord>& list);
++
++// Entries that fail a check are dropped and counted in `skipped`. In a setup
++// package every record comes back with `files` false.
++std::vector<ExtensionRecord> ExtensionListFromJson(const base::DictValue& json,
++                                                   Kind package_kind,
++                                                   size_t& skipped);
++
++enum class ExtensionFilesError {
++  kSetupPackage,
++  kNotCrx,
++  kBundled,
++  kNoFiles,
++  kNoManifest,
++  kBadManifest,
++  kNoKey,
++  kKeyMismatch,
++  kVersionMismatch,
++};
++
++struct ExtensionFiles {
++  ExtensionFiles();
++  ExtensionFiles(ExtensionFiles&&);
++  ExtensionFiles& operator=(ExtensionFiles&&);
++  ~ExtensionFiles();
++
++  // Base64 DER, as the installed manifest carries it.
++  std::string public_key;
++  // Path inside the extension folder to contents, without _metadata.
++  std::map<std::string, std::string> files;
++};
++
++// The folder for `record` from a full package, after the checks a restore
++// needs before handing it to the installer: the record is a CRX extension
++// other than the bundled uBO, its manifest parses, carries a key that hashes
++// to the ID, and has the listed version.
++base::expected<ExtensionFiles, ExtensionFilesError> ExtensionFilesForRestore(
++    const Package& package,
++    Kind package_kind,
++    const ExtensionRecord& record);
++
++}  // namespace bare::backup
++
++#endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_EXTENSIONS_H_
+diff --git a/chrome/browser/bare/backup/backup_extensions_browser.cc b/chrome/browser/bare/backup/backup_extensions_browser.cc
+new file mode 100644
+index 00000000000..8c4cedfe730
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_extensions_browser.cc
+@@ -0,0 +1,293 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_extensions_browser.h"
++
++#include <utility>
++
++#include "base/barrier_callback.h"
++#include "base/files/file_enumerator.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/functional/bind.h"
++#include "base/json/json_reader.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/thread_pool.h"
++#include "chrome/browser/profiles/profile.h"
++#include "extensions/browser/crx_installer.h"
++#include "extensions/browser/extension_registry.h"
++#include "extensions/browser/install/crx_install_error.h"
++#include "extensions/common/extension.h"
++#include "extensions/common/manifest.h"
++#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
++#include "extensions/common/permissions/permission_message.h"
++#include "extensions/common/permissions/permissions_data.h"
++
++namespace bare::backup {
++
++namespace {
++
++using extensions::Extension;
++using extensions::Manifest;
++using extensions::mojom::ManifestLocation;
++
++// Leaves room in a 64 MB package for everything else.
++constexpr uint64_t kMaxFolderBytes = 48 * 1024 * 1024;
++constexpr int64_t kMaxFileBytes = 16 * 1024 * 1024;
++constexpr size_t kMaxFolderFiles = 1500;
++constexpr size_t kMaxManifestDepth = 32;
++
++struct FolderToRead {
++  std::string id;
++  base::FilePath path;
++};
++
++// Reads each folder whole or not at all.
++CollectedExtensions ReadFolders(CollectedExtensions collected,
++                                std::vector<FolderToRead> folders) {
++  for (const FolderToRead& folder : folders) {
++    std::map<std::string, std::string> files;
++    uint64_t total = 0;
++    bool fits = true;
++    base::FileEnumerator walk(folder.path, /*recursive=*/true,
++                              base::FileEnumerator::FILES);
++    for (base::FilePath path = walk.Next(); fits && !path.empty();
++         path = walk.Next()) {
++      base::FilePath relative;
++      if (base::IsLink(path) || !folder.path.AppendRelativePath(path, &relative)) {
++        continue;
++      }
++      const std::string relative_name = relative.AsUTF8Unsafe();
++      if (!ShouldCopyExtensionFile(relative_name)) {
++        continue;
++      }
++      const std::string name = ExtensionFilesPrefix(folder.id) + relative_name;
++      std::string contents;
++      if (!IsSafeEntryName(name) || files.size() >= kMaxFolderFiles ||
++          walk.GetInfo().GetSize() > kMaxFileBytes ||
++          !base::ReadFileToStringWithMaxSize(path, &contents, kMaxFileBytes)) {
++        fits = false;
++        break;
++      }
++      total += contents.size();
++      fits = total <= kMaxFolderBytes;
++      files.emplace(name, std::move(contents));
++    }
++    for (ExtensionRecord& record : collected.records) {
++      if (record.id == folder.id) {
++        record.files = fits && !files.empty();
++      }
++    }
++    if (fits && !files.empty()) {
++      collected.files.merge(files);
++    } else {
++      collected.too_large.push_back(folder.id);
++    }
++  }
++  return collected;
++}
++
++std::vector<std::u16string> PermissionsOf(const Extension& extension) {
++  std::vector<std::u16string> permissions;
++  for (const extensions::PermissionMessage& message :
++       extension.permissions_data()->GetPermissionMessages()) {
++    permissions.push_back(message.message());
++  }
++  return permissions;
++}
++
++// The folder written out for the installer, or an empty path on failure.
++base::FilePath WriteFolder(base::FilePath profile_path,
++                           std::map<std::string, std::string> files) {
++  base::FilePath dir;
++  if (!base::CreateTemporaryDirInDir(profile_path, "BareRestore", &dir)) {
++    return base::FilePath();
++  }
++  for (const auto& [relative, contents] : files) {
++    const base::FilePath path = dir.Append(base::FilePath::FromUTF8Unsafe(relative));
++    if (path.ReferencesParent() || !dir.IsParent(path) ||
++        !base::CreateDirectory(path.DirName()) ||
++        !base::WriteFile(path, contents)) {
++      base::DeletePathRecursively(dir);
++      return base::FilePath();
++    }
++  }
++  return dir;
++}
++
++void StartInstall(base::WeakPtr<Profile> profile,
++                  std::string id,
++                  std::string public_key,
++                  base::OnceCallback<void(std::pair<std::string, std::string>)>
++                      done,
++                  base::FilePath dir) {
++  if (dir.empty() || !profile) {
++    std::move(done).Run({id, "Bare couldn't write the extension's files."});
++    return;
++  }
++  scoped_refptr<extensions::CrxInstaller> installer =
++      extensions::CrxInstaller::CreateSilent(profile.get());
++  installer->set_allow_silent_install(true);
++  installer->set_expected_id(id);
++  installer->set_install_immediately(true);
++  // The folder comes from a file or another phone, so nothing vouches for
++  // where its code came from.
++  installer->set_is_gallery_install(false);
++  installer->AddInstallerCallback(base::BindOnce(
++      [](std::string id,
++         base::OnceCallback<void(std::pair<std::string, std::string>)> done,
++         const std::optional<extensions::CrxInstallError>& error) {
++        std::move(done).Run(
++            {id, error ? base::UTF16ToUTF8(error->message()) : std::string()});
++      },
++      id, std::move(done)));
++  installer->InstallUnpackedCrx(id, public_key, dir);
++}
++
++}  // namespace
++
++ExtensionReviewItem::ExtensionReviewItem() = default;
++ExtensionReviewItem::ExtensionReviewItem(const ExtensionReviewItem&) = default;
++ExtensionReviewItem& ExtensionReviewItem::operator=(
++    const ExtensionReviewItem&) = default;
++ExtensionReviewItem::~ExtensionReviewItem() = default;
++
++void CollectExtensions(Profile* profile,
++                       bool with_files,
++                       base::OnceCallback<void(CollectedExtensions)> done) {
++  CollectedExtensions collected;
++  std::vector<FolderToRead> folders;
++  const extensions::ExtensionSet installed =
++      extensions::ExtensionRegistry::Get(profile)
++          ->GenerateInstalledExtensionsSet();
++  for (const scoped_refptr<const Extension>& extension : installed) {
++    const ManifestLocation location = extension->location();
++    if (extension->id() == kBundledUboId ||
++        Manifest::IsComponentLocation(location) ||
++        Manifest::IsExternalLocation(location) ||
++        Manifest::IsPolicyLocation(location)) {
++      continue;
++    }
++    ExtensionRecord record;
++    if (location == ManifestLocation::kInternal) {
++      record.kind = ExtensionKind::kCrx;
++    } else if (Manifest::IsUnpackedLocation(location)) {
++      record.kind = ExtensionKind::kUnpacked;
++    } else {
++      continue;
++    }
++    record.id = extension->id();
++    record.name = extension->name();
++    record.version = extension->VersionString();
++    const GURL& update_url =
++        extensions::ManifestURL::GetUpdateURL(extension.get());
++    if (update_url.is_valid()) {
++      record.update_url = update_url.spec();
++    }
++    record.from_webstore = extension->from_webstore();
++    for (const std::u16string& permission : PermissionsOf(*extension)) {
++      record.permissions.push_back(base::UTF16ToUTF8(permission));
++    }
++    if (with_files && record.kind == ExtensionKind::kCrx) {
++      folders.push_back({record.id, extension->path()});
++    }
++    collected.records.push_back(std::move(record));
++  }
++
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE,
++      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++       base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
++      base::BindOnce(&ReadFolders, std::move(collected), std::move(folders)),
++      std::move(done));
++}
++
++std::vector<ExtensionReviewItem> DescribeExtensionsForRestore(
++    Profile* profile,
++    const Package& package,
++    const PackageSummary& summary) {
++  extensions::ExtensionRegistry* registry =
++      extensions::ExtensionRegistry::Get(profile);
++  size_t skipped = 0;
++  std::vector<ExtensionReviewItem> items;
++  for (ExtensionRecord& record : ReadExtensionList(package, summary, skipped)) {
++    ExtensionReviewItem item;
++    item.installed_here = registry->GetInstalledExtension(record.id);
++    for (const std::string& permission : record.permissions) {
++      item.permissions.push_back(base::UTF8ToUTF16(permission));
++    }
++    if (record.files) {
++      auto files = ExtensionFilesForRestore(package, summary.kind, record);
++      if (!files.has_value()) {
++        item.problem = files.error();
++      } else {
++        // Read what the folder itself asks for, rather than trusting the
++        // list.
++        std::optional<base::DictValue> manifest = base::JSONReader::ReadDict(
++            files->files.at("manifest.json"), base::JSON_ALLOW_TRAILING_COMMAS,
++            kMaxManifestDepth);
++        std::u16string error;
++        scoped_refptr<Extension> extension =
++            manifest ? Extension::Create(
++                           profile->GetPath().AppendASCII("BareRestore"),
++                           ManifestLocation::kInternal, *manifest,
++                           Extension::REQUIRE_KEY, &error)
++                     : nullptr;
++        if (!extension || extension->id() != record.id) {
++          item.problem = ExtensionFilesError::kBadManifest;
++        } else {
++          item.permissions = PermissionsOf(*extension);
++        }
++      }
++    }
++    item.record = std::move(record);
++    items.push_back(std::move(item));
++  }
++  return items;
++}
++
++void InstallExtensions(Profile* profile,
++                       const Package& package,
++                       const PackageSummary& summary,
++                       const std::vector<std::string>& approved_ids,
++                       base::OnceCallback<void(ExtensionInstallResults)> done) {
++  struct Job {
++    ExtensionRecord record;
++    ExtensionFiles files;
++  };
++  std::vector<Job> jobs;
++  for (const ExtensionReviewItem& item :
++       DescribeExtensionsForRestore(profile, package, summary)) {
++    if (!item.CanInstall() ||
++        std::ranges::find(approved_ids, item.record.id) == approved_ids.end()) {
++      continue;
++    }
++    auto files = ExtensionFilesForRestore(package, summary.kind, item.record);
++    if (files.has_value()) {
++      jobs.push_back({item.record, std::move(*files)});
++    }
++  }
++
++  auto barrier = base::BarrierCallback<std::pair<std::string, std::string>>(
++      jobs.size(),
++      base::BindOnce(
++          [](base::OnceCallback<void(ExtensionInstallResults)> done,
++             std::vector<std::pair<std::string, std::string>> results) {
++            std::move(done).Run(
++                ExtensionInstallResults(results.begin(), results.end()));
++          },
++          std::move(done)));
++  for (Job& job : jobs) {
++    base::ThreadPool::PostTaskAndReplyWithResult(
++        FROM_HERE,
++        {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++         base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
++        base::BindOnce(&WriteFolder, profile->GetPath(),
++                       std::move(job.files.files)),
++        base::BindOnce(&StartInstall, profile->GetWeakPtr(), job.record.id,
++                       job.files.public_key, barrier));
++  }
++}
++
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_extensions_browser.h b/chrome/browser/bare/backup/backup_extensions_browser.h
+new file mode 100644
+index 00000000000..1f81d3c4234
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_extensions_browser.h
+@@ -0,0 +1,70 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKUP_BACKUP_EXTENSIONS_BROWSER_H_
++#define CHROME_BROWSER_BARE_BACKUP_BACKUP_EXTENSIONS_BROWSER_H_
++
++#include <map>
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "base/functional/callback_forward.h"
++#include "chrome/browser/bare/backup/backup_contents.h"
++#include "chrome/browser/bare/backup/backup_extensions.h"
++
++class Profile;
++
++// The part of extension backup that talks to the profile's extension system.
++// All functions are called on the UI thread.
++namespace bare::backup {
++
++// Lists the profile's extensions: CRX installs, and unpacked ones by name.
++// The bundled uBO, component, external and policy extensions are left out.
++// With `with_files`, also reads each CRX extension's installed folder, off the
++// UI thread. Folders that won't fit a package are listed in `too_large`.
++void CollectExtensions(Profile* profile,
++                       bool with_files,
++                       base::OnceCallback<void(CollectedExtensions)> done);
++
++struct ExtensionReviewItem {
++  ExtensionReviewItem();
++  ExtensionReviewItem(const ExtensionReviewItem&);
++  ExtensionReviewItem& operator=(const ExtensionReviewItem&);
++  ~ExtensionReviewItem();
++
++  ExtensionRecord record;
++  bool installed_here = false;
++  // Why the folder can't be installed, when the package carries one.
++  std::optional<ExtensionFilesError> problem;
++  // From the folder's manifest when there is one, otherwise as listed.
++  std::vector<std::u16string> permissions;
++
++  bool CanInstall() const {
++    return record.files && !installed_here && !problem;
++  }
++};
++
++// One entry per listed extension, for the review screen.
++std::vector<ExtensionReviewItem> DescribeExtensionsForRestore(
++    Profile* profile,
++    const Package& package,
++    const PackageSummary& summary);
++
++// Extension ID to an error message, empty on success.
++using ExtensionInstallResults = std::map<std::string, std::string>;
++
++// Installs the approved extensions that CanInstall(), under their own IDs,
++// as normal installs so they keep updating. The review screen was the
++// permission prompt, so the installer shows none. Each folder is written to a
++// temporary directory in the profile, which the installer takes over.
++void InstallExtensions(Profile* profile,
++                       const Package& package,
++                       const PackageSummary& summary,
++                       const std::vector<std::string>& approved_ids,
++                       base::OnceCallback<void(ExtensionInstallResults)> done);
++
++}  // namespace bare::backup
++
++#endif  // CHROME_BROWSER_BARE_BACKUP_BACKUP_EXTENSIONS_BROWSER_H_
+diff --git a/chrome/browser/bare/backup/backup_extensions_unittest.cc b/chrome/browser/bare/backup/backup_extensions_unittest.cc
+new file mode 100644
+index 00000000000..0df6a6d3f2e
+--- /dev/null
++++ b/chrome/browser/bare/backup/backup_extensions_unittest.cc
+@@ -0,0 +1,225 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/backup/backup_extensions.h"
++
++#include <string>
++#include <vector>
++
++#include "base/base64.h"
++#include "base/json/json_writer.h"
++#include "base/strings/strcat.h"
++#include "components/crx_file/id_util.h"
++#include "crypto/keypair.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace bare::backup {
++namespace {
++
++struct TestKey {
++  TestKey() {
++    std::vector<uint8_t> spki =
++        crypto::keypair::PrivateKey::GenerateRsa2048().ToSubjectPublicKeyInfo();
++    public_key = base::Base64Encode(spki);
++    id = crx_file::id_util::GenerateId(spki);
++  }
++  std::string public_key;
++  std::string id;
++};
++
++ExtensionRecord Record(const std::string& id,
++                       ExtensionKind kind = ExtensionKind::kCrx) {
++  ExtensionRecord record;
++  record.id = id;
++  record.name = "Test extension";
++  record.version = "1.2";
++  record.kind = kind;
++  record.update_url = "https://updates.example.test/updates.xml";
++  record.files = kind == ExtensionKind::kCrx;
++  record.permissions = {"Read and change your data on all websites"};
++  return record;
++}
++
++// An installed folder as a full package carries it.
++void AddFolder(Package& package,
++               const std::string& id,
++               const std::string& key,
++               const std::string& version = "1.2") {
++  base::DictValue manifest;
++  manifest.Set("name", "__MSG_name__");
++  manifest.Set("version", version);
++  manifest.Set("manifest_version", 2);
++  if (!key.empty()) {
++    manifest.Set("key", key);
++  }
++  const std::string prefix = ExtensionFilesPrefix(id);
++  package[prefix + "manifest.json"] = *base::WriteJson(manifest);
++  package[prefix + "background.js"] = "chrome.storage.local.set({a: 1});";
++  package[prefix + "img/icon@2x.png"] = "png";
++  package[prefix + "_metadata/verified_contents.json"] = "[]";
++}
++
++TEST(BackupExtensionsTest, CopyRule) {
++  EXPECT_TRUE(ShouldCopyExtensionFile("manifest.json"));
++  EXPECT_TRUE(ShouldCopyExtensionFile("js/_metadata/x.js"));
++  EXPECT_FALSE(ShouldCopyExtensionFile("_metadata/computed_hashes.json"));
++  EXPECT_FALSE(ShouldCopyExtensionFile(
++      "_metadata/generated_indexed_rulesets/_ruleset1"));
++  EXPECT_FALSE(ShouldCopyExtensionFile(""));
++}
++
++TEST(BackupExtensionsTest, ListRoundTrip) {
++  TestKey a, b;
++  std::vector<ExtensionRecord> list = {
++      Record(a.id), Record(b.id, ExtensionKind::kUnpacked)};
++  const base::DictValue json = ExtensionListToJson(list);
++
++  size_t skipped = 1;
++  std::vector<ExtensionRecord> full =
++      ExtensionListFromJson(json, Kind::kFull, skipped);
++  EXPECT_EQ(skipped, 0u);
++  ASSERT_EQ(full.size(), 2u);
++  EXPECT_EQ(full[0].id, a.id);
++  EXPECT_EQ(full[0].name, "Test extension");
++  EXPECT_EQ(full[0].version, "1.2");
++  EXPECT_EQ(full[0].update_url, "https://updates.example.test/updates.xml");
++  EXPECT_TRUE(full[0].files);
++  EXPECT_FALSE(full[0].from_webstore);
++  EXPECT_EQ(full[0].permissions, list[0].permissions);
++  EXPECT_EQ(full[1].kind, ExtensionKind::kUnpacked);
++  EXPECT_FALSE(full[1].files);
++
++  // A setup package never offers files, whatever the list says.
++  std::vector<ExtensionRecord> setup =
++      ExtensionListFromJson(json, Kind::kSetup, skipped);
++  EXPECT_FALSE(setup[0].files);
++}
++
++TEST(BackupExtensionsTest, StoreClaimIgnored) {
++  TestKey a;
++  ExtensionRecord record = Record(a.id);
++  record.from_webstore = true;
++  const base::DictValue json = ExtensionListToJson({record});
++  // The file says the store, as a backup made from a store install would.
++  const base::ListValue* written = json.FindList("extensions");
++  ASSERT_TRUE(written);
++  ASSERT_EQ(written->size(), 1u);
++  EXPECT_EQ((*written)[0].GetDict().FindBool("from_webstore"), true);
++  size_t skipped = 0;
++  std::vector<ExtensionRecord> read =
++      ExtensionListFromJson(json, Kind::kFull, skipped);
++  ASSERT_EQ(read.size(), 1u);
++  EXPECT_FALSE(read[0].from_webstore);
++}
++
++TEST(BackupExtensionsTest, BadListEntriesSkipped) {
++  TestKey a;
++  base::DictValue json = ExtensionListToJson({
++      Record(a.id),
++      Record(a.id),            // duplicate
++      Record(kBundledUboId),   // the bundled uBO
++      Record("not-an-id"),
++      Record("FKGKIBAJHFBEPLJEAEFDNFNEGDCJOMKH"),  // uBO in upper case
++  });
++  base::ListValue& list = *json.FindList("extensions");
++  base::DictValue odd_kind = list[0].GetDict().Clone();
++  odd_kind.Set("id", TestKey().id);
++  odd_kind.Set("kind", "theme");
++  list.Append(std::move(odd_kind));
++  base::DictValue bad_url = list[0].GetDict().Clone();
++  bad_url.Set("id", TestKey().id);
++  bad_url.Set("update_url", "javascript:alert(1)");
++  list.Append(std::move(bad_url));
++  list.Append("not an entry");
++
++  size_t skipped = 0;
++  std::vector<ExtensionRecord> records =
++      ExtensionListFromJson(json, Kind::kFull, skipped);
++  EXPECT_EQ(skipped, 6u);
++  ASSERT_EQ(records.size(), 2u);
++  EXPECT_EQ(records[0].id, a.id);
++  // A bad update URL is dropped, the extension kept.
++  EXPECT_EQ(records[1].update_url, "");
++}
++
++TEST(BackupExtensionsTest, FilesForRestore) {
++  TestKey a;
++  Package package;
++  AddFolder(package, a.id, a.public_key);
++  package["setup/settings.json"] = "{}";
++
++  auto files = ExtensionFilesForRestore(package, Kind::kFull, Record(a.id));
++  ASSERT_TRUE(files.has_value());
++  EXPECT_EQ(files->public_key, a.public_key);
++  EXPECT_EQ(files->files.size(), 3u);
++  EXPECT_TRUE(files->files.contains("img/icon@2x.png"));
++  EXPECT_FALSE(files->files.contains("_metadata/verified_contents.json"));
++}
++
++TEST(BackupExtensionsTest, FilesRefused) {
++  TestKey a, b;
++  Package package;
++  AddFolder(package, a.id, a.public_key);
++
++  EXPECT_EQ(ExtensionFilesForRestore(package, Kind::kSetup, Record(a.id))
++                .error(),
++            ExtensionFilesError::kSetupPackage);
++  EXPECT_EQ(ExtensionFilesForRestore(package, Kind::kFull,
++                                     Record(a.id, ExtensionKind::kUnpacked))
++                .error(),
++            ExtensionFilesError::kNotCrx);
++  EXPECT_EQ(ExtensionFilesForRestore(package, Kind::kFull,
++                                     Record(kBundledUboId))
++                .error(),
++            ExtensionFilesError::kBundled);
++  EXPECT_EQ(ExtensionFilesForRestore(package, Kind::kFull,
++                                     Record("FKGKIBAJHFBEPLJEAEFDNFNEGDCJOMKH"))
++                .error(),
++            ExtensionFilesError::kBundled);
++  EXPECT_EQ(
++      ExtensionFilesForRestore(package, Kind::kFull, Record(b.id)).error(),
++      ExtensionFilesError::kNoFiles);
++
++  // Someone else's code under this ID: the key hashes to another ID.
++  Package swapped;
++  AddFolder(swapped, a.id, b.public_key);
++  EXPECT_EQ(
++      ExtensionFilesForRestore(swapped, Kind::kFull, Record(a.id)).error(),
++      ExtensionFilesError::kKeyMismatch);
++
++  Package no_key;
++  AddFolder(no_key, a.id, "");
++  EXPECT_EQ(
++      ExtensionFilesForRestore(no_key, Kind::kFull, Record(a.id)).error(),
++      ExtensionFilesError::kNoKey);
++
++  Package bad_key = package;
++  bad_key[ExtensionFilesPrefix(a.id) + "manifest.json"] =
++      R"({"version": "1.2", "key": "not base64!"})";
++  EXPECT_EQ(
++      ExtensionFilesForRestore(bad_key, Kind::kFull, Record(a.id)).error(),
++      ExtensionFilesError::kKeyMismatch);
++
++  Package newer;
++  AddFolder(newer, a.id, a.public_key, "2.0");
++  EXPECT_EQ(
++      ExtensionFilesForRestore(newer, Kind::kFull, Record(a.id)).error(),
++      ExtensionFilesError::kVersionMismatch);
++
++  Package broken = package;
++  broken[ExtensionFilesPrefix(a.id) + "manifest.json"] = "{not json";
++  EXPECT_EQ(
++      ExtensionFilesForRestore(broken, Kind::kFull, Record(a.id)).error(),
++      ExtensionFilesError::kBadManifest);
++
++  Package only_metadata;
++  only_metadata[ExtensionFilesPrefix(a.id) + "_metadata/x"] = "x";
++  only_metadata[ExtensionFilesPrefix(a.id) + "background.js"] = "x";
++  EXPECT_EQ(ExtensionFilesForRestore(only_metadata, Kind::kFull, Record(a.id))
++                .error(),
++            ExtensionFilesError::kNoManifest);
++}
++
++}  // namespace
++}  // namespace bare::backup
+diff --git a/chrome/browser/bare/backup/backup_package.h b/chrome/browser/bare/backup/backup_package.h
+index 0d04d49a51f..b3168f1109c 100644
+--- a/chrome/browser/bare/backup/backup_package.h
++++ b/chrome/browser/bare/backup/backup_package.h
+@@ -78,6 +78,11 @@ class PackageWriter {
+   // a directory, is already in the package, or would take it past a limit.
+   bool Add(std::string_view name, std::string_view contents);
+ 
++  // Room left under the limits, for a caller that must add a group of files
++  // all or none.
++  size_t entries_left() const { return limits_.max_entries - entries_.size(); }
++  uint64_t bytes_left() const { return limits_.max_total_size - total_size_; }
++
+   // The zip. Entries are deflated, or all stored if deflating would put the
+   // package over the ratio limit.
+   std::string Finish();
+diff --git a/chrome/browser/ui/android/extensions/BUILD.gn b/chrome/browser/ui/android/extensions/BUILD.gn
+index d5d1808d14b..46df178ca1a 100644
+--- a/chrome/browser/ui/android/extensions/BUILD.gn
++++ b/chrome/browser/ui/android/extensions/BUILD.gn
+@@ -50,6 +50,7 @@ if (enable_extensions_core) {
+     deps = [
+       "//base",
+       "//chrome/app:generated_resources",
++      "//chrome/browser/bare/backup:browser",
+       "//chrome/browser/devtools",
+       "//chrome/browser/extensions",
+       "//chrome/browser/extensions/api/omnibox",

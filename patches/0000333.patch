@@ -1,0 +1,948 @@
+diff --git a/chrome/android/java/res/values/bare_backup_strings.xml b/chrome/android/java/res/values/bare_backup_strings.xml
+index 52d46cb4cef..fc61ee725bc 100644
+--- a/chrome/android/java/res/values/bare_backup_strings.xml
++++ b/chrome/android/java/res/values/bare_backup_strings.xml
+@@ -174,4 +174,24 @@
+     <string name="bare_bring_from_phone_summary" translatable="false">Keep both phones close. Nothing goes online.</string>
+     <string name="bare_bring_from_file" translatable="false">From a backup file</string>
+     <string name="bare_bring_from_file_summary" translatable="false">Open a Bare backup or setup file you saved.</string>
++    <!-- Move everything: receipt and erase. -->
++    <string name="bare_direct_offer_move_body" translatable="false">Settings, bookmarks, site settings and extensions. All of it is restored here, then %1$s can erase Bare.</string>
++    <string name="bare_direct_move_locked" translatable="false">Moving from %1$s, so everything is restored.</string>
++    <string name="bare_direct_receipt_sent" translatable="false">%1$s has been told what was restored.</string>
++    <string name="bare_direct_waiting_restore" translatable="false">Waiting for %1$s to restore</string>
++    <string name="bare_direct_waiting_restore_body" translatable="false">Keep this page open. Once everything is restored there, Bare offers to erase itself on this phone.</string>
++    <string name="bare_direct_moved" translatable="false">Everything arrived on %1$s</string>
++    <string name="bare_direct_erase_what" translatable="false">Erasing removes everything Bare keeps on this phone: settings, bookmarks, site settings, extensions, tabs, history and cookies.</string>
++    <string name="bare_direct_erase_kept" translatable="false">It doesn\'t touch files in Downloads, backup files you saved, or anything Android or your phone maker keeps.</string>
++    <string name="bare_direct_not_moved" translatable="false">Not moved: open tabs, history, cookies and logins.</string>
++    <string name="bare_direct_by_hand" translatable="false">Reinstall these yourself: %1$s</string>
++    <string name="bare_direct_erase" translatable="false">Erase Bare on this phone</string>
++    <string name="bare_direct_not_now" translatable="false">Not now</string>
++    <string name="bare_direct_erase_confirm_title" translatable="false">Erase Bare on this phone?</string>
++    <string name="bare_direct_erase_confirm" translatable="false">Bare closes and starts like a new install next time.</string>
++    <string name="bare_direct_erase_button" translatable="false">Erase</string>
++    <string name="bare_direct_erase_failed" translatable="false">Android didn\'t erase Bare. You can do it in Android settings: Apps, Bare, Storage, Clear storage.</string>
++    <string name="bare_direct_move_mismatch" translatable="false">The other phone didn\'t restore everything.</string>
++    <string name="bare_direct_restore_stopped" translatable="false">The other phone stopped before restoring.</string>
++    <string name="bare_direct_nothing_erased" translatable="false">Nothing was erased on this phone.</string>
+ </resources>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
+index 360ec7dcec5..a6a2f846553 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
+@@ -56,11 +56,18 @@ public final class BareBackupBridge {
+         return BareBackupBridgeJni.get().verifyTransferCommitment(a, cert, commitment);
+     }
+ 
+-    /**
+-     * The package for a phone-to-phone transfer: Setup, or everything with extension files. Empty
+-     * if it couldn't be built.
+-     */
+-    static void buildTransfer(Profile profile, boolean full, Callback<byte[]> done) {
++    /** What {@link #buildTransfer} hands back. */
++    interface TransferCallback {
++        /**
++         * {@code transfer} is empty if the package couldn't be built. {@code expected} is JSON:
++         * the manifest counts, {@code extension_ids} sent with their folders, and {@code
++         * extensions_by_hand}, the names of the others.
++         */
++        void onBuilt(byte[] transfer, String expected);
++    }
++
++    /** The package for a phone-to-phone transfer: Setup, or everything with extension files. */
++    static void buildTransfer(Profile profile, boolean full, TransferCallback done) {
+         BareBackupBridgeJni.get().buildTransfer(profile, full, done);
+     }
+ 
+@@ -228,6 +235,14 @@ public final class BareBackupBridge {
+         callback.onResult(bytes);
+     }
+ 
++    @CalledByNative
++    private static void onTransferBuilt(
++            TransferCallback callback,
++            @JniType("std::vector<uint8_t>") byte[] transfer,
++            @JniType("std::string") String expected) {
++        callback.onBuilt(transfer, expected);
++    }
++
+     @CalledByNative
+     private static void onBoolean(Callback<Boolean> callback, boolean value) {
+         callback.onResult(value);
+@@ -277,7 +292,7 @@ public final class BareBackupBridge {
+                 int bareVersionCode,
+                 Callback<byte[]> done);
+ 
+-        void buildTransfer(Profile profile, boolean full, Callback<byte[]> done);
++        void buildTransfer(Profile profile, boolean full, TransferCallback done);
+ 
+         void openTransfer(long handle, Profile profile, Callback<String> done);
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java
+index 25078ce7d0e..1b4796ef137 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java
+@@ -64,6 +64,9 @@ public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
+     private BareBackupBridge.@Nullable Opened mOpened;
+     private boolean mFromWelcome;
+     private boolean mTransfer;
++    // Move everything: all of it is restored, and the sender gets a receipt.
++    private @Nullable BareDirectSession mMove;
++    private final List<String> mInstalledHere = new ArrayList<>();
+     private boolean mRestoring;
+     private JSONObject mHeader = new JSONObject();
+ 
+@@ -87,16 +90,19 @@ public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
+     public static void openTransfer(
+             Context context,
+             byte[] transfer,
+-            boolean full,
++            boolean move,
+             String fromModel,
+             String bareVersion,
+             boolean fromWelcome) {
++        // The kind is the package's own first byte, not what the other phone said about it.
++        boolean full = transfer.length > 0 && transfer[0] == 2;
+         BareBackupBridge.Opened opened = new BareBackupBridge.Opened(transfer);
+         Arrays.fill(transfer, (byte) 0);
+         setPending(opened, fromWelcome);
+         JSONObject header = new JSONObject();
+         try {
+             header.put("kind", full ? "full" : "setup");
++            header.put("move", full && move);
+             header.put("device_label", fromModel);
+             header.put("bare_version", bareVersion);
+         } catch (JSONException e) {
+@@ -164,6 +170,13 @@ public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
+         if (transfer != null) {
+             mTransfer = true;
+             mHeader = transfer;
++            BareDirectSession session = BareDirectSession.current();
++            if (transfer.optBoolean("move")
++                    && session != null
++                    && !session.isSending()
++                    && session.isOfferMove()) {
++                mMove = session;
++            }
+             showHeader();
+             openReceived();
+             return;
+@@ -319,6 +332,13 @@ public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
+         PreferenceCategory what = new PreferenceCategory(context);
+         what.setTitle(R.string.bare_backup_what);
+         screen.addPreference(what);
++        if (mMove != null) {
++            TextMessagePreference locked = new TextMessagePreference(context, null);
++            locked.setSummary(
++                    context.getString(
++                            R.string.bare_direct_move_locked, mHeader.optString("device_label")));
++            what.addPreference(locked);
++        }
+         JSONArray sections = result.getJSONArray("sections");
+         for (int i = 0; i < sections.length(); i++) {
+             String section = sections.getString(i);
+@@ -347,6 +367,7 @@ public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
+             row.setTitle(title);
+             if (summary != 0) row.setSummary(summary);
+             row.setChecked(true);
++            row.setEnabled(mMove == null);
+             what.addPreference(row);
+             mSections.put(section, row);
+         }
+@@ -412,7 +433,12 @@ public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
+                     lines.isEmpty()
+                             ? context.getString(R.string.bare_backup_ext_permissions_none)
+                             : String.join("\n", lines));
+-            row.setChecked(true);
++            // The folder's code can't be checked against the store, so nothing installs unless
++            // the person turns it on. A Move is the exception: it brings everything across
++            // between two phones whose people both confirmed the code, and its receipt needs
++            // every extension.
++            row.setChecked(mMove != null);
++            row.setEnabled(mMove == null);
+             list.addPreference(row);
+             mExtensions.put(id, row);
+             return;
+@@ -422,6 +448,7 @@ public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
+         row.setSelectable(false);
+         String host = extension.optString("update_host");
+         if (extension.optBoolean("installed_here")) {
++            mInstalledHere.add(id);
+             row.setSummary(R.string.bare_backup_ext_installed);
+         } else if (extension.optBoolean("unpacked")) {
+             row.setSummary(R.string.bare_backup_ext_by_hand);
+@@ -534,12 +561,36 @@ public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
+                         JSONObject report = new JSONObject(json);
+                         applyAfterRestore(report.optJSONArray("android_changed"));
+                         showReport(report);
++                        if (mMove != null) sendReceipt(mMove, report);
+                     } catch (JSONException e) {
+                         BareBackupDialogs.message(getContext(), R.string.bare_backup_damaged);
+                     }
+                 });
+     }
+ 
++    /** Move: tells the sender what arrived, so it can decide whether to offer to erase. */
++    private void sendReceipt(BareDirectSession session, JSONObject report) throws JSONException {
++        JSONObject numbers = report.optJSONObject("receipt");
++        JSONObject receipt = numbers == null ? new JSONObject() : new JSONObject(numbers.toString());
++        receipt.put("failed", report.optString("failed"));
++        JSONArray arrived = new JSONArray();
++        for (String id : mInstalledHere) arrived.put(id);
++        JSONObject extensions = report.optJSONObject("extensions");
++        if (extensions != null) {
++            Iterator<String> ids = extensions.keys();
++            while (ids.hasNext()) {
++                String id = ids.next();
++                if (extensions.optString(id).isEmpty()) arrived.put(id);
++            }
++        }
++        receipt.put("extension_ids", arrived);
++        session.sendReceipt(receipt);
++        // Not sent if the other phone gave up while this one was choosing.
++        if (session.isReceiptSent()) {
++            line(getContext().getString(R.string.bare_direct_receipt_sent, session.getPeerModel()));
++        }
++    }
++
+     // Settings that other parts of Bare only pick up through their own setters.
+     private void applyAfterRestore(@Nullable JSONArray changed) {
+         if (changed == null) return;
+@@ -696,6 +747,10 @@ public class BareBackupRestoreFragment extends ChromeBaseSettingsFragment {
+             mOpened.close();
+             mOpened = null;
+         }
++        // Leaving a Move before restoring tells the sender, which then erases nothing.
++        BareDirectSession move = mMove;
++        boolean leaving = getActivity() == null || getActivity().isFinishing();
++        if (move != null && leaving && !move.isReceiptSent()) move.cancel();
+         super.onDestroy();
+     }
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectFragment.java
+index d0860d0120d..37d5b1c6858 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectFragment.java
+@@ -189,7 +189,10 @@ abstract class BareDirectFragment extends ChromeBaseSettingsFragment
+                 heading(
+                         screen,
+                         context.getString(error == 0 ? R.string.bare_direct_stopped : error),
+-                        context.getString(R.string.bare_direct_nothing_sent));
++                        context.getString(
++                                session.isDelivered()
++                                        ? R.string.bare_direct_nothing_erased
++                                        : R.string.bare_direct_nothing_sent));
+                 button(screen, R.string.bare_direct_try_again, tryAgain);
+                 return true;
+             default:
+@@ -203,8 +206,13 @@ abstract class BareDirectFragment extends ChromeBaseSettingsFragment
+         BareDirectSession session = mSession;
+         if (session != null) {
+             session.removeObserver(this);
+-            // Leaving the page ends the transfer; a rotation doesn't.
+-            if (getActivity() == null || getActivity().isFinishing()) session.cancel();
++            // Leaving the page ends the transfer; a rotation doesn't. A received Move belongs to
++            // the restore page from then on, which sends the receipt.
++            boolean leaving = getActivity() == null || getActivity().isFinishing();
++            if (leaving && session.getState() != BareDirectSession.State.RECEIVED) {
++                session.cancel();
++                BareDirectSession.forget(session);
++            }
+         }
+         super.onDestroy();
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectReceiveFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectReceiveFragment.java
+index a9d5d0e968d..2300fc003fd 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectReceiveFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectReceiveFragment.java
+@@ -61,13 +61,16 @@ public class BareDirectReceiveFragment extends BareDirectFragment {
+         Context context = getContext();
+         PreferenceScreen screen = clear();
+         BareDirectSession session = mSession;
+-        if (session != null && session.getState() == BareDirectSession.State.RECEIVED) {
++        if (session != null
++                && session.getState() == BareDirectSession.State.RECEIVED
++                && session.isConfirmedHere()
++                && session.isAcceptedHere()) {
+             byte[] received = session.takeReceived();
+             if (received == null) return;
+             BareBackupRestoreFragment.openTransfer(
+                     context,
+                     received,
+-                    session.isOfferFull(),
++                    session.isOfferMove(),
+                     session.getPeerModel(),
+                     session.getOfferVersion(),
+                     fromWelcome());
+@@ -85,10 +88,12 @@ public class BareDirectReceiveFragment extends BareDirectFragment {
+                                     ? R.string.bare_direct_offer_full
+                                     : R.string.bare_direct_offer_setup,
+                             other),
+-                    context.getString(
+-                            session.isOfferFull()
+-                                    ? R.string.bare_direct_offer_full_body
+-                                    : R.string.bare_direct_offer_setup_body));
++                    session.isOfferMove()
++                            ? context.getString(R.string.bare_direct_offer_move_body, other)
++                            : context.getString(
++                                    session.isOfferFull()
++                                            ? R.string.bare_direct_offer_full_body
++                                            : R.string.bare_direct_offer_setup_body));
+             button(screen, R.string.bare_direct_accept, session::accept);
+             button(screen, R.string.bare_direct_decline, session::cancel);
+             return;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSendFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSendFragment.java
+index 8b9a2bffcb2..95bfcf49f80 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSendFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSendFragment.java
+@@ -4,6 +4,7 @@
+ 
+ package org.chromium.chrome.browser.bare.backup;
+ 
++import android.app.ActivityManager;
+ import android.content.Context;
+ import android.os.Bundle;
+ 
+@@ -88,6 +89,18 @@ public class BareDirectSendFragment extends BareDirectFragment {
+                     null);
+             return;
+         }
++        if (session != null && session.getState() == BareDirectSession.State.RESTORING) {
++            heading(
++                    screen,
++                    context.getString(R.string.bare_direct_waiting_restore, session.getPeerModel()),
++                    context.getString(R.string.bare_direct_waiting_restore_body));
++            button(screen, android.R.string.cancel, session::cancel);
++            return;
++        }
++        if (session != null && session.getState() == BareDirectSession.State.MOVED) {
++            offerErase(screen, session);
++            return;
++        }
+         if (session != null && session.getState() == BareDirectSession.State.SENT) {
+             heading(
+                     screen,
+@@ -124,6 +137,53 @@ public class BareDirectSendFragment extends BareDirectFragment {
+         }
+     }
+ 
++    /** SPEC 9.4: what goes, what stays, and the button. Only reached with a matching receipt. */
++    private void offerErase(PreferenceScreen screen, BareDirectSession session) {
++        Context context = getContext();
++        heading(
++                screen,
++                context.getString(R.string.bare_direct_moved, session.getPeerModel()),
++                context.getString(R.string.bare_direct_erase_what));
++        heading(screen, context.getString(R.string.bare_direct_erase_kept), null);
++        heading(screen, context.getString(R.string.bare_direct_not_moved), null);
++        List<String> byHand = session.getByHand();
++        if (!byHand.isEmpty()) {
++            heading(
++                    screen,
++                    context.getString(R.string.bare_direct_by_hand, String.join(", ", byHand)),
++                    null);
++        }
++        button(screen, R.string.bare_direct_erase, this::confirmErase);
++        button(
++                screen,
++                R.string.bare_direct_not_now,
++                () -> {
++                    BareDirectSession.forget(session);
++                    if (getActivity() != null) getActivity().finish();
++                });
++    }
++
++    private void confirmErase() {
++        Context context = getContext();
++        BareBackupDialogs.builder(context)
++                .setTitle(R.string.bare_direct_erase_confirm_title)
++                .setMessage(R.string.bare_direct_erase_confirm)
++                .setNegativeButton(android.R.string.cancel, null)
++                .setPositiveButton(R.string.bare_direct_erase_button, (d, w) -> erase())
++                .show();
++    }
++
++    // Android removes all of Bare's data and stops it. The next launch is a fresh install.
++    private void erase() {
++        Context context = getContext();
++        if (context == null) return;
++        ActivityManager manager =
++                (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
++        if (manager == null || !manager.clearApplicationUserData()) {
++            BareBackupDialogs.message(context, R.string.bare_direct_erase_failed);
++        }
++    }
++
+     private void again() {
+         if (mSession != null) mSession.removeObserver(this);
+         mSession = null;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSession.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSession.java
+index 38c4f7d2d71..acb86857244 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSession.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectSession.java
+@@ -18,6 +18,7 @@ import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceInfo;
+ import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceRequest;
+ import android.os.Build;
+ import android.os.Handler;
++import android.util.Base64;
+ import android.os.Looper;
+ 
+ import androidx.annotation.IntDef;
+@@ -31,6 +32,7 @@ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.profiles.ProfileManager;
+ 
++import org.json.JSONArray;
+ import org.json.JSONException;
+ import org.json.JSONObject;
+ 
+@@ -96,7 +98,10 @@ public final class BareDirectSession {
+     static final int FRAME_ACCEPT = 7;
+     static final int FRAME_PACKAGE = 8;
+     static final int FRAME_RECEIVED = 9;
++    static final int FRAME_RECEIPT = 10;
+     private static final int MAX_CONTROL_FRAME = 16 * 1024;
++    // A receipt lists the extension IDs that arrived, up to 500 of them.
++    private static final int MAX_RECEIPT_FRAME = 64 * 1024;
+     // The kind byte and a body no bigger than a backup file's.
+     private static final int MAX_PACKAGE_FRAME = 1 + 64 * 1024 * 1024;
+ 
+@@ -111,7 +116,9 @@ public final class BareDirectSession {
+         State.SENDING,
+         State.SENT,
+         State.RECEIVED,
+-        State.FAILED
++        State.FAILED,
++        State.RESTORING,
++        State.MOVED
+     })
+     @Retention(RetentionPolicy.SOURCE)
+     @interface State {
+@@ -130,9 +137,14 @@ public final class BareDirectSession {
+         int SENDING = 7;
+         // The receiver has the package. The transfer is over on the sender.
+         int SENT = 8;
+-        // The package is here and goes to the restore page.
++        // The package is here and goes to the restore page. On a Move the connection stays up
++        // until the restore page sends the receipt.
+         int RECEIVED = 9;
+         int FAILED = 10;
++        // Move: the receiver has the package; the sender waits for its receipt.
++        int RESTORING = 11;
++        // Move: the receipt matches what was sent, so the sender may erase.
++        int MOVED = 12;
+     }
+ 
+     /** What the sender chose to send. */
+@@ -188,10 +200,18 @@ public final class BareDirectSession {
+ 
+     // The offer as the receiver sees it, and the package once it's here.
+     private boolean mOfferFull;
++    private boolean mOfferMove;
+     private String mOfferVersion = "";
+     private byte @Nullable [] mReceived;
++    private boolean mReceiptSent;
+     // The sender's package, kept until it is sent.
+     private volatile byte @Nullable [] mPackage;
++    // Move, sender side: what the receipt must show, the receiver's certificate to check its
++    // signature, and whether the package got there.
++    private volatile @Nullable JSONObject mExpected;
++    private volatile byte @Nullable [] mReceiverCertificate;
++    private boolean mDelivered;
++    private List<String> mByHand = new ArrayList<>();
+ 
+     private BareDirectTls.@Nullable Identity mIdentity;
+     private @Nullable ServerSocket mServer;
+@@ -211,6 +231,11 @@ public final class BareDirectSession {
+         return sCurrent;
+     }
+ 
++    /** Drops a finished Move once its erase offer is turned down. */
++    static void forget(BareDirectSession session) {
++        if (sCurrent == session) sCurrent = null;
++    }
++
+     /** Ends any earlier transfer and starts a new one. */
+     static BareDirectSession start(boolean sending) {
+         if (sCurrent != null) sCurrent.cancel();
+@@ -273,6 +298,21 @@ public final class BareDirectSession {
+         return mOfferFull;
+     }
+ 
++    /** Receiver: whether the sender is moving everything and waits for a receipt. */
++    boolean isOfferMove() {
++        return mOfferMove;
++    }
++
++    /** Sender: whether the package reached the other phone. */
++    boolean isDelivered() {
++        return mDelivered;
++    }
++
++    /** Sender: names of extensions that went without their files. */
++    List<String> getByHand() {
++        return mByHand;
++    }
++
+     /** Receiver: the sender's Bare version, from the offer. */
+     String getOfferVersion() {
+         return mOfferVersion;
+@@ -483,6 +523,7 @@ public final class BareDirectSession {
+                 tls = pinning.connect(plain);
+                 receiverCertificate = pinning.seen();
+                 if (receiverCertificate == null) throw new IOException("no certificate");
++                mReceiverCertificate = receiverCertificate;
+             } else {
+                 BareDirectTls.Identity identity = BareDirectTls.Identity.create();
+                 mIdentity = identity;
+@@ -632,33 +673,168 @@ public final class BareDirectSession {
+             out.flush();
+         }
+         if (readEmpty(in) != FRAME_RECEIVED) throw new IOException("not received");
+-        mHandler.post(() -> end(State.SENT, 0));
++        if (mMode != Mode.MOVE) {
++            mHandler.post(() -> end(State.SENT, 0));
++            return;
++        }
++        mHandler.post(
++                () -> {
++                    mDelivered = true;
++                    setState(State.RESTORING);
++                });
++        // No time limit: the person on the other phone reviews what to restore first.
++        int type = in.readUnsignedByte();
++        int length = in.readInt();
++        if (type == FRAME_CANCEL) {
++            mHandler.post(() -> fail(R.string.bare_direct_restore_stopped));
++            return;
++        }
++        if (type != FRAME_RECEIPT || length < 0 || length > MAX_RECEIPT_FRAME) {
++            throw new IOException("receipt frame");
++        }
++        byte[] bytes = new byte[length];
++        in.readFully(bytes);
++        List<String> differences = checkReceipt(bytes);
++        if (!differences.isEmpty()) Log.i(TAG, "Receipt differs: %s", differences);
++        mHandler.post(
++                () -> {
++                    if (differences.isEmpty()) {
++                        end(State.MOVED, 0);
++                    } else {
++                        fail(R.string.bare_direct_move_mismatch);
++                    }
++                });
++    }
++
++    /**
++     * Sender: checks the receipt's signature against the certificate the phones confirmed, then
++     * compares it with what was sent. Returns what differs.
++     */
++    private List<String> checkReceipt(byte[] bytes) throws IOException {
++        JSONObject receipt;
++        try {
++            JSONObject signed = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
++            String text = signed.getString("receipt");
++            byte[] signature = Base64.decode(signed.getString("signature"), Base64.NO_WRAP);
++            byte[] certificate = mReceiverCertificate;
++            if (certificate == null
++                    || !BareDirectTls.verify(
++                            certificate, text.getBytes(StandardCharsets.UTF_8), signature)) {
++                throw new SecurityException("receipt signature");
++            }
++            receipt = new JSONObject(text);
++        } catch (JSONException | IllegalArgumentException e) {
++            throw new IOException("receipt");
++        }
++        JSONObject expected = mExpected;
++        if (expected == null) throw new IOException("nothing expected");
++        return differences(expected, receipt);
++    }
++
++    /** The parts of a Move's receipt that don't match what was sent. Empty when all arrived. */
++    static List<String> differences(JSONObject expected, JSONObject receipt) {
++        List<String> differ = new ArrayList<>();
++        for (String key :
++                new String[] {
++                    "settings", "search_engines", "site_settings", "bookmarks", "reading_list"
++                }) {
++            if (expected.optInt(key) != receipt.optInt(key, -1)) differ.add(key);
++        }
++        // Anything refused, skipped or not run means something stayed behind.
++        for (String key :
++                new String[] {
++                    "settings_refused",
++                    "settings_held_back",
++                    "search_engines_skipped",
++                    "site_settings_skipped",
++                    "bookmarks_skipped",
++                    "reading_list_skipped",
++                    "ignored",
++                    "not_run"
++                }) {
++            if (receipt.optInt(key, -1) != 0) differ.add(key);
++        }
++        if (!receipt.optString("failed", "?").isEmpty()) differ.add("failed");
++        JSONArray sent = expected.optJSONArray("extension_ids");
++        JSONArray arrived = receipt.optJSONArray("extension_ids");
++        List<String> here = new ArrayList<>();
++        for (int i = 0; arrived != null && i < arrived.length(); i++) {
++            here.add(arrived.optString(i));
++        }
++        for (int i = 0; sent != null && i < sent.length(); i++) {
++            if (!here.contains(sent.optString(i))) {
++                differ.add("extensions");
++                break;
++            }
++        }
++        return differ;
+     }
+ 
+     /** Receiver: shows the offer, and takes the package if it is accepted. */
+     private void receive(DataInputStream in, DataOutputStream out)
+             throws IOException, JSONException {
+-        JSONObject offer = read(in, FRAME_OFFER);
++        int offerType = in.readUnsignedByte();
++        // The sender offers only after this phone's confirm frame, and that goes out only once
++        // this phone's person has said the codes match. An offer before it means the other
++        // phone skipped the check.
++        if (offerType != FRAME_CANCEL && !mConfirmedHere) {
++            throw new SecurityException("offer before confirmation");
++        }
++        JSONObject offer = readBody(in, offerType, FRAME_OFFER);
+         boolean full = "full".equals(offer.optString("kind"));
++        boolean move = full && offer.optBoolean("move");
+         String version = offer.optString("bare_version");
+         mHandler.post(
+                 () -> {
+                     mOfferFull = full;
++                    mOfferMove = move;
+                     mOfferVersion = version;
++                    mHandler.removeCallbacks(mGiveUp);
+                     setState(State.OFFERED);
+                 });
+         int type = in.readUnsignedByte();
++        // Likewise, the package comes only after this phone's Accept.
++        if (type == FRAME_PACKAGE && !mAcceptedHere) {
++            throw new SecurityException("package before accept");
++        }
+         int length = in.readInt();
+         if (type != FRAME_PACKAGE || length <= 1 || length > MAX_PACKAGE_FRAME) {
+             throw new IOException("package frame");
+         }
+         byte[] transfer = new byte[length];
+         in.readFully(transfer);
++        // What was accepted is what the offer said. The restore page reads the kind from the
++        // package, so they must agree.
++        if (transfer[0] != (full ? KIND_FULL : KIND_SETUP)) {
++            Arrays.fill(transfer, (byte) 0);
++            throw new SecurityException("kind differs from offer");
++        }
+         synchronized (out) {
+             out.writeByte(FRAME_RECEIVED);
+             out.writeInt(0);
+             out.flush();
+         }
++        if (move) {
++            mHandler.post(
++                    () -> {
++                        if (mEnded) {
++                            Arrays.fill(transfer, (byte) 0);
++                            return;
++                        }
++                        mReceived = transfer;
++                        setState(State.RECEIVED);
++                    });
++            // The connection stays up for the receipt. Whatever comes next, a cancel from the
++            // sender or its hang-up after the receipt, the transfer is over here. The restore
++            // page carries on either way.
++            try {
++                in.read();
++            } catch (IOException e) {
++                // Closed.
++            }
++            mHandler.post(() -> end(State.RECEIVED, 0));
++            return;
++        }
+         // The sender hangs up once it reads that. Removing the group straight away could drop
+         // the reply before it leaves this phone, so wait for the sender to close, briefly.
+         Socket socket = mSocket;
+@@ -707,6 +883,38 @@ public final class BareDirectSession {
+         end(State.FAILED, 0);
+     }
+ 
++    /**
++     * Receiver, on a Move: tells the sender what the restore did, signed with this transfer's key.
++     * Sent once; the sender compares it with what it sent before it offers to erase.
++     */
++    void sendReceipt(JSONObject receipt) {
++        if (mEnded || mSending || !mOfferMove || mReceiptSent) return;
++        DataOutputStream out = mOut;
++        BareDirectTls.Identity identity = mIdentity;
++        if (out == null || identity == null) return;
++        mReceiptSent = true;
++        String text = receipt.toString();
++        mWriter.execute(
++                () -> {
++                    try {
++                        byte[] signature = identity.sign(text.getBytes(StandardCharsets.UTF_8));
++                        JSONObject signed = new JSONObject();
++                        signed.put("receipt", text);
++                        signed.put("signature", Base64.encodeToString(signature, Base64.NO_WRAP));
++                        write(out, FRAME_RECEIPT, signed);
++                    } catch (IOException | GeneralSecurityException | JSONException e) {
++                        Log.w(TAG, "Receipt not sent: %s", e.toString());
++                    }
++                });
++        // The sender hangs up once it has read it. If it doesn't, stop waiting.
++        mHandler.postDelayed(() -> end(State.RECEIVED, 0), HANG_UP_WAIT_MS);
++    }
++
++    /** Receiver: whether this Move's receipt has gone out. */
++    boolean isReceiptSent() {
++        return mReceiptSent;
++    }
++
+     /** Receiver: the person accepts what the sender offered. */
+     void accept() {
+         if (mEnded || mSending || mState != State.OFFERED) return;
+@@ -728,10 +936,11 @@ public final class BareDirectSession {
+     private void offer() {
+         boolean full = mMode != Mode.SETUP;
+         Profile profile = ProfileManager.getLastUsedRegularProfile();
++        boolean move = mMode == Mode.MOVE;
+         BareBackupBridge.buildTransfer(
+                 profile,
+                 full,
+-                transfer -> {
++                (transfer, expectedJson) -> {
+                     if (mEnded) {
+                         if (transfer != null) Arrays.fill(transfer, (byte) 0);
+                         return;
+@@ -740,15 +949,25 @@ public final class BareDirectSession {
+                         fail(R.string.bare_direct_couldnt_build);
+                         return;
+                     }
+-                    mPackage = transfer;
+                     JSONObject offer = new JSONObject();
+                     try {
++                        JSONObject expected = new JSONObject(expectedJson);
++                        JSONArray byHand = expected.optJSONArray("extensions_by_hand");
++                        List<String> names = new ArrayList<>();
++                        for (int i = 0; byHand != null && i < byHand.length(); i++) {
++                            names.add(byHand.getString(i));
++                        }
++                        mByHand = names;
++                        mExpected = expected;
+                         offer.put("kind", full ? "full" : "setup");
++                        offer.put("move", move);
+                         offer.put("bare_version", BareBackupIo.bareVersion(mContext));
+                     } catch (JSONException e) {
++                        Arrays.fill(transfer, (byte) 0);
+                         fail(R.string.bare_direct_couldnt_build);
+                         return;
+                     }
++                    mPackage = transfer;
+                     DataOutputStream out = mOut;
+                     if (out == null) return;
+                     mWriter.execute(
+@@ -827,7 +1046,8 @@ public final class BareDirectSession {
+             channel.close();
+         }
+         BareDirectServiceImpl.end(mContext);
+-        if (sCurrent == this) sCurrent = null;
++        // A finished Move stays findable, so the erase offer survives a rotation.
++        if (sCurrent == this && state != State.MOVED) sCurrent = null;
+         setState(state);
+     }
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectTls.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectTls.java
+index 1baf8625843..04c231becba 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectTls.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareDirectTls.java
+@@ -9,6 +9,7 @@ import android.security.keystore.KeyProperties;
+ 
+ import org.chromium.build.annotations.Nullable;
+ 
++import java.io.ByteArrayInputStream;
+ import java.io.IOException;
+ import java.math.BigInteger;
+ import java.net.Socket;
+@@ -18,7 +19,10 @@ import java.security.KeyStore;
+ import java.security.Principal;
+ import java.security.PrivateKey;
+ import java.security.SecureRandom;
++import java.security.Signature;
++import java.security.cert.Certificate;
+ import java.security.cert.CertificateException;
++import java.security.cert.CertificateFactory;
+ import java.security.cert.X509Certificate;
+ import java.security.spec.ECGenParameterSpec;
+ import java.util.Date;
+@@ -41,9 +45,25 @@ import javax.security.auth.x500.X500Principal;
+ final class BareDirectTls {
+     private static final String KEYSTORE = "AndroidKeyStore";
+     private static final String PROTOCOL = "TLSv1.3";
++    private static final String SIGNATURE = "SHA256withECDSA";
+ 
+     private BareDirectTls() {}
+ 
++    /** Whether {@code signature} over {@code data} was made with the key behind {@code der}. */
++    static boolean verify(byte[] der, byte[] data, byte[] signature) {
++        try {
++            Certificate certificate =
++                    CertificateFactory.getInstance("X.509")
++                            .generateCertificate(new ByteArrayInputStream(der));
++            Signature check = Signature.getInstance(SIGNATURE);
++            check.initVerify(certificate.getPublicKey());
++            check.update(data);
++            return check.verify(signature);
++        } catch (GeneralSecurityException e) {
++            return false;
++        }
++    }
++
+     /** The receiver's key and certificate for one transfer. */
+     static final class Identity {
+         private final String mAlias;
+@@ -88,6 +108,14 @@ final class BareDirectTls {
+             return mCertificate.getEncoded();
+         }
+ 
++        /** Signs with this transfer's key, which the sender knows from the certificate. */
++        byte[] sign(byte[] data) throws GeneralSecurityException {
++            Signature signature = Signature.getInstance(SIGNATURE);
++            signature.initSign(mKey);
++            signature.update(data);
++            return signature.sign();
++        }
++
+         void delete() {
+             try {
+                 KeyStore store = KeyStore.getInstance(KEYSTORE);
+diff --git a/chrome/browser/bare/backup/backup_contents.cc b/chrome/browser/bare/backup/backup_contents.cc
+index 6b2d490ac42..9f492ea9ca7 100644
+--- a/chrome/browser/bare/backup/backup_contents.cc
++++ b/chrome/browser/bare/backup/backup_contents.cc
+@@ -109,6 +109,11 @@ bool AddExtensions(PackageWriter& writer,
+       }
+     }
+   }
++  for (const ExtensionRecord& record : records) {
++    if (record.files) {
++      built.extensions_with_files.push_back(record.id);
++    }
++  }
+   built.counts["extensions"] = static_cast<int>(records.size());
+   return AddJson(writer, kSetupExtensions, ExtensionListToJson(records));
+ }
+diff --git a/chrome/browser/bare/backup/backup_contents.h b/chrome/browser/bare/backup/backup_contents.h
+index 7546dcd1e58..ceb7e2386a2 100644
+--- a/chrome/browser/bare/backup/backup_contents.h
++++ b/chrome/browser/bare/backup/backup_contents.h
+@@ -75,6 +75,8 @@ struct BuiltPackage {
+   std::string zip;
+   // Extensions listed without their files because they didn't fit.
+   std::vector<std::string> extensions_too_large;
++  // Extensions whose folder is in the package.
++  std::vector<std::string> extensions_with_files;
+   // For the file header: "settings", "bookmarks", "reading_list",
+   // "site_settings", "search_engines".
+   std::map<std::string, int> counts;
+diff --git a/chrome/browser/ui/android/bare_backup_bridge.cc b/chrome/browser/ui/android/bare_backup_bridge.cc
+index 88d588b4c1f..652a7c3921d 100644
+--- a/chrome/browser/ui/android/bare_backup_bridge.cc
++++ b/chrome/browser/ui/android/bare_backup_bridge.cc
+@@ -8,6 +8,7 @@
+ 
+ #include <openssl/mem.h>
+ 
++#include <algorithm>
+ #include <memory>
+ #include <string>
+ #include <utility>
+@@ -296,7 +297,8 @@ void OnCollectedForTransfer(base::WeakPtr<Profile> profile,
+                             CollectedExtensions extensions) {
+   JNIEnv* env = AttachCurrentThread();
+   if (!profile) {
+-    Java_BareBackupBridge_onBytes(env, callback, std::vector<uint8_t>());
++    Java_BareBackupBridge_onTransferBuilt(env, callback, std::vector<uint8_t>(),
++                                          "{}");
+     return;
+   }
+   JavaAndroidPrefs android;
+@@ -304,15 +306,35 @@ void OnCollectedForTransfer(base::WeakPtr<Profile> profile,
+   sources.extensions = &extensions;
+   std::optional<BuiltPackage> built = BuildPackage(kind, sources);
+   if (!built || built->zip.size() > kMaxBodySize) {
+-    Java_BareBackupBridge_onBytes(env, callback, std::vector<uint8_t>());
++    Java_BareBackupBridge_onTransferBuilt(env, callback, std::vector<uint8_t>(),
++                                          "{}");
+     return;
+   }
++  // What a Move compares the receipt with: the counts in the manifest, the
++  // extensions that travel with their folders, and the names of the others.
++  base::DictValue expected;
++  for (const auto& [name, count] : built->counts) {
++    expected.Set(name, count);
++  }
++  base::ListValue with_files;
++  base::ListValue by_hand;
++  for (const ExtensionRecord& record : extensions.records) {
++    if (std::ranges::contains(built->extensions_with_files, record.id)) {
++      with_files.Append(record.id);
++    } else {
++      by_hand.Append(record.name);
++    }
++  }
++  expected.Set("extension_ids", std::move(with_files));
++  expected.Set("extensions_by_hand", std::move(by_hand));
++
+   std::vector<uint8_t> transfer;
+   transfer.reserve(built->zip.size() + 1);
+   transfer.push_back(static_cast<uint8_t>(kind));
+   transfer.insert(transfer.end(), built->zip.begin(), built->zip.end());
+   OPENSSL_cleanse(built->zip.data(), built->zip.size());
+-  Java_BareBackupBridge_onBytes(env, callback, transfer);
++  Java_BareBackupBridge_onTransferBuilt(env, callback, transfer,
++                                        ToJson(base::Value(std::move(expected))));
+   OPENSSL_cleanse(transfer.data(), transfer.size());
+ }
+ 
+@@ -559,6 +581,36 @@ base::DictValue ReportJson(const RestoreReport& report,
+                                              report.site_defaults.applied));
+   json.Set("search_engines", static_cast<int>(report.search_engines.added));
+   json.Set("ignored", static_cast<int>(report.ignored_entries.size()));
++  json.Set("settings_held_back",
++           static_cast<int>(report.settings.held_back.size()));
++  // Entries already on this phone count as arrived: the phone keeps its own.
++  base::DictValue receipt;
++  receipt.Set("settings", static_cast<int>(report.settings.applied));
++  receipt.Set("settings_refused",
++              static_cast<int>(report.settings.skipped.size() +
++                               report.settings.unknown.size()));
++  receipt.Set("settings_held_back",
++              static_cast<int>(report.settings.held_back.size()));
++  receipt.Set("search_engines",
++              static_cast<int>(report.search_engines.added +
++                               report.search_engines.already_present));
++  receipt.Set("search_engines_skipped",
++              static_cast<int>(report.search_engines.skipped));
++  receipt.Set("site_settings",
++              static_cast<int>(report.site_exceptions.applied));
++  receipt.Set("site_settings_skipped",
++              static_cast<int>(report.site_exceptions.skipped +
++                               report.site_defaults.skipped));
++  receipt.Set("bookmarks", static_cast<int>(report.bookmarks.urls));
++  receipt.Set("bookmarks_skipped", static_cast<int>(report.bookmarks.skipped));
++  receipt.Set("reading_list",
++              static_cast<int>(report.reading_list.added +
++                               report.reading_list.already_present));
++  receipt.Set("reading_list_skipped",
++              static_cast<int>(report.reading_list.skipped));
++  receipt.Set("ignored", static_cast<int>(report.ignored_entries.size()));
++  receipt.Set("not_run", static_cast<int>(report.sections_not_run.size()));
++  json.Set("receipt", std::move(receipt));
+   base::ListValue changed;
+   for (const std::string& key : android_changed) {
+     changed.Append(key);

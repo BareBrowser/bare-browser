@@ -22,6 +22,8 @@ host `edgedl.me.gvt1.com`. It is kept deliberately. These are the components reg
 | Safety Tips, Crowd Deny | lookalike-domain and abusive-notification lists, applied locally |
 | Captcha Providers | left registered: its purpose is not clear enough in the tree to remove it confidently |
 
+Certificate Transparency is enforced from 2.0.4. The list of accepted logs that ships with Chromium is good for 70 days; the PKI Metadata component keeps it current, and Bare reports nothing to Google about it. If the list ever goes stale, Bare stops checking instead of blocking sites.
+
 Registration tells Google an install exists, along with a component id, a version, an install
 date and a cohort. Twelve other components were dropped in patch 0000082 for buying nothing here:
 the Privacy Sandbox set, Google's omnibox suggestion model, the optimization-hints feed, shopping
@@ -41,7 +43,8 @@ as it is.
 **On the first run of a fresh profile, most of the rest is uBlock Origin** fetching the filter
 lists it ships enabled, from the list maintainers and their CDNs rather than from Google:
 `pgl.yoyo.org`, `ublockorigin.github.io`, `ublockorigin.pages.dev`, `malware-filter.pages.dev`,
-`cdn.jsdelivr.net` and `publicsuffix.org`. That happens once and then on the extension's own
+`malware-filter.gitlab.io`, `curbengh.github.io`, `phishing-filter.pages.dev`, `cdn.jsdelivr.net` and
+`publicsuffix.org`. That happens once and then on the extension's own
 schedule. uBlock Origin is installed and fetching these while the welcome screen is still asking
 whether you want an ad blocker; turning the switch off removes it, with its settings.
 
@@ -198,6 +201,12 @@ affected by anything Bare does.
 **Safe Browsing does not work in this build, and no longer claims to.** Chromium Android performs
 lookups through a handler that Google injects in its own build and that no public build has. The
 settings, the Safety Hub module and the promotional cards all described protection that never
-ran, so patch 0000077 removed them. Bare shows no phishing or malware interstitial. Treat unknown
-links with the caution you would give a browser with no such feature, because that is what this
-is.
+ran, so patch 0000077 removed them. Bare shows no phishing or malware interstitial of its own. Instead, uBlock Origin blocks
+addresses on three lists it keeps: uBlock filters - Badware risks, the URLhaus malware list and the
+Phishing URL Blocklist (turned on once by Bare, from 2.0.4). These lists are smaller than Google's,
+so some dangerous sites still get through. Untick a list in uBlock Origin, Filter lists, to turn it
+off; Bare does not turn it on again. Treat unknown links with care.
+
+**Downloads and the external download manager.** With the external download manager on, a download goes to the app you chose only when you started it. Cookies go along only if you allowed it and an app is chosen, and only those the browser would send on that request. Incognito downloads stay in Bare.
+
+**Backups, automatic backup and Direct transfer make no internet request.** A backup is a file Bare writes to a folder on the phone, and an automatic backup writes the same file to the folder you picked when you leave Bare. A full backup holds settings, search engines, site settings, bookmarks, the reading list, extensions, open tabs (never Incognito), history and signed-in sessions (cookies). History means the pages and how often you visited them, not every visit. Full and automatic backups are encrypted. Setup files (Share my setup) are not encrypted, and their header is readable. When you restore, a row called Security settings that lower protection is off by default; in a Move it is on and locked. Direct transfer between two phones uses Wi-Fi Direct on the local radio, with a one-time certificate and a short code you compare on both screens, and sends nothing over the internet. A transfer copies your signed-in sessions; until you erase the old phone, the same sessions exist on both, and some sites will end one of them. Signing out everywhere on a site makes a copied session useless.

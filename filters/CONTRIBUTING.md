@@ -78,7 +78,7 @@ You never need to share passwords, cookies, private links or full diagnostic log
 - **What doesn't restart it:** edits to comments (lines starting with `!`), edits to documentation files, and formatting outside rule lines, such as blank lines.
 - **No rule lines, no rule waiting period.** A pull request that only changes comments, blank lines or other files has no 72-hour wait. The maintainer still reads it. If it ever changes a rule line, even in one commit that is later reverted, it becomes a rule proposal and stays one.
 - **Silence is not approval.** Approvals from the community are useful feedback, but there is no vote count to reach, and the maintainer still reviews every proposal.
-- **The maintainer's own changes follow the same process** and the same waiting time.
+- **The maintainer can add or change rules directly,** after testing them on a device. Those changes are in the commit history.
 - **A concrete breakage report pauses merging** until it has been looked at. If the maintainer decides against a point someone raised, they explain why in the pull request.
 - **Urgent rollbacks are the one exception.** A rule that is actively harming people can be removed or reverted without waiting, with a public explanation of what was wrong. This is not a route for ordinary additions.
 
