@@ -1,0 +1,216 @@
+diff --git a/chrome/browser/ui/android/edge_to_edge/internal/BUILD.gn b/chrome/browser/ui/android/edge_to_edge/internal/BUILD.gn
+index a20d0d0c392da..2fea845498f64 100644
+--- a/chrome/browser/ui/android/edge_to_edge/internal/BUILD.gn
++++ b/chrome/browser/ui/android/edge_to_edge/internal/BUILD.gn
+@@ -30,6 +30,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/ui/edge_to_edge/SimpleEdgeToEdgePadAdjuster.java",
+   ]
+   deps = [
++    "//chrome/browser/ui/android/actions:java",
+     "//base:base_java",
+     "//cc:cc_java",
+     "//chrome/browser/browser_controls/android:java",
+@@ -37,6 +38,7 @@ android_library("java") {
+     "//chrome/browser/fullscreen/android:java",
+     "//chrome/browser/ntp_customization:java",
+     "//chrome/browser/tab:java",
++    "//chrome/browser/ui/android/bottombar:config_java",
+     "//chrome/browser/ui/android/edge_to_edge:java",
+     "//chrome/browser/ui/android/layouts:java",
+     "//chrome/browser/ui/android/native_page:java",
+@@ -83,6 +85,7 @@ robolectric_library("junit") {
+     "//chrome/browser/ntp_customization:java",
+     "//chrome/browser/ntp_customization:ntp_customization_test_support_java",
+     "//chrome/browser/tab:java",
++    "//chrome/browser/ui/android/bottombar:config_java",
+     "//chrome/browser/ui/android/edge_to_edge:java",
+     "//chrome/browser/ui/android/layouts:java",
+     "//chrome/browser/ui/android/native_page:java",
+diff --git a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinCoordinator.java b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinCoordinator.java
+index fb28f1a3087cc..1cfdca77acd4a 100644
+--- a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinCoordinator.java
++++ b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinCoordinator.java
+@@ -123,6 +123,8 @@ public class EdgeToEdgeBottomChinCoordinator implements Destroyable, SystemBarCo
+                         bottomControlsStacker,
+                         fullscreenManager,
+                         defaultVisibility);
++        // Bare: activity context so the chin can drop itself when nothing sits at the bottom.
++        mMediator.setHostContext(androidView.getContext());
+ 
+         mLayoutManager.addSceneOverlay(sceneLayer);
+     }
+diff --git a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinMediator.java b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinMediator.java
+index d982ff929fe5c..9275b1705840d 100644
+--- a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinMediator.java
++++ b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeBottomChinMediator.java
+@@ -13,6 +13,9 @@ import static org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeBottomChinPr
+ import static org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeBottomChinProperties.Y_OFFSET;
+ import static org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils.isBottomChinAllowed;
+ 
++import android.content.Context;
++import android.graphics.Color;
++
+ import org.chromium.base.Callback;
+ import org.chromium.base.supplier.NonNullObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+@@ -23,11 +26,14 @@ import org.chromium.chrome.browser.browser_controls.BottomControlsStacker.LayerS
+ import org.chromium.chrome.browser.browser_controls.BottomControlsStacker.LayerType;
+ import org.chromium.chrome.browser.browser_controls.BottomControlsStacker.LayerVisibility;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsOffsetTagsInfo;
++import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
++import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
+ import org.chromium.chrome.browser.fullscreen.FullscreenManager;
+ import org.chromium.chrome.browser.fullscreen.FullscreenOptions;
+ import org.chromium.chrome.browser.layouts.LayoutManager;
+ import org.chromium.chrome.browser.layouts.LayoutStateProvider;
+ import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.ui.KeyboardVisibilityDelegate;
+ import org.chromium.ui.edge_to_edge.EdgeToEdgeSupplier;
+ import org.chromium.ui.insets.InsetObserver;
+@@ -40,7 +46,8 @@ class EdgeToEdgeBottomChinMediator
+                 InsetObserver.WindowInsetObserver,
+                 EdgeToEdgeSupplier.ChangeObserver,
+                 FullscreenManager.Observer,
+-                BottomControlsLayer {
++                BottomControlsLayer,
++                BrowserControlsStateProvider.Observer {
+     private static final String TAG = "E2EBottomChin";
+ 
+     /** The model for the bottom controls component that holds all of its view state. */
+@@ -81,7 +88,12 @@ class EdgeToEdgeBottomChinMediator
+     private final EdgeToEdgeController mEdgeToEdgeController;
+     private final BottomControlsStacker mBottomControlsStacker;
+     private final FullscreenManager mFullscreenManager;
++    private final BrowserControlsStateProvider mControls;
+     private final boolean mDefaultVisibility;
++    // Set from the activity view. Until it is set, the gesture strip keeps the stock chin.
++    private @Nullable Context mHostContext;
++    // requestLayerUpdate notifies this observer, which would re-enter the update.
++    private boolean mUpdatingChin;
+     private final boolean mIsConstraintChinScrollableWhenStacking;
+ 
+     /**
+@@ -116,6 +128,7 @@ class EdgeToEdgeBottomChinMediator
+         mEdgeToEdgeController = edgeToEdgeController;
+         mBottomControlsStacker = bottomControlsStacker;
+         mFullscreenManager = fullscreenManager;
++        mControls = bottomControlsStacker.getBrowserControls();
+         mDefaultVisibility = defaultVisibility;
+         mIsConstraintChinScrollableWhenStacking = true;
+ 
+@@ -155,11 +168,23 @@ class EdgeToEdgeBottomChinMediator
+         mEdgeToEdgeController.unregisterObserver(this);
+         mBottomControlsStacker.removeLayer(this);
+         mFullscreenManager.removeObserver(this);
++        if (mHostContext != null) mControls.removeObserver(this);
+         if (mOmniboxFocusSupplier != null) {
+             mOmniboxFocusSupplier.removeObserver(mOmniboxFocusObserver);
+         }
+     }
+ 
++    /**
++     * Bare: the activity context, so the chin can tell a top address bar with no bottom toolbar
++     * from every other arrangement. Called once, after this mediator exists.
++     */
++    void setHostContext(Context context) {
++        boolean first = mHostContext == null;
++        mHostContext = context;
++        if (first) mControls.addObserver(this);
++        updateHeightAndVisibility();
++    }
++
+     /** Bare: follows the address bar's focus so the strip can stay while it has the keyboard. */
+     void setOmniboxFocusSupplier(NonNullObservableSupplier<Boolean> omniboxFocusSupplier) {
+         mOmniboxFocusSupplier = omniboxFocusSupplier;
+@@ -215,19 +240,13 @@ class EdgeToEdgeBottomChinMediator
+     /** Change the color of the bottom chin. */
+     void changeBottomChinColor(int color) {
+         mNavigationBarColor = color;
+-        if (!isVisible()) {
+-            return;
+-        }
+-        mModel.set(COLOR, color);
++        applyStripColor();
+     }
+ 
+     /** Change the color of the bottom chin. */
+     void changeBottomChinDividerColor(int dividerColor) {
+         mDividerColor = dividerColor;
+-        if (!isVisible()) {
+-            return;
+-        }
+-        mModel.set(DIVIDER_COLOR, dividerColor);
++        applyStripColor();
+     }
+ 
+     /**
+@@ -237,10 +256,14 @@ class EdgeToEdgeBottomChinMediator
+      * redundant layer update requests.
+      */
+     private void updateHeightAndVisibility() {
++        if (mUpdatingChin) return;
++        mUpdatingChin = true;
+         int newHeight = mEdgeToEdgeBottomInsetPx;
+         // Bare: the window stops reporting the strip's inset as the keyboard comes up. While the
+         // address bar has the keyboard the strip keeps its last height.
+         if (mKeepForOmnibox && newHeight == 0) newHeight = mModel.get(HEIGHT);
++        // Bare: nothing sits at the bottom, so the chin must not reserve the gesture strip.
++        if (leaveGestureStripClear()) newHeight = 0;
+         boolean isKeyboardVisible = mIsKeyboardVisible && mKeyboardInset > 0 && !mKeepForOmnibox;
+         boolean newVisibility =
+                 mIsDrawingToEdge
+@@ -262,6 +285,53 @@ class EdgeToEdgeBottomChinMediator
+         if (heightChanged || visibilityChanged || layerVisibilityChanged) {
+             mBottomControlsStacker.requestLayerUpdate(false);
+         }
++        applyStripColor();
++        mUpdatingChin = false;
++    }
++
++    /**
++     * Bare: the chin is the solid band in the gesture strip, and it only leaves once it scrolls
++     * off. With the address bar on top and no bottom toolbar, drop it. The page already draws to
++     * the screen edge; without the chin's height the web contents extend under the gesture handle.
++     * Any real bottom control (the button row, the address bar at the bottom, a tab strip) keeps
++     * the chin.
++     */
++    private boolean leaveGestureStripClear() {
++        if (mHostContext == null) return false;
++        if (mControls.getControlsPosition() != ControlsPosition.TOP) return false;
++        if (BottomBarConfigUtils.isBottomBarEnabled(mHostContext)) return false;
++        return !mBottomControlsStacker.hasVisibleLayersOtherThan(LayerType.BOTTOM_CHIN);
++    }
++
++    @Override
++    public void onControlsPositionChanged(@ControlsPosition int controlsPosition) {
++        updateHeightAndVisibility();
++    }
++
++    @Override
++    public void onBottomControlsHeightChanged(
++            int bottomControlsHeight, int bottomControlsMinHeight) {
++        updateHeightAndVisibility();
++    }
++
++    /** Paints nothing while the gesture strip is clear, and the cached bar color otherwise. */
++    private void applyStripColor() {
++        if (leaveGestureStripClear()) {
++            if (mModel.get(COLOR) != Color.TRANSPARENT) {
++                mModel.set(COLOR, Color.TRANSPARENT);
++            }
++            if (mModel.get(DIVIDER_COLOR) != Color.TRANSPARENT) {
++                mModel.set(DIVIDER_COLOR, Color.TRANSPARENT);
++            }
++            return;
++        }
++        if (!isVisible()) return;
++        if (mModel.get(COLOR) != mNavigationBarColor) {
++            mModel.set(COLOR, mNavigationBarColor);
++        }
++        if (mModel.get(DIVIDER_COLOR) != mDividerColor) {
++            mModel.set(DIVIDER_COLOR, mDividerColor);
++        }
+     }
+ 
+     // LayoutStateProvider.LayoutStateObserver
