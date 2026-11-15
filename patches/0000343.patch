@@ -115,7 +115,7 @@ index dd870786a6de9..070d76a98c660 100644
      boolean onLongClickHomeButton(View view) {
          if (view != mHomeButton || mIsHomeButtonMenuDisabled.get()) return false;
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
-index e0f84f6e584a1..284b7889613a2 100644
+index 40b2b215631cc..f0b1b7e4158bb 100644
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
 @@ -13,6 +13,7 @@ import android.animation.TimeInterpolator;
@@ -188,18 +188,56 @@ index e0f84f6e584a1..284b7889613a2 100644
          super.onLayout(changed, l, t, r, b);
          keepUrlTextClearOfExtensions();
 +        restoreMinimalClusterButtons();
-     }
+         // The focus animation has finished. A layout during the fade can leave the new-tab
+         // search icon transparent while its slot stays, so finish that icon once editing settles.
+         if (mLocationBar != null
+@@ -977,9 +994,14 @@ public class ToolbarPhone extends ToolbarLayout
+         // those in this current layout pass as they are needed for animations.
+         boolean changed = updateUnfocusedLocationBarLayoutParams();
  
-     /**
-@@ -1061,6 +1078,15 @@ public class ToolbarPhone extends ToolbarLayout
+-        if (mLayoutLocationBarInFocusedMode
+-                || (mVisualState == VisualState.NEW_TAB_NORMAL
+-                        && mTabSwitcherState == STATIC_TAB)) {
++        // urlHasFocus() keeps a later measure from putting the focused field back at the
++        // unfocused inset. The new-tab page is not NEW_TAB_NORMAL, so that inset is the menu.
++        boolean focusedLayout =
++                mLayoutLocationBarInFocusedMode
++                        || urlHasFocus()
++                        || (mVisualState == VisualState.NEW_TAB_NORMAL
++                                && mTabSwitcherState == STATIC_TAB);
++        if (focusedLayout) {
+             if (mIsAuroraEnabled
+                     && mVisualState == VisualState.NEW_TAB_NORMAL
+                     && mTabSwitcherState == STATIC_TAB) {
+@@ -991,12 +1013,9 @@ public class ToolbarPhone extends ToolbarLayout
+             }
+             int priorVisibleWidth =
+                     mLocationBar.getPhoneCoordinator().getOffsetOfFirstVisibleFocusedView();
+-            width =
+-                    getFocusedLocationBarWidth(
+-                            containerWidth, priorVisibleWidth, mLayoutLocationBarInFocusedMode);
+-            leftMargin =
+-                    getFocusedLocationBarLeftMargin(
+-                            priorVisibleWidth, mLayoutLocationBarInFocusedMode);
++            boolean focusedWidth = mLayoutLocationBarInFocusedMode || urlHasFocus();
++            width = getFocusedLocationBarWidth(containerWidth, priorVisibleWidth, focusedWidth);
++            leftMargin = getFocusedLocationBarLeftMargin(priorVisibleWidth, focusedWidth);
+         } else {
+             width = mUnfocusedLocationBarLayoutWidth;
+             leftMargin = mUnfocusedLocationBarLayoutLeft;
+@@ -1069,6 +1088,19 @@ public class ToolbarPhone extends ToolbarLayout
       */
      private int getBoundsAfterAccountingForLeftButton() {
          int padding = mToolbarSidePaddingForNtp;
 +        // The menu has taken the left end, so the home view is on the right and must not
-+        // reserve space here. Edit mode hides that menu, and the focused bar ignores this.
++        // reserve space here. Edit mode hides that menu with INVISIBLE, which is still
++        // measured, so only a menu that is actually showing reserves its width.
 +        if (mMenuOnLeftApplied) {
 +            View menu = mMenuButtonWrapper;
-+            if (menu != null && menu.getVisibility() != GONE && menu.getMeasuredWidth() > 0) {
++            if (!urlHasFocus()
++                    && menu != null
++                    && menu.getVisibility() == VISIBLE
++                    && menu.getMeasuredWidth() > 0) {
 +                padding = menu.getMeasuredWidth();
 +            }
 +            return padding;
@@ -207,7 +245,7 @@ index e0f84f6e584a1..284b7889613a2 100644
  
          assert mHomeButton.getVisibility() == GONE || mToolbarBackButton.getVisibility() == GONE;
  
-@@ -1117,9 +1143,26 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -1125,9 +1157,26 @@ public class ToolbarPhone extends ToolbarLayout
          }
  
          toolbarButtonsContainerWidth -= getExtensionsWidthInsideLocationBar();
@@ -234,7 +272,7 @@ index e0f84f6e584a1..284b7889613a2 100644
      /**
       * Bare: on the full toolbar the extensions icon sits inside the address bar, next to the share
       * icon, instead of past its right edge.
-@@ -1502,6 +1545,14 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -1510,6 +1559,14 @@ public class ToolbarPhone extends ToolbarLayout
          } else if (mHomeButton.getVisibility() != GONE) {
              mHomeButton.setVisibility(toolbarButtonVisibility);
          }
@@ -249,7 +287,7 @@ index e0f84f6e584a1..284b7889613a2 100644
  
          if (mBackButtonCoordinator != null) {
              mBackButtonCoordinator.setVisibility(
-@@ -1873,6 +1924,9 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -1881,6 +1938,9 @@ public class ToolbarPhone extends ToolbarLayout
  
          mToolbarButtonsContainer.setTranslationY(transY);
          mHomeButton.setTranslationY(transY);
@@ -259,7 +297,7 @@ index e0f84f6e584a1..284b7889613a2 100644
      }
  
      private void setAncestorsShouldClipChildren(boolean clip) {
-@@ -1893,6 +1947,17 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -1901,6 +1961,17 @@ public class ToolbarPhone extends ToolbarLayout
          if (mHomeButton.getVisibility() != GONE) {
              drawChild(canvas, mHomeButton, SystemClock.uptimeMillis());
          }
@@ -277,7 +315,7 @@ index e0f84f6e584a1..284b7889613a2 100644
  
          if (mBackButtonCoordinator != null && mBackButtonCoordinator.isVisible()) {
              drawChild(canvas, mToolbarBackButton, SystemClock.uptimeMillis());
-@@ -1969,11 +2034,14 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -1977,11 +2048,14 @@ public class ToolbarPhone extends ToolbarLayout
              tabSwitcherButtonCoordinator.draw(mToolbarButtonsContainer, canvas);
          }
  
@@ -297,7 +335,7 @@ index e0f84f6e584a1..284b7889613a2 100644
          }
  
          canvas.restore();
-@@ -2033,7 +2101,91 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -2041,7 +2115,91 @@ public class ToolbarPhone extends ToolbarLayout
      }
  
      private boolean isChildLeft(View child) {
@@ -390,7 +428,7 @@ index e0f84f6e584a1..284b7889613a2 100644
      }
  
      /**
-@@ -2396,6 +2548,54 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -2404,6 +2562,54 @@ public class ToolbarPhone extends ToolbarLayout
          }
      }
  

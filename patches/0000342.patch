@@ -1,8 +1,37 @@
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinatorPhone.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinatorPhone.java
+index a31191c4748f2..6bd000e350b93 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinatorPhone.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinatorPhone.java
+@@ -192,4 +192,9 @@ public class LocationBarCoordinatorPhone implements LocationBarCoordinator.SubCo
+     public View getViewForDrawing() {
+         return mLocationBarPhone;
+     }
++
++    /** See {@link LocationBarPhone#showSettledStatusIcon}. */
++    public void showSettledStatusIcon() {
++        mLocationBarPhone.showSettledStatusIcon();
++    }
+ }
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
-index acb219ee09757..f3c8674b13595 100644
+index acb219ee09757..0b352d988c0a4 100644
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
-@@ -20,7 +20,6 @@ import androidx.core.widget.ImageViewCompat;
+@@ -7,12 +7,14 @@ package org.chromium.chrome.browser.omnibox;
+ import android.content.Context;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
++import android.graphics.drawable.Drawable;
+ import android.util.AttributeSet;
+ import android.view.Gravity;
+ import android.view.View;
+ import android.view.ViewStub;
+ import android.widget.FrameLayout;
+ import android.widget.ImageButton;
++import android.widget.ImageView;
+ 
+ import androidx.constraintlayout.widget.ConstraintLayout;
+ import androidx.core.widget.ImageViewCompat;
+@@ -20,10 +22,10 @@ import androidx.core.widget.ImageViewCompat;
  import org.chromium.base.TraceEvent;
  import org.chromium.build.annotations.NullMarked;
  import org.chromium.build.annotations.Nullable;
@@ -10,7 +39,11 @@ index acb219ee09757..f3c8674b13595 100644
  import org.chromium.chrome.browser.omnibox.status.StatusCoordinator;
  import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteCoordinator;
  import org.chromium.chrome.browser.toolbar.ToolbarVariationUtils;
-@@ -39,8 +38,6 @@ class LocationBarPhone extends LocationBarLayout {
++import org.chromium.components.browser_ui.widget.ChromeTransitionDrawable;
+ import org.chromium.components.metrics.OmniboxEventProtosIntDef.PageClassification;
+ import org.chromium.ui.base.ViewUtils;
+ import org.chromium.ui.base.WindowAndroid;
+@@ -39,8 +41,6 @@ class LocationBarPhone extends LocationBarLayout {
      private final int mNonCenteredUrlBarEndPaddingPx;
      private LocationBarDataProvider.@Nullable Observer mUrlObserver;
  
@@ -19,7 +52,7 @@ index acb219ee09757..f3c8674b13595 100644
      /** Constructor used to inflate from XML. */
      public LocationBarPhone(Context context, AttributeSet attrs) {
          super(context, attrs);
-@@ -179,11 +176,6 @@ class LocationBarPhone extends LocationBarLayout {
+@@ -179,11 +179,6 @@ class LocationBarPhone extends LocationBarLayout {
          return super.performLongClick();
      }
  
@@ -31,7 +64,7 @@ index acb219ee09757..f3c8674b13595 100644
      @Override
      protected void updateCenteringUrlAndStatusState() {
          boolean shouldCenter =
-@@ -240,10 +232,9 @@ class LocationBarPhone extends LocationBarLayout {
+@@ -240,10 +235,9 @@ class LocationBarPhone extends LocationBarLayout {
              urlBarParams.startToStart = ConstraintLayout.LayoutParams.UNSET;
              urlBarParams.startToEnd = R.id.location_bar_status;
              urlBarParams.endToEnd = ConstraintLayout.LayoutParams.UNSET;
@@ -45,8 +78,36 @@ index acb219ee09757..f3c8674b13595 100644
              urlBarParams.width = ConstraintLayout.LayoutParams.MATCH_CONSTRAINT;
              urlBarParams.horizontalWeight = 1;
  
+@@ -515,6 +509,27 @@ class LocationBarPhone extends LocationBarLayout {
+         return 0;
+     }
+ 
++    /**
++     * Shows the search icon once editing has settled. A layout pass during its fade-in can leave
++     * the icon transparent, so the new-tab field keeps an empty slot in front of the hint.
++     */
++    void showSettledStatusIcon() {
++        ImageView icon = findViewById(R.id.location_bar_status_icon);
++        if (icon == null || icon.getDrawable() == null) return;
++        Drawable drawable = icon.getDrawable();
++        if (drawable instanceof ChromeTransitionDrawable transition
++                && transition.getFinalDrawable().getAlpha() == 0) {
++            transition.finishTransition(true);
++        }
++        if (icon.getAlpha() == 0f) icon.setAlpha(1f);
++        if (icon.getVisibility() != View.VISIBLE) {
++            View parent = (View) icon.getParent();
++            if (parent != null) parent.setVisibility(View.VISIBLE);
++        }
++        icon.invalidateOutline();
++        if (getClipBounds() != null) setClipBounds(null);
++    }
++
+     @Override
+     public void destroy() {
+         if (mUrlObserver != null) {
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
-index 9936f433d46d9..e0f84f6e584a1 100644
+index 9936f433d46d9..40b2b215631cc 100644
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
 @@ -791,9 +791,9 @@ public class ToolbarPhone extends ToolbarLayout
@@ -61,7 +122,7 @@ index 9936f433d46d9..e0f84f6e584a1 100644
          View urlBar = locationBar.findViewById(R.id.url_bar);
          if (mBareLocationBarEndPadding < 0) {
              mBareLocationBarEndPadding = locationBar.getPaddingEnd();
-@@ -818,16 +818,25 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -818,22 +818,39 @@ public class ToolbarPhone extends ToolbarLayout
              mToolbarButtonsContainer.setLayoutParams(params);
          }
          int end = mBareLocationBarEndPadding;
@@ -89,7 +150,21 @@ index 9936f433d46d9..e0f84f6e584a1 100644
      }
  
      @Override
-@@ -914,7 +923,7 @@ public class ToolbarPhone extends ToolbarLayout
+     protected void onLayout(boolean changed, int l, int t, int r, int b) {
+         super.onLayout(changed, l, t, r, b);
+         keepUrlTextClearOfExtensions();
++        // The focus animation has finished. A layout during the fade can leave the new-tab
++        // search icon transparent while its slot stays, so finish that icon once editing settles.
++        if (mLocationBar != null
++                && urlHasFocus()
++                && mUrlExpansionFraction == 1f
++                && !mUrlFocusChangeInProgress) {
++            mLocationBar.getPhoneCoordinator().showSettledStatusIcon();
++        }
+     }
+ 
+     /**
+@@ -914,7 +931,7 @@ public class ToolbarPhone extends ToolbarLayout
       *     be remeasured.
       */
      private boolean updateUnfocusedLocationBarLayoutParams() {
@@ -98,7 +173,7 @@ index 9936f433d46d9..e0f84f6e584a1 100644
          int leftViewBounds = getViewBoundsLeftOfLocationBar(mVisualState);
          int rightViewBounds = getViewBoundsRightOfLocationBar(mVisualState);
  
-@@ -926,7 +935,7 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -926,7 +943,7 @@ public class ToolbarPhone extends ToolbarLayout
              mLocationBar.setUnfocusedWidth(mUnfocusedLocationBarLayoutWidth);
              return true;
          }
@@ -107,7 +182,7 @@ index 9936f433d46d9..e0f84f6e584a1 100644
      }
  
      /**
-@@ -1476,7 +1485,15 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -1476,7 +1493,15 @@ public class ToolbarPhone extends ToolbarLayout
          if (isInTabSwitcherMode()) return;
  
          int toolbarButtonVisibility = getToolbarButtonVisibility();
