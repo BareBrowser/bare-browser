@@ -1,0 +1,126 @@
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
+index acb219ee09757..f3c8674b13595 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
+@@ -20,7 +20,6 @@ import androidx.core.widget.ImageViewCompat;
+ import org.chromium.base.TraceEvent;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+-import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxState;
+ import org.chromium.chrome.browser.omnibox.status.StatusCoordinator;
+ import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteCoordinator;
+ import org.chromium.chrome.browser.toolbar.ToolbarVariationUtils;
+@@ -39,8 +38,6 @@ class LocationBarPhone extends LocationBarLayout {
+     private final int mNonCenteredUrlBarEndPaddingPx;
+     private LocationBarDataProvider.@Nullable Observer mUrlObserver;
+ 
+-    private @FuseboxState int mFuseboxState = FuseboxState.DISABLED;
+-
+     /** Constructor used to inflate from XML. */
+     public LocationBarPhone(Context context, AttributeSet attrs) {
+         super(context, attrs);
+@@ -179,11 +176,6 @@ class LocationBarPhone extends LocationBarLayout {
+         return super.performLongClick();
+     }
+ 
+-    @Override
+-    void onFuseboxStateChanged(@FuseboxState int state) {
+-        mFuseboxState = state;
+-    }
+-
+     @Override
+     protected void updateCenteringUrlAndStatusState() {
+         boolean shouldCenter =
+@@ -240,10 +232,9 @@ class LocationBarPhone extends LocationBarLayout {
+             urlBarParams.startToStart = ConstraintLayout.LayoutParams.UNSET;
+             urlBarParams.startToEnd = R.id.location_bar_status;
+             urlBarParams.endToEnd = ConstraintLayout.LayoutParams.UNSET;
+-            urlBarParams.endToStart =
+-                    mFuseboxState == FuseboxState.EXPANDED
+-                            ? R.id.delete_button
+-                            : R.id.action_buttons_segment;
++            // Share and copy take the delete button's place. The barrier is the
++            // start of whichever of them is showing, so the field fills up to it.
++            urlBarParams.endToStart = R.id.action_buttons_segment;
+             urlBarParams.width = ConstraintLayout.LayoutParams.MATCH_CONSTRAINT;
+             urlBarParams.horizontalWeight = 1;
+ 
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+index 9936f433d46d9..e0f84f6e584a1 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+@@ -791,9 +791,9 @@ public class ToolbarPhone extends ToolbarLayout
+      * has on the left. On the minimal layout the extensions icon sits at the end of the address
+      * bar.
+      */
+-    private void applyExtensionsInsideLocationBar() {
++    private boolean applyExtensionsInsideLocationBar() {
+         View locationBar = findViewById(R.id.location_bar);
+-        if (locationBar == null) return;
++        if (locationBar == null) return false;
+         View urlBar = locationBar.findViewById(R.id.url_bar);
+         if (mBareLocationBarEndPadding < 0) {
+             mBareLocationBarEndPadding = locationBar.getPaddingEnd();
+@@ -818,16 +818,25 @@ public class ToolbarPhone extends ToolbarLayout
+             mToolbarButtonsContainer.setLayoutParams(params);
+         }
+         int end = mBareLocationBarEndPadding;
+-        if (extensions > 0) {
++        // The extensions icon sits in the toolbar-button container. That container is
++        // invisible while the address is edited, so reserving its width leaves an empty
++        // slot after the mic, or after copy and share.
++        boolean extensionsShown = !minimal || mToolbarButtonsContainer.getVisibility() == VISIBLE;
++        if (extensions > 0 && extensionsShown) {
+             end = minimal ? end + extensions : Math.round(2 * density);
+         }
+-        if (locationBar.getPaddingEnd() != end) {
++        // Padding is changed inside the measure pass. A nested requestLayout
++        // is dropped, so the caller must measure the children again or the
++        // old inset stays after the mic, or after copy and share.
++        boolean paddingChanged = locationBar.getPaddingEnd() != end;
++        if (paddingChanged) {
+             locationBar.setPaddingRelative(
+                     locationBar.getPaddingStart(),
+                     locationBar.getPaddingTop(),
+                     end,
+                     locationBar.getPaddingBottom());
+         }
++        return paddingChanged;
+     }
+ 
+     @Override
+@@ -914,7 +923,7 @@ public class ToolbarPhone extends ToolbarLayout
+      *     be remeasured.
+      */
+     private boolean updateUnfocusedLocationBarLayoutParams() {
+-        applyExtensionsInsideLocationBar();
++        boolean paddingChanged = applyExtensionsInsideLocationBar();
+         int leftViewBounds = getViewBoundsLeftOfLocationBar(mVisualState);
+         int rightViewBounds = getViewBoundsRightOfLocationBar(mVisualState);
+ 
+@@ -926,7 +935,7 @@ public class ToolbarPhone extends ToolbarLayout
+             mLocationBar.setUnfocusedWidth(mUnfocusedLocationBarLayoutWidth);
+             return true;
+         }
+-        return false;
++        return paddingChanged;
+     }
+ 
+     /**
+@@ -1476,7 +1485,15 @@ public class ToolbarPhone extends ToolbarLayout
+         if (isInTabSwitcherMode()) return;
+ 
+         int toolbarButtonVisibility = getToolbarButtonVisibility();
+-        mToolbarButtonsContainer.setVisibility(toolbarButtonVisibility);
++        if (mToolbarButtonsContainer.getVisibility() != toolbarButtonVisibility) {
++            mToolbarButtonsContainer.setVisibility(toolbarButtonVisibility);
++            // Visible and invisible are both measured, so the extensions slot above
++            // would otherwise keep the width from the last layout.
++            if (BottomBarConfigUtils.isMinimalLayout()) {
++                ViewUtils.requestLayout(
++                        this, "ToolbarPhone.updateUrlExpansionAnimation extensions slot");
++            }
++        }
+         boolean showBackButtonOutside = shouldShowBackButtonOutside();
+         // Enforce mutual exclusivity: if the back button should be shown outside,
+         // we must hide the home button to prevent them from overlapping during transitions.

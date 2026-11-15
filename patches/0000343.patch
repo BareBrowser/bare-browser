@@ -1,0 +1,447 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMinimalLeftButton.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMinimalLeftButton.java
+index 0bdb8d671a149..0161828a7d4c2 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMinimalLeftButton.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMinimalLeftButton.java
+@@ -68,6 +68,7 @@ public final class BareMinimalLeftButton
+         @ActionId int action = BareToolbarPrefs.getPrimaryAction(BareToolbarSlot.HOME);
+         if (action == ActionId.HOME_BUTTON) {
+             mCoordinator.setOverride(null, null, 0, 0);
++            mCoordinator.setIconMirrored(false);
+             return;
+         }
+         NullableObservableSupplier<PropertyModel> supplier = mRegistry.get(action);
+@@ -92,6 +93,9 @@ public final class BareMinimalLeftButton
+                 },
+                 BareToolbarActionUi.iconFor(action),
+                 BareToolbarActionUi.labelFor(action));
++        // The glyph is drawn for the left edge. On the right it faces the side the drawer opens.
++        mCoordinator.setIconMirrored(
++                BottomBarConfigUtils.isMenuOnLeft() && action == ActionId.VERTICAL_TABS);
+     }
+ 
+     @Override
+@@ -99,7 +103,8 @@ public final class BareMinimalLeftButton
+         if (key == null) return;
+         boolean primary = ChromePreferenceKeys.BOTTOM_BAR_SLOT_PRIMARY_ACTION.hasGenerated(key);
+         boolean secondary = ChromePreferenceKeys.BOTTOM_BAR_SLOT_SECONDARY_ACTION.hasGenerated(key);
+-        if (!primary && !secondary) return;
++        boolean menuSide = ChromePreferenceKeys.BARE_MENU_ON_LEFT.equals(key);
++        if (!primary && !secondary && !menuSide) return;
+         mSecondary.refresh();
+         bind();
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+index aac7978b655ab..db2383642b16d 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+@@ -601,8 +601,8 @@ public final class BareVerticalTabsDrawer {
+ 
+     /**
+      * The panel comes from the side the sidebar button is on. That is the right edge when the menu
+-     * is on the left of the bottom bar, and the left edge otherwise. Read each time the sidebar
+-     * opens, so the setting applies at once.
++     * is on the left, on the full bar or the minimal bar, and the left edge otherwise. Read each
++     * time the sidebar opens, so the setting applies at once.
+      */
+     private void updateSide() {
+         boolean onRight = BottomBarConfigUtils.isSidebarOnRight(mActivity);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
+index e6010f0bc74fc..98a52293678e5 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
+@@ -99,6 +99,22 @@ public final class BareToolbarPreviewBinder {
+             markEditable(rightButton, editable);
+             bindFixed(root, R.id.bare_preview_minimal_new_tab, ActionId.NEW_TAB, editable);
+             bindFixed(root, R.id.bare_preview_minimal_app_menu, ActionId.APP_MENU, editable);
++            // The menu and the sidebar button trade ends, the same swap the bar itself does.
++            boolean menuLeft = BottomBarConfigUtils.isMenuOnLeft();
++            leftButton.setScaleX(menuLeft && first == ActionId.VERTICAL_TABS ? -1f : 1f);
++            ViewGroup minimalRow = root.findViewById(R.id.bare_preview_minimal);
++            View menuPreview = minimalRow.findViewById(R.id.bare_preview_minimal_app_menu);
++            if ((minimalRow.indexOfChild(menuPreview) == 0) != menuLeft) {
++                minimalRow.removeView(leftButton);
++                minimalRow.removeView(menuPreview);
++                if (menuLeft) {
++                    minimalRow.addView(menuPreview, 0);
++                    minimalRow.addView(leftButton);
++                } else {
++                    minimalRow.addView(leftButton, 0);
++                    minimalRow.addView(menuPreview);
++                }
++            }
+             return;
+         }
+ 
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
+index 15f9f203267e3..647d61a9b135d 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
+@@ -63,17 +63,16 @@ public class BottomBarConfigUtils {
+                 .writeBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, minimal);
+     }
+ 
+-    /** Whether the menu button sits on the left end of the bar, swapped with the first button. */
+     /**
+-     * Whether the sidebar button is at the right end of the bottom bar, and so the sidebar opens
+-     * from the right: the menu is on the left of the full bar. The minimal bar keeps the sidebar
+-     * on the left, and a right-to-left layout is left as the system draws it.
++     * Whether the sidebar button is at the right end of the bar, and so the sidebar opens from
++     * the right: the menu is on the left. The full bar and the minimal bar both follow the
++     * setting. A right-to-left layout is left as the system draws it.
+      */
+     public static boolean isSidebarOnRight(Context context) {
+         boolean rtl =
+                 context.getResources().getConfiguration().getLayoutDirection()
+                         == View.LAYOUT_DIRECTION_RTL;
+-        return isMenuOnLeft() && !isMinimalLayout() && !rtl;
++        return isMenuOnLeft() && !rtl;
+     }
+ 
+     public static boolean isMenuOnLeft() {
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/home_button/HomeButtonCoordinator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/home_button/HomeButtonCoordinator.java
+index dd870786a6de9..070d76a98c660 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/home_button/HomeButtonCoordinator.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/home_button/HomeButtonCoordinator.java
+@@ -162,6 +162,11 @@ public class HomeButtonCoordinator extends ToolbarChildButton implements TintObs
+         mHomeButton.setContentDescription(mContext.getString(label));
+     }
+ 
++    /** Mirrors the icon when the sidebar button sits on the right. Other actions stay as drawn. */
++    public void setIconMirrored(boolean mirrored) {
++        mHomeButton.setScaleX(mirrored ? -1f : 1f);
++    }
++
+     @VisibleForTesting
+     boolean onLongClickHomeButton(View view) {
+         if (view != mHomeButton || mIsHomeButtonMenuDisabled.get()) return false;
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+index e0f84f6e584a1..284b7889613a2 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+@@ -13,6 +13,7 @@ import android.animation.TimeInterpolator;
+ import android.animation.ValueAnimator;
+ import android.annotation.SuppressLint;
+ import android.content.Context;
++import android.content.SharedPreferences;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.graphics.Canvas;
+@@ -44,6 +45,7 @@ import android.view.ViewDebug;
+ import android.view.ViewGroup;
+ import android.view.ViewOutlineProvider;
+ import android.view.ViewStub;
++import android.widget.FrameLayout;
+ import android.widget.ImageView;
+ import android.widget.TextView;
+ 
+@@ -70,6 +72,7 @@ import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ import org.chromium.chrome.browser.ntp.NewTabPageUtils;
+ import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.omnibox.LocationBar;
+ import org.chromium.chrome.browser.omnibox.LocationBarBackgroundDrawable;
+ import org.chromium.chrome.browser.omnibox.LocationBarBackgroundDrawable.HairlineBehavior;
+@@ -170,6 +173,16 @@ public class ToolbarPhone extends ToolbarLayout
+     private @MonotonicNonNull OptionalButtonCoordinator mOptionalButtonCoordinator;
+     // Non-null after inflation occurs.
+     private ImageView mHomeButton;
++    private @Nullable View mMenuButtonWrapper;
++    private boolean mMenuOnLeftApplied;
++    // The menu has been lifted out of the right-hand cluster. Toggling the setting after
++    // that only changes gravity, so the shortcut and the extensions button stay put.
++    private boolean mMinimalMenuDetached;
++    private int mMenuEndPadding = -1;
++    private final SharedPreferences.OnSharedPreferenceChangeListener mBareMenuSideListener =
++            (preferences, key) -> {
++                if (ChromePreferenceKeys.BARE_MENU_ON_LEFT.equals(key)) applyMinimalMenuSide();
++            };
+     private @Nullable View mBarePressedButton;
+     private View mToolbarBackButton;
+     private @Nullable BackButtonCoordinator mBackButtonCoordinator;
+@@ -403,6 +416,7 @@ public class ToolbarPhone extends ToolbarLayout
+             if (ChromeFeatureList.sToolbarPhoneAnimationRefactor.isEnabled()) {
+                 mActiveLocationBarBackgroundView.setVisibility(View.VISIBLE);
+             }
++            watchMinimalMenuSide();
+         }
+     }
+ 
+@@ -527,6 +541,7 @@ public class ToolbarPhone extends ToolbarLayout
+ 
+     @Override
+     public void destroy() {
++        ignoreMinimalMenuSide();
+         cancelAnimations();
+         Handler handler = getHandler();
+         if (handler != null && mDefaultSearchEngineChangedRunnable != null) {
+@@ -811,6 +826,7 @@ public class ToolbarPhone extends ToolbarLayout
+                         || (shortcut != null && shortcut.getVisibility() == View.VISIBLE);
+         int share = Math.round((shortcutShown ? 52 : 10) * density);
+         int margin = extensions > 0 && !minimal ? mToolbarSidePadding + share : 0;
++        if (minimal) margin = minimalClusterEndInset();
+         ViewGroup.MarginLayoutParams params =
+                 (ViewGroup.MarginLayoutParams) mToolbarButtonsContainer.getLayoutParams();
+         if (params.getMarginEnd() != margin) {
+@@ -843,6 +859,7 @@ public class ToolbarPhone extends ToolbarLayout
+     protected void onLayout(boolean changed, int l, int t, int r, int b) {
+         super.onLayout(changed, l, t, r, b);
+         keepUrlTextClearOfExtensions();
++        restoreMinimalClusterButtons();
+     }
+ 
+     /**
+@@ -1061,6 +1078,15 @@ public class ToolbarPhone extends ToolbarLayout
+      */
+     private int getBoundsAfterAccountingForLeftButton() {
+         int padding = mToolbarSidePaddingForNtp;
++        // The menu has taken the left end, so the home view is on the right and must not
++        // reserve space here. Edit mode hides that menu, and the focused bar ignores this.
++        if (mMenuOnLeftApplied) {
++            View menu = mMenuButtonWrapper;
++            if (menu != null && menu.getVisibility() != GONE && menu.getMeasuredWidth() > 0) {
++                padding = menu.getMeasuredWidth();
++            }
++            return padding;
++        }
+ 
+         assert mHomeButton.getVisibility() == GONE || mToolbarBackButton.getVisibility() == GONE;
+ 
+@@ -1117,9 +1143,26 @@ public class ToolbarPhone extends ToolbarLayout
+         }
+ 
+         toolbarButtonsContainerWidth -= getExtensionsWidthInsideLocationBar();
++        // The menu or the sidebar now sits past this cluster, in the container's end margin.
++        if (mMinimalMenuDetached) {
++            ViewGroup.MarginLayoutParams lp =
++                    (ViewGroup.MarginLayoutParams) mToolbarButtonsContainer.getLayoutParams();
++            toolbarButtonsContainerWidth += lp.getMarginEnd();
++        }
+         return Math.max(mToolbarSidePaddingForNtp, toolbarButtonsContainerWidth);
+     }
+ 
++    /**
++     * Width reserved past the right-hand cluster for whichever of the menu and the sidebar is
++     * parked there. Zero until the menu has its own slot, so the untouched row is unchanged.
++     */
++    private int minimalClusterEndInset() {
++        if (!mMinimalMenuDetached) return 0;
++        View end = mMenuOnLeftApplied ? mHomeButton : mMenuButtonWrapper;
++        if (end == null || end.getVisibility() == GONE) return 0;
++        return end.getMeasuredWidth();
++    }
++
+     /**
+      * Bare: on the full toolbar the extensions icon sits inside the address bar, next to the share
+      * icon, instead of past its right edge.
+@@ -1502,6 +1545,14 @@ public class ToolbarPhone extends ToolbarLayout
+         } else if (mHomeButton.getVisibility() != GONE) {
+             mHomeButton.setVisibility(toolbarButtonVisibility);
+         }
++        // The menu is no longer inside the cluster, so the cluster's visibility does not
++        // hide it. Hide it with the cluster or it stays on top of the field while editing.
++        if (mMinimalMenuDetached) {
++            View menu = mMenuButtonWrapper;
++            if (menu != null && menu.getVisibility() != GONE) {
++                menu.setVisibility(toolbarButtonVisibility);
++            }
++        }
+ 
+         if (mBackButtonCoordinator != null) {
+             mBackButtonCoordinator.setVisibility(
+@@ -1873,6 +1924,9 @@ public class ToolbarPhone extends ToolbarLayout
+ 
+         mToolbarButtonsContainer.setTranslationY(transY);
+         mHomeButton.setTranslationY(transY);
++        if (mMinimalMenuDetached && mMenuButtonWrapper != null) {
++            mMenuButtonWrapper.setTranslationY(transY);
++        }
+     }
+ 
+     private void setAncestorsShouldClipChildren(boolean clip) {
+@@ -1893,6 +1947,17 @@ public class ToolbarPhone extends ToolbarLayout
+         if (mHomeButton.getVisibility() != GONE) {
+             drawChild(canvas, mHomeButton, SystemClock.uptimeMillis());
+         }
++        // On the minimal bar the menu is a direct child. Draw it before the canvas moves
++        // into the cluster, which is no longer its parent.
++        if (mMinimalMenuDetached) {
++            MenuButtonCoordinator detachedMenu = getMenuButtonCoordinator();
++            if (mMenuButtonWrapper != null
++                    && detachedMenu != null
++                    && mMenuButtonWrapper.getVisibility() != GONE
++                    && detachedMenu.isVisible()) {
++                detachedMenu.drawTabSwitcherAnimationOverlay(this, canvas, rgbAlpha);
++            }
++        }
+ 
+         if (mBackButtonCoordinator != null && mBackButtonCoordinator.isVisible()) {
+             drawChild(canvas, mToolbarBackButton, SystemClock.uptimeMillis());
+@@ -1969,11 +2034,14 @@ public class ToolbarPhone extends ToolbarLayout
+             tabSwitcherButtonCoordinator.draw(mToolbarButtonsContainer, canvas);
+         }
+ 
+-        // Draw the menu button if necessary.
+-        final MenuButtonCoordinator menuButtonCoordinator = getMenuButtonCoordinator();
+-        if (menuButtonCoordinator != null && menuButtonCoordinator.isVisible()) {
+-            menuButtonCoordinator.drawTabSwitcherAnimationOverlay(
+-                    mToolbarButtonsContainer, canvas, rgbAlpha);
++        // The minimal bar draws its menu above, as a direct child. In there it is not a
++        // descendant of the cluster, and translating from the cluster would throw.
++        if (!mMinimalMenuDetached) {
++            final MenuButtonCoordinator menuButtonCoordinator = getMenuButtonCoordinator();
++            if (menuButtonCoordinator != null && menuButtonCoordinator.isVisible()) {
++                menuButtonCoordinator.drawTabSwitcherAnimationOverlay(
++                        mToolbarButtonsContainer, canvas, rgbAlpha);
++            }
+         }
+ 
+         canvas.restore();
+@@ -2033,7 +2101,91 @@ public class ToolbarPhone extends ToolbarLayout
+     }
+ 
+     private boolean isChildLeft(View child) {
+-        return (child == mHomeButton) ^ LocalizationUtils.isLayoutRtl();
++        boolean atStart = mMenuOnLeftApplied ? child == mMenuButtonWrapper : child == mHomeButton;
++        return atStart ^ LocalizationUtils.isLayoutRtl();
++    }
++
++    /**
++     * Trades the menu with the sidebar button on the minimal bar when the menu is on the left.
++     * The shortcut and the extensions button stay in the cluster, which is what shows and hides
++     * them. Only the menu and the sidebar change ends. Off, the menu is on the right again.
++     */
++    private void applyMinimalMenuSide() {
++        if (!BottomBarConfigUtils.isMinimalLayout()) return;
++        if (mMenuButtonWrapper == null) {
++            mMenuButtonWrapper = findViewById(R.id.menu_button_wrapper);
++        }
++        View wrapper = mMenuButtonWrapper;
++        if (wrapper == null) return;
++
++        boolean wasDetached = mMinimalMenuDetached;
++        detachMinimalMenu(wrapper);
++        boolean wantLeft = BottomBarConfigUtils.isMenuOnLeft();
++        if (wasDetached && wantLeft == mMenuOnLeftApplied) return;
++
++        FrameLayout.LayoutParams menuLp = (FrameLayout.LayoutParams) wrapper.getLayoutParams();
++        menuLp.gravity = Gravity.TOP | (wantLeft ? Gravity.START : Gravity.END);
++        wrapper.setLayoutParams(menuLp);
++
++        if (mHomeButton.getLayoutParams() instanceof FrameLayout.LayoutParams homeLp) {
++            homeLp.gravity = Gravity.TOP | (wantLeft ? Gravity.END : Gravity.START);
++            mHomeButton.setLayoutParams(homeLp);
++        }
++        // On the right the sidebar is past the pill, so it has to paint after the pill.
++        if (wantLeft) mHomeButton.bringToFront();
++        wrapper.bringToFront();
++
++        mMenuOnLeftApplied = wantLeft;
++        placeMenuScreenInset(wrapper, wantLeft);
++        if (wrapper.getVisibility() != GONE) {
++            wrapper.setVisibility(getToolbarButtonVisibility());
++        }
++        updateButtonVisibility();
++        ViewUtils.requestLayout(this, "ToolbarPhone.applyMinimalMenuSide");
++    }
++
++    /**
++     * Lifts the menu out of the right-hand cluster once. That cluster animates every child when
++     * the shortcut shows or hides, and moving a button through it left the shortcut and the
++     * extensions button at width 0. Afterwards the two ends trade places by gravity alone.
++     */
++    private void detachMinimalMenu(View wrapper) {
++        if (mMinimalMenuDetached) return;
++        if (wrapper.getParent() == mToolbarButtonsContainer) {
++            mToolbarButtonsContainer.removeView(wrapper);
++            FrameLayout.LayoutParams lp =
++                    new FrameLayout.LayoutParams(
++                            ViewGroup.LayoutParams.WRAP_CONTENT,
++                            ViewGroup.LayoutParams.WRAP_CONTENT);
++            lp.gravity = Gravity.TOP | Gravity.END;
++            addView(wrapper, lp);
++        }
++        mMinimalMenuDetached = wrapper.getParent() == this;
++    }
++
++    /** Keeps the menu icon 8dp off the screen edge after the button moves to the other end. */
++    private void placeMenuScreenInset(View wrapper, boolean onLeft) {
++        if (!(wrapper instanceof ViewGroup group)) return;
++        for (int i = 0; i < group.getChildCount(); i++) {
++            View child = group.getChildAt(i);
++            if (mMenuEndPadding < 0) mMenuEndPadding = child.getPaddingEnd();
++            int end = onLeft ? 0 : mMenuEndPadding;
++            int start = onLeft ? mMenuEndPadding : 0;
++            child.setPaddingRelative(start, child.getPaddingTop(), end, child.getPaddingBottom());
++        }
++    }
++
++    @SuppressWarnings("UseSharedPreferencesManagerFromChromeCheck")
++    private void watchMinimalMenuSide() {
++        ContextUtils.getAppSharedPreferences()
++                .registerOnSharedPreferenceChangeListener(mBareMenuSideListener);
++        applyMinimalMenuSide();
++    }
++
++    @SuppressWarnings("UseSharedPreferencesManagerFromChromeCheck")
++    private void ignoreMinimalMenuSide() {
++        ContextUtils.getAppSharedPreferences()
++                .unregisterOnSharedPreferenceChangeListener(mBareMenuSideListener);
+     }
+ 
+     /**
+@@ -2396,6 +2548,54 @@ public class ToolbarPhone extends ToolbarLayout
+         }
+     }
+ 
++    /**
++     * Puts back a shortcut or extensions button that a row animation left at width 0 or
++     * transparent. Does not start that animation again. Edit mode hides the whole cluster
++     * and is left alone, so the focused field still fills.
++     */
++    private void restoreMinimalClusterButtons() {
++        if (!BottomBarConfigUtils.isMinimalLayout()) return;
++        if (urlHasFocus() || mUrlExpansionFraction == 1f) return;
++        if (mToolbarButtonsContainer.getVisibility() != VISIBLE) return;
++
++        ButtonData buttonData = mButtonData;
++        if (mOptionalButtonCoordinator != null
++                && shouldShowOptionalButtonInToolbar(buttonData)
++                && buttonData != null
++                && buttonData.canShow()) {
++            var coordinator = assumeNonNull(mOptionalButtonCoordinator);
++            View slot = coordinator.getViewForDrawing();
++            if (slot.getParent() == mToolbarButtonsContainer) {
++                if (slot.getAlpha() != 1f) slot.setAlpha(1f);
++                View inner = coordinator.getButtonView();
++                if (inner != null && inner.getAlpha() != 1f) inner.setAlpha(1f);
++                ViewGroup.LayoutParams lp = slot.getLayoutParams();
++                int collapsed = R.dimen.toolbar_phone_optional_button_collapsed_state_width;
++                int want = getResources().getDimensionPixelSize(collapsed);
++                if (lp != null && (slot.getVisibility() == GONE || lp.width <= 0)) {
++                    mLayoutLocationBarWithoutExtraButton = false;
++                    mOptionalButtonAnimationRunning = false;
++                    slot.setVisibility(VISIBLE);
++                    lp.width = want;
++                    slot.setLayoutParams(lp);
++                }
++            }
++        }
++
++        View extensions =
++                mToolbarButtonsContainer.findViewById(R.id.extensions_toolbar_container);
++        if (extensions == null || extensions.getVisibility() != VISIBLE) return;
++        if (extensions.getAlpha() != 1f) extensions.setAlpha(1f);
++        View puzzle = extensions.findViewById(R.id.extensions_menu_button);
++        if (puzzle == null || puzzle.getVisibility() != VISIBLE) return;
++        if (puzzle.getAlpha() != 1f) puzzle.setAlpha(1f);
++        ViewGroup.LayoutParams puzzleLp = puzzle.getLayoutParams();
++        if (puzzleLp != null && puzzleLp.width <= 0) {
++            puzzleLp.width = getResources().getDimensionPixelSize(R.dimen.toolbar_button_width);
++            puzzle.setLayoutParams(puzzleLp);
++        }
++    }
++
+     private boolean shouldShowBackButtonOutside() {
+         return mIsToolbarUiRefactorEnabled
+                 && !ToolbarVariationUtils.shouldBackButtonBeInOmnibox()
