@@ -1,0 +1,2569 @@
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+index dd689330958..f8ed6525ce0 100644
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -3111,6 +3111,7 @@ if (_is_default_toolchain) {
+       "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
+       "java/src/org/chromium/chrome/browser/bare/BareUboUpdate.java",
+       "java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java",
++      "java/src/org/chromium/chrome/browser/bare/canvas/BareCanvasBlockBridge.java",
+       "java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java",
+       "java/src/org/chromium/chrome/browser/browserservices/digitalgoods/SiteIsolator.java",
+       "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappBridge.java",
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 88550540881..b0ab7828d00 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -514,6 +514,7 @@ chrome_java_resources = [
+   "java/res/drawable/bare_welcome_seg_track.xml",
+   "java/res/layout/bare_welcome_page_backup.xml",
+   "java/res/layout/bare_welcome_page_browsing.xml",
++  "java/res/layout/bare_welcome_page_canvas.xml",
+   "java/res/layout/bare_welcome_page_finish.xml",
+   "java/res/layout/bare_welcome_page_ready.xml",
+   "java/res/layout/bare_welcome_page_welcome.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 81b350de2f1..8bcef3dc7a9 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -313,6 +313,8 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/notices/BareNotices.java",
+   "java/src/org/chromium/chrome/browser/bare/notices/BareNoticesFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java",
++  "java/src/org/chromium/chrome/browser/bare/canvas/BareCanvasBlockBridge.java",
++  "java/src/org/chromium/chrome/browser/bare/canvas/BareCanvasFlowView.java",
+   "java/src/org/chromium/chrome/browser/bare/player/BarePlayerController.java",
+   "java/src/org/chromium/chrome/browser/bare/player/BarePlayerIcon.java",
+   "java/src/org/chromium/chrome/browser/bare/player/BarePlayerScripts.java",
+diff --git a/chrome/android/java/res/layout/bare_welcome_page_canvas.xml b/chrome/android/java/res/layout/bare_welcome_page_canvas.xml
+new file mode 100644
+index 00000000000..413b24df1c1
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_welcome_page_canvas.xml
+@@ -0,0 +1,73 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="match_parent"
++    android:fillViewport="true"
++    android:scrollbarStyle="outsideOverlay">
++
++    <LinearLayout
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:orientation="vertical"
++        android:paddingStart="20dp"
++        android:paddingTop="28dp"
++        android:paddingEnd="20dp"
++        android:paddingBottom="16dp">
++
++        <TextView
++            android:id="@+id/bare_page_title"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:paddingStart="4dp"
++            android:paddingEnd="4dp"
++            android:accessibilityHeading="true"
++            android:text="@string/bare_welcome_canvas_title"
++            android:textColor="@color/bare_welcome_title"
++            android:textSize="28sp"
++            android:fontFamily="sans-serif-medium" />
++
++        <TextView
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="10dp"
++            android:layout_marginBottom="16dp"
++            android:paddingStart="4dp"
++            android:paddingEnd="4dp"
++            android:text="@string/bare_welcome_canvas_intro"
++            android:textColor="@color/bare_welcome_body"
++            android:textSize="14sp"
++            android:lineSpacingMultiplier="1.2" />
++
++        <org.chromium.chrome.browser.bare.canvas.BareCanvasFlowView
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginBottom="16dp"
++            android:background="@drawable/bare_welcome_group_bg" />
++
++        <LinearLayout
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:orientation="vertical"
++            android:background="@drawable/bare_welcome_group_bg">
++
++            <include android:id="@+id/bare_row_canvas" layout="@layout/bare_welcome_option_row" />
++        </LinearLayout>
++
++        <TextView
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="16dp"
++            android:paddingStart="8dp"
++            android:paddingEnd="8dp"
++            android:text="@string/bare_welcome_canvas_note"
++            android:textColor="@color/bare_welcome_body"
++            android:textSize="12sp"
++            android:lineSpacingMultiplier="1.2" />
++    </LinearLayout>
++</ScrollView>
+diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
+index 09edb3e56d0..7e480af4f21 100644
+--- a/chrome/android/java/res/values/ids.xml
++++ b/chrome/android/java/res/values/ids.xml
+@@ -289,6 +289,7 @@ found in the LICENSE file.
+     <item type="id" name="bare_exit_id" />
+     <item type="id" name="bare_immersive_id" />
+     <item type="id" name="bare_notifications_id" />
++    <item type="id" name="bare_canvas_allow_id" />
+     <item type="id" name="bare_immersive_check_id" />
+     <item type="id" name="bare_tab_view_toggle_id" />
+     <item type="id" name="qr_code_menu_id" />
+diff --git a/chrome/android/java/res/xml/bare_security_preferences.xml b/chrome/android/java/res/xml/bare_security_preferences.xml
+index 2d4b74ced4e..fc417384ca6 100644
+--- a/chrome/android/java/res/xml/bare_security_preferences.xml
++++ b/chrome/android/java/res/xml/bare_security_preferences.xml
+@@ -45,4 +45,16 @@ found in the LICENSE file.
+         android:order="5"
+         android:summary="@string/bare_security_phishing_note" />
+ 
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_sec_canvas"
++        android:order="6"
++        android:persistent="false"
++        android:title="@string/bare_security_canvas_title"
++        android:summary="@string/bare_security_canvas_summary" />
++
++    <PreferenceCategory
++        android:key="bare_sec_canvas_allowed"
++        android:order="7"
++        android:title="@string/bare_security_canvas_allowed" />
++
+ </PreferenceScreen>
+diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/java/res/xml/main_preferences.xml
+index dafd4e5dc7d..1858a2aadaa 100644
+--- a/chrome/android/java/res/xml/main_preferences.xml
++++ b/chrome/android/java/res/xml/main_preferences.xml
+@@ -204,6 +204,12 @@ found in the LICENSE file.
+         android:persistent="false"
+         android:title="@string/bare_snackbars_title"
+         android:summary="@string/bare_snackbars_summary"/>
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_menu_card"
++        android:order="33"
++        android:persistent="false"
++        android:title="@string/bare_menu_card_title"
++        android:summary="@string/bare_menu_card_summary"/>
+     <org.chromium.chrome.browser.bare.settings.BareMadeWithLovePreference
+         android:key="bare_made_with_love"
+         android:order="34"/>
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 680d093b72f..fcb47bc7f3b 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -68,6 +68,22 @@ found in the LICENSE file.
+     <string name="bare_translate_own_summary" translatable="false">Adds Translate to the menu and sends the text of the page to the server below, not to Google. Turns Google off. Off by default.</string>
+     <string name="bare_page_translation_summary" translatable="false">Adds Translate to the menu and to the choices under Appearance, Address bar shortcut. Your shortcut is not changed. Off by default.</string>
+     <string name="bare_page_translation_about" translatable="false">Translation happens only when you choose to send the current page for translation. Bare will not suggest it automatically. When you do, the text of that page is sent to Google, and Google can see it. Other tabs are not sent. Google also gets your IP address, as with any request, and may get other details about the page. Bare does not control Google’s service, and it may stop working.</string>
++    <string name="bare_canvas_menu_allow" translatable="false">Allow canvas reading</string>
++    <string name="bare_canvas_menu_block" translatable="false">Block canvas reading</string>
++    <string name="bare_security_canvas_title" translatable="false">Block canvas reading</string>
++    <string name="bare_security_canvas_summary" translatable="false">Sites that read pixels from a canvas get a blank one. What you see is unchanged. Canvas only: not audio, fonts or device info, so fingerprint tests may still call you unique. Some sites need canvas reading to work; allow them from the menu. Applies to new pages.</string>
++    <string name="bare_security_canvas_allowed" translatable="false">Sites allowed to read canvas</string>
++    <string name="bare_security_canvas_allowed_remove" translatable="false">Tap to remove</string>
++    <string name="bare_welcome_canvas_title" translatable="false">Canvas reading</string>
++    <string name="bare_welcome_canvas_intro" translatable="false">Sites can read pixels from a hidden canvas to recognize your browser. Bare can hand them a blank canvas instead.</string>
++    <string name="bare_welcome_canvas_step_ask" translatable="false">Site reads canvas pixels</string>
++    <string name="bare_welcome_canvas_step_blank" translatable="false">Bare hands over a blank canvas</string>
++    <string name="bare_welcome_canvas_step_receive" translatable="false">Site gets nothing to recognize</string>
++    <string name="bare_welcome_canvas_screen_unchanged" translatable="false">What you see is unchanged</string>
++    <string name="bare_welcome_canvas_picture_description" translatable="false">A site reads canvas pixels, Bare hands over a blank canvas, and the site gets nothing to recognize. What you see is unchanged.</string>
++    <string name="bare_welcome_opt_canvas" translatable="false">Block canvas reading</string>
++    <string name="bare_welcome_hint_canvas" translatable="false">Applies to new pages</string>
++    <string name="bare_welcome_canvas_note" translatable="false">Canvas only. Not audio, fonts or device info. Fingerprint tests may still call you unique. Some sites need canvas reading to work; allow them from the menu. Also in Settings, Security options.</string>
+     <string name="bare_welcome_translate_title" translatable="false">Page translation</string>
+     <string name="bare_welcome_translate_intro" translatable="false">Bare translates a page only when you send it. It never suggests translating on its own.</string>
+     <string name="bare_welcome_opt_translate" translatable="false">Translate pages with Google</string>
+@@ -136,6 +152,8 @@ found in the LICENSE file.
+     <string name="bare_smooth_scrolling_title" translatable="false">Smooth scrolling</string>
+     <string name="bare_smooth_scrolling_restart_message" translatable="false">Restart Bare to change scrolling.</string>
+     <string name="bare_smooth_scrolling_summary" translatable="false">A flick stops where your finger says, like a native app, and does not run on for pages. Turning it off applies the next time Bare starts</string>
++    <string name="bare_menu_card_title" translatable="false">Bare menu</string>
++    <string name="bare_menu_card_summary" translatable="false">The menu as a card that rises from the toolbar. Turn off for the classic drop-down menu.</string>
+     <string name="bare_glass_title" translatable="false">Frosted glass</string>
+     <string name="bare_glass_summary" translatable="false">Translucent, blurred panels, starting with the tabs drawer</string>
+     <string name="bare_incognito_mode" translatable="false">Incognito mode</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index 904853d7487..adbba5745a3 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -199,6 +199,7 @@ import org.chromium.chrome.browser.screenshot_protection.ScreenshotProtectionCon
+ import org.chromium.chrome.browser.selection.SelectionPopupBackPressHandler;
+ import org.chromium.chrome.browser.settings.SettingsInTab;
+ import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
++import org.chromium.chrome.browser.bare.canvas.BareCanvasBlockBridge;
+ import org.chromium.chrome.browser.bare.notices.BareNoticesFragment;
+ import org.chromium.chrome.browser.settings.SettingsTabUtil;
+ import org.chromium.chrome.browser.share.ShareDelegate;
+@@ -3081,6 +3082,19 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+             return true;
+         }
+ 
++        if (id == R.id.bare_canvas_allow_id) {
++            // Allows canvas reading on this page's site, or blocks it again. The browser decides
++            // when a page loads, so the page is loaded again.
++            Tab canvasTab = getActivityTab();
++            if (canvasTab != null && canvasTab.getWebContents() != null) {
++                boolean allowed =
++                        BareCanvasBlockBridge.isPageSiteAllowed(canvasTab.getWebContents());
++                BareCanvasBlockBridge.setPageSiteAllowed(canvasTab.getWebContents(), !allowed);
++                canvasTab.reload();
++            }
++            return true;
++        }
++
+         if (id == R.id.bare_notifications_id) {
+             SettingsNavigationFactory.createSettingsNavigation()
+                     .startSettings(this, BareNoticesFragment.class);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java
+index aca90e5154b..6b715b4e35c 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java
+@@ -5,6 +5,7 @@
+ package org.chromium.chrome.browser.bare;
+ 
+ import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.bare.canvas.BareCanvasBlockBridge;
+ import org.chromium.chrome.browser.preferences.Pref;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge;
+@@ -62,6 +63,18 @@ public final class BareSecurityChoices {
+                 profile, ContentSettingsType.JAVASCRIPT_OPTIMIZER, !on);
+     }
+ 
++    /**
++     * Hand a page blank pixels when it reads a canvas. Off by default. The browser decides when a
++     * page loads, so a change applies to pages opened after it.
++     */
++    public static boolean isBlockCanvasReading(Profile profile) {
++        return BareCanvasBlockBridge.isEnabled(profile);
++    }
++
++    public static void setBlockCanvasReading(Profile profile, boolean on) {
++        BareCanvasBlockBridge.setEnabled(profile, on);
++    }
++
+     /** Keep a page from learning the phone's local network address through WebRTC. */
+     public static boolean isHideLocalAddress(Profile profile) {
+         PrefService prefs = UserPrefs.get(profile);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+index 6fe52d7c4f4..c6c25f18bd2 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+@@ -153,6 +153,8 @@ public class BareWelcomeOverlay {
+     private static final String KEY_DRAFT_BAR_SWIPE = "draft_bar_swipe";
+     private static final String KEY_DRAFT_SECURITY = "draft_security";
+     private static final String KEY_DRAFT_SECURITY_TOUCHED = "draft_security_touched";
++    private static final String KEY_DRAFT_CANVAS = "draft_canvas_block";
++    private static final String KEY_DRAFT_CANVAS_TOUCHED = "draft_canvas_block_touched";
+     private static final String KEY_DRAFT_TRANSLATE = "draft_page_translation";
+     private static final String KEY_DRAFT_TRANSLATE_TOUCHED = "draft_page_translation_touched";
+     private static final String KEY_DRAFT_OPEN_LINKS = "draft_open_links_in_apps";
+@@ -161,11 +163,12 @@ public class BareWelcomeOverlay {
+     private static final int PAGE_TOOLBAR = 2;
+     private static final int PAGE_BROWSING = 3;
+     private static final int PAGE_SECURITY = 4;
+-    private static final int PAGE_TRANSLATE = 5;
+-    private static final int PAGE_READY = 6;
+-    private static final int PAGE_BACKUP = 7;
+-    private static final int PAGE_FINISH = 8;
+-    private static final int PAGE_COUNT = 9;
++    private static final int PAGE_CANVAS = 5;
++    private static final int PAGE_TRANSLATE = 6;
++    private static final int PAGE_READY = 7;
++    private static final int PAGE_BACKUP = 8;
++    private static final int PAGE_FINISH = 9;
++    private static final int PAGE_COUNT = 10;
+ 
+     private static final long SLIDE_MS = 380;
+     private static final long LOGO_IN_MS = 650;
+@@ -309,6 +312,11 @@ public class BareWelcomeOverlay {
+         boolean hardenedJavaScript;
+         int securityTouched;
+ 
++        // Blocking canvas reading, off unless the user turns it on. Like page translation it is
++        // written on a first showing, and on a review only once the user has touched it.
++        boolean canvasBlock;
++        boolean canvasBlockTouched;
++
+         // Page translation, off unless the user turns it on. It is written on Start on a first
+         // showing, and on a review only once the user has touched the switch.
+         boolean pageTranslation;
+@@ -358,6 +366,7 @@ public class BareWelcomeOverlay {
+         private @Nullable MaterialSwitch mBackgroundSwitch;
+         private final MaterialSwitch[] mSecuritySwitches = new MaterialSwitch[4];
+         private @Nullable MaterialSwitch mTranslateSwitch;
++        private @Nullable MaterialSwitch mCanvasSwitch;
+         private @Nullable View mDefaultRow;
+         private @Nullable TextView mOpenLinksValue;
+         private @Nullable View mNotificationsRow;
+@@ -400,6 +409,7 @@ public class BareWelcomeOverlay {
+                 R.layout.bare_welcome_page_toolbar,
+                 R.layout.bare_welcome_page_browsing,
+                 R.layout.bare_welcome_page_security,
++                R.layout.bare_welcome_page_canvas,
+                 R.layout.bare_welcome_page_translate,
+                 R.layout.bare_welcome_page_ready,
+                 R.layout.bare_welcome_page_backup,
+@@ -449,6 +459,7 @@ public class BareWelcomeOverlay {
+             buildToolbarPage(mPages[PAGE_TOOLBAR]);
+             buildBrowsingPage(mPages[PAGE_BROWSING]);
+             buildSecurityPage(mPages[PAGE_SECURITY]);
++            buildCanvasPage(mPages[PAGE_CANVAS]);
+             buildTranslatePage(mPages[PAGE_TRANSLATE]);
+             buildReadyPage(mPages[PAGE_READY]);
+             buildBackupPage(mPages[PAGE_BACKUP]);
+@@ -1157,6 +1168,39 @@ public class BareWelcomeOverlay {
+             if (mPage == PAGE_BACKUP) updateChrome();
+         }
+ 
++        // ---------------------------------------------------------------------------------------
++        // The canvas page: one switch, off unless chosen, that blocks canvas reading.
++
++        private void buildCanvasPage(View page) {
++            View row = page.findViewById(R.id.bare_row_canvas);
++            setUpRow(
++                    row,
++                    R.drawable.ic_grid_view_24dp,
++                    R.string.bare_welcome_opt_canvas,
++                    R.string.bare_welcome_hint_canvas);
++            mCanvasSwitch =
++                    switchRow(
++                            row,
++                            mChoices.canvasBlock,
++                            on -> {
++                                mChoices.canvasBlock = on;
++                                mChoices.canvasBlockTouched = true;
++                                saveDraft();
++                            });
++            // On a review the switch shows what the profile holds.
++            if (mChoices.reviewing) {
++                whenProfileReady(
++                        profile -> {
++                            if (mChoices.canvasBlockTouched) return;
++                            mChoices.canvasBlock =
++                                    BareSecurityChoices.isBlockCanvasReading(profile);
++                            if (mCanvasSwitch != null) {
++                                mCanvasSwitch.setChecked(mChoices.canvasBlock);
++                            }
++                        });
++            }
++        }
++
+         private void buildTranslatePage(View page) {
+             View row = page.findViewById(R.id.bare_row_translate);
+             setUpRow(
+@@ -2019,6 +2063,8 @@ public class BareWelcomeOverlay {
+                                     | (mChoices.hardenedJavaScript ? 8 : 0))
+                     .putInt(KEY_DRAFT_SECURITY_TOUCHED, mChoices.securityTouched)
+                     .putInt(KEY_DRAFT_OPEN_LINKS, mChoices.openLinksInApps)
++                    .putBoolean(KEY_DRAFT_CANVAS, mChoices.canvasBlock)
++                    .putBoolean(KEY_DRAFT_CANVAS_TOUCHED, mChoices.canvasBlockTouched)
+                     .putBoolean(KEY_DRAFT_TRANSLATE, mChoices.pageTranslation)
+                     .putBoolean(KEY_DRAFT_TRANSLATE_TOUCHED, mChoices.pageTranslationTouched)
+                     .apply();
+@@ -2066,6 +2112,9 @@ public class BareWelcomeOverlay {
+             choices.securityTouched = prefs.getInt(KEY_DRAFT_SECURITY_TOUCHED, 0);
+         }
+         choices.openLinksInApps = prefs.getInt(KEY_DRAFT_OPEN_LINKS, choices.openLinksInApps);
++        choices.canvasBlock = prefs.getBoolean(KEY_DRAFT_CANVAS, choices.canvasBlock);
++        choices.canvasBlockTouched =
++                prefs.getBoolean(KEY_DRAFT_CANVAS_TOUCHED, choices.canvasBlockTouched);
+         choices.pageTranslation = prefs.getBoolean(KEY_DRAFT_TRANSLATE, choices.pageTranslation);
+         choices.pageTranslationTouched =
+                 prefs.getBoolean(KEY_DRAFT_TRANSLATE_TOUCHED, choices.pageTranslationTouched);
+@@ -2081,6 +2130,8 @@ public class BareWelcomeOverlay {
+                 .remove(KEY_DRAFT_ENGINE_KNOWN)
+                 .remove(KEY_DRAFT_SECURITY)
+                 .remove(KEY_DRAFT_SECURITY_TOUCHED)
++                .remove(KEY_DRAFT_CANVAS)
++                .remove(KEY_DRAFT_CANVAS_TOUCHED)
+                 .remove(KEY_DRAFT_TRANSLATE)
+                 .remove(KEY_DRAFT_TRANSLATE_TOUCHED)
+                 .remove(KEY_DRAFT_AD_BLOCKER)
+@@ -2299,6 +2350,11 @@ public class BareWelcomeOverlay {
+                         BareSecurityChoices.setHardenedJavaScript(
+                                 profile, choices.hardenedJavaScript);
+                     }
++                    // Off is the default, so a first showing writes what was chosen; a review
++                    // writes only a switch the user touched.
++                    if (!choices.reviewing || choices.canvasBlockTouched) {
++                        BareSecurityChoices.setBlockCanvasReading(profile, choices.canvasBlock);
++                    }
+                     if (choices.reviewing && !choices.engineKnown) return;
+                     whenTemplateUrlServiceLoaded(
+                             service -> service.setSearchEngine(choices.engineKeyword));
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/canvas/BareCanvasBlockBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/canvas/BareCanvasBlockBridge.java
+new file mode 100644
+index 00000000000..180156af576
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/canvas/BareCanvasBlockBridge.java
+@@ -0,0 +1,77 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.canvas;
++
++import org.jni_zero.JniType;
++import org.jni_zero.NativeMethods;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.profiles.Profile;
++import org.chromium.content_public.browser.WebContents;
++
++/**
++ * The switch that blocks canvas reading, and the sites it leaves alone.
++ *
++ * <p>With the switch on, a page that reads pixels back from a canvas gets blank pixels. What is
++ * drawn on screen does not change. A site that needs the real pixels can be put on the allowed
++ * list. Both apply to pages loaded afterwards.
++ */
++@NullMarked
++public final class BareCanvasBlockBridge {
++    private BareCanvasBlockBridge() {}
++
++    public static boolean isEnabled(Profile profile) {
++        return BareCanvasBlockBridgeJni.get().isEnabled(profile);
++    }
++
++    public static void setEnabled(Profile profile, boolean enabled) {
++        BareCanvasBlockBridgeJni.get().setEnabled(profile, enabled);
++    }
++
++    /** Whether a canvas read has been blocked on the page the tab shows. */
++    public static boolean wasReadBlocked(@Nullable WebContents webContents) {
++        if (webContents == null || webContents.isDestroyed()) return false;
++        return BareCanvasBlockBridgeJni.get().wasReadBlocked(webContents);
++    }
++
++    /** Whether the site of the page the tab shows is on the allowed list. */
++    public static boolean isPageSiteAllowed(@Nullable WebContents webContents) {
++        if (webContents == null || webContents.isDestroyed()) return false;
++        return BareCanvasBlockBridgeJni.get().isPageSiteAllowed(webContents);
++    }
++
++    /** Allows the site of the page the tab shows, or blocks it again. Reload to apply. */
++    public static void setPageSiteAllowed(@Nullable WebContents webContents, boolean allowed) {
++        if (webContents == null || webContents.isDestroyed()) return;
++        BareCanvasBlockBridgeJni.get().setPageSiteAllowed(webContents, allowed);
++    }
++
++    public static String[] getAllowedSites(Profile profile) {
++        return BareCanvasBlockBridgeJni.get().getAllowedSites(profile);
++    }
++
++    public static void removeAllowedSite(Profile profile, String site) {
++        BareCanvasBlockBridgeJni.get().removeAllowedSite(profile, site);
++    }
++
++    @NativeMethods
++    public interface Natives {
++        boolean isEnabled(Profile profile);
++
++        void setEnabled(Profile profile, boolean enabled);
++
++        boolean wasReadBlocked(WebContents webContents);
++
++        boolean isPageSiteAllowed(WebContents webContents);
++
++        void setPageSiteAllowed(WebContents webContents, boolean allowed);
++
++        @JniType("std::vector<std::string>")
++        String[] getAllowedSites(Profile profile);
++
++        void removeAllowedSite(Profile profile, @JniType("std::string") String site);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/canvas/BareCanvasFlowView.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/canvas/BareCanvasFlowView.java
+new file mode 100644
+index 00000000000..2d37629e958
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/canvas/BareCanvasFlowView.java
+@@ -0,0 +1,148 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.canvas;
++
++import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Paint;
++import android.graphics.RectF;
++import android.text.Layout;
++import android.text.StaticLayout;
++import android.text.TextPaint;
++import android.util.AttributeSet;
++import android.view.View;
++
++import androidx.core.content.ContextCompat;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.R;
++
++/**
++ * The picture on the welcome's canvas page: a page asks for canvas pixels, Bare hands over a blank
++ * canvas, and the site gets nothing it could recognize the browser by, while what is drawn on
++ * screen stays as it was. It draws only that one path, which is also all the feature does.
++ */
++@NullMarked
++public class BareCanvasFlowView extends View {
++    private static final int GRID = 4;
++
++    // A fixed little picture, standing for whatever a page drew.
++    private static final int[] CELL_COLORS = {
++        0xFF345FC7, 0xFF345FC7, 0xFF8AA8E8, 0xFF8AA8E8,
++        0xFF345FC7, 0xFFDA654B, 0xFFDA654B, 0xFF8AA8E8,
++        0xFFF1C27B, 0xFFDA654B, 0xFFDA654B, 0xFF5F9E6E,
++        0xFFF1C27B, 0xFFF1C27B, 0xFF5F9E6E, 0xFF5F9E6E,
++    };
++
++    private final Paint mFill = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint mStroke = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final TextPaint mText = new TextPaint(Paint.ANTI_ALIAS_FLAG);
++    private final RectF mRect = new RectF();
++    private final float mDensity;
++
++    public BareCanvasFlowView(Context context, AttributeSet attrs) {
++        super(context, attrs);
++        mDensity = context.getResources().getDisplayMetrics().density;
++        mStroke.setStyle(Paint.Style.STROKE);
++        mStroke.setStrokeWidth(1.5f * mDensity);
++        mText.setTextSize(12 * mDensity);
++        setContentDescription(context.getString(R.string.bare_welcome_canvas_picture_description));
++    }
++
++    @Override
++    protected void onMeasure(int widthSpec, int heightSpec) {
++        int width = MeasureSpec.getSize(widthSpec);
++        setMeasuredDimension(width, Math.round(192 * mDensity));
++    }
++
++    @Override
++    protected void onDraw(Canvas canvas) {
++        float width = getWidth();
++        float column = width / 3f;
++        float grid = Math.min(column - 28 * mDensity, 76 * mDensity);
++        float top = 8 * mDensity;
++        int accent = ContextCompat.getColor(getContext(), R.color.bare_welcome_accent);
++        int body = ContextCompat.getColor(getContext(), R.color.bare_welcome_body);
++        int title = ContextCompat.getColor(getContext(), R.color.bare_welcome_title);
++        int card = ContextCompat.getColor(getContext(), R.color.bare_welcome_card);
++        int divider = ContextCompat.getColor(getContext(), R.color.bare_welcome_divider);
++        int soft = ContextCompat.getColor(getContext(), R.color.bare_welcome_soft);
++
++        int[] labels = {
++            R.string.bare_welcome_canvas_step_ask,
++            R.string.bare_welcome_canvas_step_blank,
++            R.string.bare_welcome_canvas_step_receive,
++        };
++        for (int i = 0; i < 3; i++) {
++            float left = i * column + (column - grid) / 2f;
++            // Bare's own step sits in a tinted card so the eye finds where the change happens.
++            if (i == 1) {
++                mRect.set(i * column + 4 * mDensity, top - 6 * mDensity,
++                        (i + 1) * column - 4 * mDensity, top + grid + 74 * mDensity);
++                mFill.setColor(soft);
++                canvas.drawRoundRect(mRect, 14 * mDensity, 14 * mDensity, mFill);
++            }
++            // The first tile is what the page drew. The other two are the blank canvas.
++            drawGrid(canvas, left, top, grid, i > 0, accent, card);
++            drawLabel(canvas, getContext().getString(labels[i]), i * column + 8 * mDensity,
++                    top + grid + 10 * mDensity, column - 16 * mDensity, i == 1 ? title : body);
++        }
++        // Drawn after the cards so the tinted one cannot cover an arrow.
++        for (int i = 1; i < 3; i++) {
++            drawArrow(canvas, i * column, top + grid / 2f, accent);
++        }
++
++        // What is drawn on screen is not part of the path above and does not change.
++        float lineY = getHeight() - 30 * mDensity;
++        mFill.setColor(divider);
++        canvas.drawRect(8 * mDensity, lineY - 1, width - 8 * mDensity, lineY, mFill);
++        float small = 20 * mDensity;
++        drawGrid(canvas, 12 * mDensity, lineY + 5 * mDensity, small, false, accent, card);
++        drawLabel(canvas, getContext().getString(R.string.bare_welcome_canvas_screen_unchanged),
++                12 * mDensity + small + 10 * mDensity, lineY + 7 * mDensity,
++                width - small - 36 * mDensity, title);
++    }
++
++    private void drawGrid(Canvas canvas, float left, float top, float size, boolean blank,
++            int accent, int card) {
++        if (blank) {
++            mFill.setColor(card);
++            canvas.drawRect(left, top, left + size, top + size, mFill);
++        } else {
++            float cell = size / GRID;
++            for (int row = 0; row < GRID; row++) {
++                for (int col = 0; col < GRID; col++) {
++                    float x = left + col * cell;
++                    float y = top + row * cell;
++                    mFill.setColor(CELL_COLORS[row * GRID + col]);
++                    canvas.drawRect(x, y, x + cell, y + cell, mFill);
++                }
++            }
++        }
++        mStroke.setColor(accent);
++        mRect.set(left, top, left + size, top + size);
++        canvas.drawRect(mRect, mStroke);
++    }
++
++    private void drawArrow(Canvas canvas, float x, float y, int color) {
++        mStroke.setColor(color);
++        float half = 8 * mDensity;
++        canvas.drawLine(x - half, y, x + half, y, mStroke);
++        canvas.drawLine(x + half - 5 * mDensity, y - 5 * mDensity, x + half, y, mStroke);
++        canvas.drawLine(x + half - 5 * mDensity, y + 5 * mDensity, x + half, y, mStroke);
++    }
++
++    private void drawLabel(Canvas canvas, String text, float x, float y, float width, int color) {
++        mText.setColor(color);
++        StaticLayout layout =
++                StaticLayout.Builder.obtain(text, 0, text.length(), mText, Math.round(width))
++                        .setAlignment(Layout.Alignment.ALIGN_NORMAL)
++                        .build();
++        canvas.save();
++        canvas.translate(x, y);
++        layout.draw(canvas);
++        canvas.restore();
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSecuritySettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSecuritySettingsFragment.java
+index 9ac48404ddc..a2f7c8d1979 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSecuritySettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSecuritySettingsFragment.java
+@@ -7,6 +7,9 @@ package org.chromium.chrome.browser.bare.settings;
+ import android.content.Context;
+ import android.os.Bundle;
+ 
++import androidx.preference.Preference;
++import androidx.preference.PreferenceCategory;
++
+ import org.chromium.base.supplier.MonotonicObservableSupplier;
+ import org.chromium.base.supplier.ObservableSuppliers;
+ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+@@ -14,6 +17,7 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.bare.BareSecurityChoices;
++import org.chromium.chrome.browser.bare.canvas.BareCanvasBlockBridge;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
+ import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+@@ -46,6 +50,38 @@ public class BareSecuritySettingsFragment extends ChromeBaseSettingsFragment {
+                 BareSecurityChoices::setHideLocalAddress);
+         bind("bare_sec_hardened", profile, BareSecurityChoices::isHardenedJavaScript,
+                 BareSecurityChoices::setHardenedJavaScript);
++        bind("bare_sec_canvas", profile, BareSecurityChoices::isBlockCanvasReading,
++                BareSecurityChoices::setBlockCanvasReading);
++        showAllowedCanvasSites(profile);
++    }
++
++    /**
++     * Lists the sites canvas reading is allowed on, each removed with a tap. Sites are added from
++     * the menu on the page itself. The heading goes when the list is empty.
++     */
++    private void showAllowedCanvasSites(Profile profile) {
++        PreferenceCategory category = findPreference("bare_sec_canvas_allowed");
++        assert category != null;
++        category.removeAll();
++        String[] sites = BareCanvasBlockBridge.getAllowedSites(profile);
++        category.setVisible(sites.length > 0);
++        for (String site : sites) {
++            Preference row = new Preference(getStyledContext());
++            row.setPersistent(false);
++            row.setTitle(site);
++            row.setSummary(R.string.bare_security_canvas_allowed_remove);
++            row.setOnPreferenceClickListener(
++                    p -> {
++                        BareCanvasBlockBridge.removeAllowedSite(profile, site);
++                        showAllowedCanvasSites(profile);
++                        return true;
++                    });
++            category.addPreference(row);
++        }
++    }
++
++    private Context getStyledContext() {
++        return getPreferenceManager().getContext();
+     }
+ 
+     private void bind(
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
+index b631aacc939..760ad320e88 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
+@@ -113,7 +113,8 @@ public final class BareSettingsLayout {
+                                             "bare_toolbar",
+                                             "bare_app_icon",
+                                             "bare_glass",
+-                                            "bare_snackbars"),
++                                            "bare_snackbars",
++                                            "bare_menu_card"),
+                                     new Entry(
+                                             "privacy",
+                                             R.string.bare_settings_cat_privacy,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+index 1a73c65b751..6adcaaca4c4 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+@@ -144,6 +144,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
+     public static final String PREF_BARE_APP_ICON = "bare_app_icon";
+     private static final String PREF_BARE_GLASS = "bare_glass";
+     private static final String PREF_BARE_SNACKBARS = "bare_snackbars";
++    private static final String PREF_BARE_MENU_CARD = "bare_menu_card";
+     private static final String PREF_BARE_SMOOTH_SCROLLING = "bare_smooth_scrolling";
+     private static @Nullable Boolean sRunningSmoothScrolling;
+     private static final String PREF_BARE_THEME = "bare_ui_theme";
+@@ -524,6 +525,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
+         setUpAppIconRow();
+         setUpGlassRow();
+         setUpSnackbarsRow();
++        setUpMenuCardRow();
+         setUpSmoothScrollingRow();
+ 
+         cachePreferences();
+@@ -1132,6 +1134,24 @@ public class MainSettings extends ChromeBaseSettingsFragment
+                 });
+     }
+ 
++    /**
++     * The switch between the Bare menu, a card that rises from the toolbar, and the classic
++     * drop-down menu. On unless the user turned it off; the next menu opened follows it.
++     */
++    private void setUpMenuCardRow() {
++        ChromeSwitchPreference row = (ChromeSwitchPreference) findPreference(PREF_BARE_MENU_CARD);
++        if (row == null) return;
++        row.setChecked(
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_MENU_CARD, true));
++        row.setOnPreferenceChangeListener(
++                (pref, newValue) -> {
++                    ChromeSharedPreferences.getInstance()
++                            .writeBoolean(ChromePreferenceKeys.BARE_MENU_CARD, (boolean) newValue);
++                    return true;
++                });
++    }
++
+     /**
+      * The switch for snackbars, the short messages at the bottom of the screen. Off unless the
+      * user turned it on; while off they are listed under Notifications in the menu.
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+index fddf1ac15ae..b7796b20a02 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+@@ -36,6 +36,7 @@ import org.chromium.chrome.browser.app.appmenu.AppMenuItemUtils;
+ import org.chromium.chrome.browser.app.appmenu.AppMenuPropertiesDelegateImpl;
+ import org.chromium.chrome.browser.app.appmenu.BareAppMenuCustomization;
+ import org.chromium.chrome.browser.bare.BareImmersive;
++import org.chromium.chrome.browser.bare.canvas.BareCanvasBlockBridge;
+ import org.chromium.chrome.browser.bookmarks.BookmarkImageFetcher;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+ import org.chromium.chrome.browser.device.DeviceConditions;
+@@ -65,6 +66,7 @@ import org.chromium.chrome.browser.recent_tabs.ForeignSessionHelper;
+ import org.chromium.chrome.browser.share.ShareUtils;
+ import org.chromium.chrome.browser.supervised_user.AndroidParentalControlsBridge;
+ import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.content_public.browser.WebContents;
+ import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
+ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+ import org.chromium.chrome.browser.task_manager.TaskManager;
+@@ -452,6 +454,9 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+         // Downloads
+         modelList.add(buildDownloadsItem());
+         modelList.add(buildNotificationsItem());
++        if (shouldShowBareCanvasItem(currentTab)) {
++            modelList.add(buildBareCanvasItem(currentTab));
++        }
+ 
+         // Bookmarks
+         modelList.add(mBookmarksItemBuilder.buildBookmarksItem(shouldShowIconBeforeItem));
+@@ -690,6 +695,9 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+         // Downloads
+         modelList.add(buildDownloadsItem());
+         modelList.add(buildNotificationsItem());
++        if (shouldShowBareCanvasItem(currentTab)) {
++            modelList.add(buildBareCanvasItem(currentTab));
++        }
+ 
+         // Bookmarks
+         modelList.add(mBookmarksItemBuilder.buildBookmarksParentItem(currentTab));
+@@ -1104,6 +1112,37 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+                         isMenuIconAtStart()));
+     }
+ 
++    /**
++     * Bare: the canvas row is offered only where it has something to do. That is a page where a
++     * canvas read was blocked, which the user may want to allow, or a page of a site already
++     * allowed, which the user may want to block again.
++     */
++    private boolean shouldShowBareCanvasItem(@Nullable Tab currentTab) {
++        if (currentTab == null || currentTab.isNativePage()) return false;
++        WebContents webContents = currentTab.getWebContents();
++        if (webContents == null || webContents.isDestroyed()) return false;
++        if (!BareCanvasBlockBridge.isEnabled(currentTab.getProfile())) return false;
++        return BareCanvasBlockBridge.wasReadBlocked(webContents)
++                || BareCanvasBlockBridge.isPageSiteAllowed(webContents);
++    }
++
++    private ListItem buildBareCanvasItem(@Nullable Tab currentTab) {
++        boolean allowed =
++                currentTab != null
++                        && BareCanvasBlockBridge.isPageSiteAllowed(currentTab.getWebContents());
++        return new ListItem(
++                AppMenuHandler.AppMenuItemType.STANDARD,
++                AppMenuItemUtils.buildModelForStandardMenuItem(
++                        mContext,
++                        getAppMenuItemTheme(),
++                        R.id.bare_canvas_allow_id,
++                        allowed ? R.string.bare_canvas_menu_block : R.string.bare_canvas_menu_allow,
++                        shouldShowIconBeforeItem()
++                                ? R.drawable.ic_grid_view_24dp
++                                : Resources.ID_NULL,
++                        isMenuIconAtStart()));
++    }
++
+     /** Bare: the messages that were not popped up. */
+     private ListItem buildNotificationsItem() {
+         return new ListItem(
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+index 5a3ba47d163..059bfb5b28f 100644
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -435,6 +435,7 @@ if (is_android) {
+       "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinatorUnitTest.java",
+       "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarEnabledChangeObserverUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapterUnitTest.java",
++      "src/org/chromium/chrome/browser/bare/BareCanvasBlockChoiceUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareExtensionPresentationUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BareOpenInAppsModeUnitTest.java",
+       "src/org/chromium/chrome/browser/bare/BarePageTranslationUnitTest.java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareCanvasBlockChoiceUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareCanvasBlockChoiceUnitTest.java
+new file mode 100644
+index 00000000000..a4f314f25ed
+--- /dev/null
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareCanvasBlockChoiceUnitTest.java
+@@ -0,0 +1,101 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
++import static org.mockito.ArgumentMatchers.anyBoolean;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++import org.junit.After;
++import org.junit.Before;
++import org.junit.Rule;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.mockito.Mock;
++import org.mockito.junit.MockitoJUnit;
++import org.mockito.junit.MockitoRule;
++
++import org.chromium.components.prefs.PrefService;
++import org.chromium.components.user_prefs.UserPrefs;
++import org.chromium.components.user_prefs.UserPrefsJni;
++import org.chromium.base.test.BaseRobolectricTestRunner;
++import org.chromium.chrome.browser.bare.canvas.BareCanvasBlockBridge;
++import org.chromium.chrome.browser.bare.canvas.BareCanvasBlockBridgeJni;
++import org.chromium.chrome.browser.profiles.Profile;
++import org.chromium.chrome.browser.profiles.ProfileManager;
++
++/**
++ * Tests for the choice to block canvas reading: off by default, read and written through the one
++ * switch the browser reads, and written by the welcome only when it should be.
++ */
++@RunWith(BaseRobolectricTestRunner.class)
++public class BareCanvasBlockChoiceUnitTest {
++    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
++
++    @Mock private BareCanvasBlockBridge.Natives mNatives;
++    @Mock private Profile mProfile;
++    @Mock private UserPrefs.Natives mUserPrefsNatives;
++    @Mock private PrefService mPrefs;
++
++    @Before
++    public void setUp() {
++        BareCanvasBlockBridgeJni.setInstanceForTesting(mNatives);
++        UserPrefsJni.setInstanceForTesting(mUserPrefsNatives);
++        when(mUserPrefsNatives.get(mProfile)).thenReturn(mPrefs);
++        ProfileManager.setLastUsedProfileForTesting(mProfile);
++    }
++
++    @After
++    public void tearDown() {
++        ProfileManager.resetForTesting();
++    }
++
++    @Test
++    public void testTheSwitchReadsAndWritesTheBrowsersSetting() {
++        when(mNatives.isEnabled(mProfile)).thenReturn(false);
++        assertFalse(BareSecurityChoices.isBlockCanvasReading(mProfile));
++        when(mNatives.isEnabled(mProfile)).thenReturn(true);
++        assertTrue(BareSecurityChoices.isBlockCanvasReading(mProfile));
++
++        BareSecurityChoices.setBlockCanvasReading(mProfile, true);
++        verify(mNatives).setEnabled(mProfile, true);
++        BareSecurityChoices.setBlockCanvasReading(mProfile, false);
++        verify(mNatives).setEnabled(mProfile, false);
++    }
++
++    @Test
++    public void testTheWelcomeOpensWithItOff() {
++        for (boolean reviewing : new boolean[] {false, true}) {
++            BareWelcomeOverlay.Choices choices = BareWelcomeOverlay.currentChoices(reviewing);
++            assertFalse(choices.canvasBlock);
++            assertFalse(choices.canvasBlockTouched);
++        }
++    }
++
++    @Test
++    public void testAReviewWritesItOnlyWhenTheUserChangedIt() {
++        BareWelcomeOverlay.Choices choices = BareWelcomeOverlay.currentChoices(true);
++        BareWelcomeOverlay.applyChoices(choices);
++        verify(mNatives, never()).setEnabled(eq(mProfile), anyBoolean());
++
++        choices.canvasBlock = true;
++        choices.canvasBlockTouched = true;
++        BareWelcomeOverlay.applyChoices(choices);
++        verify(mNatives).setEnabled(mProfile, true);
++    }
++
++    @Test
++    public void testAReviewCanTurnItBackOff() {
++        BareWelcomeOverlay.Choices choices = BareWelcomeOverlay.currentChoices(true);
++        choices.canvasBlock = false;
++        choices.canvasBlockTouched = true;
++        BareWelcomeOverlay.applyChoices(choices);
++        verify(mNatives).setEnabled(mProfile, false);
++    }
++}
+diff --git a/chrome/browser/android/BUILD.gn b/chrome/browser/android/BUILD.gn
+index 6d25d487824..6ea475566ca 100644
+--- a/chrome/browser/android/BUILD.gn
++++ b/chrome/browser/android/BUILD.gn
+@@ -471,6 +471,8 @@ if (is_android) {
+       "content/web_contents_factory.cc",
+       "content/web_contents_factory_data_deleter.cc",
+       "content/web_contents_factory_data_deleter.h",
++      "bare_canvas_block.cc",
++      "bare_canvas_block.h",
+       "bare_player_bridge.cc",
+       "context_menu/context_menu_native_delegate_impl.cc",
+       "context_menu/context_menu_native_delegate_impl.h",
+diff --git a/chrome/browser/android/bare_canvas_block.cc b/chrome/browser/android/bare_canvas_block.cc
+new file mode 100644
+index 00000000000..ecdb29e3d56
+--- /dev/null
++++ b/chrome/browser/android/bare_canvas_block.cc
+@@ -0,0 +1,234 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/android/bare_canvas_block.h"
++
++#include <memory>
++#include <set>
++#include <string>
++#include <vector>
++
++#include "base/android/jni_android.h"
++#include "base/android/jni_array.h"
++#include "base/android/jni_string.h"
++#include "base/android/scoped_java_ref.h"
++#include "base/supports_user_data.h"
++#include "base/values.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/common/pref_names.h"
++#include "components/prefs/pref_service.h"
++#include "components/prefs/scoped_user_pref_update.h"
++#include "content/public/browser/browser_context.h"
++#include "content/public/browser/page.h"
++#include "content/public/browser/page_user_data.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "net/base/schemeful_site.h"
++#include "url/origin.h"
++
++// Must come after all headers that specialize FromJniType() / ToJniType().
++#include "chrome/android/chrome_jni_headers/BareCanvasBlockBridge_jni.h"
++
++namespace {
++
++using base::android::JavaRef;
++
++// Only its address is used, as the key the incognito list is stored under.
++const int kIncognitoSitesKey = 0;
++
++// The sites allowed in an incognito profile. Kept on the profile, in memory
++// only: it is never written anywhere and goes when the profile does. An
++// incognito profile does not read or change the regular profile's list.
++struct IncognitoSites : public base::SupportsUserData::Data {
++  std::set<std::string> sites;
++};
++
++std::set<std::string>* IncognitoSet(Profile* profile, bool create) {
++  auto* data =
++      static_cast<IncognitoSites*>(profile->GetUserData(&kIncognitoSitesKey));
++  if (!data && create) {
++    auto owned = std::make_unique<IncognitoSites>();
++    data = owned.get();
++    profile->SetUserData(&kIncognitoSitesKey, std::move(owned));
++  }
++  return data ? &data->sites : nullptr;
++}
++
++// The name a site is listed under, or empty for an origin with no site.
++std::string SiteOf(const url::Origin& origin) {
++  if (origin.opaque()) {
++    return std::string();
++  }
++  return net::SchemefulSite(origin).Serialize();
++}
++
++bool IsAllowed(Profile* profile, const std::string& site) {
++  if (site.empty()) {
++    return false;
++  }
++  if (profile->IsOffTheRecord()) {
++    const std::set<std::string>* sites = IncognitoSet(profile, false);
++    return sites && sites->contains(site);
++  }
++  for (const base::Value& value :
++       profile->GetPrefs()->GetList(prefs::kBareCanvasBlockAllowedSites)) {
++    if (value.is_string() && value.GetString() == site) {
++      return true;
++    }
++  }
++  return false;
++}
++
++void SetAllowed(Profile* profile, const std::string& site, bool allowed) {
++  if (site.empty() || IsAllowed(profile, site) == allowed) {
++    return;
++  }
++  if (profile->IsOffTheRecord()) {
++    std::set<std::string>* sites = IncognitoSet(profile, true);
++    if (allowed) {
++      sites->insert(site);
++    } else {
++      sites->erase(site);
++    }
++    return;
++  }
++  ScopedListPrefUpdate update(profile->GetPrefs(),
++                              prefs::kBareCanvasBlockAllowedSites);
++  if (allowed) {
++    update->Append(site);
++  } else {
++    update->EraseValue(base::Value(site));
++  }
++}
++
++// Present on a page once a canvas read has been blocked on it. It goes with
++// the page, so a reload or a new page starts without it.
++class ReadBlockedMark : public content::PageUserData<ReadBlockedMark> {
++ public:
++  ~ReadBlockedMark() override = default;
++
++ private:
++  explicit ReadBlockedMark(content::Page& page)
++      : content::PageUserData<ReadBlockedMark>(page) {}
++
++  friend content::PageUserData<ReadBlockedMark>;
++  PAGE_USER_DATA_KEY_DECL();
++};
++
++PAGE_USER_DATA_KEY_IMPL(ReadBlockedMark);
++
++Profile* ProfileOf(content::WebContents* web_contents) {
++  return web_contents
++             ? Profile::FromBrowserContext(web_contents->GetBrowserContext())
++             : nullptr;
++}
++
++std::string SiteOfPage(content::WebContents* web_contents) {
++  return SiteOf(web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
++}
++
++}  // namespace
++
++namespace bare_canvas_block {
++
++bool ShouldBlock(content::BrowserContext* browser_context,
++                 const url::Origin& top_level_origin) {
++  Profile* profile = Profile::FromBrowserContext(browser_context);
++  if (!profile ||
++      !profile->GetPrefs()->GetBoolean(prefs::kBareCanvasBlockEnabled)) {
++    return false;
++  }
++  return !IsAllowed(profile, SiteOf(top_level_origin));
++}
++
++void NoteReadBlocked(content::RenderFrameHost* render_frame_host) {
++  ReadBlockedMark::GetOrCreateForPage(
++      render_frame_host->GetOutermostMainFrame()->GetPage());
++}
++
++}  // namespace bare_canvas_block
++
++static jboolean JNI_BareCanvasBlockBridge_IsEnabled(
++    JNIEnv* env,
++    const JavaRef<jobject>& jprofile) {
++  Profile* profile = Profile::FromJavaObject(jprofile);
++  return profile &&
++         profile->GetPrefs()->GetBoolean(prefs::kBareCanvasBlockEnabled);
++}
++
++static void JNI_BareCanvasBlockBridge_SetEnabled(
++    JNIEnv* env,
++    const JavaRef<jobject>& jprofile,
++    jboolean enabled) {
++  if (Profile* profile = Profile::FromJavaObject(jprofile)) {
++    profile->GetPrefs()->SetBoolean(prefs::kBareCanvasBlockEnabled, enabled);
++  }
++}
++
++// Whether a canvas read has been blocked on the page the tab shows.
++static jboolean JNI_BareCanvasBlockBridge_WasReadBlocked(
++    JNIEnv* env,
++    const JavaRef<jobject>& jweb_contents) {
++  content::WebContents* web_contents =
++      content::WebContents::FromJavaWebContents(jweb_contents);
++  return web_contents &&
++         ReadBlockedMark::GetForPage(web_contents->GetPrimaryPage());
++}
++
++// Whether the site of the page the tab shows is on the allowed list.
++static jboolean JNI_BareCanvasBlockBridge_IsPageSiteAllowed(
++    JNIEnv* env,
++    const JavaRef<jobject>& jweb_contents) {
++  content::WebContents* web_contents =
++      content::WebContents::FromJavaWebContents(jweb_contents);
++  Profile* profile = ProfileOf(web_contents);
++  return profile && IsAllowed(profile, SiteOfPage(web_contents));
++}
++
++// Puts the site of the page the tab shows on the allowed list, or takes it
++// off. It applies to pages loaded afterwards; the caller reloads.
++static void JNI_BareCanvasBlockBridge_SetPageSiteAllowed(
++    JNIEnv* env,
++    const JavaRef<jobject>& jweb_contents,
++    jboolean allowed) {
++  content::WebContents* web_contents =
++      content::WebContents::FromJavaWebContents(jweb_contents);
++  if (Profile* profile = ProfileOf(web_contents)) {
++    SetAllowed(profile, SiteOfPage(web_contents), allowed);
++  }
++}
++
++static std::vector<std::string> JNI_BareCanvasBlockBridge_GetAllowedSites(
++    JNIEnv* env,
++    const JavaRef<jobject>& jprofile) {
++  std::vector<std::string> sites;
++  Profile* profile = Profile::FromJavaObject(jprofile);
++  if (!profile) {
++    return sites;
++  }
++  if (profile->IsOffTheRecord()) {
++    if (const std::set<std::string>* set = IncognitoSet(profile, false)) {
++      sites.assign(set->begin(), set->end());
++    }
++    return sites;
++  }
++  for (const base::Value& value :
++       profile->GetPrefs()->GetList(prefs::kBareCanvasBlockAllowedSites)) {
++    if (value.is_string()) {
++      sites.push_back(value.GetString());
++    }
++  }
++  return sites;
++}
++
++static void JNI_BareCanvasBlockBridge_RemoveAllowedSite(
++    JNIEnv* env,
++    const JavaRef<jobject>& jprofile,
++    std::string site) {
++  if (Profile* profile = Profile::FromJavaObject(jprofile)) {
++    SetAllowed(profile, site, false);
++  }
++}
++
++DEFINE_JNI(BareCanvasBlockBridge)
+diff --git a/chrome/browser/android/bare_canvas_block.h b/chrome/browser/android/bare_canvas_block.h
+new file mode 100644
+index 00000000000..e614732d2b9
+--- /dev/null
++++ b/chrome/browser/android/bare_canvas_block.h
+@@ -0,0 +1,36 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_ANDROID_BARE_CANVAS_BLOCK_H_
++#define CHROME_BROWSER_ANDROID_BARE_CANVAS_BLOCK_H_
++
++namespace content {
++class BrowserContext;
++class RenderFrameHost;
++}  // namespace content
++
++namespace url {
++class Origin;
++}  // namespace url
++
++// The browser side of canvas read blocking: the switch, the list of sites it
++// leaves alone, and the note that a page had a read blocked. The renderer
++// side is third_party/blink/renderer/core/html/canvas/bare_canvas_block.h.
++namespace bare_canvas_block {
++
++// Whether canvas reads are blocked on a page whose top-level origin is
++// `top_level_origin`: the switch is on and the origin's site is not on the
++// allowed list. An opaque origin has no site to allow, so it is blocked
++// whenever the switch is on.
++bool ShouldBlock(content::BrowserContext* browser_context,
++                 const url::Origin& top_level_origin);
++
++// Remembers, for as long as the page lives, that a read was blocked on the
++// page `render_frame_host` belongs to. The menu offers to allow the site only
++// on such a page.
++void NoteReadBlocked(content::RenderFrameHost* render_frame_host);
++
++}  // namespace bare_canvas_block
++
++#endif  // CHROME_BROWSER_ANDROID_BARE_CANVAS_BLOCK_H_
+diff --git a/chrome/browser/bare/backup/backup_settings.cc b/chrome/browser/bare/backup/backup_settings.cc
+index 13b60c827a6..5b8de0b2328 100644
+--- a/chrome/browser/bare/backup/backup_settings.cc
++++ b/chrome/browser/bare/backup/backup_settings.cc
+@@ -389,6 +389,7 @@ constexpr Setting kSettings[] = {
+     {A, kSetup, "Bare.ClearOnExit.LeaveAsExit", kBool, AnyBool},
+     {P, kSetup, "enable_do_not_track", kBool, AnyBool},
+     {P, kSetup, "https_only_mode_enabled", kBool, AnyBool},
++    {P, kSetup, "bare.canvas_block_enabled", kBool, AnyBool},
+     {P, kSetup, "profile.cookie_controls_mode", kInt, IntRange<0, 2>},
+     {P, kSetup, "webrtc.ip_handling_policy", kString,
+      StringIn<kWebRtcPolicies>},
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index f3927a731ba..8d29a354368 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "chrome/browser/chrome_content_browser_client.h"
+ 
++#include "build/build_config.h"
++#if BUILDFLAG(IS_ANDROID)
++#include "chrome/browser/android/bare_canvas_block.h"
++#endif
++
+ #include <algorithm>
+ #include <iterator>
+ #include <map>
+@@ -1683,6 +1688,8 @@ void ChromeContentBrowserClient::RegisterLocalStatePrefs(
+ // static
+ void ChromeContentBrowserClient::RegisterProfilePrefs(
+     user_prefs::PrefRegistrySyncable* registry) {
++  registry->RegisterBooleanPref(prefs::kBareCanvasBlockEnabled, false);
++  registry->RegisterListPref(prefs::kBareCanvasBlockAllowedSites);
+   registry->RegisterBooleanPref(prefs::kDisable3DAPIs, false);
+   registry->RegisterBooleanPref(prefs::kEnableHyperlinkAuditing, true);
+   // Register user prefs for mapping SitePerProcess and IsolateOrigins in
+@@ -2877,6 +2884,23 @@ bool ChromeContentBrowserClient::ShouldUrlUseApplicationIsolationLevel(
+   return false;
+ }
+ 
++bool ChromeContentBrowserClient::BareShouldBlockCanvasRead(
++    content::BrowserContext* browser_context,
++    const url::Origin& top_level_origin) {
++#if BUILDFLAG(IS_ANDROID)
++  return bare_canvas_block::ShouldBlock(browser_context, top_level_origin);
++#else
++  return false;
++#endif
++}
++
++void ChromeContentBrowserClient::BareCanvasReadBlocked(
++    content::RenderFrameHost* render_frame_host) {
++#if BUILDFLAG(IS_ANDROID)
++  bare_canvas_block::NoteReadBlocked(render_frame_host);
++#endif
++}
++
+ #if !BUILDFLAG(IS_ANDROID)
+ bool ChromeContentBrowserClient::IsInitialWebUIURL(const GURL& url) {
+   return waap::IsForInitialWebUI(url);
+@@ -6295,7 +6319,9 @@ std::unique_ptr<blink::URLLoaderThrottle> CreateGoogleURLLoaderThrottle(
+               policy::policy_prefs::kForceGoogleSafeSearch),
+           profile->GetPrefs()->GetInteger(
+               policy::policy_prefs::kForceYouTubeRestrict),
+-          profile->GetPrefs()->GetString(prefs::kAllowedDomainsForApps)
++          profile->GetPrefs()->GetString(prefs::kAllowedDomainsForApps),
++          // Bare: only renderers use this field.
++          /*bare_block_canvas_read=*/false
+ #if BUILDFLAG(ENABLE_REQUEST_HEADER_INTEGRITY) && !BUILDFLAG(IS_ANDROID)
+               ,
+           // Only the copy pushed to renderers carries this; the throttle
+diff --git a/chrome/browser/chrome_content_browser_client.h b/chrome/browser/chrome_content_browser_client.h
+index 8ba370793b2..ddb1fd05fe2 100644
+--- a/chrome/browser/chrome_content_browser_client.h
++++ b/chrome/browser/chrome_content_browser_client.h
+@@ -328,6 +328,10 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
+   bool IsInitialWebUIURL(const GURL& url) override;
+ #endif  // !BUILDFLAG(IS_ANDROID)
+   bool IsTopChromeWebUIURL(const GURL& url) override;
++  bool BareShouldBlockCanvasRead(content::BrowserContext* browser_context,
++                                 const url::Origin& top_level_origin) override;
++  void BareCanvasReadBlocked(
++      content::RenderFrameHost* render_frame_host) override;
+   bool IsMultiCaptureAllowed(
+       content::RenderFrameHost* render_frame_host) override;
+   bool IsVideoCaptureAllowedWhileScreenLocked(
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 0ff9d1c65eb..1660f503379 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -556,6 +556,9 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_SNACKBARS_SHOWN = "Bare.Appearance.Snackbars";
+ 
++    /** Whether the three-dot menu is the Bare card. Off shows the classic drop-down menu. */
++    public static final String BARE_MENU_CARD = "Bare.Appearance.MenuCard";
++
+     /**
+      * De-Googled build: package name of the chosen external download manager, or empty to ask
+      * every time. A package that is no longer installed falls back to asking.
+@@ -1467,6 +1470,7 @@ public final class ChromePreferenceKeys {
+                 BARE_PLAYER_ENABLED,
+                 BARE_PLAYER_OFFERED,
+                 BARE_SNACKBARS_SHOWN,
++                BARE_MENU_CARD,
+                 BARE_USER_AGENT_PRESET,
+                 BARE_ADDRESS_BAR_SWIPE_TABS,
+                 BARE_EXTENSION_PRESENTATION,
+diff --git a/chrome/browser/profiles/renderer_updater.cc b/chrome/browser/profiles/renderer_updater.cc
+index caa836b7e96..2604079d265 100644
+--- a/chrome/browser/profiles/renderer_updater.cc
++++ b/chrome/browser/profiles/renderer_updater.cc
+@@ -23,6 +23,7 @@
+ #include "components/content_settings/core/common/content_settings.h"
+ #include "components/content_settings/core/common/content_settings_utils.h"
+ #include "components/policy/core/common/policy_pref_names.h"
++#include "components/prefs/pref_service.h"
+ #include "components/signin/public/base/signin_buildflags.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/render_process_host.h"
+@@ -96,6 +97,10 @@ RendererUpdater::RendererUpdater(Profile* profile)
+       prefs::kAllowedDomainsForApps,
+       base::BindRepeating(&RendererUpdater::UpdateAllRenderers,
+                           base::Unretained(this)));
++  pref_change_registrar_.Add(
++      prefs::kBareCanvasBlockEnabled,
++      base::BindRepeating(&RendererUpdater::UpdateAllRenderers,
++                          base::Unretained(this)));
+ 
+ #if BUILDFLAG(ENABLE_REQUEST_HEADER_INTEGRITY) && !BUILDFLAG(IS_ANDROID)
+   if (auto* platform_runtime_host =
+@@ -249,7 +254,8 @@ chrome::mojom::DynamicParamsPtr RendererUpdater::CreateRendererDynamicParams()
+       GetBoundSessionThrottlerParams(),
+ #endif
+       force_google_safesearch_.GetValue(), force_youtube_restrict_.GetValue(),
+-      allowed_domains_for_apps_.GetValue()
++      allowed_domains_for_apps_.GetValue(),
++      profile_->GetPrefs()->GetBoolean(prefs::kBareCanvasBlockEnabled)
+ #if BUILDFLAG(ENABLE_REQUEST_HEADER_INTEGRITY) && !BUILDFLAG(IS_ANDROID)
+           ,
+       GetPlatformRuntimeHeaders()
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+index 8f21e1d3f91..57a228ffca1 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+@@ -589,11 +589,14 @@ class AppMenu implements OnKeyListener {
+ 
+         // Bare: on phones, opened from the button on screen, the menu is a sheet that comes up
+         // from behind the bottom toolbar. Its window ends at the top of the toolbar, so the
+-        // toolbar stays in front of it and undimmed.
++        // toolbar stays in front of it and undimmed. With Bare menu turned off in Appearance
++        // the classic drop-down menu is shown instead.
+         mSheet = null;
+         View popupContent = contentView;
+         int[] position = popupPosition;
+         if (!isByPermanentButton
++                && ContextUtils.getAppSharedPreferences()
++                        .getBoolean("Bare.Appearance.MenuCard", true)
+                 && !DeviceInfo.isDesktop()
+                 && context.getResources().getConfiguration().smallestScreenWidthDp < 600) {
+             View root = anchorView.getRootView();
+diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
+index 4635e636a48..98bf6d1793a 100644
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -3364,6 +3364,15 @@ inline constexpr char kCpuPerformanceTierOverride[] =
+ // Value indicating that the CPU performance tier has not been overridden.
+ inline constexpr int kCpuPerformanceTierOverrideNone = -1;
+ 
++// Bare: whether scripts that read pixels back from a canvas get blank pixels.
++// Off by default.
++inline constexpr char kBareCanvasBlockEnabled[] = "bare.canvas_block_enabled";
++
++// Bare: the sites canvas reading stays allowed on while the switch above is
++// on. A list of serialized sites ("https://example.com").
++inline constexpr char kBareCanvasBlockAllowedSites[] =
++    "bare.canvas_block_allowed_sites";
++
+ }  // namespace prefs
+ 
+ #endif  // CHROME_COMMON_PREF_NAMES_H_
+diff --git a/chrome/common/renderer_configuration.mojom b/chrome/common/renderer_configuration.mojom
+index b5631d2a8d9..5c5f24e3aa3 100644
+--- a/chrome/common/renderer_configuration.mojom
++++ b/chrome/common/renderer_configuration.mojom
+@@ -34,6 +34,10 @@ struct DynamicParams {
+   int32 youtube_restrict = 0;
+   string allowed_domains_for_apps;
+ 
++  // Bare: whether canvas reads are blocked for the profile. Used for shared
++  // and service workers only; documents are told with each navigation.
++  bool bare_block_canvas_read = false;
++
+   // Request headers produced by the Platform Runtime library. Empty until the
+   // browser has a value.
+   //
+diff --git a/chrome/renderer/chrome_render_thread_observer.cc b/chrome/renderer/chrome_render_thread_observer.cc
+index e8a78b8b848..638e2625847 100644
+--- a/chrome/renderer/chrome_render_thread_observer.cc
++++ b/chrome/renderer/chrome_render_thread_observer.cc
+@@ -221,6 +221,8 @@ void ChromeRenderThreadObserver::SetConfiguration(
+   request_header_integrity::PlatformRuntimeHeaders::GetInstance().Set(
+       params->request_integrity_headers);
+ #endif
++  blink::WebSecurityPolicy::SetBareCanvasBlockInSharedWorkers(
++      params->bare_block_canvas_read);
+   base::AutoLock lock(dynamic_params_lock_);
+   dynamic_params_ = std::move(params);
+ }
+diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/content/browser/renderer_host/navigation_controller_impl.cc
+index 580d1a893d4..3c6c1f0c57d 100644
+--- a/content/browser/renderer_host/navigation_controller_impl.cc
++++ b/content/browser/renderer_host/navigation_controller_impl.cc
+@@ -4818,7 +4818,8 @@ NavigationControllerImpl::CreateNavigationRequestFromLoadParams(
+           /*internal_scroll_to_text_fragment=*/
+           params.internal_scroll_to_text_fragment,
+           /*is_secure_context_root=*/false,
+-          blink::mojom::ScriptInjectionPolicy::kNone);
++          blink::mojom::ScriptInjectionPolicy::kNone,
++          /*bare_block_canvas_read=*/false);
+ 
+   // internal_scroll_to_text_fragment should only be set for browser-initiated
+   // navigations.
+diff --git a/content/browser/renderer_host/navigation_entry_impl.cc b/content/browser/renderer_host/navigation_entry_impl.cc
+index 83b871f22c2..8dfcff756bc 100644
+--- a/content/browser/renderer_host/navigation_entry_impl.cc
++++ b/content/browser/renderer_host/navigation_entry_impl.cc
+@@ -1110,7 +1110,8 @@ NavigationEntryImpl::ConstructCommitNavigationParams(
+           /*permissions_policy_override=*/std::nullopt,
+           /*internal_scroll_to_text_fragment=*/std::nullopt,
+           /*is_secure_context_root=*/false,
+-          blink::mojom::ScriptInjectionPolicy::kNone);
++          blink::mojom::ScriptInjectionPolicy::kNone,
++          /*bare_block_canvas_read=*/false);
+ #if BUILDFLAG(IS_ANDROID)
+   // `data_url_as_string` is saved in NavigationEntry but should only be used by
+   // main frames, because loadData* navigations can only happen on the main
+diff --git a/content/browser/renderer_host/navigation_request.cc b/content/browser/renderer_host/navigation_request.cc
+index 63ce1500216..9a7f8cad2ec 100644
+--- a/content/browser/renderer_host/navigation_request.cc
++++ b/content/browser/renderer_host/navigation_request.cc
+@@ -1429,7 +1429,8 @@ std::unique_ptr<NavigationRequest> NavigationRequest::CreateRendererInitiated(
+           /*isolated_app_policy=*/std::nullopt,
+           /*internal_scroll_to_text_fragment=*/std::nullopt,
+           /*is_secure_context_root=*/false,
+-          blink::mojom::ScriptInjectionPolicy::kNone);
++          blink::mojom::ScriptInjectionPolicy::kNone,
++          /*bare_block_canvas_read=*/false);
+ #if !BUILDFLAG(IS_ANDROID)
+   CHECK(!GetContentClient()->browser()->IsInitialWebUIURL(common_params->url));
+ #endif
+@@ -1603,7 +1604,8 @@ NavigationRequest::CreateForSynchronousRendererCommit(
+           /*isolated_app_policy=*/std::nullopt,
+           /*internal_scroll_to_text_fragment=*/std::nullopt,
+           /*is_secure_context_root=*/false,
+-          blink::mojom::ScriptInjectionPolicy::kNone);
++          blink::mojom::ScriptInjectionPolicy::kNone,
++          /*bare_block_canvas_read=*/false);
+   blink::mojom::BeginNavigationParamsPtr begin_params =
+       blink::mojom::BeginNavigationParams::New();
+   std::unique_ptr<NavigationRequest> navigation_request(new NavigationRequest(
+@@ -7401,6 +7403,27 @@ void NavigationRequest::CommitNavigation() {
+   commit_params_->modified_runtime_features =
+       runtime_feature_state_context_.GetFeatureOverrides();
+ 
++  // Bare: whether canvas reads are blocked in the new document. It follows the
++  // page's top-level site: the origin being committed for a main frame, the
++  // main frame's origin for any other frame. An origin that cannot be named
++  // stays opaque, which the embedder treats as a site that is not allowed.
++  {
++    url::Origin top_level_origin;
++    if (frame_tree_node_->IsMainFrame()) {
++      if (std::optional<url::Origin> origin = GetOriginToCommit()) {
++        top_level_origin = *origin;
++      }
++    } else {
++      top_level_origin = frame_tree_node_->current_frame_host()
++                             ->GetOutermostMainFrame()
++                             ->GetLastCommittedOrigin();
++    }
++    commit_params_->bare_block_canvas_read =
++        GetContentClient()->browser()->BareShouldBlockCanvasRead(
++            frame_tree_node_->navigator().controller().GetBrowserContext(),
++            top_level_origin);
++  }
++
+   // Documents loaded from fenced frame configs can opt into allowing
+   // cross-origin subframes to use their reporting metadata to send
+   // `reportEvent()` beacons. The cross-origin subframes still require a
+diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
+index 11eb261a67b..72f08405a90 100644
+--- a/content/browser/renderer_host/render_frame_host_impl.cc
++++ b/content/browser/renderer_host/render_frame_host_impl.cc
+@@ -8862,6 +8862,10 @@ void RenderFrameHostImpl::DidDisplayInsecureContent() {
+   frame_tree_->controller().ssl_manager()->DidDisplayMixedContent();
+ }
+ 
++void RenderFrameHostImpl::BareCanvasReadBlocked() {
++  GetContentClient()->browser()->BareCanvasReadBlocked(this);
++}
++
+ void RenderFrameHostImpl::DidContainInsecureFormAction() {
+   frame_tree_->controller().ssl_manager()->DidContainInsecureFormAction();
+ }
+diff --git a/content/browser/renderer_host/render_frame_host_impl.h b/content/browser/renderer_host/render_frame_host_impl.h
+index 8a4abe73f00..3831bf50af8 100644
+--- a/content/browser/renderer_host/render_frame_host_impl.h
++++ b/content/browser/renderer_host/render_frame_host_impl.h
+@@ -2339,6 +2339,7 @@ class CONTENT_EXPORT RenderFrameHostImpl
+                                  bool user_gesture) override;
+   void DidDisplayInsecureContent() override;
+   void DidContainInsecureFormAction() override;
++  void BareCanvasReadBlocked() override;
+   void MainDocumentElementAvailable(bool uses_temporary_zoom_level) override;
+   void SetNeedsOcclusionTracking(bool needs_tracking) override;
+   void SetVirtualKeyboardMode(ui::mojom::VirtualKeyboardMode mode) override;
+diff --git a/content/public/browser/content_browser_client.cc b/content/public/browser/content_browser_client.cc
+index 92be4ef5f55..335e6aad974 100644
+--- a/content/public/browser/content_browser_client.cc
++++ b/content/public/browser/content_browser_client.cc
+@@ -433,6 +433,15 @@ bool ContentBrowserClient::IsTopChromeWebUIURL(const GURL& url) {
+   return false;
+ }
+ 
++bool ContentBrowserClient::BareShouldBlockCanvasRead(
++    BrowserContext* browser_context,
++    const url::Origin& top_level_origin) {
++  return false;
++}
++
++void ContentBrowserClient::BareCanvasReadBlocked(
++    RenderFrameHost* render_frame_host) {}
++
+ bool ContentBrowserClient::ShouldAllowMojoJsBindingsForFrame(
+     RenderFrameHost& render_frame_host) {
+   return false;
+diff --git a/content/public/browser/content_browser_client.h b/content/public/browser/content_browser_client.h
+index 9a920eb24de..cb843f185a1 100644
+--- a/content/public/browser/content_browser_client.h
++++ b/content/public/browser/content_browser_client.h
+@@ -854,6 +854,15 @@ class CONTENT_EXPORT ContentBrowserClient {
+   // false on platforms that do not support Top Chrome WebUIs, e.g., Android.
+   virtual bool IsTopChromeWebUIURL(const GURL& url);
+ 
++  // Bare: whether scripts on a page whose top-level origin is
++  // `top_level_origin` get blank pixels when they read a canvas. False by
++  // default.
++  virtual bool BareShouldBlockCanvasRead(BrowserContext* browser_context,
++                                         const url::Origin& top_level_origin);
++
++  // Bare: a canvas read was blocked in a document of `render_frame_host`.
++  virtual void BareCanvasReadBlocked(RenderFrameHost* render_frame_host);
++
+   // Returns true if the given `render_frame_host` is allowed to use MojoJS
+   // bindings.
+   virtual bool ShouldAllowMojoJsBindingsForFrame(
+diff --git a/content/renderer/render_frame_impl.cc b/content/renderer/render_frame_impl.cc
+index 1348b5a6bc5..0b97e5e7005 100644
+--- a/content/renderer/render_frame_impl.cc
++++ b/content/renderer/render_frame_impl.cc
+@@ -1118,6 +1118,9 @@ void FillMiscNavigationParams(
+   navigation_params->modified_runtime_features =
+       commit_params.modified_runtime_features;
+ 
++  navigation_params->bare_block_canvas_read =
++      commit_params.bare_block_canvas_read;
++
+   // Populate the arrays of non-current entries for the window.navigation API.
+   auto& entry_arrays = commit_params.navigation_api_history_entry_arrays;
+   navigation_params->navigation_api_back_entries.reserve(
+diff --git a/third_party/blink/public/mojom/frame/frame.mojom b/third_party/blink/public/mojom/frame/frame.mojom
+index a5e66ee60ee..777a72c8de7 100644
+--- a/third_party/blink/public/mojom/frame/frame.mojom
++++ b/third_party/blink/public/mojom/frame/frame.mojom
+@@ -328,6 +328,11 @@ interface LocalFrameHost {
+   // insecure target url.
+   DidContainInsecureFormAction();
+ 
++  // Bare: a script in the associated frame, or in a dedicated worker it made,
++  // read a canvas and got blank pixels because canvas reads are blocked for
++  // the page. Sent once per document.
++  BareCanvasReadBlocked();
++
+   // Indicates that the document element is available for the top-level frame.
+   // This happens after the page starts loading, but before all resources are
+   // finished.
+diff --git a/third_party/blink/public/mojom/navigation/navigation_params.mojom b/third_party/blink/public/mojom/navigation/navigation_params.mojom
+index 7d1f949b4d1..c34081dd539 100644
+--- a/third_party/blink/public/mojom/navigation/navigation_params.mojom
++++ b/third_party/blink/public/mojom/navigation/navigation_params.mojom
+@@ -792,6 +792,12 @@ struct CommitNavigationParams {
+   // document (e.g. preventing injected scripts from navigating the page without
+   // a user gesture).
+   ScriptInjectionPolicy script_injection_policy = kNone;
++
++  // Bare: whether scripts that read pixels back from a canvas in the Document
++  // this navigation commits get blank pixels. False is the normal case. The
++  // browser decides it from the page's top-level site, so every frame of a
++  // page, in any process, gets the same answer.
++  bool bare_block_canvas_read = false;
+ };
+ 
+ // Parameters used to dispatch the `pageswap` event on the old Document for
+diff --git a/third_party/blink/public/web/web_navigation_params.h b/third_party/blink/public/web/web_navigation_params.h
+index b7fdcba9bdc..be8dc5f29ee 100644
+--- a/third_party/blink/public/web/web_navigation_params.h
++++ b/third_party/blink/public/web/web_navigation_params.h
+@@ -618,6 +618,9 @@ struct BLINK_EXPORT WebNavigationParams {
+   base::flat_map<::blink::mojom::RuntimeFeature, bool>
+       modified_runtime_features;
+ 
++  // Bare: whether canvas reads give blank pixels in the new document.
++  bool bare_block_canvas_read = false;
++
+   // The Storage Access API status that the document should be loaded with.
+   net::StorageAccessApiStatus load_with_storage_access =
+       net::StorageAccessApiStatus::kNone;
+diff --git a/third_party/blink/public/web/web_security_policy.h b/third_party/blink/public/web/web_security_policy.h
+index a22060df457..839b66bed02 100644
+--- a/third_party/blink/public/web/web_security_policy.h
++++ b/third_party/blink/public/web/web_security_policy.h
+@@ -158,6 +158,11 @@ class BLINK_EXPORT WebSecurityPolicy {
+   // Blink and will fail to load.
+   static void RegisterURLSchemeAsDirectLaunch(const WebString&);
+ 
++  // Bare: whether shared and service workers in this process hand back blank
++  // pixels for canvas reads. Documents and dedicated workers are told with
++  // the navigation instead.
++  static void SetBareCanvasBlockInSharedWorkers(bool block);
++
+  private:
+   WebSecurityPolicy() = delete;
+ };
+diff --git a/third_party/blink/renderer/bindings/core/v8/serialization/v8_script_value_deserializer.cc b/third_party/blink/renderer/bindings/core/v8/serialization/v8_script_value_deserializer.cc
+index 34d5a7cbed8..0f006387f06 100644
+--- a/third_party/blink/renderer/bindings/core/v8/serialization/v8_script_value_deserializer.cc
++++ b/third_party/blink/renderer/bindings/core/v8/serialization/v8_script_value_deserializer.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/bindings/core/v8/serialization/v8_script_value_deserializer.h"
+ 
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++
+ #include <array>
+ #include <limits>
+ #include <optional>
+@@ -614,6 +616,8 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
+         // been deprecated.
+         return nullptr;
+       }
++      // Bare: an ImageBitmap that arrives in a message may hold canvas pixels.
++      BareNoteCanvasBitmap(ExecutionContext::From(GetScriptState()));
+       SkPixmap pixmap(info, pixels, info.minRowBytes());
+       return MakeGarbageCollected<ImageBitmap>(pixmap, origin_clean,
+                                                settings.GetImageOrientation());
+@@ -625,6 +629,7 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
+       const auto& transferred_image_bitmaps = unpacked_value_->ImageBitmaps();
+       if (!ReadUint32(&index) || index >= transferred_image_bitmaps.size())
+         return nullptr;
++      BareNoteCanvasBitmap(ExecutionContext::From(GetScriptState()));
+       return transferred_image_bitmaps[index].Get();
+     }
+     case kElementImageTransferTag: {
+diff --git a/third_party/blink/renderer/core/execution_context/execution_context.h b/third_party/blink/renderer/core/execution_context/execution_context.h
+index 2b779e154ba..a771fc0775c 100644
+--- a/third_party/blink/renderer/core/execution_context/execution_context.h
++++ b/third_party/blink/renderer/core/execution_context/execution_context.h
+@@ -494,6 +494,17 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
+     canvas_noise_token_ = token;
+   }
+ 
++  // Bare: whether the browser told this context to hand back blank pixels
++  // when a script reads a canvas. Set once, when the document commits or the
++  // worker starts. See core/html/canvas/bare_canvas_block.h.
++  bool BareBlockCanvasRead() const { return bare_block_canvas_read_; }
++  void SetBareBlockCanvasRead(bool block) { bare_block_canvas_read_ = block; }
++
++  // Bare: whether this context has already told the browser that a canvas
++  // read was blocked, so it is said once.
++  bool BareCanvasBlockReported() const { return bare_canvas_block_reported_; }
++  void SetBareCanvasBlockReported() { bare_canvas_block_reported_ = true; }
++
+   // Returns the policy state for network-efficiency-guardrails in this
+   // document.
+   virtual std::optional<mojom::blink::PolicyDisposition>
+@@ -576,6 +587,9 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
+   bool require_trusted_types_ = false;
+ 
+   std::optional<NoiseToken> canvas_noise_token_;
++
++  bool bare_block_canvas_read_ = false;
++  bool bare_canvas_block_reported_ = false;
+ };
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/core/exported/web_security_policy.cc b/third_party/blink/renderer/core/exported/web_security_policy.cc
+index 12a36986b9b..0264a980277 100644
+--- a/third_party/blink/renderer/core/exported/web_security_policy.cc
++++ b/third_party/blink/renderer/core/exported/web_security_policy.cc
+@@ -30,6 +30,8 @@
+ 
+ #include "third_party/blink/public/web/web_security_policy.h"
+ 
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++
+ #include "base/types/pass_key.h"
+ #include "services/network/public/mojom/referrer_policy.mojom-blink.h"
+ #include "third_party/blink/public/common/scheme_registry.h"
+@@ -180,4 +182,8 @@ void WebSecurityPolicy::RegisterURLSchemeAsDirectLaunch(
+   SchemeRegistry::RegisterURLSchemeAsDirectLaunch(scheme);
+ }
+ 
++void WebSecurityPolicy::SetBareCanvasBlockInSharedWorkers(bool block) {
++  blink::SetBareCanvasBlockInSharedWorkers(block);
++}
++
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/core/html/build.gni b/third_party/blink/renderer/core/html/build.gni
+index 1d7cd61e599..24e1291fbed 100644
+--- a/third_party/blink/renderer/core/html/build.gni
++++ b/third_party/blink/renderer/core/html/build.gni
+@@ -13,6 +13,8 @@ blink_core_sources_html = [
+   "anchor_element_utils.h",
+   "blocking_attribute.cc",
+   "blocking_attribute.h",
++  "canvas/bare_canvas_block.cc",
++  "canvas/bare_canvas_block.h",
+   "canvas/canvas_async_blob_creator.cc",
+   "canvas/canvas_async_blob_creator.h",
+   "canvas/canvas_context_creation_attributes_core.cc",
+diff --git a/third_party/blink/renderer/core/html/canvas/bare_canvas_block.cc b/third_party/blink/renderer/core/html/canvas/bare_canvas_block.cc
+new file mode 100644
+index 00000000000..f460c09dc96
+--- /dev/null
++++ b/third_party/blink/renderer/core/html/canvas/bare_canvas_block.cc
+@@ -0,0 +1,132 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++
++#include <atomic>
++
++#include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
++#include "third_party/blink/renderer/core/execution_context/execution_context.h"
++#include "third_party/blink/renderer/core/frame/local_dom_window.h"
++#include "third_party/blink/renderer/core/frame/local_frame.h"
++#include "third_party/blink/renderer/core/html/canvas/canvas_image_source.h"
++#include "third_party/blink/renderer/core/workers/worker_global_scope.h"
++#include "third_party/blink/renderer/core/workers/worker_reporting_proxy.h"
++#include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
++#include "third_party/blink/renderer/platform/graphics/unaccelerated_static_bitmap_image.h"
++#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
++#include "third_party/skia/include/core/SkBitmap.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "third_party/skia/include/core/SkColorSpace.h"
++#include "third_party/skia/include/core/SkImage.h"
++#include "third_party/skia/include/core/SkImageInfo.h"
++#include "ui/gfx/geometry/size.h"
++
++namespace blink {
++
++namespace {
++
++// Read on worker threads, written on the main thread.
++std::atomic<bool> g_block_in_shared_workers{false};
++
++// Set once a blocked context has made an ImageBitmap from a canvas or has
++// been sent one. A renderer process serves one site, so this is as narrow as
++// an ImageBitmap can be followed without marking every copy of it.
++std::atomic<bool> g_canvas_bitmap_seen{false};
++
++void Report(ExecutionContext* context) {
++  if (context->BareCanvasBlockReported()) {
++    return;
++  }
++  context->SetBareCanvasBlockReported();
++  if (auto* window = DynamicTo<LocalDOMWindow>(context)) {
++    if (LocalFrame* frame = window->GetFrame()) {
++      frame->GetLocalFrameHostRemote().BareCanvasReadBlocked();
++    }
++    return;
++  }
++  // A dedicated worker passes it to the context that made it, which reports
++  // in turn. Shared and service workers have no single page to report to.
++  if (auto* scope = DynamicTo<WorkerGlobalScope>(context)) {
++    if (scope->IsDedicatedWorkerGlobalScope()) {
++      scope->ReportingProxy().BareCanvasReadBlocked();
++    }
++  }
++}
++
++}  // namespace
++
++void SetBareCanvasBlockInSharedWorkers(bool block) {
++  g_block_in_shared_workers.store(block, std::memory_order_relaxed);
++}
++
++bool BareCanvasReadIsBlocked(const ExecutionContext* context) {
++  if (!context) {
++    return false;
++  }
++  // Extensions draw their toolbar icons through a canvas (setIcon), so they
++  // are never blocked; otherwise the uBO button goes blank.
++  const SecurityOrigin* origin = context->GetSecurityOrigin();
++  if (origin && origin->Protocol() == "chrome-extension") {
++    return false;
++  }
++  if (context->BareBlockCanvasRead()) {
++    return true;
++  }
++  if (context->IsSharedWorkerGlobalScope() ||
++      context->IsServiceWorkerGlobalScope()) {
++    return g_block_in_shared_workers.load(std::memory_order_relaxed);
++  }
++  return false;
++}
++
++bool BareBlockCanvasRead(ExecutionContext* context) {
++  if (!BareCanvasReadIsBlocked(context)) {
++    return false;
++  }
++  Report(context);
++  return true;
++}
++
++scoped_refptr<StaticBitmapImage> BareBlankIfBlocked(
++    ExecutionContext* context,
++    scoped_refptr<StaticBitmapImage> image) {
++  if (!image || !BareBlockCanvasRead(context)) {
++    return image;
++  }
++  const gfx::Size size = image->Size();
++  SkBitmap bitmap;
++  if (size.IsEmpty() ||
++      !bitmap.tryAllocPixels(SkImageInfo::MakeN32Premul(
++          size.width(), size.height(), SkColorSpace::MakeSRGB()))) {
++    return nullptr;
++  }
++  bitmap.eraseColor(SK_ColorTRANSPARENT);
++  bitmap.setImmutable();
++  return UnacceleratedStaticBitmapImage::Create(bitmap.asImage());
++}
++
++void BareNoteCanvasBitmap(const ExecutionContext* context) {
++  if (BareCanvasReadIsBlocked(context)) {
++    g_canvas_bitmap_seen.store(true, std::memory_order_relaxed);
++  }
++}
++
++bool BareBlockCanvasExport(ExecutionContext* context,
++                           const CanvasImageSource& source) {
++  if (!BareCanvasReadIsBlocked(context)) {
++    return false;
++  }
++  const bool holds_canvas_pixels =
++      source.IsCanvasElement() || source.IsOffscreenCanvas() ||
++      (source.IsImageBitmap() &&
++       g_canvas_bitmap_seen.load(std::memory_order_relaxed));
++  if (!holds_canvas_pixels) {
++    return false;
++  }
++  Report(context);
++  return true;
++}
++
++}  // namespace blink
+diff --git a/third_party/blink/renderer/core/html/canvas/bare_canvas_block.h b/third_party/blink/renderer/core/html/canvas/bare_canvas_block.h
+new file mode 100644
+index 00000000000..0ffc66a33d3
+--- /dev/null
++++ b/third_party/blink/renderer/core/html/canvas/bare_canvas_block.h
+@@ -0,0 +1,72 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_CANVAS_BARE_CANVAS_BLOCK_H_
++#define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_CANVAS_BARE_CANVAS_BLOCK_H_
++
++#include "base/memory/scoped_refptr.h"
++#include "third_party/blink/renderer/core/core_export.h"
++
++namespace blink {
++
++class CanvasImageSource;
++class ExecutionContext;
++class StaticBitmapImage;
++
++// Blocking of canvas reads.
++//
++// When the user has turned it on, the browser tells each document whether
++// scripts that read pixels back from a canvas get blank pixels instead
++// (ExecutionContext::BareBlockCanvasRead). The decision is made per page, from
++// the top-level site, so every frame of a page gets the same answer. Dedicated
++// workers take their creator's answer. Shared and service workers can serve
++// pages of several sites, so they follow the switch alone.
++//
++// Nothing here touches drawing. A canvas keeps its real content, and copying
++// one canvas into another stays exact. Only the calls that hand pixels to
++// script are affected, and they return what an empty canvas of the same size
++// would: every argument check still runs first, and sizes, types and formats
++// are unchanged. The result does not depend on the device, the site or
++// anything random.
++//
++// All of this does nothing, at the cost of one test, when the context was not
++// told to block.
++
++// Sets whether shared and service workers in this process block. Called when
++// the browser sends the profile's setting, and again when it changes.
++CORE_EXPORT void SetBareCanvasBlockInSharedWorkers(bool block);
++
++// Whether canvas reads are blocked in `context`. Does not report anything.
++CORE_EXPORT bool BareCanvasReadIsBlocked(const ExecutionContext* context);
++
++// The same, for a call that is about to hand pixels to script. When it
++// returns true the caller must not expose the real pixels, and the browser is
++// told, once per context, that a read was blocked on this page.
++CORE_EXPORT bool BareBlockCanvasRead(ExecutionContext* context);
++
++// For an image a page is about to encode (toDataURL, toBlob, convertToBlob).
++// Returns `image` when reads are not blocked. Otherwise returns a transparent
++// image of the same size, or null if one cannot be made, which callers
++// already treat as "nothing to encode". Never falls back to `image`.
++CORE_EXPORT scoped_refptr<StaticBitmapImage> BareBlankIfBlocked(
++    ExecutionContext* context,
++    scoped_refptr<StaticBitmapImage> image);
++
++// Called when an ImageBitmap is made from a canvas, or arrives in a message,
++// in `context`. If reads are blocked there, ImageBitmaps can from then on
++// carry canvas pixels, so BareBlockCanvasExport() starts refusing them.
++CORE_EXPORT void BareNoteCanvasBitmap(const ExecutionContext* context);
++
++// For the calls that would move the pixels of `source` out of canvases
++// altogether: into a WebCodecs VideoFrame or a WebGPU texture, where they
++// could be read without touching a canvas again. True when `source` is a
++// canvas, or an ImageBitmap that may hold canvas pixels, and reads are
++// blocked. The caller then fails the call the way it does for a tainted
++// source.
++CORE_EXPORT bool BareBlockCanvasExport(ExecutionContext* context,
++                                       const CanvasImageSource& source);
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_HTML_CANVAS_BARE_CANVAS_BLOCK_H_
+diff --git a/third_party/blink/renderer/core/html/canvas/canvas_async_blob_creator.cc b/third_party/blink/renderer/core/html/canvas/canvas_async_blob_creator.cc
+index 8e9d8429042..012914b18ee 100644
+--- a/third_party/blink/renderer/core/html/canvas/canvas_async_blob_creator.cc
++++ b/third_party/blink/renderer/core/html/canvas/canvas_async_blob_creator.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/core/html/canvas/canvas_async_blob_creator.h"
+ 
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++
+ #include "base/location.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+@@ -178,7 +180,12 @@ CanvasAsyncBlobCreator::CanvasAsyncBlobCreator(
+   // We use pixmap to access the image pixels. Make the image unaccelerated if
+   // necessary. May return nullptr if GPU context lost or readback buffer
+   // allocation failed.
+-  image_ = image->MakeUnaccelerated();
++  //
++  // Bare: toBlob() and convertToBlob() both come through here. With canvas
++  // reads blocked the image is swapped for a transparent one of the same size
++  // before anything is read from it.
++  image = BareBlankIfBlocked(context, std::move(image));
++  image_ = image ? image->MakeUnaccelerated() : nullptr;
+ 
+   if (image_) {
+     skia_image_ = image_->PaintImageForCurrentFrame().GetSwSkImage();
+diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
+index 3da40c38fa9..26e622788df 100644
+--- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
++++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
+@@ -27,6 +27,8 @@
+ 
+ #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
+ 
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++
+ #include <math.h>
+ 
+ #include <limits>
+@@ -1434,6 +1436,11 @@ String HTMLCanvasElement::ToDataURLInternal(
+       ImageEncoderUtils::ToEncodingMimeType(mime_type);
+ 
+   scoped_refptr<StaticBitmapImage> image_bitmap = Snapshot(source_buffer);
++  // Bare: a transparent image of the same size when canvas reads are blocked,
++  // otherwise the same image. Null if the blank one cannot be made, never the
++  // real pixels.
++  image_bitmap =
++      BareBlankIfBlocked(GetExecutionContext(), std::move(image_bitmap));
+   if (image_bitmap) {
+     std::unique_ptr<ImageDataBuffer> data_buffer =
+         ImageDataBuffer::Create(image_bitmap);
+diff --git a/third_party/blink/renderer/core/imagebitmap/image_bitmap.cc b/third_party/blink/renderer/core/imagebitmap/image_bitmap.cc
+index 828f244d431..e08f90f5013 100644
+--- a/third_party/blink/renderer/core/imagebitmap/image_bitmap.cc
++++ b/third_party/blink/renderer/core/imagebitmap/image_bitmap.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/core/imagebitmap/image_bitmap.h"
+ 
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++
+ #include <memory>
+ #include <utility>
+ 
+@@ -383,6 +385,7 @@ ImageBitmap::ImageBitmap(HTMLCanvasElement* canvas,
+     return;
+ 
+   image_->SetOriginClean(canvas->OriginClean());
++  BareNoteCanvasBitmap(canvas->GetExecutionContext());
+   UpdateImageBitmapMemoryUsage();
+ }
+ 
+@@ -407,6 +410,7 @@ ImageBitmap::ImageBitmap(OffscreenCanvas* offscreen_canvas,
+   if (!image_)
+     return;
+   image_->SetOriginClean(offscreen_canvas->OriginClean());
++  BareNoteCanvasBitmap(offscreen_canvas->GetExecutionContext());
+   UpdateImageBitmapMemoryUsage();
+ }
+ 
+diff --git a/third_party/blink/renderer/core/loader/document_loader.cc b/third_party/blink/renderer/core/loader/document_loader.cc
+index feb3a3d9ab1..8c0a63c2b28 100644
+--- a/third_party/blink/renderer/core/loader/document_loader.cc
++++ b/third_party/blink/renderer/core/loader/document_loader.cc
+@@ -463,6 +463,7 @@ struct SameSizeAsDocumentLoader
+   const std::optional<base::UnguessableToken> browsing_context_group_token;
+   const base::flat_map<mojom::blink::RuntimeFeature, bool>
+       modified_runtime_features;
++  bool bare_block_canvas_read;
+   mojom::RendererContentSettingsPtr content_settings;
+   int64_t body_size_from_service_worker;
+   const std::optional<
+@@ -631,6 +632,7 @@ DocumentLoader::DocumentLoader(
+       storage_access_api_status_(params_->load_with_storage_access),
+       browsing_context_group_token_(params_->browsing_context_group_token),
+       modified_runtime_features_(std::move(params_->modified_runtime_features)),
++      bare_block_canvas_read_(params_->bare_block_canvas_read),
+       content_settings_(std::move(params_->content_settings)),
+       initial_permission_statuses_(ConvertPermissionStatusFlatMapToHashMap(
+           params_->initial_permission_statuses)),
+@@ -822,6 +824,7 @@ DocumentLoader::CreateWebNavigationParamsToCloneDocument() {
+   params->navigation_delivery_type = navigation_delivery_type_;
+   params->load_with_storage_access = storage_access_api_status_;
+   params->modified_runtime_features = modified_runtime_features_;
++  params->bare_block_canvas_read = bare_block_canvas_read_;
+   params->visited_link_salt = visited_link_salt_;
+   params->content_settings = content_settings_->Clone();
+   params->sandbox_origin_token = std::move(sandbox_origin_token_);
+@@ -3095,6 +3098,29 @@ void DocumentLoader::CommitNavigation() {
+ 
+   frame_->DomWindow()->SetCanvasNoiseToken(std::nullopt);
+ 
++  // Bare: the browser says with each commit whether canvas reads are blocked
++  // in the new document. Two kinds of document have no commit from the
++  // browser to say so: the initial empty document of a frame or popup a
++  // script has just made, and the about:blank document the renderer commits
++  // for a frame or popup without a source. They take the answer of their
++  // parent or, without one, their opener, or a script could read canvas
++  // pixels there instead. This only ever adds blocking.
++  bool bare_block_canvas_read = bare_block_canvas_read_;
++  const bool bare_is_initial = commit_reason_ == CommitReason::kInitialization;
++  if (!bare_block_canvas_read &&
++      (bare_is_initial || url_.IsEmpty() || url_.ProtocolIs("about"))) {
++    Frame* parent_or_opener = frame_->Tree().Parent();
++    if (!parent_or_opener) {
++      parent_or_opener = frame_->Opener();
++    }
++    if (auto* local = DynamicTo<LocalFrame>(parent_or_opener)) {
++      if (LocalDOMWindow* window = local->DomWindow()) {
++        bare_block_canvas_read = window->BareBlockCanvasRead();
++      }
++    }
++  }
++  frame_->DomWindow()->SetBareBlockCanvasRead(bare_block_canvas_read);
++
+   // Previous same-document navigation tasks are not relevant once a
+   // cross-document navigation has happened.
+   if (auto* tracker = scheduler::TaskAttributionTracker::From(
+diff --git a/third_party/blink/renderer/core/loader/document_loader.h b/third_party/blink/renderer/core/loader/document_loader.h
+index 462358cb17f..309f4870efa 100644
+--- a/third_party/blink/renderer/core/loader/document_loader.h
++++ b/third_party/blink/renderer/core/loader/document_loader.h
+@@ -926,6 +926,9 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
+   const base::flat_map<mojom::blink::RuntimeFeature, bool>
+       modified_runtime_features_;
+ 
++  // Bare: whether the browser said canvas reads are blocked in the document.
++  const bool bare_block_canvas_read_;
++
+   // Renderer-enforced content settings are stored on a per-document basis.
+   mojom::RendererContentSettingsPtr content_settings_;
+ 
+diff --git a/third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.cc b/third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.cc
+index 41ed6d0c215..bfc51e0fbe5 100644
+--- a/third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.cc
++++ b/third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.h"
+ 
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++
+ #include <memory>
+ #include <utility>
+ 
+@@ -381,6 +383,7 @@ ImageBitmap* OffscreenCanvas::transferToImageBitmap(
+   if (exception_state.HadException()) [[unlikely]] {
+     return nullptr;
+   }
++  BareNoteCanvasBitmap(ExecutionContext::From(script_state));
+ 
+   if (!image) {
+     // Undocumented exception (not in spec).
+diff --git a/third_party/blink/renderer/core/testing/fake_local_frame_host.h b/third_party/blink/renderer/core/testing/fake_local_frame_host.h
+index dadb41b2811..c54ea5e72fe 100644
+--- a/third_party/blink/renderer/core/testing/fake_local_frame_host.h
++++ b/third_party/blink/renderer/core/testing/fake_local_frame_host.h
+@@ -45,6 +45,7 @@ class FakeLocalFrameHost : public mojom::blink::LocalFrameHost {
+                                  bool user_gesture) override;
+   void DidDisplayInsecureContent() override;
+   void DidContainInsecureFormAction() override;
++  void BareCanvasReadBlocked() override {}
+   void MainDocumentElementAvailable(bool uses_temporary_zoom_level) override;
+   void SetNeedsOcclusionTracking(bool needs_tracking) override;
+   void SetVirtualKeyboardMode(
+diff --git a/third_party/blink/renderer/core/workers/dedicated_worker.cc b/third_party/blink/renderer/core/workers/dedicated_worker.cc
+index 64be4c4900f..534930918a4 100644
+--- a/third_party/blink/renderer/core/workers/dedicated_worker.cc
++++ b/third_party/blink/renderer/core/workers/dedicated_worker.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/core/workers/dedicated_worker.h"
+ 
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++
+ #include <optional>
+ #include <utility>
+ 
+@@ -574,6 +576,7 @@ DedicatedWorker::CreateGlobalScopeCreationParams(
+       origin_ ? origin_->IsolatedCopy() : nullptr,
+       std::move(coep_reporting_observer), std::move(dip_reporting_observer));
+   params->dedicated_worker_start_time = start_time_;
++  params->bare_block_canvas_read = BareCanvasReadIsBlocked(execution_context);
+ 
+   // Store the creator's document policy for inheritance by local-scheme
+   // workers.
+diff --git a/third_party/blink/renderer/core/workers/global_scope_creation_params.h b/third_party/blink/renderer/core/workers/global_scope_creation_params.h
+index 334882e5f64..1c2393e8325 100644
+--- a/third_party/blink/renderer/core/workers/global_scope_creation_params.h
++++ b/third_party/blink/renderer/core/workers/global_scope_creation_params.h
+@@ -256,6 +256,10 @@ struct CORE_EXPORT GlobalScopeCreationParams final {
+   // i.e. when DedicatedWorkerStart() was called.
+   std::optional<base::TimeTicks> dedicated_worker_start_time;
+ 
++  // Bare: whether canvas reads are blocked in the context that made a
++  // dedicated worker, which the worker then follows. False for other workers.
++  bool bare_block_canvas_read = false;
++
+   // Initiator URL for the dedicated worker script's ResourceTiming entry.
+   // Shared and service worker scripts have no ResourceTiming entry.
+   KURL dedicated_worker_script_initiator_url;
+diff --git a/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc b/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc
+index a632afc46b4..969b5f97edf 100644
+--- a/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc
++++ b/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.h"
+ 
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++
+ #include "base/feature_list.h"
+ #include "base/synchronization/waitable_event.h"
+ #include "third_party/blink/public/common/features.h"
+@@ -124,6 +126,13 @@ void ThreadedMessagingProxyBase::CountFeature(WebFeature feature) {
+   UseCounter::Count(execution_context_, feature);
+ }
+ 
++void ThreadedMessagingProxyBase::BareCanvasReadBlocked() {
++  DCHECK(IsParentContextThread());
++  // The context that made the worker reports for it. If that is a worker
++  // too, this goes up another step.
++  BareBlockCanvasRead(execution_context_);
++}
++
+ void ThreadedMessagingProxyBase::CountWebDXFeature(
+     mojom::blink::WebDXFeature feature) {
+   DCHECK(IsParentContextThread());
+diff --git a/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.h b/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.h
+index 9fa5ad19dcc..d08f93508d5 100644
+--- a/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.h
++++ b/third_party/blink/renderer/core/workers/threaded_messaging_proxy_base.h
+@@ -59,6 +59,7 @@ class CORE_EXPORT ThreadedMessagingProxyBase
+   void ParentObjectDestroyed();
+ 
+   void CountFeature(WebFeature);
++  void BareCanvasReadBlocked();
+   void CountWebDXFeature(mojom::blink::WebDXFeature);
+ 
+   void ReportConsoleMessage(mojom::ConsoleMessageSource,
+diff --git a/third_party/blink/renderer/core/workers/threaded_object_proxy_base.cc b/third_party/blink/renderer/core/workers/threaded_object_proxy_base.cc
+index 15c4ca69f2e..6da8aab8a7f 100644
+--- a/third_party/blink/renderer/core/workers/threaded_object_proxy_base.cc
++++ b/third_party/blink/renderer/core/workers/threaded_object_proxy_base.cc
+@@ -33,6 +33,18 @@ void ThreadedObjectProxyBase::CountFeature(WebFeature feature) {
+                           MessagingProxyWeakPtr(), feature));
+ }
+ 
++void ThreadedObjectProxyBase::BareCanvasReadBlocked() {
++  if (!GetParentExecutionContextTaskRunners()) {
++    return;
++  }
++
++  PostCrossThreadTask(
++      *GetParentExecutionContextTaskRunners()->Get(TaskType::kInternalDefault),
++      FROM_HERE,
++      CrossThreadBindOnce(&ThreadedMessagingProxyBase::BareCanvasReadBlocked,
++                          MessagingProxyWeakPtr()));
++}
++
+ void ThreadedObjectProxyBase::CountWebDXFeature(WebDXFeature feature) {
+   if (!GetParentExecutionContextTaskRunners()) {
+     DCHECK(GetParentAgentGroupTaskRunner());
+diff --git a/third_party/blink/renderer/core/workers/threaded_object_proxy_base.h b/third_party/blink/renderer/core/workers/threaded_object_proxy_base.h
+index 06fe82eda9f..c7f5c0a2a32 100644
+--- a/third_party/blink/renderer/core/workers/threaded_object_proxy_base.h
++++ b/third_party/blink/renderer/core/workers/threaded_object_proxy_base.h
+@@ -32,6 +32,7 @@ class CORE_EXPORT ThreadedObjectProxyBase : public WorkerReportingProxy {
+ 
+   // WorkerReportingProxy overrides.
+   void CountFeature(WebFeature) override;
++  void BareCanvasReadBlocked() override;
+   void CountWebDXFeature(WebDXFeature) override;
+   void ReportConsoleMessage(mojom::ConsoleMessageSource,
+                             mojom::ConsoleMessageLevel,
+diff --git a/third_party/blink/renderer/core/workers/worker_global_scope.cc b/third_party/blink/renderer/core/workers/worker_global_scope.cc
+index a70870c22a9..f5eca19005d 100644
+--- a/third_party/blink/renderer/core/workers/worker_global_scope.cc
++++ b/third_party/blink/renderer/core/workers/worker_global_scope.cc
+@@ -957,6 +957,8 @@ WorkerGlobalScope::WorkerGlobalScope(
+   https_state_ = CalculateHttpsState(GetSecurityOrigin(),
+                                      creation_params->starter_https_state);
+ 
++  SetBareBlockCanvasRead(creation_params->bare_block_canvas_read);
++
+   SetOutsideContentSecurityPolicies(
+       std::move(creation_params->outside_content_security_policies));
+   SetWorkerSettings(std::move(creation_params->worker_settings));
+diff --git a/third_party/blink/renderer/core/workers/worker_reporting_proxy.h b/third_party/blink/renderer/core/workers/worker_reporting_proxy.h
+index 8c51ec5a623..619802ef51f 100644
+--- a/third_party/blink/renderer/core/workers/worker_reporting_proxy.h
++++ b/third_party/blink/renderer/core/workers/worker_reporting_proxy.h
+@@ -52,6 +52,8 @@ class CORE_EXPORT WorkerReportingProxy {
+   virtual ~WorkerReportingProxy() = default;
+ 
+   virtual void CountFeature(WebFeature) {}
++  // Bare: a canvas read was blocked in the worker.
++  virtual void BareCanvasReadBlocked() {}
+   virtual void CountWebDXFeature(mojom::blink::WebDXFeature) {}
+   // TODO(crbug.com/462588571): Try converting these to pass SourceLocation
+   // by const reference.
+diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
+index ba2dcc2f2f0..3f7facd7da1 100644
+--- a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
++++ b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
+@@ -57,6 +57,7 @@
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_canvas_text_rendering.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_draw_element_image_options.h"
+ #include "third_party/blink/renderer/core/css/properties/computed_style_utils.h"
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
+ #include "third_party/blink/renderer/core/css/style_change_reason.h"
+ #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
+ #include "third_party/blink/renderer/core/dom/element.h"
+@@ -780,6 +781,15 @@ ImageData* BaseRenderingContext2D::getImageDataInternal(
+         exception_state);
+   }
+ 
++  // Bare: with canvas reads blocked the page gets an empty ImageData of the
++  // size it asked for, as it does for a lost context above. Every argument
++  // check has already run, and the canvas itself is not touched.
++  if (BareBlockCanvasRead(GetTopExecutionContext())) {
++    return ImageData::ValidateAndCreate(
++        sw, sh, std::nullopt, image_data_settings, validate_and_create_params,
++        exception_state);
++  }
++
+   // Deferred offscreen canvases might have recorded commands, make sure
+   // that those get drawn here
+   FinalizeFrame(FlushReason::kOther);
+diff --git a/third_party/blink/renderer/modules/mediacapturefromelement/html_canvas_element_capture.cc b/third_party/blink/renderer/modules/mediacapturefromelement/html_canvas_element_capture.cc
+index fba41cabaf4..72e380b8184 100644
+--- a/third_party/blink/renderer/modules/mediacapturefromelement/html_canvas_element_capture.cc
++++ b/third_party/blink/renderer/modules/mediacapturefromelement/html_canvas_element_capture.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/modules/mediacapturefromelement/html_canvas_element_capture.h"
+ 
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++
+ #include <memory>
+ #include "media/base/video_frame.h"
+ #include "third_party/blink/public/platform/platform.h"
+@@ -57,6 +59,13 @@ MediaStream* HTMLCanvasElementCapture::captureStream(
+     return nullptr;
+   }
+ 
++  // Bare: a stream of the canvas would carry its pixels out as video frames.
++  // With canvas reads blocked it is refused the way a tainted canvas is.
++  if (BareBlockCanvasRead(ExecutionContext::From(script_state))) {
++    exception_state.ThrowSecurityError("Canvas reading is blocked.");
++    return nullptr;
++  }
++
+   ExecutionContext* context = ExecutionContext::From(script_state);
+   DCHECK(context);
+   LocalFrame* frame = ToLocalFrameIfNotDetached(script_state->GetContext());
+diff --git a/third_party/blink/renderer/modules/webcodecs/video_frame.cc b/third_party/blink/renderer/modules/webcodecs/video_frame.cc
+index 72273e3b99b..22933d032e0 100644
+--- a/third_party/blink/renderer/modules/webcodecs/video_frame.cc
++++ b/third_party/blink/renderer/modules/webcodecs/video_frame.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/modules/webcodecs/video_frame.h"
+ 
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++
+ #include <limits>
+ #include <utility>
+ 
+@@ -623,6 +625,14 @@ VideoFrame* VideoFrame::Create(ScriptState* script_state,
+     return nullptr;
+   }
+ 
++  // Bare: a VideoFrame's pixels can be read with copyTo(), so one made from a
++  // canvas is refused when canvas reads are blocked.
++  if (BareBlockCanvasExport(ExecutionContext::From(script_state),
++                            *image_source)) {
++    exception_state.ThrowSecurityError("Canvas reading is blocked.");
++    return nullptr;
++  }
++
+   auto transformation =
+       media::VideoTransformation(init->rotation(), init->flip());
+   bool transformed = transformation != media::kNoTransformation;
+diff --git a/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
+index 9eb36fe26cc..a3bffb0caef 100644
+--- a/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.h"
+ 
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++
+ #include <memory>
+ 
+ #include "base/compiler_specific.h"
+@@ -914,6 +916,12 @@ void WebGL2RenderingContextBase::readPixels(GLint x,
+ 
+   ClearIfComposited(kClearCallerOther);
+ 
++  // Bare: with canvas reads blocked nothing is read into the pixel buffer, so
++  // getBufferSubData() has no canvas pixels to return.
++  if (BareBlockCanvasRead(Host()->GetTopExecutionContext())) {
++    return;
++  }
++
+   {
+     ScopedDrawingBufferBinder binder(GetDrawingBuffer(), framebuffer);
+     if (!binder.Succeeded()) {
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+index e72f6f7ca60..72d5a7fbb75 100644
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+@@ -25,6 +25,8 @@
+ 
+ #include "third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h"
+ 
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++
+ #include <inttypes.h>
+ 
+ #include <memory>
+@@ -5369,6 +5371,16 @@ void WebGLRenderingContextBase::ReadPixelsHelper(GLint x,
+   if (isContextLost() || !GetDrawingBuffer())
+     return;
+ 
++  // Bare: with canvas reads blocked nothing is read from the framebuffer. The
++  // destination is zeroed from the offset on, which is what a cleared
++  // framebuffer gives. The checks above have all run.
++  if (BareBlockCanvasRead(Host()->GetTopExecutionContext())) {
++    if (data && !buffer) {
++      UNSAFE_TODO(memset(data, 0, buffer_size.ValueOrDie()));
++    }
++    return;
++  }
++
+   {
+     ScopedDrawingBufferBinder binder(GetDrawingBuffer(), framebuffer);
+     if (!binder.Succeeded()) {
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_webgpu_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_webgpu_base.cc
+index edc81ecd2ec..853c8fe1ce3 100644
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_webgpu_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_webgpu_base.cc
+@@ -3,6 +3,8 @@
+ 
+ #include "third_party/blink/renderer/modules/webgl/webgl_rendering_context_webgpu_base.h"
+ 
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++
+ #include <dawn/dawn_proc.h>
+ #include <dawn/wire/WireClient.h>
+ 
+@@ -3685,6 +3687,11 @@ void WebGLRenderingContextWebGPUBase::readPixels(GLint x,
+     return;
+   }
+ 
++  // Bare: nothing is read into the pixel buffer when canvas reads are blocked.
++  if (BareBlockCanvasRead(Host()->GetTopExecutionContext())) {
++    return;
++  }
++
+   EnsureDefaultFramebuffer();
+   driver_gl_.fn.glReadPixelsFn(x, y, width, height, format, type,
+                                reinterpret_cast<void*>(offset));
+@@ -3818,6 +3825,13 @@ void WebGLRenderingContextWebGPUBase::readPixels(
+   constexpr size_t kMaxBufSize =
+       std::min(size_t(std::numeric_limits<GLsizei>::max()),
+                kMaximumSupportedArrayBufferSize);
++  // Bare: with canvas reads blocked nothing is read; the destination is zeroed
++  // from the offset on. The checks above have all run.
++  if (BareBlockCanvasRead(Host()->GetTopExecutionContext())) {
++    std::ranges::fill(data_at_offset, 0);
++    return;
++  }
++
+   size_t bufSizeSizeT = std::min(data_at_offset.size(), kMaxBufSize);
+   // Safe with the min() above.
+   GLsizei bufSize = static_cast<GLsizei>(bufSizeSizeT);
+diff --git a/third_party/blink/renderer/modules/webgpu/gpu_queue.cc b/third_party/blink/renderer/modules/webgpu/gpu_queue.cc
+index 76017b74b8c..a354beea475 100644
+--- a/third_party/blink/renderer/modules/webgpu/gpu_queue.cc
++++ b/third_party/blink/renderer/modules/webgpu/gpu_queue.cc
+@@ -4,6 +4,12 @@
+ 
+ #include "third_party/blink/renderer/modules/webgpu/gpu_queue.h"
+ 
++#include "third_party/blink/renderer/core/html/canvas/bare_canvas_block.h"
++#include "third_party/blink/renderer/core/html/canvas/canvas_image_source.h"
++#include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
++#include "third_party/blink/renderer/core/imagebitmap/image_bitmap.h"
++#include "third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.h"
++
+ #include <cmath>
+ 
+ #include "build/build_config.h"
+@@ -76,9 +82,33 @@ bool IsValidExternalImageDestinationFormat(
+ }
+ 
+ std::optional<ExternalImageSource> GetExternalSourceFromExternalImage(
++    ExecutionContext* execution_context,
+     const V8GPUImageCopyExternalImageSource* external_image,
+     const ExternalImageDstInfo& dst_info,
+     ExceptionState& exception_state) {
++  // Bare: a texture's pixels can be read back through a buffer without
++  // touching a canvas again, so a copy from a canvas, or from an ImageBitmap
++  // that may hold canvas pixels, is refused when canvas reads are blocked.
++  const CanvasImageSource* bare_canvas_source = nullptr;
++  switch (external_image->GetContentType()) {
++    case V8GPUImageCopyExternalImageSource::ContentType::kHTMLCanvasElement:
++      bare_canvas_source = external_image->GetAsHTMLCanvasElement();
++      break;
++    case V8GPUImageCopyExternalImageSource::ContentType::kImageBitmap:
++      bare_canvas_source = external_image->GetAsImageBitmap();
++      break;
++    case V8GPUImageCopyExternalImageSource::ContentType::kOffscreenCanvas:
++      bare_canvas_source = external_image->GetAsOffscreenCanvas();
++      break;
++    default:
++      break;
++  }
++  if (bare_canvas_source &&
++      BareBlockCanvasExport(execution_context, *bare_canvas_source)) {
++    exception_state.ThrowSecurityError("Canvas reading is blocked.");
++    return {};
++  }
++
+   switch (external_image->GetContentType()) {
+     case V8GPUImageCopyExternalImageSource::ContentType::kHTMLVideoElement:
+       return GetExternalImageSourceFrom(external_image->GetAsHTMLVideoElement(),
+@@ -351,7 +381,8 @@ void GPUQueue::copyExternalImageToTexture(
+ 
+   std::optional<ExternalImageSource> source =
+       GetExternalSourceFromExternalImage(
+-          copyImage->source(), {destination->premultipliedAlpha(), color_space},
++          device_->GetExecutionContext(), copyImage->source(),
++          {destination->premultipliedAlpha(), color_space},
+           exception_state);
+   if (!source) {
+     if (!exception_state.HadException()) {

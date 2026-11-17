@@ -1,0 +1,117 @@
+diff --git a/chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.cc b/chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.cc
+index e0402ff520d..627f83e9278 100644
+--- a/chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.cc
++++ b/chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.cc
+@@ -68,6 +68,10 @@ ChromeAutocompleteSchemeClassifier::GetInputTypeForScheme(
+   if (scheme.empty()) {
+     return metrics::OmniboxInputType::EMPTY;
+   }
++  // Bare: bare://foo is fixed up to chrome://foo (see url_fixer.cc).
++  if (base::EqualsCaseInsensitiveASCII(scheme, "bare")) {
++    return metrics::OmniboxInputType::URL;
++  }
+   if (base::IsStringASCII(scheme) &&
+       (ProfileIOData::IsHandledProtocol(scheme) ||
+        base::EqualsCaseInsensitiveASCII(scheme, content::kViewSourceScheme) ||
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarData.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarData.java
+index 7f2196ad79b..af1a4fda9c7 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarData.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarData.java
+@@ -129,6 +129,11 @@ public class UrlBarData {
+         // Instead of attempting to extract scheme from already modified URL, verify if the
+         // displayText begins with what we know to be the current URL scheme.
+         String scheme = url.getScheme();
++        // Bare shows chrome:// pages as bare://; keep the whole text as the origin, the same as
++        // for chrome:// itself.
++        if (UrlConstants.CHROME_SCHEME.equals(scheme) && displayTextStr.startsWith("bare:")) {
++            return create(url, displayTextStr, 0, displayTextStr.length(), editingText);
++        }
+         int pathSearchOffset = 0;
+         if (!scheme.isEmpty() && displayTextStr.startsWith(scheme + ":")) {
+             if (!SCHEMES_TO_SPLIT.contains(scheme)) {
+diff --git a/components/omnibox/browser/location_bar_model_impl.cc b/components/omnibox/browser/location_bar_model_impl.cc
+index 5445f8e5356..7ecd88a6080 100644
+--- a/components/omnibox/browser/location_bar_model_impl.cc
++++ b/components/omnibox/browser/location_bar_model_impl.cc
+@@ -10,6 +10,7 @@
+ #include "base/feature_list.h"
+ #include "base/metrics/field_trial_params.h"
+ #include "base/notreached.h"
++#include "base/strings/string_util.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/time/time.h"
+ #include "build/build_config.h"
+@@ -147,12 +148,19 @@ std::u16string LocationBarModelImpl::GetFormattedURL(
+   // Note that we can't unescape spaces here, because if the user copies this
+   // and pastes it into another program, that program may think the URL ends at
+   // the space.
+-  const std::u16string formatted_text =
++  std::u16string formatted_text =
+       delegate_->FormattedStringWithEquivalentMeaning(
+           url, url_formatter::FormatUrl(url, format_types,
+                                         base::UnescapeRule::NORMAL, nullptr,
+                                         nullptr, nullptr));
+ 
++  // Bare shows its internal pages as bare://. Typing bare:// leads back to
++  // chrome:// through url_formatter::FixupURL().
++  if (url.SchemeIs("chrome") &&
++      base::StartsWith(formatted_text, u"chrome://")) {
++    formatted_text.replace(0, std::size("chrome") - 1, u"bare");
++  }
++
+   // Truncating the URL breaks editing and then pressing enter, but hopefully
+   // people won't try to do much with such enormous URLs anyway. If this becomes
+   // a real problem, we could perhaps try to keep some sort of different "elided
+diff --git a/components/url_formatter/url_fixer.cc b/components/url_formatter/url_fixer.cc
+index f7074315199..0a3134a7b7f 100644
+--- a/components/url_formatter/url_fixer.cc
++++ b/components/url_formatter/url_fixer.cc
+@@ -39,6 +39,8 @@ namespace {
+ 
+ // Hardcode these constants to avoid dependences on //chrome and //content.
+ const char kChromeUIScheme[] = "chrome";
++// Bare: bare://foo is typed-in shorthand for chrome://foo.
++const char kBareScheme[] = "bare";
+ const char kDevToolsScheme[] = "devtools";
+ const char kChromeUIDefaultHost[] = "version";
+ const char kViewSourceScheme[] = "view-source";
+@@ -462,7 +464,8 @@ std::string SegmentURLInternal(std::string* text, url::Parsed* parts) {
+   // Proceed with about, chrome, and devtools schemes,
+   // but not file or nonstandard schemes.
+   if ((scheme != url::kAboutScheme) && (scheme != kChromeUIScheme) &&
+-      (scheme != kDevToolsScheme) && !url::IsStandard(scheme)) {
++      (scheme != kBareScheme) && (scheme != kDevToolsScheme) &&
++      !url::IsStandard(scheme)) {
+     return scheme;
+   }
+ 
+@@ -614,12 +617,14 @@ GURL FixupURLInternal(const std::string& text,
+   }
+ 
+   // For some schemes whose layouts we understand, we rebuild the URL.
+-  bool chrome_url =
+-      (scheme == url::kAboutScheme) || (scheme == kChromeUIScheme);
++  bool chrome_url = (scheme == url::kAboutScheme) ||
++                    (scheme == kChromeUIScheme) || (scheme == kBareScheme);
+   bool devtools_url = (scheme == kDevToolsScheme);
+   if (chrome_url || devtools_url || url::IsStandard(scheme)) {
+-    // Replace the about: scheme with the chrome: scheme.
+-    std::string url(scheme == url::kAboutScheme ? kChromeUIScheme : scheme);
++    // Replace the about: and bare: schemes with the chrome: scheme.
++    std::string url(
++        (scheme == url::kAboutScheme || scheme == kBareScheme) ? kChromeUIScheme
++                                                                : scheme);
+     url.append(url::kStandardSchemeSeparator);
+ 
+     // We need to check whether the |username| is valid because it is our
+@@ -742,7 +747,9 @@ bool IsEquivalentScheme(const std::string& scheme1,
+                         const std::string& scheme2) {
+   return scheme1 == scheme2 ||
+          (scheme1 == url::kAboutScheme && scheme2 == kChromeUIScheme) ||
+-         (scheme1 == kChromeUIScheme && scheme2 == url::kAboutScheme);
++         (scheme1 == kChromeUIScheme && scheme2 == url::kAboutScheme) ||
++         (scheme1 == kBareScheme && scheme2 == kChromeUIScheme) ||
++         (scheme1 == kChromeUIScheme && scheme2 == kBareScheme);
+ }
+ 
+ }  // namespace url_formatter

@@ -1,0 +1,1333 @@
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index ad453679e56..42217b6b5fc 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -498,6 +498,8 @@ chrome_java_resources = [
+   "java/res/layout/bare_backup_button.xml",
+   "java/res/layout/bare_backup_kind.xml",
+   "java/res/layout/bare_backup_upgrade_overlay.xml",
++  "java/res/layout/bare_upgrade_page_menu.xml",
++  "java/res/layout/bare_upgrade_pages_overlay.xml",
+   "java/res/layout/bare_direct_modes.xml",
+   "java/res/layout/bare_welcome_option_row.xml",
+   "java/res/layout/bare_welcome_overlay.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index ccebb4320ff..69de1e1d662 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -323,6 +323,8 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/player/BarePlayerSettings.java",
+   "java/src/org/chromium/chrome/browser/bare/player/BarePlayerView.java",
+   "java/src/org/chromium/chrome/browser/bare/BareWhatsNewOverlay.java",
++  "java/src/org/chromium/chrome/browser/bare/BareUpgradePagesOverlay.java",
++  "java/src/org/chromium/chrome/browser/bare/BareMenuStyleView.java",
+   "java/src/org/chromium/chrome/browser/background_sync/BackgroundSyncBackgroundTask.java",
+   "java/src/org/chromium/chrome/browser/background_sync/BackgroundSyncBackgroundTaskScheduler.java",
+   "java/src/org/chromium/chrome/browser/background_sync/GooglePlayServicesChecker.java",
+diff --git a/chrome/android/java/res/layout/bare_upgrade_page_menu.xml b/chrome/android/java/res/layout/bare_upgrade_page_menu.xml
+new file mode 100644
+index 00000000000..a0bf9f484bf
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_upgrade_page_menu.xml
+@@ -0,0 +1,72 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<!-- The menu page an update shows: a picture of the two menus and the choice between them. -->
++<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="match_parent"
++    android:fillViewport="true"
++    android:scrollbarStyle="outsideOverlay">
++
++    <LinearLayout
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:orientation="vertical"
++        android:paddingStart="20dp"
++        android:paddingTop="28dp"
++        android:paddingEnd="20dp"
++        android:paddingBottom="16dp">
++
++        <TextView
++            android:id="@+id/bare_page_title"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:paddingStart="4dp"
++            android:paddingEnd="4dp"
++            android:accessibilityHeading="true"
++            android:text="@string/bare_upgrade_menu_title"
++            android:textColor="@color/bare_welcome_title"
++            android:textSize="28sp"
++            android:fontFamily="sans-serif-medium" />
++
++        <TextView
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="10dp"
++            android:layout_marginBottom="16dp"
++            android:paddingStart="4dp"
++            android:paddingEnd="4dp"
++            android:text="@string/bare_upgrade_menu_intro"
++            android:textColor="@color/bare_welcome_body"
++            android:textSize="14sp"
++            android:lineSpacingMultiplier="1.2" />
++
++        <org.chromium.chrome.browser.bare.BareMenuStyleView
++            android:id="@+id/bare_menu_style_picture"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginBottom="16dp"
++            android:background="@drawable/bare_welcome_group_bg" />
++
++        <LinearLayout
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:orientation="vertical"
++            android:paddingTop="4dp"
++            android:paddingBottom="4dp"
++            android:background="@drawable/bare_welcome_group_bg">
++
++            <include android:id="@+id/bare_menu_option_card" layout="@layout/bare_welcome_chooser_row" />
++            <View
++                android:layout_width="match_parent"
++                android:layout_height="1dp"
++                android:layout_marginStart="26dp"
++                android:background="@color/bare_welcome_divider" />
++            <include android:id="@+id/bare_menu_option_classic" layout="@layout/bare_welcome_chooser_row" />
++        </LinearLayout>
++    </LinearLayout>
++</ScrollView>
+diff --git a/chrome/android/java/res/layout/bare_upgrade_pages_overlay.xml b/chrome/android/java/res/layout/bare_upgrade_pages_overlay.xml
+new file mode 100644
+index 00000000000..4487f8ea648
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_upgrade_pages_overlay.xml
+@@ -0,0 +1,61 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<!-- The pages an update shows after What's new, one at a time: the page itself above, Continue
++     and Skip below. Drawn like the backup page. -->
++<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
++    android:id="@+id/bare_upgrade_pages_root"
++    android:layout_width="match_parent"
++    android:layout_height="match_parent"
++    android:orientation="vertical"
++    android:background="@color/bare_welcome_bg"
++    android:clickable="true"
++    android:focusable="false">
++
++    <FrameLayout
++        android:id="@+id/bare_upgrade_pages_stage"
++        android:layout_width="match_parent"
++        android:layout_height="0dp"
++        android:layout_weight="1" />
++
++    <LinearLayout
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:orientation="vertical"
++        android:paddingStart="24dp"
++        android:paddingTop="8dp"
++        android:paddingEnd="24dp"
++        android:paddingBottom="16dp">
++
++        <Button
++            android:id="@+id/bare_upgrade_pages_continue"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:minHeight="52dp"
++            android:background="@drawable/bare_welcome_button_primary"
++            android:stateListAnimator="@null"
++            android:text="@string/bare_whats_new_continue"
++            android:textAllCaps="false"
++            android:textColor="@color/bare_welcome_on_accent"
++            android:textSize="15sp"
++            android:fontFamily="sans-serif-medium" />
++
++        <Button
++            android:id="@+id/bare_upgrade_pages_skip"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="8dp"
++            android:minHeight="48dp"
++            android:background="?attr/selectableItemBackground"
++            android:stateListAnimator="@null"
++            android:text="@string/bare_upgrade_skip"
++            android:textAllCaps="false"
++            android:textColor="@color/bare_welcome_accent"
++            android:textSize="15sp"
++            android:fontFamily="sans-serif-medium" />
++    </LinearLayout>
++</LinearLayout>
+diff --git a/chrome/android/java/res/layout/bare_welcome_page_canvas.xml b/chrome/android/java/res/layout/bare_welcome_page_canvas.xml
+index 413b24df1c1..22b37204e9c 100644
+--- a/chrome/android/java/res/layout/bare_welcome_page_canvas.xml
++++ b/chrome/android/java/res/layout/bare_welcome_page_canvas.xml
+@@ -45,6 +45,7 @@ found in the LICENSE file.
+             android:lineSpacingMultiplier="1.2" />
+ 
+         <org.chromium.chrome.browser.bare.canvas.BareCanvasFlowView
++            android:id="@+id/bare_canvas_flow"
+             android:layout_width="match_parent"
+             android:layout_height="wrap_content"
+             android:layout_marginBottom="16dp"
+diff --git a/chrome/android/java/res/layout/bare_welcome_page_toolbar.xml b/chrome/android/java/res/layout/bare_welcome_page_toolbar.xml
+index b47ac9b1bc6..39c20b98c49 100644
+--- a/chrome/android/java/res/layout/bare_welcome_page_toolbar.xml
++++ b/chrome/android/java/res/layout/bare_welcome_page_toolbar.xml
+@@ -89,6 +89,12 @@ found in the LICENSE file.
+                 android:layout_marginStart="56dp"
+                 android:background="@color/bare_welcome_divider" />
+             <include android:id="@+id/bare_row_bar_swipe" layout="@layout/bare_welcome_option_row" />
++            <View
++                android:layout_width="match_parent"
++                android:layout_height="1dp"
++                android:layout_marginStart="56dp"
++                android:background="@color/bare_welcome_divider" />
++            <include android:id="@+id/bare_row_menu" layout="@layout/bare_welcome_option_row" />
+         </LinearLayout>
+     </LinearLayout>
+ </ScrollView>
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 0afc7b0dd09..998b5ffcd06 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -48,6 +48,17 @@ found in the LICENSE file.
+     <string name="bare_welcome_hint_address_swipe" translatable="false">Slide it left or right to switch tabs</string>
+     <string name="bare_welcome_opt_bar_swipe" translatable="false">Swipe the bottom bar</string>
+     <string name="bare_welcome_hint_bar_swipe" translatable="false">What a sideways drag along the bar does</string>
++    <string name="bare_welcome_opt_menu" translatable="false">Menu</string>
++    <string name="bare_welcome_hint_menu" translatable="false">How the menu opens</string>
++    <string name="bare_welcome_menu_card_value" translatable="false">Bare menu</string>
++    <string name="bare_welcome_menu_classic_value" translatable="false">Classic</string>
++    <string name="bare_welcome_menu_card_option" translatable="false">Bare menu: a card that rises from the toolbar</string>
++    <string name="bare_welcome_menu_classic_option" translatable="false">Classic drop-down menu</string>
++    <string name="bare_upgrade_menu_title" translatable="false">Your menu</string>
++    <string name="bare_upgrade_menu_intro" translatable="false">Choose how the menu opens. You can change it later in Settings, Look &amp; feel.</string>
++    <string name="bare_upgrade_menu_picture_card" translatable="false">The menu as a card that rises from the toolbar</string>
++    <string name="bare_upgrade_menu_picture_classic" translatable="false">The menu as a list that opens from the menu button</string>
++    <string name="bare_upgrade_skip" translatable="false">Skip</string>
+     <string name="bare_welcome_security_title">Security</string>
+     <string name="bare_welcome_security_intro">Settings that limit what pages can reach or learn about your connection. You can change them later in Settings, Bare Guard.</string>
+     <string name="bare_welcome_opt_https">Secure connections</string>
+@@ -84,6 +95,9 @@ found in the LICENSE file.
+     <string name="bare_welcome_canvas_step_receive" translatable="false">Site gets nothing to recognize</string>
+     <string name="bare_welcome_canvas_screen_unchanged" translatable="false">What you see is unchanged</string>
+     <string name="bare_welcome_canvas_picture_description" translatable="false">A site reads canvas pixels, Bare hands over a blank canvas, and the site gets nothing to recognize. What you see is unchanged.</string>
++    <string name="bare_welcome_canvas_step_pass" translatable="false">Bare passes them on as drawn</string>
++    <string name="bare_welcome_canvas_step_known" translatable="false">Site can use them to recognize you</string>
++    <string name="bare_welcome_canvas_picture_description_off" translatable="false">A site reads canvas pixels and gets them as drawn, which can help it recognize your browser. What you see is unchanged.</string>
+     <string name="bare_welcome_opt_canvas" translatable="false">Block canvas reading</string>
+     <string name="bare_welcome_hint_canvas" translatable="false">Applies to new pages</string>
+     <string name="bare_welcome_canvas_note" translatable="false">Canvas only. Not audio, fonts or device info. Fingerprint tests may still call you unique. Some sites need canvas reading to work; allow them from the menu. Also in Settings, Bare Guard.</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMenuStyleView.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMenuStyleView.java
+new file mode 100644
+index 00000000000..4b3a00eeb27
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMenuStyleView.java
+@@ -0,0 +1,259 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.animation.ValueAnimator;
++import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Paint;
++import android.graphics.RectF;
++import android.util.AttributeSet;
++import android.view.View;
++import android.view.animation.PathInterpolator;
++
++import androidx.core.content.ContextCompat;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++
++/**
++ * The picture on the menu page an update shows: a small phone screen whose menu is either Bare's
++ * card, rising from behind the toolbar, or the classic list that opens from the menu button. A
++ * change of choice plays the one going away out and the other in.
++ */
++@NullMarked
++public class BareMenuStyleView extends View {
++    private static final long MOVE_MS = 460;
++    private static final long INTRO_DELAY_MS = 280;
++
++    private final Paint mFill = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint mStroke = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final RectF mRect = new RectF();
++    private final RectF mRow = new RectF();
++    private final float mDensity;
++
++    private boolean mCardStyle = true;
++    // How far each menu is open, 0 to 1.
++    private float mCard;
++    private float mClassic;
++    private boolean mIntroPending = true;
++    private @Nullable ValueAnimator mAnimator;
++
++    public BareMenuStyleView(Context context, @Nullable AttributeSet attrs) {
++        super(context, attrs);
++        mDensity = context.getResources().getDisplayMetrics().density;
++        mStroke.setStyle(Paint.Style.STROKE);
++        mStroke.setStrokeWidth(1.25f * mDensity);
++        updateDescription();
++    }
++
++    /** Shows one menu or the other, moving between them unless animations are off. */
++    public void setCardStyle(boolean card, boolean animate) {
++        mCardStyle = card;
++        updateDescription();
++        if (mIntroPending && !isAttachedToWindow()) return;
++        mIntroPending = false;
++        moveTo(animate);
++    }
++
++    @Override
++    protected void onAttachedToWindow() {
++        super.onAttachedToWindow();
++        if (!mIntroPending) return;
++        mIntroPending = false;
++        // The chosen menu opens a moment after the page appears, so it is seen to open.
++        if (ValueAnimator.areAnimatorsEnabled()) {
++            postDelayed(() -> moveTo(true), INTRO_DELAY_MS);
++        } else {
++            moveTo(false);
++        }
++    }
++
++    @Override
++    protected void onDetachedFromWindow() {
++        if (mAnimator != null) mAnimator.cancel();
++        super.onDetachedFromWindow();
++    }
++
++    private void moveTo(boolean animate) {
++        if (mAnimator != null) mAnimator.cancel();
++        float cardTo = mCardStyle ? 1f : 0f;
++        float classicTo = mCardStyle ? 0f : 1f;
++        if (!animate || !ValueAnimator.areAnimatorsEnabled() || !isAttachedToWindow()) {
++            mCard = cardTo;
++            mClassic = classicTo;
++            invalidate();
++            return;
++        }
++        float cardFrom = mCard;
++        float classicFrom = mClassic;
++        ValueAnimator animator = ValueAnimator.ofFloat(0f, 1f);
++        animator.setDuration(MOVE_MS);
++        animator.setInterpolator(new PathInterpolator(0.4f, 0f, 0.2f, 1f));
++        animator.addUpdateListener(
++                a -> {
++                    float f = (float) a.getAnimatedValue();
++                    mCard = cardFrom + (cardTo - cardFrom) * f;
++                    mClassic = classicFrom + (classicTo - classicFrom) * f;
++                    invalidate();
++                });
++        mAnimator = animator;
++        animator.start();
++    }
++
++    private void updateDescription() {
++        setContentDescription(
++                getContext()
++                        .getString(
++                                mCardStyle
++                                        ? R.string.bare_upgrade_menu_picture_card
++                                        : R.string.bare_upgrade_menu_picture_classic));
++    }
++
++    @Override
++    protected void onMeasure(int widthSpec, int heightSpec) {
++        setMeasuredDimension(MeasureSpec.getSize(widthSpec), Math.round(196 * mDensity));
++    }
++
++    @Override
++    protected void onDraw(Canvas canvas) {
++        Context context = getContext();
++        int accent = ContextCompat.getColor(context, R.color.bare_welcome_accent);
++        int card = ContextCompat.getColor(context, R.color.bare_welcome_card);
++        int background = ContextCompat.getColor(context, R.color.bare_welcome_bg);
++        int divider = ContextCompat.getColor(context, R.color.bare_welcome_divider);
++        int soft = ContextCompat.getColor(context, R.color.bare_welcome_soft);
++        float d = mDensity;
++        boolean rtl = getLayoutDirection() == LAYOUT_DIRECTION_RTL;
++
++        // The screen.
++        float screenWidth = Math.min(getWidth() - 48 * d, 240 * d);
++        float left = (getWidth() - screenWidth) / 2f;
++        float right = left + screenWidth;
++        float top = 14 * d;
++        float bottom = getHeight() - 14 * d;
++        float radius = 16 * d;
++        mRect.set(left, top, right, bottom);
++        mFill.setColor(background);
++        canvas.drawRoundRect(mRect, radius, radius, mFill);
++
++        // A page: a few lines of text.
++        mFill.setColor(divider);
++        float line = top + 18 * d;
++        float[] widths = {0.62f, 0.86f, 0.74f, 0.8f, 0.5f};
++        for (float w : widths) {
++            float start = rtl ? right - 14 * d - (screenWidth - 28 * d) * w : left + 14 * d;
++            float end = rtl ? right - 14 * d : start + (screenWidth - 28 * d) * w;
++            mRect.set(start, line, end, line + 6 * d);
++            canvas.drawRoundRect(mRect, 3 * d, 3 * d, mFill);
++            line += 16 * d;
++        }
++
++        // The toolbar, with the menu button at its end.
++        float barTop = bottom - 30 * d;
++        float menuX = rtl ? left + 18 * d : right - 18 * d;
++        float barMid = (barTop + bottom) / 2f;
++
++        // Bare's card comes up from behind the toolbar, so it is drawn under it and clipped to the
++        // screen above it.
++        if (mCard > 0f) {
++            float cardHeight = 84 * d;
++            float shift = (1f - mCard) * cardHeight;
++            canvas.save();
++            canvas.clipRect(left, top, right, barTop);
++            mRect.set(left + 8 * d, barTop - cardHeight + shift, right - 8 * d, barTop + 12 * d);
++            mFill.setColor(card);
++            mFill.setAlpha(Math.round(255 * Math.min(1f, mCard * 1.6f)));
++            canvas.drawRoundRect(mRect, 14 * d, 14 * d, mFill);
++            mStroke.setColor(divider);
++            mStroke.setAlpha(mFill.getAlpha());
++            canvas.drawRoundRect(mRect, 14 * d, 14 * d, mStroke);
++            // A row of round shortcuts and two lines under them.
++            float rowY = mRect.top + 22 * d;
++            float spacing = (mRect.width() - 24 * d) / 4f;
++            mFill.setColor(soft);
++            mFill.setAlpha(mStroke.getAlpha());
++            for (int i = 0; i < 4; i++) {
++                canvas.drawCircle(mRect.left + 12 * d + spacing * (i + 0.5f), rowY, 9 * d, mFill);
++            }
++            mFill.setColor(accent);
++            mFill.setAlpha(mStroke.getAlpha());
++            for (int i = 0; i < 4; i++) {
++                canvas.drawCircle(mRect.left + 12 * d + spacing * (i + 0.5f), rowY, 3 * d, mFill);
++            }
++            mFill.setColor(divider);
++            mFill.setAlpha(mStroke.getAlpha());
++            float lineY = rowY + 20 * d;
++            for (int i = 0; i < 2; i++) {
++                mRow.set(left + 22 * d, lineY, right - 22 * d - i * 40 * d, lineY + 5 * d);
++                if (rtl) mRow.offset(i * 40 * d, 0);
++                canvas.drawRoundRect(mRow, 2.5f * d, 2.5f * d, mFill);
++                lineY += 13 * d;
++            }
++            canvas.restore();
++            mStroke.setAlpha(255);
++            mFill.setAlpha(255);
++        }
++
++        // The bar keeps the screen's rounded bottom corners.
++        mFill.setColor(card);
++        canvas.save();
++        canvas.clipRect(left, barTop, right, bottom);
++        mRect.set(left, top, right, bottom);
++        canvas.drawRoundRect(mRect, radius, radius, mFill);
++        canvas.restore();
++        mFill.setColor(divider);
++        canvas.drawRect(left, barTop, right, barTop + 1 * d, mFill);
++        // The address bar.
++        float pillStart = rtl ? left + 34 * d : left + 12 * d;
++        float pillEnd = rtl ? right - 12 * d : right - 34 * d;
++        mRect.set(pillStart, barMid - 7 * d, pillEnd, barMid + 7 * d);
++        canvas.drawRoundRect(mRect, 7 * d, 7 * d, mFill);
++        // The menu button, three dots.
++        mFill.setColor(accent);
++        for (int i = -1; i <= 1; i++) {
++            canvas.drawCircle(menuX, barMid + i * 5 * d, 1.7f * d, mFill);
++        }
++
++        // The classic list opens from the menu button.
++        if (mClassic > 0f) {
++            float listWidth = Math.min(108 * d, screenWidth * 0.55f);
++            float listHeight = 92 * d;
++            float scale = 0.7f + 0.3f * mClassic;
++            float pivotX = menuX;
++            float pivotY = barTop - 4 * d;
++            canvas.save();
++            canvas.scale(scale, scale, pivotX, pivotY);
++            float listRight = rtl ? left + 6 * d + listWidth : right - 6 * d;
++            float listLeft = listRight - listWidth;
++            mRect.set(listLeft, pivotY - listHeight, listRight, pivotY);
++            int alpha = Math.round(255 * Math.min(1f, mClassic * 1.4f));
++            mFill.setColor(card);
++            mFill.setAlpha(alpha);
++            canvas.drawRoundRect(mRect, 6 * d, 6 * d, mFill);
++            mStroke.setColor(divider);
++            mStroke.setAlpha(alpha);
++            canvas.drawRoundRect(mRect, 6 * d, 6 * d, mStroke);
++            mFill.setColor(divider);
++            mFill.setAlpha(alpha);
++            float rowY = mRect.top + 12 * d;
++            for (int i = 0; i < 5; i++) {
++                float rowEnd = mRect.right - 12 * d - (i % 2) * 18 * d;
++                mRow.set(mRect.left + 12 * d, rowY, rowEnd, rowY + 5 * d);
++                canvas.drawRoundRect(mRow, 2.5f * d, 2.5f * d, mFill);
++                rowY += 16 * d;
++            }
++            canvas.restore();
++            mStroke.setAlpha(255);
++            mFill.setAlpha(255);
++        }
++
++        // The screen's edge, last so nothing draws over it.
++        mStroke.setColor(divider);
++        mRect.set(left, top, right, bottom);
++        canvas.drawRoundRect(mRect, radius, radius, mStroke);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpgradePagesOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpgradePagesOverlay.java
+new file mode 100644
+index 00000000000..1d2d3c77cfb
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpgradePagesOverlay.java
+@@ -0,0 +1,335 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.animation.ValueAnimator;
++import android.app.Activity;
++import android.content.SharedPreferences;
++import android.os.Build;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.view.accessibility.AccessibilityManager;
++import android.view.accessibility.AccessibilityNodeInfo;
++import android.view.animation.PathInterpolator;
++import android.widget.FrameLayout;
++import android.widget.RadioButton;
++import android.widget.TextView;
++
++import androidx.activity.ComponentActivity;
++import androidx.activity.OnBackPressedCallback;
++import androidx.core.graphics.Insets;
++import androidx.core.view.ViewCompat;
++import androidx.core.view.WindowInsetsCompat;
++
++import com.google.android.material.materialswitch.MaterialSwitch;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.canvas.BareCanvasFlowView;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.components.browser_ui.widget.RiseSheet;
++
++/**
++ * The two pages an update from 2.0.4 or earlier shows after What's new: canvas reading, then the
++ * menu. Each is shown once. Continue saves what the page shows; Skip and Back leave the setting as
++ * it was. A page left without an answer comes back at the next start, like the backup page.
++ */
++@NullMarked
++final class BareUpgradePagesOverlay {
++    /** Set once the canvas page has had Continue, Skip or Back, or the welcome covered it. */
++    static final String KEY_CANVAS_PAGE_DONE = "upgrade_canvas_page_done";
++
++    /** The same for the menu page. */
++    static final String KEY_MENU_PAGE_DONE = "upgrade_menu_page_done";
++
++    private static final int PAGE_CANVAS = 0;
++    private static final int PAGE_MENU = 1;
++    private static final long SWAP_MS = 320;
++
++    private final Activity mActivity;
++    private final SharedPreferences mPrefs;
++    private final ViewGroup mRoot;
++    private final Runnable mThen;
++    private final View mOverlay;
++    private final FrameLayout mStage;
++    private final View[] mHiddenBehind;
++    private @Nullable OnBackPressedCallback mBackCallback;
++
++    private int mPage = -1;
++    private boolean mDone;
++
++    private boolean mCanvasOn;
++    private boolean mCanvasTouched;
++    private @Nullable MaterialSwitch mCanvasSwitch;
++    private @Nullable BareCanvasFlowView mCanvasPicture;
++
++    private boolean mMenuCard;
++    private @Nullable BareMenuStyleView mMenuPicture;
++    private @Nullable View mMenuCardRow;
++    private @Nullable View mMenuClassicRow;
++
++    /**
++     * Shows whichever of the two pages this profile has not answered yet, then runs {@code then}.
++     * Runs {@code then} straight away when there is nothing to show.
++     */
++    static void maybeShow(Activity activity, SharedPreferences prefs, Runnable then) {
++        boolean canvas = !prefs.getBoolean(KEY_CANVAS_PAGE_DONE, false);
++        boolean menu = !prefs.getBoolean(KEY_MENU_PAGE_DONE, false);
++        // Only for a profile that finished a welcome before; a new install sees both in it.
++        if ((!canvas && !menu) || !prefs.getBoolean("shown", false)) {
++            then.run();
++            return;
++        }
++        if (RiseSheet.isOpen()) return;
++        @Nullable ViewGroup root = activity.findViewById(android.R.id.content);
++        if (root == null || root.findViewById(R.id.bare_upgrade_pages_root) != null) return;
++        new BareUpgradePagesOverlay(activity, prefs, root, then)
++                .show(canvas ? PAGE_CANVAS : PAGE_MENU);
++    }
++
++    private BareUpgradePagesOverlay(
++            Activity activity, SharedPreferences prefs, ViewGroup root, Runnable then) {
++        mActivity = activity;
++        mPrefs = prefs;
++        mRoot = root;
++        mThen = then;
++        mOverlay =
++                LayoutInflater.from(activity)
++                        .inflate(R.layout.bare_upgrade_pages_overlay, root, false);
++        // Not part of the activity's saved state, like the welcome.
++        mOverlay.setSaveFromParentEnabled(false);
++        mStage = mOverlay.findViewById(R.id.bare_upgrade_pages_stage);
++        mHiddenBehind = new View[root.getChildCount()];
++        mMenuCard =
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_MENU_CARD, true);
++    }
++
++    private void show(int page) {
++        // Keeps a screen reader on these pages, away from the browser they cover.
++        for (int i = 0; i < mHiddenBehind.length; i++) {
++            mHiddenBehind[i] = mRoot.getChildAt(i);
++            mHiddenBehind[i].setImportantForAccessibility(
++                    View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
++        }
++        mOverlay.findViewById(R.id.bare_upgrade_pages_continue)
++                .setOnClickListener(v -> answer(/* save= */ true));
++        mOverlay.findViewById(R.id.bare_upgrade_pages_skip)
++                .setOnClickListener(v -> answer(/* save= */ false));
++        if (mActivity instanceof ComponentActivity componentActivity) {
++            mBackCallback =
++                    new OnBackPressedCallback(true) {
++                        @Override
++                        public void handleOnBackPressed() {
++                            answer(/* save= */ false);
++                        }
++                    };
++            componentActivity.getOnBackPressedDispatcher().addCallback(mBackCallback);
++        }
++
++        // The browser draws edge to edge, so keep the content clear of the system bars. The
++        // insets are read from the window, as the welcome does, because the browser consumes them.
++        mOverlay.addOnLayoutChangeListener(
++                (view, l, t, r, b, oldL, oldT, oldR, oldB) -> {
++                    WindowInsetsCompat insets = ViewCompat.getRootWindowInsets(view);
++                    if (insets == null) return;
++                    Insets bars =
++                            insets.getInsets(
++                                    WindowInsetsCompat.Type.systemBars()
++                                            | WindowInsetsCompat.Type.displayCutout());
++                    if (view.getPaddingTop() == bars.top
++                            && view.getPaddingBottom() == bars.bottom
++                            && view.getPaddingLeft() == bars.left
++                            && view.getPaddingRight() == bars.right) {
++                        return;
++                    }
++                    view.post(() -> view.setPadding(bars.left, bars.top, bars.right, bars.bottom));
++                });
++        mRoot.addView(mOverlay);
++
++        // When What's new was seen at an earlier start, this is the first screen, and the system
++        // splash would otherwise fade out over it.
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
++            mActivity
++                    .getSplashScreen()
++                    .setOnExitAnimationListener(splashView -> splashView.remove());
++        }
++        showPage(page);
++    }
++
++    // -------------------------------------------------------------------------------------------
++    // Moving through the pages.
++
++    private void showPage(int page) {
++        mPage = page;
++        View view = page == PAGE_CANVAS ? buildCanvasPage() : buildMenuPage();
++        @Nullable View old = mStage.getChildCount() > 0 ? mStage.getChildAt(0) : null;
++        mStage.addView(view);
++        if (old != null) {
++            if (!ValueAnimator.areAnimatorsEnabled()) {
++                mStage.removeView(old);
++            } else {
++                // The old page moves off to the start side, the new one comes in from the end.
++                float density = mActivity.getResources().getDisplayMetrics().density;
++                boolean rtl = mStage.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL;
++                float shift = 32 * density * (rtl ? -1 : 1);
++                old.setImportantForAccessibility(
++                        View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
++                old.animate()
++                        .alpha(0f)
++                        .translationX(-shift)
++                        .setDuration(SWAP_MS)
++                        .setInterpolator(easeOut())
++                        .withEndAction(() -> mStage.removeView(old))
++                        .start();
++                view.setAlpha(0f);
++                view.setTranslationX(shift);
++                view.animate()
++                        .alpha(1f)
++                        .translationX(0f)
++                        .setDuration(SWAP_MS)
++                        .setInterpolator(easeOut())
++                        .start();
++            }
++        }
++        // A screen reader starts at the new page's title.
++        AccessibilityManager accessibility =
++                (AccessibilityManager) mActivity.getSystemService(Activity.ACCESSIBILITY_SERVICE);
++        if (accessibility != null && accessibility.isEnabled()) {
++            View title = view.findViewById(R.id.bare_page_title);
++            title.post(
++                    () ->
++                            title.performAccessibilityAction(
++                                    AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null));
++        }
++    }
++
++    /** Continue saves what the page shows; Skip and Back keep what was there. Both move on. */
++    private void answer(boolean save) {
++        if (mDone) return;
++        if (mPage == PAGE_CANVAS) {
++            // Written only when the switch was used: its starting position may not have been read
++            // from the profile yet, and an untouched switch already matches the setting.
++            if (save && mCanvasTouched) {
++                boolean on = mCanvasOn;
++                BareWelcomeOverlay.whenProfileReady(
++                        profile -> BareSecurityChoices.setBlockCanvasReading(profile, on));
++            }
++            mPrefs.edit().putBoolean(KEY_CANVAS_PAGE_DONE, true).apply();
++            if (!mPrefs.getBoolean(KEY_MENU_PAGE_DONE, false)) {
++                showPage(PAGE_MENU);
++                return;
++            }
++        } else {
++            if (save) {
++                ChromeSharedPreferences.getInstance()
++                        .writeBoolean(ChromePreferenceKeys.BARE_MENU_CARD, mMenuCard);
++            }
++            mPrefs.edit().putBoolean(KEY_MENU_PAGE_DONE, true).apply();
++        }
++        finish();
++    }
++
++    private void finish() {
++        mDone = true;
++        if (mBackCallback != null) mBackCallback.remove();
++        mRoot.removeView(mOverlay);
++        for (View behind : mHiddenBehind) {
++            behind.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
++        }
++        mThen.run();
++    }
++
++    // -------------------------------------------------------------------------------------------
++    // The canvas page: the welcome's own page, with its switch and picture.
++
++    private View buildCanvasPage() {
++        View page =
++                LayoutInflater.from(mActivity)
++                        .inflate(R.layout.bare_welcome_page_canvas, mStage, false);
++        mCanvasPicture = page.findViewById(R.id.bare_canvas_flow);
++        mCanvasPicture.setBlocking(mCanvasOn, false);
++        View row = page.findViewById(R.id.bare_row_canvas);
++        BareWelcomeOverlay.setUpOptionRow(
++                row,
++                R.drawable.ic_grid_view_24dp,
++                R.string.bare_welcome_opt_canvas,
++                R.string.bare_welcome_hint_canvas);
++        mCanvasSwitch =
++                BareWelcomeOverlay.switchOptionRow(
++                        row,
++                        mCanvasOn,
++                        on -> {
++                            mCanvasOn = on;
++                            mCanvasTouched = true;
++                            if (mCanvasPicture != null) mCanvasPicture.setBlocking(on, true);
++                        });
++        // Off unless the user already turned it on, which only the profile knows.
++        BareWelcomeOverlay.whenProfileReady(
++                profile -> {
++                    if (mDone || mCanvasTouched) return;
++                    mCanvasOn = BareSecurityChoices.isBlockCanvasReading(profile);
++                    if (mCanvasSwitch != null) mCanvasSwitch.setChecked(mCanvasOn);
++                    if (mCanvasPicture != null) mCanvasPicture.setBlocking(mCanvasOn, false);
++                });
++        return page;
++    }
++
++    // -------------------------------------------------------------------------------------------
++    // The menu page: Bare's card or the classic list, starting on the one in use.
++
++    private View buildMenuPage() {
++        View page =
++                LayoutInflater.from(mActivity)
++                        .inflate(R.layout.bare_upgrade_page_menu, mStage, false);
++        mMenuPicture = page.findViewById(R.id.bare_menu_style_picture);
++        mMenuPicture.setCardStyle(mMenuCard, false);
++        mMenuCardRow = page.findViewById(R.id.bare_menu_option_card);
++        mMenuClassicRow = page.findViewById(R.id.bare_menu_option_classic);
++        menuRow(mMenuCardRow, R.string.bare_welcome_menu_card_option, true);
++        menuRow(mMenuClassicRow, R.string.bare_welcome_menu_classic_option, false);
++        updateMenuRows();
++        return page;
++    }
++
++    private void menuRow(View row, int labelRes, boolean card) {
++        ((TextView) row.findViewById(R.id.bare_chooser_label)).setText(labelRes);
++        row.setOnClickListener(
++                v -> {
++                    if (mMenuCard == card) return;
++                    mMenuCard = card;
++                    updateMenuRows();
++                    if (mMenuPicture != null) mMenuPicture.setCardStyle(card, true);
++                });
++        row.setAccessibilityDelegate(
++                new View.AccessibilityDelegate() {
++                    @Override
++                    public void onInitializeAccessibilityNodeInfo(
++                            View host, AccessibilityNodeInfo info) {
++                        super.onInitializeAccessibilityNodeInfo(host, info);
++                        info.setClassName(RadioButton.class.getName());
++                        info.setCheckable(true);
++                        info.setChecked(mMenuCard == card);
++                    }
++                });
++    }
++
++    private void updateMenuRows() {
++        if (mMenuCardRow == null || mMenuClassicRow == null) return;
++        mMenuCardRow
++                .findViewById(R.id.bare_chooser_check)
++                .setVisibility(mMenuCard ? View.VISIBLE : View.INVISIBLE);
++        mMenuClassicRow
++                .findViewById(R.id.bare_chooser_check)
++                .setVisibility(mMenuCard ? View.INVISIBLE : View.VISIBLE);
++    }
++
++    private static PathInterpolator easeOut() {
++        return new PathInterpolator(0.2f, 0.8f, 0.2f, 1f);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+index c6c25f18bd2..b512d7cca34 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+@@ -73,6 +73,7 @@ import org.chromium.chrome.browser.app.ChromeActivity;
+ import org.chromium.chrome.browser.bare.backup.BareAutoBackup;
+ import org.chromium.chrome.browser.bare.backup.BareAutoBackupSetupFragment;
+ import org.chromium.chrome.browser.bare.backup.BareBringOverFragment;
++import org.chromium.chrome.browser.bare.canvas.BareCanvasFlowView;
+ import org.chromium.chrome.browser.bare.settings.BareToolbarActionUi;
+ import org.chromium.chrome.browser.bare.settings.BareToolbarPreviewBinder;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+@@ -158,6 +159,8 @@ public class BareWelcomeOverlay {
+     private static final String KEY_DRAFT_TRANSLATE = "draft_page_translation";
+     private static final String KEY_DRAFT_TRANSLATE_TOUCHED = "draft_page_translation_touched";
+     private static final String KEY_DRAFT_OPEN_LINKS = "draft_open_links_in_apps";
++    private static final String KEY_DRAFT_MENU_CARD = "draft_menu_card";
++    private static final String KEY_DRAFT_MENU_CARD_TOUCHED = "draft_menu_card_touched";
+ 
+     private static final int PAGE_WELCOME = 0;
+     private static final int PAGE_TOOLBAR = 2;
+@@ -204,8 +207,9 @@ public class BareWelcomeOverlay {
+         long installed = info == null ? 0 : info.lastUpdateTime;
+         if ((installed != 0 && installed == prefs.getLong(KEY_SHOWN_FOR_INSTALL, 0))
+                 || (installed == 0 && prefs.getBoolean(KEY_SHOWN, false))) {
+-            // An update's backup page that was left without an answer comes back.
+-            BareBackupUpgradeOverlay.maybeShow(activity, prefs);
++            // An update's pages that were left without an answer come back.
++            BareUpgradePagesOverlay.maybeShow(
++                    activity, prefs, () -> BareBackupUpgradeOverlay.maybeShow(activity, prefs));
+             return;
+         }
+ 
+@@ -231,12 +235,17 @@ public class BareWelcomeOverlay {
+                     .putString(KEY_SHOWN_FOR_VERSION, updatedTo)
+                     .putLong(KEY_SHOWN_FOR_INSTALL, installed)
+                     .apply();
+-            // What's new first, then the backup page once, on Continue.
++            // What's new first, then on Continue the canvas and menu pages and the backup page,
++            // each once.
+             BareWhatsNewOverlay.maybeShow(
+                     activity,
+                     prefs,
+                     updatedTo,
+-                    () -> BareBackupUpgradeOverlay.maybeShow(activity, prefs));
++                    () ->
++                            BareUpgradePagesOverlay.maybeShow(
++                                    activity,
++                                    prefs,
++                                    () -> BareBackupUpgradeOverlay.maybeShow(activity, prefs)));
+             return;
+         }
+         String version = info == null || info.versionName == null ? "" : info.versionName;
+@@ -260,6 +269,8 @@ public class BareWelcomeOverlay {
+                         info == null || info.versionName == null ? "" : info.versionName)
+                 .putLong(KEY_SHOWN_FOR_INSTALL, info == null ? 0 : info.lastUpdateTime)
+                 .putBoolean(KEY_BACKUP_PAGE_DONE, true)
++                .putBoolean(BareUpgradePagesOverlay.KEY_CANVAS_PAGE_DONE, true)
++                .putBoolean(BareUpgradePagesOverlay.KEY_MENU_PAGE_DONE, true)
+                 .apply();
+         clearDraft(prefs);
+         applyChoices(currentChoices(/* reviewing= */ false));
+@@ -317,6 +328,11 @@ public class BareWelcomeOverlay {
+         boolean canvasBlock;
+         boolean canvasBlockTouched;
+ 
++        // Bare's menu card or the classic drop-down. The card unless the user picks the other.
++        // Written on a first showing, and on a review only once the user has picked one.
++        boolean menuCard = true;
++        boolean menuCardTouched;
++
+         // Page translation, off unless the user turns it on. It is written on Start on a first
+         // showing, and on a review only once the user has touched the switch.
+         boolean pageTranslation;
+@@ -921,9 +937,40 @@ public class BareWelcomeOverlay {
+                     R.string.bare_welcome_opt_bar_swipe,
+                     R.string.bare_welcome_hint_bar_swipe);
+             valueRow(barSwipe, barSwipeLabel(mChoices.barSwipe), this::chooseBarSwipe);
++
++            View menu = page.findViewById(R.id.bare_row_menu);
++            setUpRow(
++                    menu,
++                    R.drawable.ic_more_vert_24dp_on_light_bg,
++                    R.string.bare_welcome_opt_menu,
++                    R.string.bare_welcome_hint_menu);
++            valueRow(menu, menuLabel(mChoices.menuCard), this::chooseMenu);
+             updateToolbarRows();
+         }
+ 
++        private String menuLabel(boolean card) {
++            return mActivity.getString(
++                    card
++                            ? R.string.bare_welcome_menu_card_value
++                            : R.string.bare_welcome_menu_classic_value);
++        }
++
++        private void chooseMenu(TextView value) {
++            List<CharSequence> labels = new ArrayList<>();
++            labels.add(mActivity.getString(R.string.bare_welcome_menu_card_option));
++            labels.add(mActivity.getString(R.string.bare_welcome_menu_classic_option));
++            showChooser(
++                    R.string.bare_welcome_opt_menu,
++                    labels,
++                    mChoices.menuCard ? 0 : 1,
++                    index -> {
++                        mChoices.menuCard = index == 0;
++                        mChoices.menuCardTouched = true;
++                        value.setText(menuLabel(mChoices.menuCard));
++                        saveDraft();
++                    });
++        }
++
+         /** Redraws the toolbar picture from what has been picked so far. */
+         private void updateToolbarIllustration() {
+             if (mToolbarIllustration == null) return;
+@@ -1172,6 +1219,8 @@ public class BareWelcomeOverlay {
+         // The canvas page: one switch, off unless chosen, that blocks canvas reading.
+ 
+         private void buildCanvasPage(View page) {
++            BareCanvasFlowView picture = page.findViewById(R.id.bare_canvas_flow);
++            picture.setBlocking(mChoices.canvasBlock, false);
+             View row = page.findViewById(R.id.bare_row_canvas);
+             setUpRow(
+                     row,
+@@ -1185,6 +1234,7 @@ public class BareWelcomeOverlay {
+                             on -> {
+                                 mChoices.canvasBlock = on;
+                                 mChoices.canvasBlockTouched = true;
++                                picture.setBlocking(on, true);
+                                 saveDraft();
+                             });
+             // On a review the switch shows what the profile holds.
+@@ -1197,6 +1247,7 @@ public class BareWelcomeOverlay {
+                             if (mCanvasSwitch != null) {
+                                 mCanvasSwitch.setChecked(mChoices.canvasBlock);
+                             }
++                            picture.setBlocking(mChoices.canvasBlock, false);
+                         });
+             }
+         }
+@@ -1620,6 +1671,10 @@ public class BareWelcomeOverlay {
+                     .putString(KEY_SHOWN_FOR_VERSION, mVersion)
+                     .putLong(KEY_SHOWN_FOR_INSTALL, mInstalled)
+                     .putBoolean(KEY_BACKUP_PAGE_DONE, true)
++                    // The welcome has the canvas page and the menu choice, so the pages an update
++                    // shows for them are not needed.
++                    .putBoolean(BareUpgradePagesOverlay.KEY_CANVAS_PAGE_DONE, true)
++                    .putBoolean(BareUpgradePagesOverlay.KEY_MENU_PAGE_DONE, true)
+                     .apply();
+             clearDraft(mPrefs);
+             applyChoices(mChoices);
+@@ -1702,9 +1757,7 @@ public class BareWelcomeOverlay {
+         // Rows.
+ 
+         private void setUpRow(View row, int iconRes, int labelRes, int hintRes) {
+-            ((ImageView) row.findViewById(R.id.bare_option_icon)).setImageResource(iconRes);
+-            ((TextView) row.findViewById(R.id.bare_option_label)).setText(labelRes);
+-            ((TextView) row.findViewById(R.id.bare_option_hint)).setText(hintRes);
++            setUpOptionRow(row, iconRes, labelRes, hintRes);
+         }
+ 
+         /** A row whose value opens a chooser. Returns the value label so it can be updated. */
+@@ -1729,18 +1782,7 @@ public class BareWelcomeOverlay {
+ 
+         /** A row that is on or off. The whole row is the switch, for a screen reader too. */
+         private MaterialSwitch switchRow(View row, boolean initial, Callback<Boolean> onChanged) {
+-            MaterialSwitch toggle = row.findViewById(R.id.bare_option_switch);
+-            toggle.setVisibility(View.VISIBLE);
+-            toggle.setChecked(initial);
+-            row.setClickable(true);
+-            row.setFocusable(true);
+-            row.setOnClickListener(
+-                    view -> {
+-                        toggle.setChecked(!toggle.isChecked());
+-                        onChanged.onResult(toggle.isChecked());
+-                    });
+-            describeAsSwitch(row, toggle);
+-            return toggle;
++            return switchOptionRow(row, initial, onChanged);
+         }
+ 
+         private static int openLinksLabel(@BareOpenInAppsMode.Mode int mode) {
+@@ -1778,7 +1820,7 @@ public class BareWelcomeOverlay {
+         }
+ 
+         /** Presents a row to a screen reader as the switch it holds. */
+-        private static void describeAsSwitch(View row, MaterialSwitch toggle) {
++        static void describeAsSwitch(View row, MaterialSwitch toggle) {
+             row.setAccessibilityDelegate(
+                     new View.AccessibilityDelegate() {
+                         @Override
+@@ -2067,6 +2109,8 @@ public class BareWelcomeOverlay {
+                     .putBoolean(KEY_DRAFT_CANVAS_TOUCHED, mChoices.canvasBlockTouched)
+                     .putBoolean(KEY_DRAFT_TRANSLATE, mChoices.pageTranslation)
+                     .putBoolean(KEY_DRAFT_TRANSLATE_TOUCHED, mChoices.pageTranslationTouched)
++                    .putBoolean(KEY_DRAFT_MENU_CARD, mChoices.menuCard)
++                    .putBoolean(KEY_DRAFT_MENU_CARD_TOUCHED, mChoices.menuCardTouched)
+                     .apply();
+         }
+ 
+@@ -2118,6 +2162,9 @@ public class BareWelcomeOverlay {
+         choices.pageTranslation = prefs.getBoolean(KEY_DRAFT_TRANSLATE, choices.pageTranslation);
+         choices.pageTranslationTouched =
+                 prefs.getBoolean(KEY_DRAFT_TRANSLATE_TOUCHED, choices.pageTranslationTouched);
++        choices.menuCard = prefs.getBoolean(KEY_DRAFT_MENU_CARD, choices.menuCard);
++        choices.menuCardTouched =
++                prefs.getBoolean(KEY_DRAFT_MENU_CARD_TOUCHED, choices.menuCardTouched);
+         int page = prefs.getInt(KEY_DRAFT_PAGE, PAGE_WELCOME);
+         return Math.max(PAGE_WELCOME, Math.min(page, PAGE_FINISH));
+     }
+@@ -2148,6 +2195,8 @@ public class BareWelcomeOverlay {
+                 .remove(KEY_DRAFT_BUTTONS_TOUCHED)
+                 .remove(KEY_DRAFT_ADDRESS_SWIPE)
+                 .remove(KEY_DRAFT_BAR_SWIPE)
++                .remove(KEY_DRAFT_MENU_CARD)
++                .remove(KEY_DRAFT_MENU_CARD_TOUCHED)
+                 .apply();
+     }
+ 
+@@ -2259,6 +2308,7 @@ public class BareWelcomeOverlay {
+         choices.fourthButton = BareToolbarLayout.actionForSlot(BareToolbarSlot.TAB_SWITCHER);
+         choices.addressBarSwipe = BareToolbarSwipePrefs.isAddressBarSwipeEnabled();
+         choices.barSwipe = BareToolbarSwipePrefs.getAction();
++        choices.menuCard = prefs.readBoolean(ChromePreferenceKeys.BARE_MENU_CARD, true);
+         return choices;
+     }
+ 
+@@ -2306,6 +2356,10 @@ public class BareWelcomeOverlay {
+                         ChromePreferenceKeys.BARE_ADDRESS_BAR_SWIPE_TABS,
+                         choices.addressBarSwipe);
+         BareToolbarSwipePrefs.setAction(choices.barSwipe);
++        if (!choices.reviewing || choices.menuCardTouched) {
++            ChromeSharedPreferences.getInstance()
++                    .writeBoolean(ChromePreferenceKeys.BARE_MENU_CARD, choices.menuCard);
++        }
+         if (choices.buttonsTouched) {
+             BareToolbarPrefs.setPrimaryAction(BareToolbarSlot.HOME, choices.firstButton);
+             BareToolbarPrefs.setPrimaryAction(BareToolbarSlot.EXTRA, choices.secondButton);
+@@ -2381,8 +2435,31 @@ public class BareWelcomeOverlay {
+                 });
+     }
+ 
++    /** Fills in a welcome option row: its icon, name and hint. */
++    static void setUpOptionRow(View row, int iconRes, int labelRes, int hintRes) {
++        ((ImageView) row.findViewById(R.id.bare_option_icon)).setImageResource(iconRes);
++        ((TextView) row.findViewById(R.id.bare_option_label)).setText(labelRes);
++        ((TextView) row.findViewById(R.id.bare_option_hint)).setText(hintRes);
++    }
++
++    /** A row that is on or off. The whole row is the switch, for a screen reader too. */
++    static MaterialSwitch switchOptionRow(View row, boolean initial, Callback<Boolean> onChanged) {
++        MaterialSwitch toggle = row.findViewById(R.id.bare_option_switch);
++        toggle.setVisibility(View.VISIBLE);
++        toggle.setChecked(initial);
++        row.setClickable(true);
++        row.setFocusable(true);
++        row.setOnClickListener(
++                view -> {
++                    toggle.setChecked(!toggle.isChecked());
++                    onChanged.onResult(toggle.isChecked());
++                });
++        Flow.describeAsSwitch(row, toggle);
++        return toggle;
++    }
++
+     /** Runs once the regular profile exists, immediately if it already does. */
+-    private static void whenProfileReady(Callback<Profile> callback) {
++    static void whenProfileReady(Callback<Profile> callback) {
+         if (ProfileManager.isInitialized()) {
+             callback.onResult(ProfileManager.getLastUsedRegularProfile());
+             return;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackup.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackup.java
+index d7f39c52243..e7cad786f67 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackup.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackup.java
+@@ -547,7 +547,8 @@ public final class BareAutoBackup {
+                 || epoch <= prefs.getLong(KEY_CARD_EPOCH, 0)
+                 || RiseSheet.isOpen()
+                 || activity.findViewById(R.id.bare_welcome_root) != null
+-                || activity.findViewById(R.id.bare_whats_new_root) != null) {
++                || activity.findViewById(R.id.bare_whats_new_root) != null
++                || activity.findViewById(R.id.bare_upgrade_pages_root) != null) {
+             return;
+         }
+         View root = activity.getWindow().getDecorView();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/canvas/BareCanvasFlowView.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/canvas/BareCanvasFlowView.java
+index 2d37629e958..f12aac87c6b 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/canvas/BareCanvasFlowView.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/canvas/BareCanvasFlowView.java
+@@ -4,8 +4,10 @@
+ 
+ package org.chromium.chrome.browser.bare.canvas;
+ 
++import android.animation.ValueAnimator;
+ import android.content.Context;
+ import android.graphics.Canvas;
++import android.graphics.Color;
+ import android.graphics.Paint;
+ import android.graphics.RectF;
+ import android.text.Layout;
+@@ -13,20 +15,27 @@ import android.text.StaticLayout;
+ import android.text.TextPaint;
+ import android.util.AttributeSet;
+ import android.view.View;
++import android.view.animation.PathInterpolator;
+ 
+ import androidx.core.content.ContextCompat;
+ 
+ import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ 
+ /**
+  * The picture on the welcome's canvas page: a page asks for canvas pixels, Bare hands over a blank
+  * canvas, and the site gets nothing it could recognize the browser by, while what is drawn on
+  * screen stays as it was. It draws only that one path, which is also all the feature does.
++ *
++ * <p>The page's switch drives it. Off, the page's picture goes through to the site unchanged; on,
++ * a blank sweeps across the two tiles after Bare's step. Without a switch it shows the blocked
++ * path, as it always did.
+  */
+ @NullMarked
+ public class BareCanvasFlowView extends View {
+     private static final int GRID = 4;
++    private static final long SWEEP_MS = 520;
+ 
+     // A fixed little picture, standing for whatever a page drew.
+     private static final int[] CELL_COLORS = {
+@@ -42,6 +51,10 @@ public class BareCanvasFlowView extends View {
+     private final RectF mRect = new RectF();
+     private final float mDensity;
+ 
++    // 0 when the picture goes through, 1 when Bare hands over a blank canvas.
++    private float mBlocked = 1f;
++    private @Nullable ValueAnimator mAnimator;
++
+     public BareCanvasFlowView(Context context, AttributeSet attrs) {
+         super(context, attrs);
+         mDensity = context.getResources().getDisplayMetrics().density;
+@@ -51,6 +64,42 @@ public class BareCanvasFlowView extends View {
+         setContentDescription(context.getString(R.string.bare_welcome_canvas_picture_description));
+     }
+ 
++    /** Shows the path with blocking on or off, sweeping between them unless animations are off. */
++    public void setBlocking(boolean on, boolean animate) {
++        setContentDescription(
++                getContext()
++                        .getString(
++                                on
++                                        ? R.string.bare_welcome_canvas_picture_description
++                                        : R.string.bare_welcome_canvas_picture_description_off));
++        float target = on ? 1f : 0f;
++        if (mAnimator != null) mAnimator.cancel();
++        if (!animate || !ValueAnimator.areAnimatorsEnabled() || !isAttachedToWindow()) {
++            mBlocked = target;
++            invalidate();
++            return;
++        }
++        ValueAnimator animator = ValueAnimator.ofFloat(mBlocked, target);
++        animator.setDuration(SWEEP_MS);
++        animator.setInterpolator(new PathInterpolator(0.4f, 0f, 0.2f, 1f));
++        animator.addUpdateListener(
++                a -> {
++                    mBlocked = (float) a.getAnimatedValue();
++                    invalidate();
++                });
++        mAnimator = animator;
++        animator.start();
++    }
++
++    @Override
++    protected void onDetachedFromWindow() {
++        if (mAnimator != null) {
++            mAnimator.cancel();
++            mAnimator = null;
++        }
++        super.onDetachedFromWindow();
++    }
++
+     @Override
+     protected void onMeasure(int widthSpec, int heightSpec) {
+         int width = MeasureSpec.getSize(widthSpec);
+@@ -75,19 +124,45 @@ public class BareCanvasFlowView extends View {
+             R.string.bare_welcome_canvas_step_blank,
+             R.string.bare_welcome_canvas_step_receive,
+         };
++        int[] labelsOff = {
++            R.string.bare_welcome_canvas_step_ask,
++            R.string.bare_welcome_canvas_step_pass,
++            R.string.bare_welcome_canvas_step_known,
++        };
+         for (int i = 0; i < 3; i++) {
+             float left = i * column + (column - grid) / 2f;
+             // Bare's own step sits in a tinted card so the eye finds where the change happens.
+-            if (i == 1) {
++            if (i == 1 && mBlocked > 0f) {
+                 mRect.set(i * column + 4 * mDensity, top - 6 * mDensity,
+                         (i + 1) * column - 4 * mDensity, top + grid + 74 * mDensity);
+                 mFill.setColor(soft);
++                mFill.setAlpha(Math.round(Color.alpha(soft) * mBlocked));
+                 canvas.drawRoundRect(mRect, 14 * mDensity, 14 * mDensity, mFill);
++                mFill.setAlpha(255);
++            }
++            // The first tile is what the page drew. The blank sweeps over the other two in turn,
++            // the way the canvas travels.
++            float cover = i == 0 ? 0f : clamp((mBlocked - (i - 1) * 0.35f) / 0.65f);
++            drawGrid(canvas, left, top, grid, cover, accent, card);
++            float labelX = i * column + 8 * mDensity;
++            float labelY = top + grid + 10 * mDensity;
++            float labelWidth = column - 16 * mDensity;
++            int color = i == 1 ? title : body;
++            if (labels[i] == labelsOff[i]) {
++                drawLabel(canvas, getContext().getString(labels[i]), labelX, labelY, labelWidth,
++                        color, 1f);
++            } else {
++                // The two wordings cross over halfway.
++                float on = clamp((mBlocked - 0.25f) / 0.5f);
++                if (on < 1f) {
++                    drawLabel(canvas, getContext().getString(labelsOff[i]), labelX, labelY,
++                            labelWidth, color, 1f - on);
++                }
++                if (on > 0f) {
++                    drawLabel(canvas, getContext().getString(labels[i]), labelX, labelY,
++                            labelWidth, color, on);
++                }
+             }
+-            // The first tile is what the page drew. The other two are the blank canvas.
+-            drawGrid(canvas, left, top, grid, i > 0, accent, card);
+-            drawLabel(canvas, getContext().getString(labels[i]), i * column + 8 * mDensity,
+-                    top + grid + 10 * mDensity, column - 16 * mDensity, i == 1 ? title : body);
+         }
+         // Drawn after the cards so the tinted one cannot cover an arrow.
+         for (int i = 1; i < 3; i++) {
+@@ -99,18 +174,20 @@ public class BareCanvasFlowView extends View {
+         mFill.setColor(divider);
+         canvas.drawRect(8 * mDensity, lineY - 1, width - 8 * mDensity, lineY, mFill);
+         float small = 20 * mDensity;
+-        drawGrid(canvas, 12 * mDensity, lineY + 5 * mDensity, small, false, accent, card);
++        drawGrid(canvas, 12 * mDensity, lineY + 5 * mDensity, small, 0f, accent, card);
+         drawLabel(canvas, getContext().getString(R.string.bare_welcome_canvas_screen_unchanged),
+                 12 * mDensity + small + 10 * mDensity, lineY + 7 * mDensity,
+-                width - small - 36 * mDensity, title);
++                width - small - 36 * mDensity, title, 1f);
++    }
++
++    private static float clamp(float value) {
++        return Math.max(0f, Math.min(1f, value));
+     }
+ 
+-    private void drawGrid(Canvas canvas, float left, float top, float size, boolean blank,
++    /** One tile: the page's picture, with {@code cover} of it blanked from the leading side. */
++    private void drawGrid(Canvas canvas, float left, float top, float size, float cover,
+             int accent, int card) {
+-        if (blank) {
+-            mFill.setColor(card);
+-            canvas.drawRect(left, top, left + size, top + size, mFill);
+-        } else {
++        if (cover < 1f) {
+             float cell = size / GRID;
+             for (int row = 0; row < GRID; row++) {
+                 for (int col = 0; col < GRID; col++) {
+@@ -121,6 +198,21 @@ public class BareCanvasFlowView extends View {
+                 }
+             }
+         }
++        if (cover > 0f) {
++            boolean rtl = getLayoutDirection() == LAYOUT_DIRECTION_RTL;
++            float edge = rtl ? left + size * (1f - cover) : left + size * cover;
++            mFill.setColor(card);
++            if (rtl) {
++                canvas.drawRect(edge, top, left + size, top + size, mFill);
++            } else {
++                canvas.drawRect(left, top, edge, top + size, mFill);
++            }
++            // The sweep's leading edge, while it moves.
++            if (cover < 1f) {
++                mStroke.setColor(accent);
++                canvas.drawLine(edge, top, edge, top + size, mStroke);
++            }
++        }
+         mStroke.setColor(accent);
+         mRect.set(left, top, left + size, top + size);
+         canvas.drawRect(mRect, mStroke);
+@@ -134,8 +226,10 @@ public class BareCanvasFlowView extends View {
+         canvas.drawLine(x + half - 5 * mDensity, y + 5 * mDensity, x + half, y, mStroke);
+     }
+ 
+-    private void drawLabel(Canvas canvas, String text, float x, float y, float width, int color) {
++    private void drawLabel(
++            Canvas canvas, String text, float x, float y, float width, int color, float alpha) {
+         mText.setColor(color);
++        mText.setAlpha(Math.round(Color.alpha(color) * alpha));
+         StaticLayout layout =
+                 StaticLayout.Builder.obtain(text, 0, text.length(), mText, Math.round(width))
+                         .setAlignment(Layout.Alignment.ALIGN_NORMAL)

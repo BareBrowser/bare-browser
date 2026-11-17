@@ -5,7 +5,9 @@ and recording the browser's own network log. For 1.0.0 that covered a wiped prof
 launch through the welcome screen, a network change and several minutes idle, then several
 sites, a page that fails to resolve, and the Languages and Search engine settings. What follows
 is what was actually observed, not what was intended. Nothing was captured again for 2.0: what changed since then
-is read from the patches, and the paragraphs below say where.
+is read from the patches, and the paragraphs below say where. 2.0.5 got one capture of the same kind
+(fresh profile, about nine minutes, a few pages, a search, a download and the settings pages).
+It showed the hosts above and no new ones.
 
 **Chromium's component updater contacts `update.googleapis.com`**, from the first start onwards,
 and fetches the components it needs as signed packages over plain HTTP from Google's download
@@ -43,8 +45,8 @@ as it is.
 **On the first run of a fresh profile, most of the rest is uBlock Origin** fetching the filter
 lists it ships enabled, from the list maintainers and their CDNs rather than from Google:
 `pgl.yoyo.org`, `ublockorigin.github.io`, `ublockorigin.pages.dev`, `malware-filter.pages.dev`,
-`malware-filter.gitlab.io`, `curbengh.github.io`, `phishing-filter.pages.dev`, `cdn.jsdelivr.net` and
-`publicsuffix.org`. That happens once and then on the extension's own
+`malware-filter.gitlab.io`, `curbengh.github.io`, `phishing-filter.pages.dev`, `cdn.jsdelivr.net`,
+`filters.adtidy.org` (the AdGuard Mobile Ads list) and `publicsuffix.org`. That happens once and then on the extension's own
 schedule. uBlock Origin is installed and fetching these while the welcome screen is still asking
 whether you want an ad blocker; turning the switch off removes it, with its settings.
 
@@ -115,10 +117,6 @@ turn it on. Both come from reading patches 0000174 and 0000195 and were not capt
   the receiver they would arrive through. With one, the subscription names the address that app
   gave out, Google is not asked, and delivery depends on that app. Only the intent actions are
   tested, with a stand-in app written for the purpose; no real distributor has been tried.
-- **A Google or YouTube page that publishes cross-origin speculation rules** can have Chromium
-  prefetch the pages it names through Google's private prefetch proxy, `tunnel.googlezip.net`,
-  after checking it can reach `dns-tunnel-check.googlezip.net` and `tls-tunnel-check.googlezip.net`.
-  This depends on the page you are on, not on your search engine.
 - **A payment form that asks for a shipping address** loads address formats from
   `chromium-i18n.appspot.com` when you edit the address.
 - **chrome://metrics-internals** can fetch a variations seed from Google if you open it and ask
@@ -129,7 +127,7 @@ turn it on. Both come from reading patches 0000174 and 0000195 and were not capt
   build does not have.
 - **A custom home page** may get its icon from Google's favicon server, `t0.gstatic.com`.
 
-The proxy, the payment form, metrics-internals, the home page icon and Touch to Search above are
+The payment form, metrics-internals, the home page icon and Touch to Search above are
 read from the code and were not captured.
 
 Extension update checks that do not go to the Chrome Web Store carry any cookies the browser
@@ -176,6 +174,21 @@ Chromium tries again with them.
   language; 0000146 keeps it to the English files built in.
 
 The 1.0.0 capture reached none of the hosts in this list.
+
+**Two Google paths that earlier releases had are gone in 2.0.5** (patch 0000359).
+
+- **The prefetch proxy.** Until 2.0.4, a Google or YouTube page that published cross-origin
+  speculation rules could have Chromium prefetch the pages it names through
+  `tunnel.googlezip.net`, after checking it could reach `dns-tunnel-check.googlezip.net` and
+  `tls-tunnel-check.googlezip.net`. In 2.0.5 the proxy address and the check addresses are empty
+  in the code, so the tunnel cannot be reached. The 2.0.5 capture shows no request to any of the
+  three hosts.
+- **The leaked-password check.** Chromium's credential API could reach
+  `passwordsleakcheck-pa.googleapis.com` to ask whether a saved password appears in a known
+  leak. In 2.0.5 the default is off and its switch is gone from the Privacy page. The capture
+  shows no contact with that host, but that only means it was not contacted in a normal
+  session; the check was not triggered on purpose. The host name is still in the binary
+  because the code was not removed.
 
 Chromium 156 also started sending HEAD requests to three random hostnames after launch and after
 every network change, to detect DNS interception. Patch 0000131 turns that check off.

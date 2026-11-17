@@ -1,0 +1,82 @@
+diff --git a/chrome/browser/bare/backup/backup_settings_unittest.cc b/chrome/browser/bare/backup/backup_settings_unittest.cc
+index 020450bc2be..cd3a2e19791 100644
+--- a/chrome/browser/bare/backup/backup_settings_unittest.cc
++++ b/chrome/browser/bare/backup/backup_settings_unittest.cc
+@@ -51,6 +51,7 @@ TEST(BackupSettingsTest, ListIsWellFormed) {
+         "Bare.ClearOnExit.VeilPending", "bare.clear_on_exit_pending",
+         "Bare.AppMenu.EditTipCount", "Chrome.Bare.NewIconUnlocked",
+         "Chrome.Bare.NewIconInUse", "Chrome.Download.ExternalManagerPackage",
++        "Chrome.Bare.SmoothScrollingReset",
+         "background_media_playback", "external_download_manager_enabled",
+         "external_download_manager_app", "incognito.incognito_reauthentication",
+         "shown_for_install", "draft_first_button"}) {
+diff --git a/chrome/browser/chrome_browser_field_trials.cc b/chrome/browser/chrome_browser_field_trials.cc
+index 1615831c76b..82901b4b4fe 100644
+--- a/chrome/browser/chrome_browser_field_trials.cc
++++ b/chrome/browser/chrome_browser_field_trials.cc
+@@ -130,15 +130,22 @@ void ChromeBrowserFieldTrials::RegisterFeatureOverrides(
+   variations::FeatureOverrides feature_overrides(*feature_list);
+ 
+ #if BUILDFLAG(IS_ANDROID)
+-  // Bare: smooth scrolling is on unless the user turned it off in Settings,
++  // Bare: smooth scrolling is off unless the user turned it on in Settings,
+   // Browsing. The browser decides here, and the feature list carries the answer
+   // to every process, including the one that reads the touches.
++  //
++  // It used to be on by default. Once, on the first start of a version that
++  // has this, the saved choice is cleared so everyone starts with it off,
++  // already for that start. Turned on after that, it stays on.
+   {
+     base::android::SharedPreferencesManager prefs =
+         android::shared_preferences::GetChromeSharedPreferences();
+-    const bool smooth = prefs.ReadBoolean("Chrome.Bare.SmoothScrolling", true);
+-    if (!smooth) {
+-      feature_overrides.DisableFeature(ui::kBareSmoothScrolling);
++    if (!prefs.ContainsKey("Chrome.Bare.SmoothScrollingReset")) {
++      prefs.RemoveKey("Chrome.Bare.SmoothScrolling");
++      prefs.WriteString("Chrome.Bare.SmoothScrollingReset", "off");
++    }
++    if (prefs.ReadBoolean("Chrome.Bare.SmoothScrolling", false)) {
++      feature_overrides.EnableFeature(ui::kBareSmoothScrolling);
+     }
+   }
+   // Bare: every site gets its own process on every phone, whatever upstream
+@@ -322,7 +329,8 @@ void ChromeBrowserFieldTrials::RegisterFeatureOverrides(
+   feature_overrides.EnableFeature(features::kTextClassifierTimeout);
+ 
+   // Enable desktop fling curve.
+-  feature_overrides.EnableFeature(features::kDesktopFlingCurveOnAndroid);
++  // Bare: not enabled. This build runs on phones, so flings keep the mobile
++  // curve and Android's own fling velocity limits, as in Chrome on a phone.
+ 
+   // Disable modern overscroll animations and gestures on Desktop Android.
+   feature_overrides.DisableFeature(features::kElasticOverscroll);
+diff --git a/ui/events/gesture_detection/smooth_scrolling.cc b/ui/events/gesture_detection/smooth_scrolling.cc
+index f0325a0209a..b846aeb1c0f 100644
+--- a/ui/events/gesture_detection/smooth_scrolling.cc
++++ b/ui/events/gesture_detection/smooth_scrolling.cc
+@@ -8,7 +8,7 @@
+ 
+ namespace ui {
+ 
+-BASE_FEATURE(kBareSmoothScrolling, base::FEATURE_ENABLED_BY_DEFAULT);
++BASE_FEATURE(kBareSmoothScrolling, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ namespace {
+ 
+diff --git a/ui/events/gesture_detection/smooth_scrolling.h b/ui/events/gesture_detection/smooth_scrolling.h
+index 4418db95d22..8c2f855daf9 100644
+--- a/ui/events/gesture_detection/smooth_scrolling.h
++++ b/ui/events/gesture_detection/smooth_scrolling.h
+@@ -13,8 +13,9 @@ namespace ui {
+ // Smooth scrolling makes a flick behave like one in a native Android list: it
+ // cannot start faster than a set speed, it glides on the curve a native list
+ // uses, and a flick while the page is still moving does not add its speed to
+-// the one before. It is on unless the user turned it off in Settings; the
+-// browser decides that at startup and every process is told the same.
++// the one before. It is off unless the user turned it on in Settings; the
++// browser decides that at startup and every process is told the same. Off,
++// none of the code that checks it changes anything.
+ GESTURE_DETECTION_EXPORT BASE_DECLARE_FEATURE(kBareSmoothScrolling);
+ 
+ GESTURE_DETECTION_EXPORT bool IsSmoothScrollingEnabled();

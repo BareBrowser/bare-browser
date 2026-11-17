@@ -1,0 +1,119 @@
+diff --git a/chrome/browser/preloading/prefetch/prefetch_service/chrome_prefetch_service_delegate.cc b/chrome/browser/preloading/prefetch/prefetch_service/chrome_prefetch_service_delegate.cc
+index e2e06ca2de6..01efe9fdf58 100644
+--- a/chrome/browser/preloading/prefetch/prefetch_service/chrome_prefetch_service_delegate.cc
++++ b/chrome/browser/preloading/prefetch/prefetch_service/chrome_prefetch_service_delegate.cc
+@@ -39,20 +39,23 @@ std::string ChromePrefetchServiceDelegate::GetAcceptLanguageHeader() {
+       profile_->GetPrefs()->GetString(language::prefs::kAcceptLanguages));
+ }
+ 
++// Bare: no Google prefetch proxy. An empty host means no proxy configurator,
++// so proxied prefetches end as kPrefetchProxyNotAvailable.
+ GURL ChromePrefetchServiceDelegate::GetDefaultPrefetchProxyHost() {
+-  return GURL("https://tunnel.googlezip.net/");
++  return GURL();
+ }
+ 
+ std::string ChromePrefetchServiceDelegate::GetAPIKey() {
+   return google_apis::GetAPIKey();
+ }
+ 
++// Bare: no canary checks against Google hosts.
+ GURL ChromePrefetchServiceDelegate::GetDefaultDNSCanaryCheckURL() {
+-  return GURL("http://dns-tunnel-check.googlezip.net/connect");
++  return GURL();
+ }
+ 
+ GURL ChromePrefetchServiceDelegate::GetDefaultTLSCanaryCheckURL() {
+-  return GURL("http://tls-tunnel-check.googlezip.net/connect");
++  return GURL();
+ }
+ 
+ void ChromePrefetchServiceDelegate::ReportOriginRetryAfter(
+@@ -104,12 +107,10 @@ bool ChromePrefetchServiceDelegate::IsExtendedPreloadingEnabled() {
+          prefetch::PreloadPagesState::kExtendedPreloading;
+ }
+ 
++// Bare: no referrer may use the prefetch proxy.
+ bool ChromePrefetchServiceDelegate::IsDomainInPrefetchAllowList(
+     const GURL& referring_url) {
+-  return IsGoogleDomainUrl(referring_url, google_util::ALLOW_SUBDOMAIN,
+-                           google_util::ALLOW_NON_STANDARD_PORTS) ||
+-         IsYoutubeDomainUrl(referring_url, google_util::ALLOW_SUBDOMAIN,
+-                            google_util::ALLOW_NON_STANDARD_PORTS);
++  return false;
+ }
+ 
+ bool ChromePrefetchServiceDelegate::IsContaminationExempt(
+diff --git a/components/password_manager/core/browser/password_manager.cc b/components/password_manager/core/browser/password_manager.cc
+index 7938d6a0d79..b201e6868d4 100644
+--- a/components/password_manager/core/browser/password_manager.cc
++++ b/components/password_manager/core/browser/password_manager.cc
+@@ -582,8 +582,11 @@ void PasswordManager::RegisterProfilePrefs(
+ #endif  // BUILDFLAG(IS_APPLE)
+   registry->RegisterListPref(prefs::kPasswordHashDataList,
+                              PrefRegistry::NO_REGISTRATION_FLAGS);
++  // Bare: off by default. The check sends a hash prefix of the username and
++  // the encrypted credentials to passwordsleakcheck-pa.googleapis.com, signed
++  // in or not, and Bare has no switch for it.
+   registry->RegisterBooleanPref(
+-      prefs::kPasswordLeakDetectionEnabled, true,
++      prefs::kPasswordLeakDetectionEnabled, false,
+       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+   registry->RegisterBooleanPref(
+       prefs::kPasswordDismissCompromisedAlertEnabled, true,
+diff --git a/content/browser/preloading/prefetch/prefetch_params.cc b/content/browser/preloading/prefetch/prefetch_params.cc
+index a112b2076a7..68c4ef7e30d 100644
+--- a/content/browser/preloading/prefetch/prefetch_params.cc
++++ b/content/browser/preloading/prefetch/prefetch_params.cc
+@@ -22,20 +22,10 @@
+ 
+ namespace content {
+ 
++// Bare: the prefetch proxy is off. The command line switch and the
++// embedder default are both ignored.
+ GURL PrefetchProxyHost(const GURL& default_proxy_url) {
+-  // Command line overrides take priority.
+-  std::string cmd_line_value =
+-      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+-          "isolated-prerender-tunnel-proxy");
+-  if (!cmd_line_value.empty()) {
+-    GURL cmd_line_url(cmd_line_value);
+-    if (cmd_line_url.is_valid()) {
+-      return cmd_line_url;
+-    }
+-    LOG(ERROR) << "--isolated-prerender-tunnel-proxy value is invalid";
+-  }
+-
+-  return default_proxy_url;
++  return GURL();
+ }
+ 
+ std::string PrefetchProxyServerExperimentGroup() {
+@@ -151,24 +141,13 @@ bool PrefetchTLSCanaryCheckEnabled() {
+       features::kPrefetchCanaryCheckerParams, "do_tls_canary", false);
+ }
+ 
++// Bare: no canary checks. Field trial params are ignored too.
+ GURL PrefetchTLSCanaryCheckURL(const GURL& default_tls_canary_check_url) {
+-  GURL url(base::GetFieldTrialParamValueByFeature(
+-      features::kPrefetchCanaryCheckerParams, "tls_canary_url"));
+-  if (url.is_valid()) {
+-    return url;
+-  }
+-
+-  return default_tls_canary_check_url;
++  return GURL();
+ }
+ 
+ GURL PrefetchDNSCanaryCheckURL(const GURL& default_dns_canary_check_url) {
+-  GURL url(base::GetFieldTrialParamValueByFeature(
+-      features::kPrefetchCanaryCheckerParams, "dns_canary_url"));
+-  if (url.is_valid()) {
+-    return url;
+-  }
+-
+-  return default_dns_canary_check_url;
++  return GURL();
+ }
+ 
+ base::TimeDelta PrefetchCanaryCheckCacheLifetime() {

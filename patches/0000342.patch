@@ -1,0 +1,3790 @@
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+index b5877c488ff..dd689330958 100644
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -51,6 +51,7 @@ if (_is_default_toolchain) {
+   import("java_sources.gni")
+   import("static_initializers.gni")
+   import("bare_diagnostics.gni")
++  import("bare_player.gni")
+   import("trichrome.gni")
+ }
+ 
+@@ -934,6 +935,7 @@ if (_is_default_toolchain) {
+       "//components/supervised_user/core/browser:supervised_user_utils_enum_javagen",
+       "//components/touch_to_search/core/browser:quick_action_category_enum_javagen",
+       ":bare_diag_buildflags",
++      ":bare_player_buildflags",
+     ]
+ 
+     # From java_sources.gni.
+@@ -1028,6 +1030,14 @@ if (_is_default_toolchain) {
+     }
+   }
+ 
++  # Whether Bare Player starts out on: only in a local test build.
++  java_cpp_template("bare_player_buildflags") {
++    sources = [ "java/src/org/chromium/chrome/browser/bare/player/BarePlayerBuildflags.template" ]
++    if (bare_player_test_default) {
++      defines = [ "BARE_PLAYER_TEST_DEFAULT" ]
++    }
++  }
++
+   generate_product_config_srcjar("chrome_product_config") {
+     java_package = "org.chromium.chrome.browser"
+   }
+@@ -3100,6 +3110,7 @@ if (_is_default_toolchain) {
+       "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
+       "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
+       "java/src/org/chromium/chrome/browser/bare/BareUboUpdate.java",
++      "java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java",
+       "java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java",
+       "java/src/org/chromium/chrome/browser/browserservices/digitalgoods/SiteIsolator.java",
+       "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappBridge.java",
+diff --git a/chrome/android/bare_player.gni b/chrome/android/bare_player.gni
+new file mode 100644
+index 00000000000..58a5b89df15
+--- /dev/null
++++ b/chrome/android/bare_player.gni
+@@ -0,0 +1,9 @@
++# Copyright 2026 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++declare_args() {
++  # Turns Bare Player on by default, for local test builds only. Release builds
++  # leave this false: the player is then off until the user chooses it.
++  bare_player_test_default = false
++}
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index ebd74d2a0a7..88550540881 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -451,6 +451,20 @@ chrome_java_resources = [
+   "java/res/values/bare_backup_styles.xml",
+   "java/res/values/bare_welcome_colors.xml",
+   "java/res/drawable/bare_settings_ic_palette.xml",
++  "java/res/drawable/bare_player_back_10.xml",
++  "java/res/drawable/bare_player_captions.xml",
++  "java/res/drawable/bare_player_close.xml",
++  "java/res/drawable/bare_player_download.xml",
++  "java/res/drawable/bare_player_fill.xml",
++  "java/res/drawable/bare_player_fit.xml",
++  "java/res/drawable/bare_player_forward_10.xml",
++  "java/res/drawable/bare_player_lock.xml",
++  "java/res/drawable/bare_player_pause.xml",
++  "java/res/drawable/bare_player_pip.xml",
++  "java/res/drawable/bare_player_play.xml",
++  "java/res/drawable/bare_player_replay.xml",
++  "java/res/drawable/bare_player_rotate.xml",
++  "java/res/drawable/bare_player_unlock.xml",
+   "java/res/drawable/bare_settings_ic_shield.xml",
+   "java/res/drawable/bare_settings_ic_puzzle.xml",
+   "java/res/drawable/bare_settings_ic_sliders.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 97980e7ac71..0a622077ff5 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -310,6 +310,12 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java",
+   "java/src/org/chromium/chrome/browser/bare/BareBackupUpgradeOverlay.java",
+   "java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java",
++  "java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java",
++  "java/src/org/chromium/chrome/browser/bare/player/BarePlayerController.java",
++  "java/src/org/chromium/chrome/browser/bare/player/BarePlayerIcon.java",
++  "java/src/org/chromium/chrome/browser/bare/player/BarePlayerScripts.java",
++  "java/src/org/chromium/chrome/browser/bare/player/BarePlayerSettings.java",
++  "java/src/org/chromium/chrome/browser/bare/player/BarePlayerView.java",
+   "java/src/org/chromium/chrome/browser/bare/BareWhatsNewOverlay.java",
+   "java/src/org/chromium/chrome/browser/background_sync/BackgroundSyncBackgroundTask.java",
+   "java/src/org/chromium/chrome/browser/background_sync/BackgroundSyncBackgroundTaskScheduler.java",
+diff --git a/chrome/android/java/res/drawable/bare_player_back_10.xml b/chrome/android/java/res/drawable/bare_player_back_10.xml
+new file mode 100644
+index 00000000000..9774b27dc08
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_player_back_10.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="960"
++    android:viewportHeight="960">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M480,880Q405,880 339.5,851.5Q274,823 225.5,774.5Q177,726 148.5,660.5Q120,595 120,520L200,520Q200,637 281.5,718.5Q363,800 480,800Q597,800 678.5,718.5Q760,637 760,520Q760,403 678.5,321.5Q597,240 480,240L474,240L536,302L480,360L320,200L480,40L536,98L474,160L480,160Q555,160 620.5,188.5Q686,217 734.5,265.5Q783,314 811.5,379.5Q840,445 840,520Q840,595 811.5,660.5Q783,726 734.5,774.5Q686,823 620.5,851.5Q555,880 480,880ZM360,640L360,460L300,460L300,400L420,400L420,640L360,640ZM500,640Q483,640 471.5,628.5Q460,617 460,600L460,440Q460,423 471.5,411.5Q483,400 500,400L580,400Q597,400 608.5,411.5Q620,423 620,440L620,600Q620,617 608.5,628.5Q597,640 580,640L500,640ZM520,580L560,580L560,460L520,460L520,580Z"/>
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_player_captions.xml b/chrome/android/java/res/drawable/bare_player_captions.xml
+new file mode 100644
+index 00000000000..6cca661cfca
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_player_captions.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M19,4H5c-1.11,0 -2,0.9 -2,2v12c0,1.1 0.89,2 2,2h14c1.1,0 2,-0.9 2,-2V6c0,-1.1 -0.9,-2 -2,-2zM11,11H9.5v-0.5h-2v3h2V13H11v1c0,0.55 -0.45,1 -1,1H7c-0.55,0 -1,-0.45 -1,-1v-4c0,-0.55 0.45,-1 1,-1h3c0.55,0 1,0.45 1,1v1zM18,11h-1.5v-0.5h-2v3h2V13H18v1c0,0.55 -0.45,1 -1,1h-3c-0.55,0 -1,-0.45 -1,-1v-4c0,-0.55 0.45,-1 1,-1h3c0.55,0 1,0.45 1,1v1z"/>
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_player_close.xml b/chrome/android/java/res/drawable/bare_player_close.xml
+new file mode 100644
+index 00000000000..e094aa00042
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_player_close.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="960"
++    android:viewportHeight="960">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M256,760L200,704L424,480L200,256L256,200L480,424L704,200L760,256L536,480L760,704L704,760L480,536L256,760Z"/>
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_player_download.xml b/chrome/android/java/res/drawable/bare_player_download.xml
+new file mode 100644
+index 00000000000..7ed524fee56
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_player_download.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="960"
++    android:viewportHeight="960">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M160,880L160,800L800,800L800,880L160,880ZM480,720L200,360L360,360L360,80L600,80L600,360L760,360L480,720Z"/>
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_player_fill.xml b/chrome/android/java/res/drawable/bare_player_fill.xml
+new file mode 100644
+index 00000000000..6d360a3c7ae
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_player_fill.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M5 19V14H7V17H10V19H5ZM5 10V5H10V7H7V10H5ZM14 19V17H17V14H19V19H14ZM17 10V7H14V5H19V10H17Z"/>
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_player_fit.xml b/chrome/android/java/res/drawable/bare_player_fit.xml
+new file mode 100644
+index 00000000000..4b6937c9223
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_player_fit.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M5 8H8V5H10V10H5V8ZM8 16H5V14H10V19H8V16ZM14 19H16V16H19V14H14V19ZM16 5V8H19V10H14V5H16Z"/>
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_player_forward_10.xml b/chrome/android/java/res/drawable/bare_player_forward_10.xml
+new file mode 100644
+index 00000000000..d877cde267c
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_player_forward_10.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="960"
++    android:viewportHeight="960">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M360,640L360,460L300,460L300,400L420,400L420,640L360,640ZM500,640Q483,640 471.5,628.5Q460,617 460,600L460,440Q460,423 471.5,411.5Q483,400 500,400L580,400Q597,400 608.5,411.5Q620,423 620,440L620,600Q620,617 608.5,628.5Q597,640 580,640L500,640ZM520,580L560,580L560,460L520,460L520,580ZM480,880Q405,880 339.5,851.5Q274,823 225.5,774.5Q177,726 148.5,660.5Q120,595 120,520Q120,445 148.5,379.5Q177,314 225.5,265.5Q274,217 339.5,188.5Q405,160 480,160L486,160L424,98L480,40L640,200L480,360L424,302L486,240L480,240Q363,240 281.5,321.5Q200,403 200,520Q200,637 281.5,718.5Q363,800 480,800Q597,800 678.5,718.5Q760,637 760,520L840,520Q840,595 811.5,660.5Q783,726 734.5,774.5Q686,823 620.5,851.5Q555,880 480,880Z"/>
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_player_lock.xml b/chrome/android/java/res/drawable/bare_player_lock.xml
+new file mode 100644
+index 00000000000..52f67862035
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_player_lock.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="960"
++    android:viewportHeight="960">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M240,880Q207,880 183.5,856.5Q160,833 160,800L160,400Q160,367 183.5,343.5Q207,320 240,320L280,320L280,240Q280,157 338.5,98.5Q397,40 480,40Q563,40 621.5,98.5Q680,157 680,240L680,320L720,320Q753,320 776.5,343.5Q800,367 800,400L800,800Q800,833 776.5,856.5Q753,880 720,880L240,880ZM240,800L720,800L720,400L240,400L240,800ZM480,680Q513,680 536.5,656.5Q560,633 560,600Q560,567 536.5,543.5Q513,520 480,520Q447,520 423.5,543.5Q400,567 400,600Q400,633 423.5,656.5Q447,680 480,680ZM360,320L600,320L600,240Q600,190 565,155Q530,120 480,120Q430,120 395,155Q360,190 360,240L360,320Z"/>
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_player_pause.xml b/chrome/android/java/res/drawable/bare_player_pause.xml
+new file mode 100644
+index 00000000000..b1b8b9df765
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_player_pause.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M6,19h4L10,5L6,5v14zM14,5v14h4L18,5h-4z"/>
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_player_pip.xml b/chrome/android/java/res/drawable/bare_player_pip.xml
+new file mode 100644
+index 00000000000..07bf55aa21e
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_player_pip.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="960"
++    android:viewportHeight="960">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M160,800Q127,800 103.5,776.5Q80,753 80,720L80,240Q80,207 103.5,183.5Q127,160 160,160L800,160Q833,160 856.5,183.5Q880,207 880,240L880,720Q880,753 856.5,776.5Q833,800 800,800L160,800ZM160,720L800,720L800,240L160,240L160,720ZM440,520L760,520L760,280L440,280L440,520Z"/>
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_player_play.xml b/chrome/android/java/res/drawable/bare_player_play.xml
+new file mode 100644
+index 00000000000..e8a2b93a212
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_player_play.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M8,5v14l11,-7z"/>
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_player_replay.xml b/chrome/android/java/res/drawable/bare_player_replay.xml
+new file mode 100644
+index 00000000000..623e2d6c71c
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_player_replay.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M12,5V1L7,6l5,5V7c3.31,0 6,2.69 6,6s-2.69,6 -6,6 -6,-2.69 -6,-6H4c0,4.42 3.58,8 8,8s8,-3.58 8,-8 -3.58,-8 -8,-8z"/>
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_player_rotate.xml b/chrome/android/java/res/drawable/bare_player_rotate.xml
+new file mode 100644
+index 00000000000..d567314657c
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_player_rotate.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M16.48,2.52c3.27,1.55 5.61,4.72 5.97,8.48h1.5C23.44,4.84 18.29,0 12,0l-0.66,0.03 3.81,3.81 1.33,-1.32zM10.23,1.75c-0.59,-0.59 -1.54,-0.59 -2.12,0L1.75,8.11c-0.59,0.59 -0.59,1.54 0,2.12l12.02,12.02c0.59,0.59 1.54,0.59 2.12,0l6.36,-6.36c0.59,-0.59 0.59,-1.54 0,-2.12L10.23,1.75zM14.83,21.19L2.81,9.17l6.36,-6.36 12.02,12.02 -6.36,6.36zM7.52,21.48C4.25,19.94 1.91,16.76 1.55,13H0.05C0.56,19.16 5.71,24 12,24l0.66,-0.03 -3.81,-3.81 -1.33,1.32z"/>
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_player_unlock.xml b/chrome/android/java/res/drawable/bare_player_unlock.xml
+new file mode 100644
+index 00000000000..e52c48b3fea
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_player_unlock.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="960"
++    android:viewportHeight="960">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M240,880Q207,880 183.5,856.5Q160,833 160,800L160,400Q160,367 183.5,343.5Q207,320 240,320L600,320L600,240Q600,190 565,155Q530,120 480,120Q430,120 395,155Q360,190 360,240L280,240Q280,157 338.5,98.5Q397,40 480,40Q563,40 621.5,98.5Q680,157 680,240L680,320L720,320Q753,320 776.5,343.5Q800,367 800,400L800,800Q800,833 776.5,856.5Q753,880 720,880L240,880ZM240,800L720,800L720,400L240,400L240,800ZM480,680Q513,680 536.5,656.5Q560,633 560,600Q560,567 536.5,543.5Q513,520 480,520Q447,520 423.5,543.5Q400,567 400,600Q400,633 423.5,656.5Q447,680 480,680Z"/>
++</vector>
+diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
+index 49600660e4c..db242659cf9 100644
+--- a/chrome/android/java/res/values/ids.xml
++++ b/chrome/android/java/res/values/ids.xml
+@@ -168,6 +168,7 @@ found in the LICENSE file.
+     <item type="id" name="contextmenu_save_detected_audio" />
+     <item type="id" name="contextmenu_save_detected_video" />
+     <item type="id" name="contextmenu_save_detected_image" />
++    <item type="id" name="contextmenu_bare_player" />
+     <item type="id" name="contextmenu_save_video" />
+     <!-- go/keep-sorted end -->
+ 
+diff --git a/chrome/android/java/res/xml/media_preferences.xml b/chrome/android/java/res/xml/media_preferences.xml
+index 44023d10082..a1d0f6657d6 100644
+--- a/chrome/android/java/res/xml/media_preferences.xml
++++ b/chrome/android/java/res/xml/media_preferences.xml
+@@ -13,6 +13,12 @@ found in the LICENSE file.
+         android:title="@string/bare_haptics_title"
+         android:summary="@string/bare_haptics_summary" />
+ 
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_player"
++        android:persistent="false"
++        android:title="@string/bare_player_title"
++        android:summary="@string/bare_player_summary" />
++
+     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+         android:key="background_media_playback"
+         android:title="@string/background_media_playback_title"
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index e2aede48f27..62f2b90bd5d 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -121,6 +121,7 @@ import org.chromium.chrome.browser.back_press.MinimizeAppAndCloseTabBackPressHan
+ import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpenerImpl;
+ import org.chromium.chrome.browser.bare.BareUpdateCheck;
+ import org.chromium.chrome.browser.bare.BareWelcomeOverlay;
++import org.chromium.chrome.browser.bare.player.BarePlayerController;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+ import org.chromium.chrome.browser.bookmarks.BookmarkOpenerImpl;
+ import org.chromium.chrome.browser.bookmarks.BookmarkPane;
+@@ -1769,6 +1770,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+             var profileProvider = assertNonNull(getProfileProviderSupplier().get());
+             var originalProfile = profileProvider.getOriginalProfile();
+             maybeClearWebstoreDesktopSiteException(originalProfile);
++            // Bare Player watches fullscreen from here on; it acts only while it is switched on.
++            BarePlayerController.attach(this, getFullscreenManager());
+             new NavigationPredictorBridge(
+                     originalProfile, getLifecycleDispatcher(), this::isWarmOnResume);
+ 
+@@ -5621,6 +5624,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+     @Override
+     @SuppressWarnings("NullAway")
+     public void onDestroyInternal() {
++        BarePlayerController.detach(this);
+ 
+         if (mPrefChangeRegistrar != null) {
+             mPrefChangeRegistrar.destroy();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java
+new file mode 100644
+index 00000000000..fc398614f43
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java
+@@ -0,0 +1,89 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.player;
++
++import org.jni_zero.CalledByNative;
++import org.jni_zero.JniType;
++import org.jni_zero.NativeMethods;
++
++import org.chromium.base.Callback;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.content_public.browser.RenderFrameHost;
++import org.chromium.content_public.browser.WebContents;
++
++/**
++ * Talks to the page for the player: runs its script in one frame or in all of them.
++ *
++ * <p>Scripts run in Bare's isolated world, which sees the page's elements but not its variables,
++ * and which the page cannot see. Nothing here touches how the video is fetched or decoded.
++ */
++@NullMarked
++final class BarePlayerBridge {
++    private BarePlayerBridge() {}
++
++    /**
++     * Runs {@code script} in every frame. The callback gets a JSON list of {"f": frame, "r":
++     * result} for every frame that answered something other than null, or null if the page has
++     * gone.
++     */
++    static void evaluateAll(
++            @Nullable WebContents webContents, String script, Callback<@Nullable String> callback) {
++        if (webContents == null || webContents.isDestroyed()) {
++            callback.onResult(null);
++            return;
++        }
++        BarePlayerBridgeJni.get().evaluateAll(webContents, script, callback);
++    }
++
++    /** Runs {@code script} in one frame. {@code activate} counts as a tap in that frame. */
++    static void evaluateIn(
++            @Nullable WebContents webContents,
++            int frameId,
++            String script,
++            boolean activate,
++            Callback<@Nullable String> callback) {
++        if (webContents == null || webContents.isDestroyed()) {
++            callback.onResult(null);
++            return;
++        }
++        BarePlayerBridgeJni.get().evaluateIn(webContents, frameId, script, activate, callback);
++    }
++
++    /** Downloads {@code url} as the page's video, like the long-press menu's Save video. */
++    static void download(@Nullable WebContents webContents, int frameId, String url) {
++        if (webContents == null || webContents.isDestroyed()) return;
++        BarePlayerBridgeJni.get().download(webContents, frameId, url);
++    }
++
++    /** The id {@link #evaluateIn} takes for a frame, or -1 if there is none. */
++    static int frameIdOf(@Nullable RenderFrameHost frame) {
++        if (frame == null) return -1;
++        return BarePlayerBridgeJni.get().frameIdOf(frame);
++    }
++
++    @CalledByNative
++    private static void onResult(
++            Callback<@Nullable String> callback, @JniType("std::string") String json) {
++        callback.onResult(json);
++    }
++
++    @NativeMethods
++    interface Natives {
++        void evaluateAll(
++                WebContents webContents, String script, Callback<@Nullable String> callback);
++
++        void evaluateIn(
++                WebContents webContents,
++                int frameId,
++                String script,
++                boolean activate,
++                Callback<@Nullable String> callback);
++
++        int frameIdOf(RenderFrameHost frame);
++
++        void download(WebContents webContents, int frameId, String url);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBuildflags.template b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBuildflags.template
+new file mode 100644
+index 00000000000..b648eb0e4a5
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBuildflags.template
+@@ -0,0 +1,19 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.player;
++
++/**
++ * Whether Bare Player starts out on. Off unless the build sets bare_player_test_default, which
++ * only local test builds do; a release build never carries it.
++ */
++public class BarePlayerBuildflags {
++#if defined(BARE_PLAYER_TEST_DEFAULT)
++    public static final boolean ON_BY_DEFAULT = true;
++#else
++    public static final boolean ON_BY_DEFAULT = false;
++#endif
++
++    private BarePlayerBuildflags() {}
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerController.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerController.java
+new file mode 100644
+index 00000000000..127078526d4
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerController.java
+@@ -0,0 +1,712 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.player;
++
++import android.app.Activity;
++import android.content.pm.ActivityInfo;
++import android.content.res.Configuration;
++import android.graphics.Color;
++import android.graphics.drawable.ColorDrawable;
++import android.graphics.drawable.Drawable;
++import android.os.Handler;
++import android.os.Looper;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.FrameLayout;
++import android.widget.PopupMenu;
++import android.widget.Toast;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import org.chromium.base.Log;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.BareMediaRegistryBridge;
++import org.chromium.chrome.browser.media.PictureInPicture;
++import org.chromium.chrome.browser.fullscreen.FullscreenManager;
++import org.chromium.chrome.browser.fullscreen.FullscreenOptions;
++import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.content_public.browser.RenderFrameHost;
++import org.chromium.content_public.browser.WebContents;
++import org.chromium.ui.base.WindowAndroid;
++
++import java.lang.ref.WeakReference;
++import java.util.WeakHashMap;
++
++/**
++ * Bare Player: native controls for the page's own video in fullscreen.
++ *
++ * <p>When a page goes fullscreen with a video in it, the player finds that video (in whichever
++ * frame holds it), asks for fullscreen on the video element itself so the site's own controls and
++ * overlays drop away, and lays native controls over it. Playback never leaves the page: the same
++ * element, the same media pipeline, the same session, cookies, DRM and audio. If no video is found,
++ * or the page will not let the video itself go fullscreen, the site's own fullscreen is left as it
++ * was (or, in the second case, keeps the native controls over it).
++ *
++ * <p>The long-press menu can also open a video in the player, which goes the same way: it puts the
++ * video into fullscreen, and the fullscreen it causes brings the player up.
++ */
++@NullMarked
++public final class BarePlayerController implements FullscreenManager.Observer, BarePlayerView.Delegate {
++    private static final String TAG = "BarePlayer";
++
++    private static final long FIRST_LOOK_MS = 150;
++    private static final long RETRY_LOOK_MS = 400;
++    private static final int LOOK_ATTEMPTS = 3;
++    private static final long POLL_MS = 500;
++    private static final long ENTER_CHECK_MS = 900;
++    private static final long REVEAL_SETTLE_MS = 300;
++    private static final long REVEAL_FALLBACK_MS = 1600;
++
++    private static final WeakHashMap<Activity, BarePlayerController> sControllers =
++            new WeakHashMap<>();
++
++    // The page and frame whose video Bare Player last sent to picture-in-picture, so the
++    // window's expand button can bring it back fullscreen.
++    private static @Nullable WeakReference<WebContents> sPipContents;
++    private static int sPipFrame = -1;
++
++    private final Activity mActivity;
++    private final FullscreenManager mFullscreenManager;
++    private final Handler mHandler = new Handler(Looper.getMainLooper());
++
++    // The player in use, if any.
++    private @Nullable BarePlayerView mView;
++    private @Nullable Tab mTab;
++    private @Nullable WebContents mWebContents;
++    private int mFrameId;
++    private boolean mVideoFullscreen;
++    private boolean mRevealScheduled;
++    private boolean mPollInFlight;
++    private boolean mRefound;
++    private int mSavedOrientation;
++    private int mEntryOrientation;
++    private boolean mOrientationForced;
++    private @Nullable Drawable mSavedWindowBackground;
++
++    // The video's own file, when it plays one straight from an http(s) address.
++    private @Nullable String mDirectSource;
++
++    // Bumped whenever the fullscreen state changes, so answers to an earlier look are dropped.
++    private int mGeneration;
++
++    private final Runnable mPoll = this::poll;
++
++    private BarePlayerController(Activity activity, FullscreenManager fullscreenManager) {
++        mActivity = activity;
++        mFullscreenManager = fullscreenManager;
++        fullscreenManager.addObserver(this);
++    }
++
++    /** Starts watching an activity's fullscreen. */
++    public static void attach(Activity activity, FullscreenManager fullscreenManager) {
++        if (sControllers.containsKey(activity)) return;
++        sControllers.put(activity, new BarePlayerController(activity, fullscreenManager));
++    }
++
++    /** Stops watching, and closes the player if it is up. */
++    public static void detach(Activity activity) {
++        BarePlayerController controller = sControllers.remove(activity);
++        if (controller == null) return;
++        controller.tearDown();
++        controller.mFullscreenManager.removeObserver(controller);
++    }
++
++    /**
++     * Opens the video someone is watching on this page in the player, from the long-press menu.
++     * Does nothing when the player is off.
++     */
++    public static void openFromPage(
++            @Nullable WebContents webContents,
++            @Nullable RenderFrameHost frame,
++            int xDp,
++            int yDp) {
++        if (webContents == null || !BarePlayerSettings.isEnabled()) return;
++        WindowAndroid window = webContents.getTopLevelNativeWindow();
++        Activity activity = window == null ? null : window.getActivity().get();
++        BarePlayerController controller = activity == null ? null : sControllers.get(activity);
++        if (controller == null) return;
++        int frameId = BarePlayerBridge.frameIdOf(frame);
++        if (frameId < 0) {
++            controller.lookOnPage(webContents);
++        } else {
++            controller.lookInFrame(webContents, frameId, xDp, yDp);
++        }
++    }
++
++    /** Ten seconds back or forward for the video in picture-in-picture (the window's buttons). */
++    public static void seekPictureInPicture(@Nullable WebContents webContents, double seconds) {
++        BarePlayerBridge.evaluateAll(webContents, BarePlayerScripts.pipSeekBy(seconds), r -> {});
++    }
++
++    /**
++     * The picture-in-picture window was expanded. If Bare Player sent that video there, it comes
++     * back fullscreen in Bare Player rather than in the page.
++     */
++    public static void onPictureInPictureExpanded(@Nullable WebContents webContents) {
++        WeakReference<WebContents> pip = sPipContents;
++        int frameId = sPipFrame;
++        sPipContents = null;
++        if (webContents == null || pip == null || pip.get() != webContents) return;
++        if (!BarePlayerSettings.isEnabled()) return;
++        new Handler(Looper.getMainLooper())
++                .postDelayed(
++                        () ->
++                                BarePlayerBridge.evaluateIn(
++                                        webContents,
++                                        frameId,
++                                        BarePlayerScripts.FULLSCREEN_AFTER_PIP,
++                                        /* activate= */ true,
++                                        r -> {}),
++                        500);
++    }
++
++    // ---- Fullscreen ----
++
++    @Override
++    public void onEnterFullscreen(Tab tab, FullscreenOptions options) {
++        WebContents webContents = tab.getWebContents();
++        if (webContents == null) return;
++        // The player's own request for fullscreen on the video comes back through here.
++        if (mView != null && webContents == mWebContents) return;
++        if (!BarePlayerSettings.isEnabled()) return;
++        tearDown();
++        mTab = tab;
++        mWebContents = webContents;
++        int generation = ++mGeneration;
++        // Cover the screen straight away, so the page's own fullscreen layout never shows while
++        // the video is found and moved into fullscreen on its own.
++        showView();
++        mHandler.postDelayed(() -> lookForFullscreenVideo(generation, 1), FIRST_LOOK_MS);
++    }
++
++    @Override
++    public void onExitFullscreen(Tab tab) {
++        if (tab != mTab) return;
++        tearDown();
++    }
++
++    /**
++     * Asks every frame for the video it is showing fullscreen. The page may still be building its
++     * fullscreen layout when the browser hears about it, so this looks a few times.
++     */
++    private void lookForFullscreenVideo(int generation, int attempt) {
++        if (generation != mGeneration) return;
++        WebContents webContents = mWebContents;
++        BarePlayerBridge.evaluateAll(
++                webContents,
++                BarePlayerScripts.FIND_FULLSCREEN,
++                json -> {
++                    if (generation != mGeneration) return;
++                    Found found = best(json, /* fromMenu= */ false);
++                    if (found == null) {
++                        if (attempt < LOOK_ATTEMPTS) {
++                            mHandler.postDelayed(
++                                    () -> lookForFullscreenVideo(generation, attempt + 1),
++                                    RETRY_LOOK_MS);
++                        } else {
++                            Log.i(TAG, "No video in fullscreen; the site's own player stays.");
++                            // Lift the cover and leave the page's fullscreen to it.
++                            tearDown();
++                        }
++                        return;
++                    }
++                    takeOver(generation, found);
++                });
++    }
++
++    private void takeOver(int generation, Found found) {
++        mFrameId = found.frameId;
++        boolean self = found.info.optBoolean("self");
++        Log.i(
++                TAG,
++                "Taking over: frame=" + found.frameId + " self=" + self + " kind="
++                        + found.info.optString("kind") + " drm=" + found.info.optBoolean("drm")
++                        + " size=" + found.info.optInt("w") + "x" + found.info.optInt("h"));
++        if (self) {
++            BarePlayerBridge.evaluateIn(
++                    mWebContents, mFrameId, BarePlayerScripts.HIDE_CONTROLS, false, r -> {});
++        } else {
++            // The site made its own container fullscreen; ask for the video alone. The tap that
++            // got here was the user's, on the site's fullscreen button, so the frame is given the
++            // activation that request needs.
++            BarePlayerBridge.evaluateIn(
++                    mWebContents, mFrameId, BarePlayerScripts.ENTER, /* activate= */ true, r -> {});
++        }
++        showView();
++        mHandler.post(mPoll);
++        // If the page keeps the video inside its own fullscreen, still show it after a moment.
++        mHandler.postDelayed(
++                () -> {
++                    if (generation == mGeneration && mView != null) mView.reveal();
++                },
++                REVEAL_FALLBACK_MS);
++    }
++
++    private void showView() {
++        if (mView != null) return;
++        mSavedOrientation = mActivity.getRequestedOrientation();
++        mEntryOrientation = mActivity.getResources().getConfiguration().orientation;
++        mOrientationForced = false;
++        // A video window never shows white: behind the player and in the picture-in-picture
++        // transition the window itself is black, in light mode too. Given back in tearDown.
++        mSavedWindowBackground = mActivity.getWindow().getDecorView().getBackground();
++        mActivity.getWindow().setBackgroundDrawable(new ColorDrawable(Color.BLACK));
++        BarePlayerView view = new BarePlayerView(mActivity, this);
++        ViewGroup root = mActivity.findViewById(android.R.id.content);
++        root.addView(
++                view,
++                new FrameLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        view.requestApplyInsets();
++        mView = view;
++    }
++
++    /** Closes the controls and gives back what the player changed. Leaves the page alone. */
++    private void tearDown() {
++        mGeneration++;
++        mHandler.removeCallbacksAndMessages(null);
++        mPollInFlight = false;
++        mRefound = false;
++        BarePlayerView view = mView;
++        mView = null;
++        if (view != null) {
++            view.release();
++            view.fadeAway(
++                    () -> {
++                        if (view.getParent() instanceof ViewGroup parent) parent.removeView(view);
++                    });
++            BarePlayerBridge.evaluateIn(
++                    mWebContents, mFrameId, BarePlayerScripts.CLEAN_UP, false, r -> {});
++            if (mSavedWindowBackground != null) {
++                mActivity.getWindow().setBackgroundDrawable(mSavedWindowBackground);
++                mSavedWindowBackground = null;
++            }
++            if (mOrientationForced) {
++                restoreOrientation();
++                mOrientationForced = false;
++            }
++        }
++        mVideoFullscreen = false;
++        mRevealScheduled = false;
++        mTab = null;
++        mWebContents = null;
++    }
++
++    /**
++     * Goes back to how the screen was turned when the player opened. Handing straight back to the
++     * earlier request is not enough: with auto-rotate on and the phone lying flat, nothing turns
++     * the screen back, so the screen is first held where it started, then released.
++     */
++    private void restoreOrientation() {
++        int saved = mSavedOrientation;
++        int current = mActivity.getResources().getConfiguration().orientation;
++        if (current == mEntryOrientation) {
++            mActivity.setRequestedOrientation(saved);
++            return;
++        }
++        mActivity.setRequestedOrientation(
++                mEntryOrientation == Configuration.ORIENTATION_LANDSCAPE
++                        ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
++                        : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
++        View decor = mActivity.getWindow().getDecorView();
++        decor.postDelayed(
++                () -> {
++                    if (mView == null) mActivity.setRequestedOrientation(saved);
++                },
++                1500);
++    }
++
++    // ---- Page state ----
++
++    private void poll() {
++        if (mView == null || mPollInFlight) return;
++        mPollInFlight = true;
++        int generation = mGeneration;
++        BarePlayerBridge.evaluateIn(
++                mWebContents,
++                mFrameId,
++                BarePlayerScripts.STATE,
++                false,
++                json -> {
++                    if (generation != mGeneration) return;
++                    mPollInFlight = false;
++                    onState(json);
++                    if (mView != null) mHandler.postDelayed(mPoll, POLL_MS);
++                });
++    }
++
++    private void onState(@Nullable String json) {
++        BarePlayerView view = mView;
++        if (view == null) return;
++        JSONObject state;
++        try {
++            state = json == null || json.equals("null") ? null : new JSONObject(json);
++        } catch (JSONException e) {
++            state = null;
++        }
++        if (state == null || state.optBoolean("gone")) {
++            // A playlist can swap the element for a new one; look once more before giving up.
++            if (!mRefound) {
++                mRefound = true;
++                int generation = mGeneration;
++                BarePlayerBridge.evaluateAll(
++                        mWebContents,
++                        BarePlayerScripts.FIND_FULLSCREEN,
++                        found -> {
++                            if (generation != mGeneration) return;
++                            Found again = best(found, false);
++                            if (again == null) {
++                                Log.i(TAG, "The video went away; the site's own player stays.");
++                                tearDown();
++                            } else {
++                                mFrameId = again.frameId;
++                                mVideoFullscreen = false;
++                                if (!again.info.optBoolean("self")) {
++                                    BarePlayerBridge.evaluateIn(
++                                            mWebContents,
++                                            mFrameId,
++                                            BarePlayerScripts.ENTER,
++                                            true,
++                                            r -> {});
++                                }
++                            }
++                        });
++            }
++            return;
++        }
++        mRefound = false;
++        if (!state.optBoolean("any")) {
++            tearDown();
++            return;
++        }
++        boolean videoFullscreen = state.optBoolean("fs");
++        if (videoFullscreen != mVideoFullscreen) {
++            mVideoFullscreen = videoFullscreen;
++            Log.i(TAG, "Video element fullscreen: " + videoFullscreen);
++        }
++        if (videoFullscreen && !mRevealScheduled) {
++            // The video redraws once more after it becomes the fullscreen element; lifting the
++            // cover only after that gives one transition instead of two blinks.
++            mRevealScheduled = true;
++            int generation = mGeneration;
++            mHandler.postDelayed(
++                    () -> {
++                        if (generation == mGeneration && mView != null) mView.reveal();
++                    },
++                    REVEAL_SETTLE_MS);
++        }
++        String error = state.optString("err", "");
++        if (!videoFullscreen && !error.isEmpty() && !error.equals("null")) {
++            Log.i(TAG, "The page kept its own fullscreen: " + error);
++        }
++        view.update(
++                state.optDouble("t", 0),
++                state.optDouble("d", -1),
++                state.optDouble("b", 0),
++                state.optBoolean("p", true),
++                state.optBoolean("e", false),
++                state.optDouble("r", 1),
++                state.optInt("tt", 0) > 0,
++                state.optBoolean("cc", false),
++                state.optBoolean("pip", false) && PictureInPicture.isEnabled(mActivity),
++                canDownload(state),
++                state.optDouble("w", 0),
++                state.optDouble("h", 0),
++                state.optDouble("rt", 0),
++                state.optDouble("rw", 0),
++                state.optDouble("rh", 0),
++                state.optDouble("iw", 0),
++                state.optDouble("ih", 0));
++    }
++
++    // ---- Long-press menu ----
++
++    private void lookOnPage(WebContents webContents) {
++        int generation = ++mGeneration;
++        BarePlayerBridge.evaluateAll(
++                webContents,
++                BarePlayerScripts.FIND_ON_PAGE,
++                json -> {
++                    if (generation != mGeneration) return;
++                    Found found = best(json, /* fromMenu= */ true);
++                    if (found == null) {
++                        unavailable();
++                        return;
++                    }
++                    BarePlayerBridge.evaluateIn(
++                            webContents, found.frameId, BarePlayerScripts.ENTER, true, r -> {});
++                    // The fullscreen this causes brings the player up. If nothing happens, the
++                    // page or its frame does not allow fullscreen.
++                    mHandler.postDelayed(
++                            () -> {
++                                if (mView == null && generation == mGeneration) unavailable();
++                            },
++                            ENTER_CHECK_MS);
++                });
++    }
++
++    private void lookInFrame(WebContents webContents, int frameId, int xDp, int yDp) {
++        int generation = ++mGeneration;
++        BarePlayerBridge.evaluateIn(
++                webContents,
++                frameId,
++                BarePlayerScripts.findAt(xDp, yDp),
++                false,
++                json -> {
++                    if (generation != mGeneration) return;
++                    if (json == null || json.equals("null")) {
++                        unavailable();
++                        return;
++                    }
++                    BarePlayerBridge.evaluateIn(
++                            webContents, frameId, BarePlayerScripts.ENTER, true, r -> {});
++                    mHandler.postDelayed(
++                            () -> {
++                                if (mView == null && generation == mGeneration) unavailable();
++                            },
++                            ENTER_CHECK_MS);
++                });
++    }
++
++    private void unavailable() {
++        Toast.makeText(mActivity, R.string.bare_player_unavailable, Toast.LENGTH_SHORT).show();
++    }
++
++    // ---- Controls ----
++
++    @Override
++    public void onClose() {
++        WebContents webContents = mWebContents;
++        if (webContents != null && !webContents.isDestroyed()) {
++            webContents.exitFullscreen();
++        }
++        tearDown();
++    }
++
++    @Override
++    public void onTogglePlay() {
++        run(BarePlayerScripts.TOGGLE_PLAY, true);
++    }
++
++    @Override
++    public void onSeekBy(double seconds) {
++        run(BarePlayerScripts.seekBy(seconds), false);
++    }
++
++    @Override
++    public void onSeekTo(double seconds) {
++        run(BarePlayerScripts.seekTo(seconds), false);
++    }
++
++    @Override
++    public void onRate(double rate) {
++        run(BarePlayerScripts.setRate(rate), false);
++    }
++
++    @Override
++    public void onTransform(double scale, double dxCss, double dyCss, int easeMs) {
++        BarePlayerBridge.evaluateIn(
++                mWebContents,
++                mFrameId,
++                BarePlayerScripts.setTransform(scale, dxCss, dyCss, easeMs),
++                false,
++                r -> {});
++    }
++
++    // The swipe-down close sends a position every frame. One call is in flight at a time and only
++    // the newest waits behind it, so the picture follows the finger instead of a queue.
++    private boolean mDragInFlight;
++    private @Nullable String mDragPending;
++
++    private void sendDrag(String script) {
++        if (mDragInFlight) {
++            mDragPending = script;
++            return;
++        }
++        mDragInFlight = true;
++        BarePlayerBridge.evaluateIn(
++                mWebContents,
++                mFrameId,
++                script,
++                false,
++                r -> {
++                    mDragInFlight = false;
++                    String next = mDragPending;
++                    mDragPending = null;
++                    if (next != null && mView != null) sendDrag(next);
++                });
++    }
++
++    @Override
++    public void onCloseDrag(double scale, double dxCss, double dyCss, double radiusCss) {
++        sendDrag(BarePlayerScripts.setDrag(scale, dxCss, dyCss, radiusCss));
++    }
++
++    @Override
++    public void onCloseDragEnd(double scale, double dxCss, double dyCss) {
++        sendDrag(BarePlayerScripts.endDrag(scale, dxCss, dyCss));
++    }
++
++    @Override
++    public void onCaptions() {
++        run(BarePlayerScripts.TOGGLE_CAPTIONS, false);
++    }
++
++    @Override
++    public void onRotate() {
++        int current = mActivity.getResources().getConfiguration().orientation;
++        mActivity.setRequestedOrientation(
++                current == Configuration.ORIENTATION_LANDSCAPE
++                        ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
++                        : ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
++        mOrientationForced = true;
++    }
++
++    /** Runs a command, then reads the state straight away so the controls follow. */
++    private void run(String script, boolean activate) {
++        int generation = mGeneration;
++        BarePlayerBridge.evaluateIn(
++                mWebContents,
++                mFrameId,
++                script,
++                activate,
++                r -> {
++                    if (generation != mGeneration || mView == null) return;
++                    mHandler.removeCallbacks(mPoll);
++                    mPollInFlight = false;
++                    poll();
++                });
++    }
++
++    /**
++     * Whether there is a file to offer: the video's own address, or what the page fetched for
++     * a streamed video (the same files the long-press menu offers). Never for protected video.
++     */
++    private boolean canDownload(JSONObject state) {
++        if (state.optBoolean("drm")) {
++            mDirectSource = null;
++            return false;
++        }
++        String src = state.isNull("src") ? null : state.optString("src", null);
++        mDirectSource = src == null || src.isEmpty() ? null : src;
++        return mDirectSource != null || BareMediaRegistryBridge.getDownloadSet(mWebContents) != null;
++    }
++
++    @Override
++    public void onDownload(View anchor) {
++        WebContents webContents = mWebContents;
++        int frameId = mFrameId;
++        if (mDirectSource != null) {
++            BarePlayerBridge.download(webContents, frameId, mDirectSource);
++            return;
++        }
++        BareMediaRegistryBridge.DownloadSet set =
++                BareMediaRegistryBridge.getDownloadSet(webContents);
++        if (set == null) return;
++        if (set.audio == null) {
++            BarePlayerBridge.download(webContents, frameId, set.video.url.getSpec());
++            return;
++        }
++        // Streamed video often keeps its sound in a separate file; offer both, as the long-press
++        // menu does.
++        String video = set.video.url.getSpec();
++        String audio = set.audio.url.getSpec();
++        PopupMenu menu = new PopupMenu(mActivity, anchor);
++        menu.getMenu().add(0, 0, 0, R.string.contextmenu_save_video);
++        menu.getMenu().add(0, 1, 1, R.string.contextmenu_save_audio);
++        menu.setOnMenuItemClickListener(
++                item -> {
++                    BarePlayerBridge.download(
++                            webContents, frameId, item.getItemId() == 0 ? video : audio);
++                    return true;
++                });
++        menu.show();
++    }
++
++    @Override
++    public void onPip() {
++        WebContents webContents = mWebContents;
++        int frameId = mFrameId;
++        sPipContents = webContents == null ? null : new WeakReference<>(webContents);
++        sPipFrame = frameId;
++        int generation = mGeneration;
++        BarePlayerBridge.evaluateIn(
++                webContents, frameId, BarePlayerScripts.ENTER_PIP, /* activate= */ true, r -> {});
++        // Once the video is in its own window, leave fullscreen and hand the page back.
++        mHandler.postDelayed(
++                () -> {
++                    if (generation != mGeneration) return;
++                    BarePlayerBridge.evaluateIn(
++                            webContents,
++                            frameId,
++                            BarePlayerScripts.IN_PIP,
++                            false,
++                            json -> {
++                                if (generation != mGeneration) return;
++                                if ("true".equals(json)) {
++                                    onClose();
++                                } else {
++                                    Toast.makeText(
++                                                    mActivity,
++                                                    R.string.bare_player_pip_unavailable,
++                                                    Toast.LENGTH_SHORT)
++                                            .show();
++                                }
++                            });
++                },
++                700);
++    }
++
++    @Override
++    public void onScrub(double seconds) {
++        BarePlayerBridge.evaluateIn(
++                mWebContents, mFrameId, BarePlayerScripts.scrubTo(seconds), false, r -> {});
++    }
++
++    // ---- Answers ----
++
++    private static final class Found {
++        final int frameId;
++        final JSONObject info;
++
++        Found(int frameId, JSONObject info) {
++            this.frameId = frameId;
++            this.info = info;
++        }
++    }
++
++    /**
++     * The best video among the frames' answers. In fullscreen, the one covering most of its frame;
++     * from the menu, a playing one first, then the largest.
++     */
++    private static @Nullable Found best(@Nullable String json, boolean fromMenu) {
++        if (json == null) return null;
++        Found best = null;
++        double bestScore = -1;
++        try {
++            JSONArray answers = new JSONArray(json);
++            for (int i = 0; i < answers.length(); i++) {
++                JSONObject answer = answers.getJSONObject(i);
++                JSONObject info = answer.optJSONObject("r");
++                if (info == null || !"video".equals(info.optString("k"))) continue;
++                double score =
++                        fromMenu
++                                ? info.optDouble("a", 0) + (info.optBoolean("playing") ? 1e9 : 0)
++                                : info.optDouble("cov", 0) + (info.optBoolean("self") ? 10 : 0);
++                if (score > bestScore) {
++                    bestScore = score;
++                    best = new Found(answer.getInt("f"), info);
++                }
++            }
++        } catch (JSONException e) {
++            return null;
++        }
++        return best;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerIcon.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerIcon.java
+new file mode 100644
+index 00000000000..7c6d6989625
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerIcon.java
+@@ -0,0 +1,131 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.player;
++
++import android.content.Context;
++import android.view.HapticFeedbackConstants;
++import android.view.animation.DecelerateInterpolator;
++import android.view.animation.OvershootInterpolator;
++import android.widget.ImageView;
++
++import androidx.appcompat.widget.AppCompatImageView;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++/**
++ * A player button: one of the Material icons the browser already uses, in white, centred in a
++ * touch target larger than the icon.
++ */
++@NullMarked
++final class BarePlayerIcon extends AppCompatImageView {
++    static final int PLAY = 0;
++    static final int PAUSE = 1;
++    static final int BACK_10 = 2;
++    static final int FORWARD_10 = 3;
++    static final int CLOSE = 4;
++    static final int ROTATE = 5;
++    static final int LOCK = 6;
++    static final int UNLOCK = 7;
++    static final int FIT = 8;
++    static final int FILL = 9;
++    static final int CAPTIONS = 10;
++    static final int REPLAY = 11;
++    static final int PIP = 12;
++    static final int DOWNLOAD = 13;
++
++    private int mKind = -1;
++    private boolean mPressFeedback;
++
++    BarePlayerIcon(Context context, int kind) {
++        super(context);
++        setScaleType(ImageView.ScaleType.FIT_CENTER);
++        setClickable(true);
++        setFocusable(true);
++        setKind(kind);
++    }
++
++    void setKind(int kind) {
++        if (mKind == kind) return;
++        mKind = kind;
++        setImageResource(drawableFor(kind));
++    }
++
++    /**
++     * Makes a press felt and seen: a light haptic tick (when Bare's haptics setting is on) and a
++     * quick squeeze in, springing back out on release.
++     */
++    void enablePressFeedback() {
++        mPressFeedback = true;
++    }
++
++    @Override
++    public void setPressed(boolean pressed) {
++        boolean was = isPressed();
++        super.setPressed(pressed);
++        if (!mPressFeedback || was == pressed) return;
++        animate().cancel();
++        if (pressed) {
++            if (ChromeSharedPreferences.getInstance()
++                    .readBoolean(ChromePreferenceKeys.BARE_HAPTICS, true)) {
++                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
++            }
++            animate()
++                    .scaleX(0.86f)
++                    .scaleY(0.86f)
++                    .setDuration(90)
++                    .setInterpolator(new DecelerateInterpolator())
++                    .start();
++        } else {
++            animate()
++                    .scaleX(1f)
++                    .scaleY(1f)
++                    .setDuration(220)
++                    .setInterpolator(new OvershootInterpolator(3f))
++                    .start();
++        }
++    }
++
++    /** Full white when switched on (subtitles showing), dimmed when off. */
++    void setActive(boolean active) {
++        setImageAlpha(active ? 255 : 150);
++    }
++
++    private static int drawableFor(int kind) {
++        switch (kind) {
++            case PLAY:
++                return R.drawable.bare_player_play;
++            case PAUSE:
++                return R.drawable.bare_player_pause;
++            case BACK_10:
++                return R.drawable.bare_player_back_10;
++            case FORWARD_10:
++                return R.drawable.bare_player_forward_10;
++            case CLOSE:
++                return R.drawable.bare_player_close;
++            case ROTATE:
++                return R.drawable.bare_player_rotate;
++            case LOCK:
++                return R.drawable.bare_player_lock;
++            case UNLOCK:
++                return R.drawable.bare_player_unlock;
++            case FIT:
++                return R.drawable.bare_player_fit;
++            case FILL:
++                return R.drawable.bare_player_fill;
++            case CAPTIONS:
++                return R.drawable.bare_player_captions;
++            case REPLAY:
++                return R.drawable.bare_player_replay;
++            case PIP:
++                return R.drawable.bare_player_pip;
++            case DOWNLOAD:
++            default:
++                return R.drawable.bare_player_download;
++        }
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerScripts.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerScripts.java
+new file mode 100644
+index 00000000000..5c7b057c82b
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerScripts.java
+@@ -0,0 +1,314 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.player;
++
++import org.chromium.build.annotations.NullMarked;
++
++import java.util.Locale;
++
++/**
++ * The page side of the player, run in Bare's isolated world.
++ *
++ * <p>Every script first makes sure {@code window.__bp} exists in that world, so each one stands on
++ * its own and a frame that has never seen the player still works. The video the player drives is
++ * kept there as {@code __bp.v}. The page's own variables are out of reach and nothing here is
++ * visible to the page, apart from the plain DOM calls a user's own tap would make: play, pause,
++ * seek, playback rate, fullscreen on the video, and a scale style while zoomed.
++ */
++@NullMarked
++final class BarePlayerScripts {
++    private BarePlayerScripts() {}
++
++    private static final String LIB =
++            "if(!window.__bp){const bp=window.__bp={v:null};"
++                    // Every video under root, including open shadow roots, which custom players
++                    // use often.
++                    + "bp.all=(root,out)=>{if(root.tagName==='VIDEO')out.push(root);"
++                    + "if(root.shadowRoot)bp.all(root.shadowRoot,out);"
++                    + "for(const v of root.querySelectorAll('video'))out.push(v);"
++                    + "for(const e of root.querySelectorAll('*'))if(e.shadowRoot)bp.all(e.shadowRoot,out);"
++                    + "return out;};"
++                    // How much of the window a video covers.
++                    + "bp.area=v=>{const r=v.getBoundingClientRect();"
++                    + "return Math.max(0,Math.min(r.right,innerWidth)-Math.max(r.left,0))"
++                    + "*Math.max(0,Math.min(r.bottom,innerHeight)-Math.max(r.top,0));};"
++                    // The video someone is watching: playing first, then the largest on screen.
++                    + "bp.pick=root=>{let best=null,score=0;for(const v of bp.all(root,[])){"
++                    + "const a=bp.area(v);if(a<=0)continue;"
++                    + "const s=a+(v.paused?0:1e9)+(v.readyState>0?1e8:0);"
++                    + "if(s>score){score=s;best=v;}}return best;};"
++                    // Inside a shadow root, document.fullscreenElement names the host.
++                    + "bp.isFs=v=>{try{return v.matches(':fullscreen');}catch(e){return document.fullscreenElement===v;}};"
++                    // How much of the screen the video covers, against the most a picture of
++                    // that shape could: a 16:9 video across a tall phone counts as full.
++                    + "bp.cov=v=>{const r=v.getBoundingClientRect();if(r.width<=0||r.height<=0)return 0;"
++                    + "const a=r.width/r.height,W=innerWidth,H=innerHeight;"
++                    + "const fit=Math.min(W,H*a)*Math.min(H,W/a);return bp.area(v)/Math.max(1,fit);};"
++                    + "bp.info=v=>({w:v.videoWidth,h:v.videoHeight,"
++                    + "cov:bp.cov(v),"
++                    + "drm:!!v.mediaKeys,ctl:v.controls,"
++                    + "kind:(v.currentSrc||'').startsWith('blob:')?'stream':(v.currentSrc?'file':'none')});"
++                    // A video that is itself fullscreen gets the browser's own controls (and its
++                    // cast button); the player draws its own. Some sites also crop the picture
++                    // with object-fit; the player starts from the whole picture and zooms itself. The rule only matches while the
++                    // video is fullscreen, so however fullscreen ends, the page's controls come
++                    // back. A constructed sheet, so a page's style-src policy does not block it,
++                    // added to whichever document or shadow root holds the video.
++                    + "bp.hideControls=v=>{const root=v.getRootNode();"
++                    + "if(bp.sheet&&bp.sheetRoot===root)return;bp.showControls();"
++                    + "const sh=new CSSStyleSheet();"
++                    + "sh.replaceSync('video:fullscreen{object-fit:contain !important}"
++                    + "video:fullscreen::-webkit-media-controls{display:none !important}');"
++                    + "root.adoptedStyleSheets=[...root.adoptedStyleSheets,sh];bp.sheet=sh;bp.sheetRoot=root;};"
++                    // Moves the picture by dx, dy at scale s. The browser's fullscreen style fixes
++                    // transform and translate (!important), so the move goes through offset-path,
++                    // which it leaves alone; it is applied inside the scale, hence the division.
++                    + "bp.move=(st,dx,dy,s)=>{if(Math.abs(dx)<0.5&&Math.abs(dy)<0.5){"
++                    + "st.removeProperty('offset-path');st.removeProperty('offset-distance');"
++                    + "st.removeProperty('offset-rotate');st.removeProperty('offset-anchor');return;}"
++                    + "st.setProperty('offset-path','path(\\'M0 0 L '+(dx/s).toFixed(2)+' '+(dy/s).toFixed(2)+'\\')','important');"
++                    + "st.setProperty('offset-distance','100%','important');"
++                    + "st.setProperty('offset-rotate','0deg','important');"
++                    + "st.setProperty('offset-anchor','0 0','important');};"
++                    + "bp.showControls=()=>{if(!bp.sheet)return;const root=bp.sheetRoot,sh=bp.sheet;"
++                    + "root.adoptedStyleSheets=root.adoptedStyleSheets.filter(x=>x!==sh);"
++                    + "bp.sheet=null;bp.sheetRoot=null;};"
++                    + "}";
++
++    private static String wrap(String body) {
++        return "(()=>{" + LIB + ";const bp=window.__bp;" + body + "})()";
++    }
++
++    /**
++     * Run in every frame once the page goes fullscreen: finds the video being shown. A frame whose
++     * fullscreen element is a frame says so, and the frame inside answers for itself.
++     */
++    static final String FIND_FULLSCREEN =
++            wrap(
++                    "const fs=document.fullscreenElement;if(!fs)return null;"
++                            + "if(fs.tagName==='IFRAME'||fs.tagName==='FRAME')return {k:'frame'};"
++                            + "const v=bp.pick(fs);if(!v)return {k:'none'};"
++                            + "const i=bp.info(v);"
++                            // A fullscreen game or slide deck with a small video in a corner is
++                            // not a video to take over.
++                            + "const self=bp.isFs(v);"
++                            + "if(!self&&i.cov<0.5)return {k:'small',cov:i.cov};"
++                            + "bp.v=v;i.k='video';i.self=self;return i;");
++
++    /**
++     * Run in the frame that was long-pressed: the video under the press (through any overlay) in
++     * the top frame, else the one being watched in that frame. {@code x}, {@code y} are DIPs from
++     * the top of the page view.
++     */
++    static String findAt(int x, int y) {
++        return wrap(
++                String.format(
++                        Locale.US,
++                        "let v=null;if(window.top===window){const vv=window.visualViewport;"
++                                + "const s=vv?vv.scale:1,ox=vv?vv.offsetLeft:0,oy=vv?vv.offsetTop:0;"
++                                + "for(const e of document.elementsFromPoint(ox+%d/s,oy+%d/s)){"
++                                + "if(e.tagName==='VIDEO'){v=e;break;}"
++                                + "if(e.shadowRoot){const i=bp.all(e,[]);if(i.length){v=i[0];break;}}}}"
++                                + "if(!v)v=bp.pick(document);if(!v)return null;"
++                                + "bp.v=v;const i=bp.info(v);i.k='video';i.playing=!v.paused;"
++                                + "i.a=bp.area(v);return i;",
++                        x,
++                        y));
++    }
++
++    /** Run in every frame from the long-press menu: finds the video someone is watching. */
++    static final String FIND_ON_PAGE =
++            wrap(
++                    "const v=bp.pick(document);if(!v)return null;"
++                            + "bp.v=v;const i=bp.info(v);i.k='video';i.playing=!v.paused;"
++                            + "i.a=bp.area(v);return i;");
++
++    /** Puts the chosen video itself into fullscreen, so the page's own controls are gone. */
++    static final String ENTER =
++            wrap(
++                    "const v=bp.v;if(!v||!v.isConnected)return 'gone';"
++                            + "if(bp.isFs(v))return 'already';"
++                            + "bp.err=null;bp.hideControls(v);v.requestFullscreen({navigationUI:'hide'})"
++                            + ".catch(e=>{bp.err=String(e);});return 'requested';");
++
++    /** What the controls need to draw. */
++    static final String STATE =
++            wrap(
++                    "const v=bp.v;if(!v||!v.isConnected)return {gone:true};"
++                            + "let b=0;for(let i=0;i<v.buffered.length;i++)"
++                            + "if(v.buffered.start(i)<=v.currentTime+1)b=Math.max(b,v.buffered.end(i));"
++                            + "let cc=false;for(const t of v.textTracks)if(t.mode==='showing')cc=true;"
++                            + "return {t:v.currentTime,d:isFinite(v.duration)?v.duration:-1,"
++                            + "p:v.paused,e:v.ended,r:v.playbackRate,w:v.videoWidth,h:v.videoHeight,"
++                            + "b:b,fs:bp.isFs(v),any:!!document.fullscreenElement,"
++                            + "tt:v.textTracks.length,cc:cc,ctl:v.controls,err:bp.err||null,"
++                            + "drm:!!v.mediaKeys,"
++                            + "pip:document.pictureInPictureEnabled===true,"
++                            + "inPip:document.pictureInPictureElement===v,"
++                            + "src:/^https?:/.test(v.currentSrc||'')?v.currentSrc:null,"
++                            + "rt:v.getBoundingClientRect().top,"
++                            + "rw:v.getBoundingClientRect().width,rh:v.getBoundingClientRect().height,"
++                            + "iw:innerWidth,ih:innerHeight};");
++
++    static final String TOGGLE_PLAY =
++            wrap(
++                    "const v=bp.v;if(!v)return null;"
++                            + "if(v.paused||v.ended){v.play().catch(()=>{});return 'play';}"
++                            + "v.pause();return 'pause';");
++
++    static String seekBy(double seconds) {
++        return wrap(
++                String.format(
++                        Locale.US,
++                        "const v=bp.v;if(!v)return null;"
++                                + "const end=isFinite(v.duration)?v.duration:Infinity;"
++                                + "v.currentTime=Math.max(0,Math.min(end,v.currentTime+(%f)));"
++                                + "return v.currentTime;",
++                        seconds));
++    }
++
++    static String seekTo(double seconds) {
++        return wrap(
++                String.format(
++                        Locale.US,
++                        "const v=bp.v;if(!v)return null;bp.scrubT=null;v.currentTime=%f;"
++                                + "return v.currentTime;",
++                        seconds));
++    }
++
++    static String setRate(double rate) {
++        return wrap(
++                String.format(
++                        Locale.US,
++                        "const v=bp.v;if(!v)return null;v.playbackRate=%f;return v.playbackRate;",
++                        rate));
++    }
++
++    /**
++     * Zooms and moves the picture. The browser's fullscreen style locks transform, but leaves the
++     * separate scale and translate properties alone. A short transition eases each update into
++     * the next, so a stream of them reads as one smooth movement.
++     */
++    static String setTransform(double scale, double dxCss, double dyCss, int easeMs) {
++        return wrap(
++                String.format(
++                        Locale.US,
++                        "const v=bp.v;if(!v)return null;const st=v.style;"
++                                + "st.setProperty('transition','scale %dms ease-out, translate %dms ease-out','important');"
++                                + "if(%f<=1.001&&Math.abs(%f)<0.5&&Math.abs(%f)<0.5){"
++                                + "st.setProperty('scale','1','important');bp.move(st,0,0,1);}"
++                                + "else{st.setProperty('scale','%f','important');bp.move(st,%f,%f,%f);}return true;",
++                        easeMs, easeMs, scale, dxCss, dyCss, scale, dxCss, dyCss, scale));
++    }
++
++    /**
++     * The swipe-down close: the picture follows the finger with no easing, so each update lands
++     * as sent. Its corners are rounded by {@code radiusCss}.
++     */
++    static String setDrag(double scale, double dxCss, double dyCss, double radiusCss) {
++        return wrap(
++                String.format(
++                        Locale.US,
++                        "const v=bp.v;if(!v)return null;const st=v.style;"
++                                + "if(bp.rad0===undefined)bp.rad0=st.getPropertyValue('border-radius');"
++                                + "st.setProperty('transition','none','important');"
++                                + "st.setProperty('scale','%f','important');bp.move(st,%f,%f,%f);"
++                                + "st.setProperty('border-radius','%fpx','important');return true;",
++                        scale, dxCss, dyCss, scale, radiusCss));
++    }
++
++    /** The swipe-down is over: the zoom it had, square corners as before. */
++    static String endDrag(double scale, double dxCss, double dyCss) {
++        return wrap(
++                String.format(
++                        Locale.US,
++                        "const v=bp.v;if(!v)return null;const st=v.style;"
++                                + "st.setProperty('transition','none','important');"
++                                + "if(%f<=1.001&&Math.abs(%f)<0.5&&Math.abs(%f)<0.5){"
++                                + "st.setProperty('scale','1','important');bp.move(st,0,0,1);}"
++                                + "else{st.setProperty('scale','%f','important');bp.move(st,%f,%f,%f);}"
++                                + "if(bp.rad0!==undefined){if(bp.rad0)st.setProperty('border-radius',bp.rad0);"
++                                + "else st.removeProperty('border-radius');bp.rad0=undefined;}return true;",
++                        scale, dxCss, dyCss, scale, dxCss, dyCss, scale));
++    }
++
++    /**
++     * A seek while the timeline is dragged. While one is still loading, only the newest position
++     * is kept, and it is applied as soon as that seek lands, so the picture keeps up with the
++     * finger without queueing every position it passed.
++     */
++    static String scrubTo(double seconds) {
++        return wrap(
++                String.format(
++                        Locale.US,
++                        "const v=bp.v;if(!v)return null;bp.scrubT=%f;"
++                                + "if(!bp.hooked)bp.hooked=new WeakSet();"
++                                + "if(!bp.hooked.has(v)){bp.hooked.add(v);"
++                                + "v.addEventListener('seeked',()=>{const t=bp.scrubT;"
++                                + "if(t==null||bp.v!==v)return;bp.scrubT=null;"
++                                + "if(Math.abs(v.currentTime-t)>0.25)v.currentTime=t;});}"
++                                + "if(!v.seeking){bp.scrubT=null;v.currentTime=%f;}return true;",
++                        seconds,
++                        seconds));
++    }
++
++    /**
++     * Asks for the browser's picture-in-picture window for the video. Some sites (YouTube) mark
++     * the video as not allowed in picture-in-picture; the user asked for it, so that mark is lifted
++     * for this request and put back once the window closes.
++     */
++    static final String ENTER_PIP =
++            wrap(
++                    "const v=bp.v;if(!v)return 'gone';bp.err=null;bp.pipV=v;"
++                            + "if(v.disablePictureInPicture){v.disablePictureInPicture=false;"
++                            + "v.addEventListener('leavepictureinpicture',"
++                            + "()=>{v.disablePictureInPicture=true;},{once:true});}"
++                            + "v.requestPictureInPicture().catch(e=>{bp.err=String(e);});"
++                            + "return 'requested';");
++
++    /** Ten seconds either way for the video in picture-in-picture, in whichever frame holds it. */
++    static String pipSeekBy(double seconds) {
++        return wrap(
++                String.format(
++                        Locale.US,
++                        "const v=document.pictureInPictureElement;if(!v)return null;"
++                                + "const end=isFinite(v.duration)?v.duration:Infinity;"
++                                + "v.currentTime=Math.max(0,Math.min(end,v.currentTime+(%f)));"
++                                + "return true;",
++                        seconds));
++    }
++
++    /** After the window's expand button: the same video, back fullscreen in Bare Player. */
++    static final String FULLSCREEN_AFTER_PIP =
++            wrap(
++                    "const v=bp.pipV;bp.pipV=null;if(!v||!v.isConnected)return null;bp.v=v;"
++                            + "v.requestFullscreen({navigationUI:'hide'}).catch(()=>{});"
++                            + "return true;");
++
++    /** Whether the video is in picture-in-picture now. */
++    static final String IN_PIP =
++            wrap("const v=bp.v;return !!v&&document.pictureInPictureElement===v;");
++
++    /** Turns the video's own subtitle tracks on (the first one) or off. */
++    static final String TOGGLE_CAPTIONS =
++            wrap(
++                    "const v=bp.v;if(!v)return null;const ts=[...v.textTracks];"
++                            + "const on=ts.some(t=>t.mode==='showing');"
++                            + "if(on){for(const t of ts)if(t.mode==='showing')t.mode='disabled';return false;}"
++                            + "const t=ts.find(t=>t.kind==='subtitles'||t.kind==='captions');"
++                            + "if(!t)return false;t.mode='showing';return true;");
++
++    /** Undoes what the player changed on the element. */
++    static final String CLEAN_UP =
++            wrap(
++                    "const v=bp.v;if(v){v.style.removeProperty('scale');bp.move(v.style,0,0,1);"
++                            + "v.style.removeProperty('translate');v.style.removeProperty('transition');"
++                            + "if(bp.rad0!==undefined){if(bp.rad0)v.style.setProperty('border-radius',bp.rad0);"
++                            + "else v.style.removeProperty('border-radius');bp.rad0=undefined;}}"
++                            + "bp.showControls();bp.v=null;return true;");
++
++    /** Hides the browser's controls when the video was already fullscreen on its own. */
++    static final String HIDE_CONTROLS = wrap("const v=bp.v;if(v)bp.hideControls(v);return true;");
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerSettings.java
+new file mode 100644
+index 00000000000..b4b234079b0
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerSettings.java
+@@ -0,0 +1,59 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.player;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++/**
++ * Whether Bare Player is on.
++ *
++ * <p>Nothing is written until someone chooses, in Settings or when the choice is offered. Until
++ * then the build's default applies: off for a release build, on only in a local test build (see
++ * {@link BarePlayerBuildflags}). So an upgrade never turns it on for anyone; only a choice does.
++ * Read on every use, so a change applies at once.
++ */
++@NullMarked
++public final class BarePlayerSettings {
++    private BarePlayerSettings() {}
++
++    /** True when the player should take over fullscreen video. */
++    public static boolean isEnabled() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(
++                        ChromePreferenceKeys.BARE_PLAYER_ENABLED,
++                        BarePlayerBuildflags.ON_BY_DEFAULT);
++    }
++
++    /** Records the user's choice, from Settings or from the offer. */
++    public static void setEnabled(boolean enabled) {
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_PLAYER_ENABLED, enabled);
++        markOffered();
++    }
++
++    /** True once the user has chosen either way, in Settings or when offered. */
++    public static boolean hasChosen() {
++        return ChromeSharedPreferences.getInstance()
++                .contains(ChromePreferenceKeys.BARE_PLAYER_ENABLED);
++    }
++
++    /**
++     * Whether the welcome or upgrade page should offer the choice: only once, and never to someone
++     * who has already chosen. The page itself is not part of this test build.
++     */
++    public static boolean shouldOffer() {
++        return !hasChosen()
++                && !ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_PLAYER_OFFERED, false);
++    }
++
++    /** Records that the choice has been offered, whatever the answer. */
++    public static void markOffered() {
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_PLAYER_OFFERED, true);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerView.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerView.java
+new file mode 100644
+index 00000000000..35625be4370
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerView.java
+@@ -0,0 +1,1391 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.player;
++
++import android.annotation.SuppressLint;
++import android.app.Activity;
++import android.content.Context;
++import android.content.res.ColorStateList;
++import android.animation.ValueAnimator;
++import android.content.res.Configuration;
++import android.graphics.Canvas;
++import android.graphics.ColorFilter;
++import android.graphics.Paint;
++import android.graphics.PixelFormat;
++import android.graphics.drawable.Drawable;
++import android.view.Choreographer;
++import android.view.HapticFeedbackConstants;
++import android.view.VelocityTracker;
++import android.view.ViewGroup;
++import android.view.animation.DecelerateInterpolator;
++import android.graphics.Color;
++import android.graphics.drawable.GradientDrawable;
++import android.media.AudioManager;
++import android.os.Handler;
++import android.os.Looper;
++import android.provider.Settings;
++import android.util.TypedValue;
++import android.view.DisplayCutout;
++import android.view.GestureDetector;
++import android.view.Gravity;
++import android.view.MotionEvent;
++import android.view.View;
++import android.view.ViewConfiguration;
++import android.view.WindowInsets;
++import android.view.WindowManager;
++import android.widget.FrameLayout;
++import android.widget.LinearLayout;
++import android.widget.PopupMenu;
++import android.widget.SeekBar;
++import android.widget.TextView;
++
++import org.chromium.base.Log;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++
++import java.util.Locale;
++
++/**
++ * Bare Player's controls: a native layer laid over the page's own video while it is fullscreen.
++ *
++ * <p>The picture underneath is still the page's video element, played by the page's own media
++ * pipeline; this layer only draws controls and turns touches into commands. It takes every touch
++ * while it is up, so nothing reaches the page's player behind it.
++ */
++@NullMarked
++@SuppressLint("ViewConstructor")
++final class BarePlayerView extends FrameLayout {
++    /** What the controls ask the player to do. */
++    interface Delegate {
++        void onClose();
++
++        void onTogglePlay();
++
++        void onSeekBy(double seconds);
++
++        void onSeekTo(double seconds);
++
++        void onRate(double rate);
++
++        /**
++         * Zooms and moves the picture: {@code scale} about its centre, then shifted by
++         * {@code dxCss}, {@code dyCss} CSS pixels, easing over {@code easeMs}.
++         */
++        void onTransform(double scale, double dxCss, double dyCss, int easeMs);
++
++        /** The swipe-down close: like onTransform with no easing, plus rounded corners. */
++        void onCloseDrag(double scale, double dxCss, double dyCss, double radiusCss);
++
++        /** The swipe-down is over: the picture goes back to {@code scale} and the given shift. */
++        void onCloseDragEnd(double scale, double dxCss, double dyCss);
++
++        void onRotate();
++
++        void onCaptions();
++
++        /** Hands the video to the browser's picture-in-picture window. */
++        void onPip();
++
++        /** Offers the video's file for download; {@code anchor} is the button pressed. */
++        void onDownload(View anchor);
++
++        /** Shows the frame at {@code seconds} while the timeline is dragged. */
++        void onScrub(double seconds);
++    }
++
++    private static final long HIDE_AFTER_MS = 3500;
++    private static final long BUBBLE_MS = 700;
++    private static final double[] RATES = {0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3};
++    private static final double MAX_SCALE = 4;
++
++    private final Activity mActivity;
++    private final Delegate mDelegate;
++    private final Handler mHandler = new Handler(Looper.getMainLooper());
++    private final float mDp;
++
++    private final FrameLayout mControls;
++    private final BarePlayerIcon mPlay;
++    private final BarePlayerIcon mBack;
++    private final BarePlayerIcon mForward;
++    private final BarePlayerIcon mFit;
++    private final BarePlayerIcon mCaptions;
++    private final BarePlayerIcon mLockButton;
++    private final BarePlayerIcon mPip;
++    private final BarePlayerIcon mDownload;
++    private final BarePlayerIcon mUnlock;
++    private final TextView mSpeed;
++    private final TextView mPosition;
++    private final TextView mDuration;
++    private final TextView mBubble;
++    private final SeekBar mSeek;
++
++    private final GestureDetector mGestures;
++    private final AudioManager mAudio;
++    private final int mTouchSlop;
++
++    private boolean mControlsShown;
++
++    // Black cover laid over the screen the moment the page asks for fullscreen, so the page's own
++    // fullscreen layout never flashes; it fades away once the video is ready.
++    private final View mCurtain;
++    private boolean mRevealed;
++
++    private final PressThumb mThumb;
++    private @Nullable ValueAnimator mThumbAnimator;
++
++    // The rows sit just above and below the picture, inside the screen's safe area.
++    private LinearLayout mTopRow;
++    private LinearLayout mBottomRow;
++    private int mSafeLeft;
++    private int mSafeTop;
++    private int mSafeRight;
++    private int mSafeBottom;
++    private int mPictureTop = -1;
++    private int mPictureBottom = -1;
++    private boolean mLocked;
++    private boolean mUserSeeking;
++
++    // Last known state from the page.
++    private double mTime;
++    private double mDurationSeconds = -1;
++    private boolean mPaused = true;
++    private double mRate = 1;
++
++    // Zoom: 1 is the whole picture; mFillScale covers the screen.
++    private double mScale = 1;
++    private double mFillScale = 1;
++    private long mLastScaleSentMs;
++
++    // The drag in progress.
++    private static final int DRAG_NONE = 0;
++    private static final int DRAG_SEEK = 1;
++    private static final int DRAG_BRIGHTNESS = 2;
++    private static final int DRAG_VOLUME = 3;
++    private int mDrag = DRAG_NONE;
++    private float mDownX;
++    private float mDownY;
++    private double mDragStartTime;
++    private double mDragTargetTime;
++    private float mDragStartLevel;
++    private boolean mScaling;
++
++    // Two-finger zoom and pan, anchored where the fingers went down.
++    private boolean mIgnoreUntilUp;
++    private float mPinchSpan0;
++    private float mPinchFocusX0;
++    private float mPinchFocusY0;
++    private double mPinchScale0;
++    private double mPinchTx0;
++    private double mPinchTy0;
++    // The picture's shift from the screen centre, in screen pixels, and its unzoomed size.
++    private double mTx;
++    private double mTy;
++    private double mPictureW;
++    private double mPictureH;
++    private double mCssPerPx = 1;
++
++    // Swipe down in the middle to close. The view that shows the page (everything this layer sits
++    // over) is moved, scaled and clipped to rounded corners straight from the touch events, so the
++    // picture stays under the finger; there is no timing in between. One haptic tick when letting
++    // go would close. Past the line, or flung down fast, it carries the finger's speed out of the
++    // screen and the player closes; short of that, it springs back.
++    private static final String TAG = "BarePlayerView";
++    private static final int DRAG_CLOSE = 4;
++    private static final float CLOSE_LINE = 0.22f;
++    private static final float CLOSE_SHRINK = 0.18f;
++    private static final float CLOSE_RADIUS_DP = 28;
++    private static final float CLOSE_FOLLOW_X = 0.3f;
++    private static final float CLOSE_LEAD_SECONDS = 0.02f;
++    private static final float CLOSE_FLING_DP_PER_SECOND = 1000;
++    private boolean mCloseArmed;
++    private boolean mCloseControlsWereShown;
++    private boolean mClosing;
++    private float mCloseOriginX;
++    private float mCloseOriginY;
++    private float mCloseSlop;
++    private float mClosePull;
++    private float mCloseDx0;
++    private float mCloseDxNow;
++    private boolean mCloseActive;
++    private @Nullable VelocityTracker mVelocity;
++    private final CloseSpring mSpring = new CloseSpring();
++
++    // Brightness is the window's own, given back when the player closes.
++    private final float mOriginalBrightness;
++
++    // Double taps add up, so three quick taps go 30 seconds.
++    private int mTapSeekTotal;
++
++    // Live preview while the timeline is dragged: the video itself follows the finger, at most
++    // this often, so a streaming site is not asked for a new position on every pixel.
++    private static final long SCRUB_INTERVAL_MS = 200;
++    private long mLastScrubMs;
++
++    private final Runnable mHideRunnable = () -> showControls(false);
++    private final Runnable mHideBubble = this::hideBubble;
++    private final Runnable mHideUnlock = this::hideUnlock;
++    private final Runnable mResetTapSeek = () -> mTapSeekTotal = 0;
++
++    BarePlayerView(Activity activity, Delegate delegate) {
++        super(activity);
++        mActivity = activity;
++        mDelegate = delegate;
++        mDp = getResources().getDisplayMetrics().density;
++        mAudio = (AudioManager) activity.getSystemService(Context.AUDIO_SERVICE);
++        mTouchSlop = ViewConfiguration.get(activity).getScaledTouchSlop();
++        mOriginalBrightness = activity.getWindow().getAttributes().screenBrightness;
++        setBackgroundColor(Color.TRANSPARENT);
++        setClickable(true);
++        setFocusable(true);
++
++        mControls = new FrameLayout(activity);
++        addView(mControls, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
++
++        // One shade over the whole screen, edge to edge whatever the cutout, darker at the top
++        // and bottom so white controls read over a bright picture, with no edge of its own.
++        View scrim = new View(activity);
++        scrim.setBackground(
++                new GradientDrawable(
++                        GradientDrawable.Orientation.TOP_BOTTOM,
++                        new int[] {0x8C000000, 0x40000000, 0x40000000, 0x8C000000}));
++        mControls.addView(
++                scrim, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
++
++        // Top row: close on the start side; download, picture-in-picture and subtitles on the
++        // end side, each shown only when it can do something.
++        LinearLayout top = new LinearLayout(activity);
++        top.setOrientation(LinearLayout.HORIZONTAL);
++        top.setGravity(Gravity.CENTER_VERTICAL);
++        BarePlayerIcon close = icon(BarePlayerIcon.CLOSE, R.string.bare_player_close, 48, 24);
++        close.setOnClickListener(v -> mDelegate.onClose());
++        top.addView(close);
++        top.addView(new View(activity), new LinearLayout.LayoutParams(0, 1, 1f));
++        mDownload = icon(BarePlayerIcon.DOWNLOAD, R.string.bare_player_download, 48, 24);
++        mDownload.setOnClickListener(v -> act(() -> mDelegate.onDownload(v)));
++        mDownload.setVisibility(GONE);
++        top.addView(mDownload);
++        mPip = icon(BarePlayerIcon.PIP, R.string.bare_player_pip, 48, 24);
++        mPip.setOnClickListener(v -> mDelegate.onPip());
++        mPip.setVisibility(GONE);
++        top.addView(mPip);
++        mCaptions = icon(BarePlayerIcon.CAPTIONS, R.string.bare_player_captions, 48, 24);
++        mCaptions.setOnClickListener(v -> act(mDelegate::onCaptions));
++        mCaptions.setVisibility(GONE);
++        top.addView(mCaptions);
++        mTopRow = top;
++        mControls.addView(
++                top, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.TOP));
++
++        // Middle: back ten, play or pause, forward ten.
++        LinearLayout middle = new LinearLayout(activity);
++        middle.setOrientation(LinearLayout.HORIZONTAL);
++        middle.setGravity(Gravity.CENTER);
++        mBack = icon(BarePlayerIcon.BACK_10, R.string.bare_player_back_10, 64, 36);
++        mBack.setOnClickListener(v -> act(() -> tapSeek(-10)));
++        mPlay = icon(BarePlayerIcon.PLAY, R.string.bare_player_play, 84, 52);
++        mPlay.setOnClickListener(v -> act(mDelegate::onTogglePlay));
++        mForward = icon(BarePlayerIcon.FORWARD_10, R.string.bare_player_forward_10, 64, 36);
++        mForward.setOnClickListener(v -> act(() -> tapSeek(10)));
++        mBack.enablePressFeedback();
++        mPlay.enablePressFeedback();
++        mForward.enablePressFeedback();
++        GradientDrawable playBg = new GradientDrawable();
++        playBg.setShape(GradientDrawable.OVAL);
++        playBg.setColor(0x33000000);
++        mPlay.setBackground(playBg);
++        middle.addView(mBack);
++        middle.addView(new View(activity), new LinearLayout.LayoutParams(dp(36), 1));
++        middle.addView(mPlay);
++        middle.addView(new View(activity), new LinearLayout.LayoutParams(dp(36), 1));
++        middle.addView(mForward);
++        mControls.addView(
++                middle,
++                new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER));
++
++        // Bottom: elapsed, the bar, total.
++        LinearLayout bottom = new LinearLayout(activity);
++        bottom.setOrientation(LinearLayout.HORIZONTAL);
++        bottom.setGravity(Gravity.CENTER_VERTICAL);
++        mPosition = timeText(activity);
++        mDuration = timeText(activity);
++        mSeek = new SeekBar(activity);
++        mSeek.setMax(1000);
++        mThumb = new PressThumb(mDp);
++        mSeek.setThumb(mThumb);
++        mSeek.setSplitTrack(false);
++        mSeek.setProgressTintList(ColorStateList.valueOf(Color.WHITE));
++        mSeek.setThumbTintList(ColorStateList.valueOf(Color.WHITE));
++        mSeek.setSecondaryProgressTintList(ColorStateList.valueOf(0x80FFFFFF));
++        mSeek.setProgressBackgroundTintList(ColorStateList.valueOf(0x4DFFFFFF));
++        mSeek.setOnSeekBarChangeListener(
++                new SeekBar.OnSeekBarChangeListener() {
++                    @Override
++                    public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
++                        if (!fromUser || mDurationSeconds <= 0) return;
++                        double target = mDurationSeconds * progress / 1000.0;
++                        mPosition.setText(format(target));
++                        scrub(target);
++                    }
++
++                    @Override
++                    public void onStartTrackingTouch(SeekBar bar) {
++                        mUserSeeking = true;
++                        pressThumb(true);
++                        if (ChromeSharedPreferences.getInstance()
++                                .readBoolean(ChromePreferenceKeys.BARE_HAPTICS, true)) {
++                            bar.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
++                        }
++                        mHandler.removeCallbacks(mHideRunnable);
++                    }
++
++                    @Override
++                    public void onStopTrackingTouch(SeekBar bar) {
++                        mUserSeeking = false;
++                        pressThumb(false);
++                        if (mDurationSeconds > 0) {
++                            double target = mDurationSeconds * bar.getProgress() / 1000.0;
++                            mTime = target;
++                            mDelegate.onSeekTo(target);
++                        }
++                        scheduleHide();
++                    }
++                });
++        bottom.addView(mPosition);
++        bottom.addView(mSeek, new LinearLayout.LayoutParams(0, dp(40), 1f));
++        bottom.addView(mDuration);
++
++        // Under the bar: lock on the start side; speed, fit or fill, and rotate on the end side.
++        LinearLayout buttons = new LinearLayout(activity);
++        buttons.setOrientation(LinearLayout.HORIZONTAL);
++        buttons.setGravity(Gravity.CENTER_VERTICAL);
++        mLockButton = icon(BarePlayerIcon.LOCK, R.string.bare_player_lock, 48, 22);
++        mLockButton.setOnClickListener(v -> setLocked(true));
++        buttons.addView(mLockButton);
++        buttons.addView(new View(activity), new LinearLayout.LayoutParams(0, 1, 1f));
++        mSpeed = new TextView(activity);
++        mSpeed.setTextColor(Color.WHITE);
++        mSpeed.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
++        mSpeed.setGravity(Gravity.CENTER);
++        mSpeed.setMinWidth(dp(48));
++        mSpeed.setContentDescription(activity.getString(R.string.bare_player_speed));
++        mSpeed.setOnClickListener(v -> showSpeedMenu());
++        buttons.addView(mSpeed, new LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, dp(48)));
++        mFit = icon(BarePlayerIcon.FILL, R.string.bare_player_fill, 48, 24);
++        mFit.setOnClickListener(v -> act(this::toggleFit));
++        buttons.addView(mFit);
++        BarePlayerIcon rotate = icon(BarePlayerIcon.ROTATE, R.string.bare_player_rotate, 48, 22);
++        rotate.setOnClickListener(v -> act(mDelegate::onRotate));
++        buttons.addView(rotate);
++
++        LinearLayout bottomBlock = new LinearLayout(activity);
++        bottomBlock.setOrientation(LinearLayout.VERTICAL);
++        bottomBlock.addView(
++                bottom,
++                new LinearLayout.LayoutParams(
++                        LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
++        bottomBlock.addView(
++                buttons,
++                new LinearLayout.LayoutParams(
++                        LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
++        LayoutParams bottomParams =
++                new LayoutParams(
++                        LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
++        mBottomRow = bottomBlock;
++        mControls.addView(bottomBlock, bottomParams);
++
++        // While locked, only this shows, and only for a moment after a tap.
++        mUnlock = icon(BarePlayerIcon.UNLOCK, R.string.bare_player_unlock, 56, 26);
++        mUnlock.setOnClickListener(v -> setLocked(false));
++        mUnlock.setVisibility(GONE);
++        GradientDrawable unlockBg = new GradientDrawable();
++        unlockBg.setShape(GradientDrawable.OVAL);
++        unlockBg.setColor(0x66000000);
++        mUnlock.setBackground(unlockBg);
++        LayoutParams unlockParams =
++                new LayoutParams(dp(56), dp(56), Gravity.START | Gravity.CENTER_VERTICAL);
++        unlockParams.setMarginStart(dp(24));
++        addView(mUnlock, unlockParams);
++
++        // Feedback for gestures: seconds skipped, brightness, volume, seek target.
++        mBubble = new TextView(activity);
++        mBubble.setTextColor(Color.WHITE);
++        mBubble.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
++        mBubble.setPadding(dp(18), dp(10), dp(18), dp(10));
++        GradientDrawable bubbleBg = new GradientDrawable();
++        bubbleBg.setCornerRadius(dp(22));
++        bubbleBg.setColor(0x99000000);
++        mBubble.setBackground(bubbleBg);
++        mBubble.setVisibility(GONE);
++        LayoutParams bubbleParams =
++                new LayoutParams(
++                        LayoutParams.WRAP_CONTENT,
++                        LayoutParams.WRAP_CONTENT,
++                        Gravity.CENTER_HORIZONTAL | Gravity.TOP);
++        bubbleParams.topMargin = dp(72);
++        addView(mBubble, bubbleParams);
++
++        mGestures = new GestureDetector(activity, new Gestures());
++
++        setOnApplyWindowInsetsListener(
++                (v, insets) -> {
++                    applyCutout(insets);
++                    return insets;
++                });
++
++        mCurtain = new View(activity);
++        mCurtain.setBackgroundColor(Color.BLACK);
++        mCurtain.setClickable(false);
++        addView(mCurtain, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
++        // The page fades out into black rather than vanishing at once.
++        mCurtain.setAlpha(0f);
++        mCurtain.animate()
++                .alpha(1f)
++                .setDuration(200)
++                .setInterpolator(new DecelerateInterpolator())
++                .start();
++        mControls.setAlpha(0f);
++        mControls.setVisibility(GONE);
++
++        updateSpeedLabel();
++    }
++
++    /** Lifts the black cover off the video and brings the controls in. Once only. */
++    void reveal() {
++        if (mRevealed) return;
++        mRevealed = true;
++        mCurtain.animate().cancel();
++        mCurtain.animate()
++                .alpha(0f)
++                .setDuration(340)
++                .setInterpolator(new DecelerateInterpolator())
++                .withEndAction(() -> mCurtain.setVisibility(GONE))
++                .start();
++        mHandler.postDelayed(() -> showControls(true), 200);
++    }
++
++    /** Fades everything out, then runs {@code done} (which removes the view). */
++    void fadeAway(Runnable done) {
++        mHandler.removeCallbacksAndMessages(null);
++        animate().alpha(0f).setDuration(180).withEndAction(done).start();
++    }
++
++    private void pressThumb(boolean pressed) {
++        if (mThumbAnimator != null) mThumbAnimator.cancel();
++        ValueAnimator animator = ValueAnimator.ofFloat(mThumb.getPress(), pressed ? 1f : 0f);
++        animator.setDuration(pressed ? 140 : 220);
++        animator.setInterpolator(new DecelerateInterpolator());
++        animator.addUpdateListener(
++                a -> {
++                    mThumb.setPress((float) a.getAnimatedValue());
++                    mSeek.invalidate();
++                });
++        animator.start();
++        mThumbAnimator = animator;
++    }
++
++    /**
++     * The seek bar's thumb: a white dot that grows, with a soft halo, while it is held, so a tap
++     * on the bar is felt as well as seen. Its size never changes, only what it draws, so the bar
++     * does not re-lay itself out on every frame.
++     */
++    private static final class PressThumb extends Drawable {
++        private final Paint mDot = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint mHalo = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final float mDp;
++        private float mPress;
++
++        PressThumb(float dp) {
++            mDp = dp;
++            mDot.setColor(Color.WHITE);
++            mHalo.setColor(Color.WHITE);
++        }
++
++        float getPress() {
++            return mPress;
++        }
++
++        void setPress(float press) {
++            mPress = press;
++            invalidateSelf();
++        }
++
++        @Override
++        public void draw(Canvas canvas) {
++            float cx = getBounds().exactCenterX();
++            float cy = getBounds().exactCenterY();
++            if (mPress > 0.01f) {
++                mHalo.setAlpha((int) (64 * mPress));
++                canvas.drawCircle(cx, cy, 18 * mDp * mPress, mHalo);
++            }
++            canvas.drawCircle(cx, cy, (6 + 3 * mPress) * mDp, mDot);
++        }
++
++        @Override
++        public int getIntrinsicWidth() {
++            return Math.round(36 * mDp);
++        }
++
++        @Override
++        public int getIntrinsicHeight() {
++            return Math.round(36 * mDp);
++        }
++
++        @Override
++        public void setAlpha(int alpha) {}
++
++        @Override
++        public void setColorFilter(@Nullable ColorFilter filter) {}
++
++        @Override
++        public int getOpacity() {
++            return PixelFormat.TRANSLUCENT;
++        }
++    }
++
++    // ---- State from the page ----
++
++    /** Updates the controls from the page's answer. */
++    void update(
++            double time,
++            double duration,
++            double buffered,
++            boolean paused,
++            boolean ended,
++            double rate,
++            boolean hasCaptions,
++            boolean captionsOn,
++            boolean canPip,
++            boolean canDownload,
++            double videoWidth,
++            double videoHeight,
++            double elementTop,
++            double elementWidth,
++            double elementHeight,
++            double windowWidth,
++            double windowHeight) {
++        mTime = time;
++        mDurationSeconds = duration;
++        if (mPaused != paused || ended) {
++            mPaused = paused;
++            mPlay.setKind(
++                    ended ? BarePlayerIcon.REPLAY : paused ? BarePlayerIcon.PLAY : BarePlayerIcon.PAUSE);
++            mPlay.setContentDescription(
++                    getContext().getString(
++                            paused ? R.string.bare_player_play : R.string.bare_player_pause));
++            if (paused) {
++                mHandler.removeCallbacks(mHideRunnable);
++                if (!mLocked) showControls(true);
++            } else {
++                scheduleHide();
++            }
++        }
++        if (Math.abs(mRate - rate) > 0.001) {
++            mRate = rate;
++            updateSpeedLabel();
++        }
++        mCaptions.setVisibility(hasCaptions ? VISIBLE : GONE);
++        mPip.setVisibility(canPip ? VISIBLE : GONE);
++        mDownload.setVisibility(canDownload ? VISIBLE : GONE);
++        mCaptions.setActive(captionsOn);
++        boolean live = duration < 0;
++        mSeek.setEnabled(!live);
++        mBack.setEnabled(!live);
++        mDuration.setText(live ? getContext().getString(R.string.bare_player_live) : format(duration));
++        if (!mUserSeeking && mDrag != DRAG_SEEK) {
++            mPosition.setText(format(time));
++            mSeek.setProgress(live || duration <= 0 ? 0 : (int) (1000 * time / duration));
++            mSeek.setSecondaryProgress(
++                    live || duration <= 0 ? 0 : (int) (1000 * buffered / duration));
++        }
++        placeAroundPicture(
++                videoWidth, videoHeight, elementTop, elementWidth, elementHeight, windowWidth);
++
++        // How far the picture must grow to cover the screen. The element may be larger than the
++        // picture (letterboxed inside it), so this goes by the picture's own shape, fitted into
++        // the element, which the zoom scales about its centre.
++        if (mScale <= 1.001 && elementWidth > 0 && elementHeight > 0 && videoWidth > 0
++                && videoHeight > 0) {
++            double fit = Math.min(elementWidth / videoWidth, elementHeight / videoHeight);
++            double pictureWidth = videoWidth * fit;
++            double pictureHeight = videoHeight * fit;
++            if (getWidth() > 0 && windowWidth > 0) {
++                mCssPerPx = windowWidth / getWidth();
++                mPictureW = pictureWidth / mCssPerPx;
++                mPictureH = pictureHeight / mCssPerPx;
++            }
++            mFillScale =
++                    Math.max(1, Math.max(windowWidth / pictureWidth, windowHeight / pictureHeight));
++        }
++    }
++
++    // ---- Controls ----
++
++    private void act(Runnable action) {
++        action.run();
++        scheduleHide();
++    }
++
++    private void showControls(boolean show) {
++        mHandler.removeCallbacks(mHideRunnable);
++        if (mLocked) show = false;
++        mControlsShown = show;
++        mControls.animate().cancel();
++        if (show) {
++            mControls.setVisibility(VISIBLE);
++            mControls.animate().alpha(1f).setDuration(150).start();
++            scheduleHide();
++        } else {
++            mControls
++                    .animate()
++                    .alpha(0f)
++                    .setDuration(200)
++                    .withEndAction(
++                            () -> {
++                                if (!mControlsShown) mControls.setVisibility(GONE);
++                            })
++                    .start();
++        }
++    }
++
++    private void scheduleHide() {
++        mHandler.removeCallbacks(mHideRunnable);
++        if (mPaused || mUserSeeking) return;
++        mHandler.postDelayed(mHideRunnable, HIDE_AFTER_MS);
++    }
++
++    private void setLocked(boolean locked) {
++        mLocked = locked;
++        if (locked) {
++            showControls(false);
++            flashUnlock();
++            showBubble(getContext().getString(R.string.bare_player_locked));
++        } else {
++            mHandler.removeCallbacks(mHideUnlock);
++            mUnlock.setVisibility(GONE);
++            showControls(true);
++        }
++    }
++
++    private void hideBubble() {
++        mBubble.setVisibility(GONE);
++    }
++
++    private void hideUnlock() {
++        mUnlock.setVisibility(GONE);
++    }
++
++    private void flashUnlock() {
++        mUnlock.setVisibility(VISIBLE);
++        mHandler.removeCallbacks(mHideUnlock);
++        mHandler.postDelayed(mHideUnlock, 2500);
++    }
++
++    private void showSpeedMenu() {
++        mHandler.removeCallbacks(mHideRunnable);
++        PopupMenu menu = new PopupMenu(getContext(), mSpeed);
++        for (int i = 0; i < RATES.length; i++) {
++            menu.getMenu().add(0, i, i, rateLabel(RATES[i]));
++        }
++        menu.setOnMenuItemClickListener(
++                item -> {
++                    mRate = RATES[item.getItemId()];
++                    updateSpeedLabel();
++                    mDelegate.onRate(mRate);
++                    scheduleHide();
++                    return true;
++                });
++        menu.setOnDismissListener(m -> scheduleHide());
++        menu.show();
++    }
++
++    private void updateSpeedLabel() {
++        mSpeed.setText(rateLabel(mRate));
++    }
++
++    private static String rateLabel(double rate) {
++        String text = String.format(Locale.US, "%.2f", rate);
++        text = text.replaceAll("0+$", "").replaceAll("\\.$", "");
++        return text + "×";
++    }
++
++    private void toggleFit() {
++        setTransform(mScale > 1.001 ? 1 : mFillScale, 0, 0, 220);
++    }
++
++    /**
++     * Applies a zoom and shift, kept so the picture never leaves a gap at an edge it could cover,
++     * and sends it to the page. While fingers move, updates go out often and each one eases into
++     * the next, so the picture glides instead of stepping.
++     */
++    private void setTransform(double scale, double tx, double ty, int easeMs) {
++        mScale = Math.max(1, Math.min(MAX_SCALE, scale));
++        double maxX = mPictureW > 0 ? Math.max(0, (mScale * mPictureW - getWidth()) / 2) : 0;
++        double maxY = mPictureH > 0 ? Math.max(0, (mScale * mPictureH - getHeight()) / 2) : 0;
++        mTx = Math.max(-maxX, Math.min(maxX, tx));
++        mTy = Math.max(-maxY, Math.min(maxY, ty));
++        boolean zoomed = mScale > 1.001;
++        mFit.setKind(zoomed ? BarePlayerIcon.FIT : BarePlayerIcon.FILL);
++        mFit.setContentDescription(
++                getContext().getString(zoomed ? R.string.bare_player_fit : R.string.bare_player_fill));
++        long now = System.currentTimeMillis();
++        if (easeMs > 100 || now - mLastScaleSentMs >= 24) {
++            mLastScaleSentMs = now;
++            mDelegate.onTransform(mScale, mTx * mCssPerPx, mTy * mCssPerPx, easeMs);
++        }
++    }
++
++    /** Moves the video along with the finger, so the frame under it is what shows. */
++    private void scrub(double seconds) {
++        long now = System.currentTimeMillis();
++        if (now - mLastScrubMs < SCRUB_INTERVAL_MS) return;
++        mLastScrubMs = now;
++        mDelegate.onScrub(seconds);
++    }
++
++    private void tapSeek(int seconds) {
++        if (mDurationSeconds < 0 && seconds < 0) return;
++        if (Integer.signum(mTapSeekTotal) != Integer.signum(seconds)) mTapSeekTotal = 0;
++        mTapSeekTotal += seconds;
++        mDelegate.onSeekBy(seconds);
++        showBubble((mTapSeekTotal > 0 ? "+" : "−") + Math.abs(mTapSeekTotal) + " s");
++        mHandler.removeCallbacks(mResetTapSeek);
++        mHandler.postDelayed(mResetTapSeek, 900);
++    }
++
++    private void showBubble(String text) {
++        mBubble.setText(text);
++        mBubble.setVisibility(VISIBLE);
++        mHandler.removeCallbacks(mHideBubble);
++        mHandler.postDelayed(mHideBubble, BUBBLE_MS);
++    }
++
++    // ---- Touch ----
++
++    @Override
++    public boolean onTouchEvent(MotionEvent event) {
++        if (mLocked) {
++            if (event.getActionMasked() == MotionEvent.ACTION_UP) flashUnlock();
++            return true;
++        }
++        if (mClosing) return true;
++        int actionMasked = event.getActionMasked();
++        if (actionMasked == MotionEvent.ACTION_DOWN) {
++            // A new touch while the picture is still coming back takes over from it.
++            mSpring.cancel();
++            resetClose();
++            if (mVelocity != null) mVelocity.recycle();
++            mVelocity = VelocityTracker.obtain();
++        }
++        if (mVelocity != null) mVelocity.addMovement(event);
++        if (mIgnoreUntilUp) {
++            // The finger left after a pinch is not a new drag.
++            int a = event.getActionMasked();
++            if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) mIgnoreUntilUp = false;
++            return true;
++        }
++        if (event.getPointerCount() > 1 || mScaling) {
++            handlePinch(event);
++            return true;
++        }
++        mGestures.onTouchEvent(event);
++        int action = event.getActionMasked();
++        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
++            if (mDrag == DRAG_SEEK && action == MotionEvent.ACTION_UP) {
++                mTime = mDragTargetTime;
++                mDelegate.onSeekTo(mDragTargetTime);
++            }
++            if (mDrag == DRAG_CLOSE) {
++                float velocity = 0;
++                if (action == MotionEvent.ACTION_UP && mVelocity != null) {
++                    mVelocity.computeCurrentVelocity(1000);
++                    velocity = mVelocity.getYVelocity();
++                }
++                boolean flung = velocity > CLOSE_FLING_DP_PER_SECOND * mDp && mClosePull > 0;
++                if (action == MotionEvent.ACTION_UP && (mCloseArmed || flung)) {
++                    finishClose(velocity);
++                } else {
++                    springBack(velocity);
++                }
++            }
++            if (mDrag != DRAG_NONE) {
++                mHandler.removeCallbacks(mHideBubble);
++                mHandler.postDelayed(mHideBubble, 400);
++                scheduleHide();
++            }
++            mDrag = DRAG_NONE;
++        }
++        return true;
++    }
++
++    private final class Gestures extends GestureDetector.SimpleOnGestureListener {
++        @Override
++        public boolean onDown(MotionEvent e) {
++            mDownX = e.getX();
++            mDownY = e.getY();
++            mDrag = DRAG_NONE;
++            return true;
++        }
++
++        @Override
++        public boolean onSingleTapConfirmed(MotionEvent e) {
++            if (!mRevealed) return true;
++            showControls(!mControlsShown);
++            return true;
++        }
++
++        @Override
++        public boolean onDoubleTap(MotionEvent e) {
++            float third = getWidth() / 3f;
++            if (e.getX() < third) {
++                tapSeek(-10);
++            } else if (e.getX() > 2 * third) {
++                tapSeek(10);
++            } else {
++                mDelegate.onTogglePlay();
++            }
++            return true;
++        }
++
++        @Override
++        public boolean onScroll(
++                @Nullable MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
++            float dx = e2.getX() - mDownX;
++            float dy = e2.getY() - mDownY;
++            if (mDrag == DRAG_NONE) {
++                if (Math.hypot(dx, dy) < mTouchSlop * 2) return false;
++                if (Math.abs(dx) > Math.abs(dy)) {
++                    if (mDurationSeconds <= 0) return false;
++                    mDrag = DRAG_SEEK;
++                    mDragStartTime = mTime;
++                } else if (mDownX > getWidth() / 3f && mDownX < 2 * getWidth() / 3f) {
++                    if (dy <= 0) return false;
++                    mDrag = DRAG_CLOSE;
++                    mCloseArmed = false;
++                    mCloseControlsWereShown = mControlsShown;
++                    showControls(false);
++                    mCurtain.animate().cancel();
++                    mCurtain.setAlpha(0f);
++                    mCurtain.setVisibility(VISIBLE);
++                    // Measured from where the finger first went down; the distance it had to
++                    // cover to be recognised is given back over the next few slops, so the
++                    // picture neither jumps now nor trails the finger later.
++                    mCloseOriginX = mDownX;
++                    mCloseOriginY = mDownY;
++                    mCloseSlop = (float) Math.hypot(dx, dy);
++                    mCloseDx0 = dx;
++                    mClosePull = 0;
++                    beginClose(e2.getX(), e2.getY());
++                } else if (mDownX < getWidth() / 2f) {
++                    mDrag = DRAG_BRIGHTNESS;
++                    mDragStartLevel = currentBrightness();
++                } else {
++                    mDrag = DRAG_VOLUME;
++                    int max = mAudio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
++                    mDragStartLevel =
++                            max <= 0
++                                    ? 0
++                                    : (float) mAudio.getStreamVolume(AudioManager.STREAM_MUSIC) / max;
++                }
++                mHandler.removeCallbacks(mHideRunnable);
++                // Re-anchor so the change starts from here, not from the slop.
++                mDownX = e2.getX();
++                mDownY = e2.getY();
++                dx = 0;
++                dy = 0;
++            }
++            switch (mDrag) {
++                case DRAG_CLOSE:
++                    {
++                        // Follows the finger; one tick when the line is crossed. Coming back
++                        // a little short of it disarms, so a finger resting on it does not buzz.
++                        float raw = e2.getY() - mCloseOriginY;
++                        float over = raw - mCloseSlop;
++                        float ramp = clamp01(over / Math.max(1f, 4 * mCloseSlop));
++                        float pull = Math.max(0f, raw - mCloseSlop * (1 - ramp));
++                        float line = getHeight() * CLOSE_LINE;
++                        if (pull >= line && !mCloseArmed) {
++                            mCloseArmed = true;
++                            haptic(HapticFeedbackConstants.CLOCK_TICK);
++                        } else if (pull < line * 0.85f) {
++                            mCloseArmed = false;
++                        }
++                        // The page hears about each position a frame or two after the finger
++                        // is there, so it is sent a little ahead, along the finger's speed.
++                        float lead = 0;
++                        if (mVelocity != null) {
++                            mVelocity.computeCurrentVelocity(1000);
++                            lead = Math.max(0f, mVelocity.getYVelocity()) * CLOSE_LEAD_SECONDS;
++                        }
++                        applyClose(
++                                pull + lead,
++                                (e2.getX() - mCloseOriginX - mCloseDx0) * CLOSE_FOLLOW_X);
++                        break;
++                    }
++                case DRAG_SEEK:
++                    {
++                        // A full screen width is 90 seconds, or the whole video if shorter.
++                        double span = Math.min(90, mDurationSeconds);
++                        double delta = span * dx / Math.max(1, getWidth());
++                        mDragTargetTime =
++                                Math.max(0, Math.min(mDurationSeconds, mDragStartTime + delta));
++                        long d = Math.round(mDragTargetTime - mDragStartTime);
++                        showBubble(
++                                format(mDragTargetTime)
++                                        + "  ("
++                                        + (d >= 0 ? "+" : "−")
++                                        + Math.abs(d)
++                                        + " s)");
++                        if (mDurationSeconds > 0) {
++                            mSeek.setProgress((int) (1000 * mDragTargetTime / mDurationSeconds));
++                        }
++                        scrub(mDragTargetTime);
++                        break;
++                    }
++                case DRAG_BRIGHTNESS:
++                    {
++                        float level = clamp01(mDragStartLevel - dy / (getHeight() * 0.6f));
++                        WindowManager.LayoutParams lp = mActivity.getWindow().getAttributes();
++                        lp.screenBrightness = Math.max(0.01f, level);
++                        mActivity.getWindow().setAttributes(lp);
++                        showBubble(
++                                getContext().getString(R.string.bare_player_brightness)
++                                        + "  "
++                                        + Math.round(level * 100)
++                                        + "%");
++                        break;
++                    }
++                case DRAG_VOLUME:
++                    {
++                        float level = clamp01(mDragStartLevel - dy / (getHeight() * 0.6f));
++                        int max = mAudio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
++                        int index = Math.round(level * max);
++                        if (index != mAudio.getStreamVolume(AudioManager.STREAM_MUSIC)) {
++                            mAudio.setStreamVolume(AudioManager.STREAM_MUSIC, index, 0);
++                        }
++                        showBubble(
++                                getContext().getString(R.string.bare_player_volume)
++                                        + "  "
++                                        + Math.round(100f * index / Math.max(1, max))
++                                        + "%");
++                        break;
++                    }
++                default:
++                    break;
++            }
++            return true;
++        }
++    }
++
++    /**
++     * Two fingers: zoom about the point between them, and move the picture with them. The point
++     * of the picture under the fingers when they went down stays under them.
++     */
++    private void handlePinch(MotionEvent event) {
++        int action = event.getActionMasked();
++        if (event.getPointerCount() < 2) {
++            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
++                mScaling = false;
++            }
++            return;
++        }
++        float x0 = event.getX(0);
++        float y0 = event.getY(0);
++        float x1 = event.getX(1);
++        float y1 = event.getY(1);
++        float span = (float) Math.hypot(x1 - x0, y1 - y0);
++        float fx = (x0 + x1) / 2f - getWidth() / 2f;
++        float fy = (y0 + y1) / 2f - getHeight() / 2f;
++        if (action == MotionEvent.ACTION_POINTER_DOWN || !mScaling) {
++            mScaling = true;
++            if (mDrag == DRAG_CLOSE) springBack(0);
++            mDrag = DRAG_NONE;
++            // The first finger's tap or drag is called off.
++            MotionEvent cancel = MotionEvent.obtain(event);
++            cancel.setAction(MotionEvent.ACTION_CANCEL);
++            mGestures.onTouchEvent(cancel);
++            cancel.recycle();
++            mPinchSpan0 = Math.max(1f, span);
++            mPinchFocusX0 = fx;
++            mPinchFocusY0 = fy;
++            mPinchScale0 = mScale;
++            mPinchTx0 = mTx;
++            mPinchTy0 = mTy;
++            return;
++        }
++        if (action == MotionEvent.ACTION_MOVE) {
++            double scale =
++                    Math.max(1, Math.min(MAX_SCALE, mPinchScale0 * span / mPinchSpan0));
++            double ratio = scale / mPinchScale0;
++            double tx = fx - ratio * (mPinchFocusX0 - mPinchTx0);
++            double ty = fy - ratio * (mPinchFocusY0 - mPinchTy0);
++            setTransform(scale, tx, ty, 90);
++            showBubble(Math.round(mScale * 100) + "%");
++        } else if (action == MotionEvent.ACTION_POINTER_UP) {
++            mScaling = false;
++            mIgnoreUntilUp = true;
++            // Settle on the whole picture or on the screen when close to either.
++            if (Math.abs(mScale - 1) < 0.08) {
++                setTransform(1, 0, 0, 200);
++            } else if (Math.abs(mScale - mFillScale) < 0.06) {
++                setTransform(mFillScale, mTx, mTy, 200);
++            } else {
++                setTransform(mScale, mTx, mTy, 120);
++            }
++        }
++    }
++
++    /** Starts a swipe-down: from here the page is told where the picture is each frame. */
++    private void beginClose(float pivotX, float pivotY) {
++        resetClose();
++        mCloseActive = true;
++    }
++
++    /**
++     * Puts the picture {@code pull} pixels down and {@code dx} along: smaller the further it has
++     * been pulled, with rounder corners and a darker shade. The video is drawn in a window of its
++     * own that the views above it cannot carry along, so the picture is the page's video element,
++     * moved by the same translate and scale the zoom uses, with no easing in between.
++     */
++    private void applyClose(float pull, float dx) {
++        mClosePull = pull;
++        mCloseDxNow = dx;
++        float p = clamp01(pull / (getHeight() * 0.6f));
++        float eased = p * (2 - p);
++        float scale = 1 - CLOSE_SHRINK * eased;
++        mDelegate.onCloseDrag(
++                mScale * scale,
++                (mTx + dx) * mCssPerPx,
++                (mTy + pull) * mCssPerPx,
++                CLOSE_RADIUS_DP * eased * mCssPerPx * mDp);
++        mCurtain.setAlpha(0.55f * eased);
++    }
++
++    /** Gives the picture back as it was: the zoom it had, no offset, square corners. */
++    private void resetClose() {
++        mSpring.cancel();
++        if (mCloseActive) {
++            mCloseActive = false;
++            mDelegate.onCloseDragEnd(mScale, mTx * mCssPerPx, mTy * mCssPerPx);
++        }
++        mClosePull = 0;
++        if (!mClosing && mRevealed) {
++            mCurtain.setAlpha(0f);
++            mCurtain.setVisibility(GONE);
++        }
++    }
++
++    /** Let go short of the line: it springs back, carrying the finger's speed. */
++    private void springBack(float velocity) {
++        mCloseArmed = false;
++        final float from = mClosePull;
++        final float dx = mCloseDxNow;
++        mSpring.start(
++                from,
++                velocity,
++                0f,
++                400f,
++                0.8f,
++                Float.NaN,
++                pull -> applyClose(pull, from > 1f ? dx * (pull / from) : 0f),
++                () -> {
++                    resetClose();
++                    if (mCloseControlsWereShown) showControls(true);
++                });
++    }
++
++    /**
++     * Let go past the line, or flung: the picture carries the finger's speed on down and out, then
++     * the player leaves fullscreen behind a black cover, so nothing of the page's own layout shows
++     * while the views are put back.
++     */
++    private void finishClose(float velocity) {
++        mClosing = true;
++        mCloseArmed = false;
++        final float dx = mCloseDxNow;
++        final float height = getHeight();
++        mSpring.start(
++                mClosePull,
++                Math.max(velocity, 0f),
++                height * 1.4f,
++                220f,
++                1.0f,
++                height,
++                pull -> applyClose(pull, dx),
++                () -> {
++                    mCurtain.animate().cancel();
++                    mCurtain.setAlpha(1f);
++                    mCurtain.setVisibility(VISIBLE);
++                    mDelegate.onClose();
++                    resetClose();
++                });
++    }
++
++    /** One haptic tick, when Bare's haptics setting is on. */
++    private void haptic(int kind) {
++        boolean on =
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_HAPTICS, true);
++        boolean done = on && performHapticFeedback(kind);
++        Log.i(TAG, "Close line crossed: haptics " + (on ? "on" : "off") + ", performed=" + done);
++    }
++
++    /**
++     * A spring that settles a pull distance on a target, starting from the finger's own speed.
++     * Runs on the frame clock, so it carries the motion on from the last touch event.
++     */
++    private final class CloseSpring implements Choreographer.FrameCallback {
++        interface Update {
++            void onPull(float pull);
++        }
++
++        private float mX;
++        private float mV;
++        private float mTarget;
++        private float mStiffness;
++        private float mDamping;
++        private float mStopAt = Float.NaN;
++        private long mLastNanos;
++        private boolean mRunning;
++        private @Nullable Update mUpdate;
++        private @Nullable Runnable mDone;
++
++        void start(
++                float x,
++                float v,
++                float target,
++                float stiffness,
++                float dampingRatio,
++                float stopAt,
++                Update update,
++                Runnable done) {
++            cancel();
++            mX = x;
++            mV = v;
++            mTarget = target;
++            mStiffness = stiffness;
++            mDamping = dampingRatio * 2f * (float) Math.sqrt(stiffness);
++            mStopAt = stopAt;
++            mUpdate = update;
++            mDone = done;
++            mLastNanos = 0;
++            mRunning = true;
++            Choreographer.getInstance().postFrameCallback(this);
++        }
++
++        void cancel() {
++            if (mRunning) Choreographer.getInstance().removeFrameCallback(this);
++            mRunning = false;
++            mUpdate = null;
++            mDone = null;
++        }
++
++        @Override
++        public void doFrame(long frameTimeNanos) {
++            if (!mRunning) return;
++            float dt = mLastNanos == 0 ? 1f / 60f : (frameTimeNanos - mLastNanos) / 1e9f;
++            mLastNanos = frameTimeNanos;
++            dt = Math.min(dt, 1f / 30f);
++            float accel = -mStiffness * (mX - mTarget) - mDamping * mV;
++            mV += accel * dt;
++            mX += mV * dt;
++            Update update = mUpdate;
++            if (update != null) update.onPull(mX);
++            boolean settled =
++                    Float.isNaN(mStopAt)
++                            ? Math.abs(mX - mTarget) < 0.5f && Math.abs(mV) < 8f
++                            : mX >= mStopAt;
++            if (settled) {
++                Runnable done = mDone;
++                mRunning = false;
++                mUpdate = null;
++                mDone = null;
++                if (done != null) done.run();
++            } else {
++                Choreographer.getInstance().postFrameCallback(this);
++            }
++        }
++    }
++
++    private float currentBrightness() {
++        float own = mActivity.getWindow().getAttributes().screenBrightness;
++        if (own >= 0) return own;
++        try {
++            return Settings.System.getInt(
++                            mActivity.getContentResolver(), Settings.System.SCREEN_BRIGHTNESS)
++                    / 255f;
++        } catch (Settings.SettingNotFoundException e) {
++            return 0.5f;
++        }
++    }
++
++    // ---- Lifecycle ----
++
++    /** Gives the window its brightness back and stops pending work. */
++    void release() {
++        mHandler.removeCallbacksAndMessages(null);
++        resetClose();
++        if (mVelocity != null) {
++            mVelocity.recycle();
++            mVelocity = null;
++        }
++        WindowManager.LayoutParams lp = mActivity.getWindow().getAttributes();
++        if (lp.screenBrightness != mOriginalBrightness) {
++            lp.screenBrightness = mOriginalBrightness;
++            mActivity.getWindow().setAttributes(lp);
++        }
++    }
++
++    @Override
++    protected void onDetachedFromWindow() {
++        resetClose();
++        super.onDetachedFromWindow();
++    }
++
++    @Override
++    protected void onWindowVisibilityChanged(int visibility) {
++        super.onWindowVisibilityChanged(visibility);
++        // The activity went away (home, another app): the browser is never left scaled.
++        if (visibility != VISIBLE && !mClosing) {
++            if (mDrag == DRAG_CLOSE) mDrag = DRAG_NONE;
++            resetClose();
++        }
++    }
++
++    @Override
++    protected void onConfigurationChanged(Configuration newConfig) {
++        super.onConfigurationChanged(newConfig);
++        // Picture in picture shows the video alone; the controls would not fit.
++        setVisibility(mActivity.isInPictureInPictureMode() ? INVISIBLE : VISIBLE);
++        if (mDrag == DRAG_CLOSE) mDrag = DRAG_NONE;
++        resetClose();
++        mScale = 1;
++        mTx = 0;
++        mTy = 0;
++        mFit.setKind(BarePlayerIcon.FILL);
++        mDelegate.onTransform(1, 0, 0, 0);
++    }
++
++    private void applyCutout(WindowInsets insets) {
++        DisplayCutout cutout = insets.getDisplayCutout();
++        mSafeLeft = cutout == null ? 0 : cutout.getSafeInsetLeft();
++        mSafeTop = cutout == null ? 0 : cutout.getSafeInsetTop();
++        mSafeRight = cutout == null ? 0 : cutout.getSafeInsetRight();
++        mSafeBottom = cutout == null ? 0 : cutout.getSafeInsetBottom();
++        layoutRows();
++    }
++
++    /**
++     * Works out where the picture is on screen, from the element's box and the picture's own
++     * shape (fitted into the box and centred), at the current zoom.
++     */
++    private void placeAroundPicture(
++            double videoWidth,
++            double videoHeight,
++            double elementTop,
++            double elementWidth,
++            double elementHeight,
++            double windowWidth) {
++        int top = -1;
++        int bottom = -1;
++        if (videoWidth > 0 && videoHeight > 0 && elementWidth > 0 && elementHeight > 0
++                && windowWidth > 0 && getWidth() > 0) {
++            double fit = Math.min(elementWidth / videoWidth, elementHeight / videoHeight);
++            double pictureHeight = videoHeight * fit * mScale;
++            double centre = elementTop + elementHeight / 2;
++            double px = getWidth() / windowWidth;
++            top = (int) Math.round((centre - pictureHeight / 2) * px);
++            bottom = (int) Math.round((centre + pictureHeight / 2) * px);
++        }
++        if (top == mPictureTop && bottom == mPictureBottom) return;
++        mPictureTop = top;
++        mPictureBottom = bottom;
++        layoutRows();
++    }
++
++    /**
++     * Puts the top row just above the picture and the time and seek bar just below it, so they
++     * stay with the video on a tall screen. Where there is no room (landscape, or a zoomed
++     * picture) they sit at the screen's edges, over the picture.
++     */
++    private void layoutRows() {
++        int pad = dp(8);
++        int height = getHeight();
++        int topMargin = mSafeTop + pad;
++        int bottomMargin = mSafeBottom + pad;
++        if (height > 0 && mPictureTop >= 0 && mPictureBottom > mPictureTop) {
++            int topRowHeight = mTopRow.getHeight() > 0 ? mTopRow.getHeight() : dp(44);
++            int bottomRowHeight = mBottomRow.getHeight() > 0 ? mBottomRow.getHeight() : dp(44);
++            topMargin = Math.max(topMargin, mPictureTop - topRowHeight);
++            bottomMargin = Math.max(bottomMargin, height - mPictureBottom - bottomRowHeight);
++        }
++        LayoutParams top = (LayoutParams) mTopRow.getLayoutParams();
++        LayoutParams bottom = (LayoutParams) mBottomRow.getLayoutParams();
++        boolean changed =
++                top.topMargin != topMargin
++                        || bottom.bottomMargin != bottomMargin
++                        || top.leftMargin != mSafeLeft + pad
++                        || top.rightMargin != mSafeRight + pad;
++        if (!changed) return;
++        top.topMargin = topMargin;
++        top.leftMargin = mSafeLeft + pad;
++        top.rightMargin = mSafeRight + pad;
++        bottom.bottomMargin = bottomMargin;
++        bottom.leftMargin = mSafeLeft + pad;
++        bottom.rightMargin = mSafeRight + pad;
++        mTopRow.setLayoutParams(top);
++        mBottomRow.setLayoutParams(bottom);
++    }
++
++    // ---- Helpers ----
++
++    /** A button {@code sizeDp} square showing an icon {@code iconDp} across. */
++    private BarePlayerIcon icon(int kind, int description, int sizeDp, int iconDp) {
++        BarePlayerIcon icon = new BarePlayerIcon(getContext(), kind);
++        icon.setContentDescription(getContext().getString(description));
++        icon.setLayoutParams(new LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp)));
++        int pad = dp((sizeDp - iconDp) / 2);
++        icon.setPadding(pad, pad, pad, pad);
++        TypedValue ripple = new TypedValue();
++        if (getContext()
++                .getTheme()
++                .resolveAttribute(
++                        android.R.attr.selectableItemBackgroundBorderless, ripple, true)) {
++            icon.setBackgroundResource(ripple.resourceId);
++        }
++        return icon;
++    }
++
++    private TextView timeText(Context context) {
++        TextView text = new TextView(context);
++        text.setTextColor(Color.WHITE);
++        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
++        text.setFontFeatureSettings("tnum");
++        text.setPadding(dp(12), 0, dp(12), 0);
++        text.setText(format(0));
++        return text;
++    }
++
++    private int dp(int value) {
++        return Math.round(value * mDp);
++    }
++
++    private static float clamp01(float value) {
++        return Math.max(0f, Math.min(1f, value));
++    }
++
++    static String format(double seconds) {
++        if (seconds < 0 || Double.isNaN(seconds)) seconds = 0;
++        long total = (long) seconds;
++        long h = total / 3600;
++        long m = (total / 60) % 60;
++        long s = total % 60;
++        return h > 0
++                ? String.format(Locale.US, "%d:%02d:%02d", h, m, s)
++                : String.format(Locale.US, "%d:%02d", m, s);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
+index a43be32939c..c051eabd6a5 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuItem.java
+@@ -92,7 +92,8 @@ class ChromeContextMenuItem {
+         Item.SAVE_AUDIO,
+         Item.SAVE_DETECTED_VIDEO,
+         Item.SAVE_DETECTED_AUDIO,
+-        Item.SAVE_DETECTED_IMAGE
++        Item.SAVE_DETECTED_IMAGE,
++        Item.PLAY_IN_BARE_PLAYER
+     })
+     @Retention(RetentionPolicy.SOURCE)
+     public @interface Item {
+@@ -168,8 +169,9 @@ class ChromeContextMenuItem {
+         int SAVE_DETECTED_VIDEO = 56;
+         int SAVE_DETECTED_AUDIO = 57;
+         int SAVE_DETECTED_IMAGE = 58;
++        int PLAY_IN_BARE_PLAYER = 59;
+         // ALWAYS UPDATE!
+-        int NUM_ENTRIES = 59;
++        int NUM_ENTRIES = 60;
+     }
+ 
+     /** Mapping from {@link Item} to the ID found in the ids.xml. */
+@@ -233,6 +235,7 @@ class ChromeContextMenuItem {
+         R.id.contextmenu_save_detected_video, // Item.SAVE_DETECTED_VIDEO
+         R.id.contextmenu_save_detected_audio, // Item.SAVE_DETECTED_AUDIO
+         R.id.contextmenu_save_detected_image, // Item.SAVE_DETECTED_IMAGE
++        R.id.contextmenu_bare_player, // Item.PLAY_IN_BARE_PLAYER
+     };
+ 
+     /** Mapping from {@link Item} to the ID of the string that describes the action of the item. */
+@@ -296,6 +299,7 @@ class ChromeContextMenuItem {
+         R.string.contextmenu_save_video, // Item.SAVE_DETECTED_VIDEO
+         R.string.contextmenu_save_audio, // Item.SAVE_DETECTED_AUDIO
+         R.string.contextmenu_save_image, // Item.SAVE_DETECTED_IMAGE
++        R.string.contextmenu_bare_player, // Item.PLAY_IN_BARE_PLAYER
+     };
+ 
+     /**
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
+index 8a387d062aa..70bcbfe8868 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
+@@ -51,6 +51,8 @@ import org.chromium.chrome.browser.bare.BareMediaChooser;
+ import org.chromium.chrome.browser.bare.BareMediaProbe;
+ import org.chromium.chrome.browser.bare.BarePressedMedia;
+ import org.chromium.chrome.browser.bare.BareMediaRegistryBridge;
++import org.chromium.chrome.browser.bare.player.BarePlayerController;
++import org.chromium.chrome.browser.bare.player.BarePlayerSettings;
+ import org.chromium.chrome.browser.bookmarks.BookmarkUtils;
+ import org.chromium.chrome.browser.contextmenu.ChromeContextMenuItem.Item;
+ import org.chromium.chrome.browser.contextmenu.ContextMenuCoordinator.ContextMenuItemType;
+@@ -1001,6 +1003,15 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+             groupedItems.add(pressedGroup);
+         }
+ 
++        // Bare Player, for a video Chromium found under the press or one the page found there.
++        if ((mParams.isVideo() || pressedOffer == BarePressedMedia.Offer.VIDEO)
++                && mMode == ContextMenuMode.NORMAL
++                && BarePlayerSettings.isEnabled()) {
++            ModelList playerGroup = new ModelList();
++            playerGroup.add(createListItem(Item.PLAY_IN_BARE_PLAYER));
++            groupedItems.add(playerGroup);
++        }
++
+         if (mParams.getOpenedFromHighlight()) {
+             ModelList sharedHighlightingGroup = new ModelList();
+             if (mMode == ContextMenuMode.NORMAL) {
+@@ -1255,6 +1266,12 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+             }
+         } else if (itemId == R.id.contextmenu_save_detected_video) {
+             startPressedVideoDownload();
++        } else if (itemId == R.id.contextmenu_bare_player) {
++            BarePlayerController.openFromPage(
++                    mItemDelegate.getWebContents(),
++                    mNativeDelegate.getRenderFrameHost(),
++                    mParams.getTriggeringTouchXDp(),
++                    mParams.getTriggeringTouchYDp());
+         } else if (itemId == R.id.contextmenu_save_detected_image) {
+             BareMediaProbe.Pressed pressed = BarePressedMedia.get(mParams);
+             if (pressed != null
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/media/PictureInPictureActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/media/PictureInPictureActivity.java
+index 329434d6c68..ae613602733 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/media/PictureInPictureActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/media/PictureInPictureActivity.java
+@@ -35,6 +35,8 @@ import androidx.annotation.VisibleForTesting;
+ 
+ import org.jni_zero.CalledByNative;
+ 
++import org.chromium.base.ActivityState;
++import org.chromium.base.ApplicationStatus;
+ import org.chromium.base.ContextUtils;
+ import org.chromium.base.IntentUtils;
+ import org.chromium.base.Log;
+@@ -45,6 +47,7 @@ import org.chromium.build.annotations.Initializer;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.player.BarePlayerController;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.components.thinwebview.CompositorView;
+@@ -169,6 +172,11 @@ public class PictureInPictureActivity extends VideoOverlayActivity {
+ 
+         @VisibleForTesting final RemoteAction mHide;
+ 
++        // Bare: ten seconds back and forward, for any video.
++        final RemoteAction mSeekBackward;
++
++        final RemoteAction mSeekForward;
++
+         @VisibleForTesting final ToggleRemoteAction mMicrophone;
+ 
+         @VisibleForTesting final ToggleRemoteAction mCamera;
+@@ -202,6 +210,20 @@ public class PictureInPictureActivity extends VideoOverlayActivity {
+ 
+         private MediaActionButtonsManager() {
+             int requestCode = 0;
++            mSeekBackward =
++                    createRemoteAction(
++                            requestCode++,
++                            MediaSessionAction.SEEK_BACKWARD,
++                            R.drawable.bare_player_back_10,
++                            R.string.bare_player_back_10,
++                            /* controlState= */ null);
++            mSeekForward =
++                    createRemoteAction(
++                            requestCode++,
++                            MediaSessionAction.SEEK_FORWARD,
++                            R.drawable.bare_player_forward_10,
++                            R.string.bare_player_forward_10,
++                            /* controlState= */ null);
+             mPreviousTrack =
+                     createRemoteAction(
+                             requestCode++,
+@@ -303,6 +325,23 @@ public class PictureInPictureActivity extends VideoOverlayActivity {
+         ArrayList<RemoteAction> getActionsForPictureInPictureParams() {
+             ArrayList<RemoteAction> actions = new ArrayList<>();
+ 
++            // Bare: an ordinary video gets back 10 s, play or pause, forward 10 s, whatever the
++            // page registered (YouTube registers nothing, which left the window bare). A call
++            // keeps the page's own buttons.
++            final boolean isCall =
++                    mVisibleActions.contains(MediaSessionAction.HANG_UP)
++                            || mVisibleActions.contains(MediaSessionAction.TOGGLE_MICROPHONE)
++                            || mVisibleActions.contains(MediaSessionAction.TOGGLE_CAMERA);
++            if (!isCall) {
++                actions.add(mSeekBackward);
++                actions.add(
++                        mPlaybackState == PlaybackState.PAUSED
++                                ? mPlay
++                                : mPlaybackState == PlaybackState.END_OF_VIDEO ? mReplay : mPause);
++                actions.add(mSeekForward);
++                return actions;
++            }
++
+             // The presence of EXIT_PICTURE_IN_PICTURE in the visible actions list controls the
+             // visibility of the "hide" button, which dismisses PiP without pausing the video.
+             final boolean shouldShowHide =
+@@ -547,6 +586,12 @@ public class PictureInPictureActivity extends VideoOverlayActivity {
+                 case MediaSessionAction.PAUSE:
+                     togglePlayPause(/* toggleOn= */ false);
+                     return;
++                case MediaSessionAction.SEEK_BACKWARD:
++                    BarePlayerController.seekPictureInPicture(getInitiatorWebContents(), -10);
++                    return;
++                case MediaSessionAction.SEEK_FORWARD:
++                    BarePlayerController.seekPictureInPicture(getInitiatorWebContents(), 10);
++                    return;
+                 case MediaSessionAction.PREVIOUS_TRACK:
+                     previousTrack();
+                     return;
+@@ -621,9 +666,12 @@ public class PictureInPictureActivity extends VideoOverlayActivity {
+         // resizes messages that are above it, since they're spurious.
+         mMaxWidth = (int) (assumeNonNull(getWindowAndroid()).getDisplay().getDisplayWidth() * 0.95);
+ 
++        // Bare: the compositor clears to white until the first video frame arrives, which showed
++        // as a white window opening into picture-in-picture. A video window is black.
++        ThinWebViewConstraints constraints = new ThinWebViewConstraints();
++        constraints.backgroundColor = Color.BLACK;
+         CompositorView compositorView =
+-                CompositorViewFactory.create(
+-                        this, getWindowAndroid(), new ThinWebViewConstraints());
++                CompositorViewFactory.create(this, getWindowAndroid(), constraints);
+ 
+         addContentView(
+                 compositorView.getView(),
+@@ -709,6 +757,11 @@ public class PictureInPictureActivity extends VideoOverlayActivity {
+             boolean isInPictureInPictureMode, Configuration newConfig) {
+         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+         if (isInPictureInPictureMode) return;
++        // Bare: the window's expand button brings the video back fullscreen in Bare Player; a
++        // dismissed window (the activity is stopping) does not.
++        if (ApplicationStatus.getStateForActivity(this) != ActivityState.STOPPED) {
++            BarePlayerController.onPictureInPictureExpanded(getInitiatorWebContents());
++        }
+         onBackToTab();
+         finishOverlay(/* closeByNative= */ false);
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/media/VideoOverlayActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/media/VideoOverlayActivity.java
+index 2219732ca34..d41c15cf165 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/media/VideoOverlayActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/media/VideoOverlayActivity.java
+@@ -146,6 +146,11 @@ public abstract class VideoOverlayActivity extends AsyncInitializationActivity {
+         }
+     }
+ 
++    /** Bare: the page whose video is in the window, for Bare Player's own buttons. */
++    protected @Nullable WebContents getInitiatorWebContents() {
++        return mInitiatorTab == null ? null : mInitiatorTab.getWebContents();
++    }
++
+     protected boolean isInitiatorTabDestroyed() {
+         return mInitiatorTab == null || TabUtils.getActivity(mInitiatorTab) == null;
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/media/settings/MediaSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/media/settings/MediaSettingsFragment.java
+index 00ebfd7f748..23422912232 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/media/settings/MediaSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/media/settings/MediaSettingsFragment.java
+@@ -13,6 +13,7 @@ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.player.BarePlayerSettings;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.preferences.Pref;
+@@ -29,6 +30,7 @@ public class MediaSettingsFragment extends ChromeBaseSettingsFragment {
+     public static final String PREF_BACKGROUND_MEDIA_PLAYBACK = "background_media_playback";
+     static final String PREF_HAPTICS = "bare_haptics";
+     static final String PREF_FULLSCREEN_FOLLOWS_ORIENTATION = "fullscreen_follows_orientation";
++    static final String PREF_BARE_PLAYER = "bare_player";
+ 
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+             ObservableSuppliers.createMonotonic();
+@@ -38,6 +40,16 @@ public class MediaSettingsFragment extends ChromeBaseSettingsFragment {
+         mPageTitle.set(getTitle(getContext()));
+         SettingsUtils.addPreferencesFromResource(this, R.xml.media_preferences);
+ 
++        // Read and written on every change, so the player follows at once, without a restart.
++        ChromeSwitchPreference barePlayer = (ChromeSwitchPreference) findPreference(PREF_BARE_PLAYER);
++        assert barePlayer != null;
++        barePlayer.setChecked(BarePlayerSettings.isEnabled());
++        barePlayer.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    BarePlayerSettings.setEnabled((boolean) newValue);
++                    return true;
++                });
++
+         ChromeSwitchPreference backgroundPlayback =
+                 (ChromeSwitchPreference) findPreference(PREF_BACKGROUND_MEDIA_PLAYBACK);
+         assert backgroundPlayback != null;
+diff --git a/chrome/browser/android/BUILD.gn b/chrome/browser/android/BUILD.gn
+index 92fce498a0f..6d25d487824 100644
+--- a/chrome/browser/android/BUILD.gn
++++ b/chrome/browser/android/BUILD.gn
+@@ -471,6 +471,7 @@ if (is_android) {
+       "content/web_contents_factory.cc",
+       "content/web_contents_factory_data_deleter.cc",
+       "content/web_contents_factory_data_deleter.h",
++      "bare_player_bridge.cc",
+       "context_menu/context_menu_native_delegate_impl.cc",
+       "context_menu/context_menu_native_delegate_impl.h",
+       "contextualsearch/contextual_search_manager.cc",
+diff --git a/chrome/browser/android/bare_player_bridge.cc b/chrome/browser/android/bare_player_bridge.cc
+new file mode 100644
+index 00000000000..331770681bf
+--- /dev/null
++++ b/chrome/browser/android/bare_player_bridge.cc
+@@ -0,0 +1,200 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <utility>
++#include <vector>
++
++#include "base/android/jni_android.h"
++#include "base/android/jni_string.h"
++#include "base/android/scoped_java_ref.h"
++#include "base/barrier_callback.h"
++#include "base/functional/bind.h"
++#include "base/json/json_writer.h"
++#include "base/values.h"
++#include "chrome/browser/download/android/download_controller_base.h"
++#include "content/public/browser/context_menu_params.h"
++#include "content/public/browser/frame_tree_node_id.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/common/isolated_world_ids.h"
++#include "services/network/public/mojom/referrer_policy.mojom.h"
++#include "third_party/blink/public/mojom/context_menu/context_menu.mojom.h"
++#include "url/gurl.h"
++#include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom.h"
++
++// Must come after all headers that specialize FromJniType() / ToJniType().
++#include "chrome/android/chrome_jni_headers/BarePlayerBridge_jni.h"
++
++namespace {
++
++// The same world BareScriptBridge uses, so the player and the other page
++// scripts share one place to keep what they leave behind.
++constexpr int32_t kBareWorld = content::ISOLATED_WORLD_ID_CONTENT_END + 1;
++
++using base::android::JavaRef;
++using base::android::ScopedJavaGlobalRef;
++
++void ReplyJson(const ScopedJavaGlobalRef<jobject>& callback,
++               const base::Value& value) {
++  std::string json;
++  if (std::optional<std::string> written = base::WriteJson(value)) {
++    json = std::move(*written);
++  }
++  Java_BarePlayerBridge_onResult(base::android::AttachCurrentThread(),
++                                 callback, json);
++}
++
++void OnFrameResults(ScopedJavaGlobalRef<jobject> callback,
++                    std::vector<base::Value> results) {
++  base::ListValue list;
++  for (base::Value& result : results) {
++    if (!result.is_none()) {
++      list.Append(std::move(result));
++    }
++  }
++  ReplyJson(callback, base::Value(std::move(list)));
++}
++
++// Tags a frame's answer with the frame it came from, so a later call can go
++// back to the same frame.
++base::Value TagWithFrame(int frame_id, base::Value result) {
++  if (result.is_none()) {
++    return base::Value();
++  }
++  base::DictValue tagged;
++  tagged.Set("f", frame_id);
++  tagged.Set("r", std::move(result));
++  return base::Value(std::move(tagged));
++}
++
++content::RenderFrameHost* FindFrame(const JavaRef<jobject>& jweb_contents,
++                                    jint frame_id) {
++  content::WebContents* web_contents =
++      content::WebContents::FromJavaWebContents(jweb_contents);
++  if (!web_contents) {
++    return nullptr;
++  }
++  content::RenderFrameHost* frame =
++      web_contents->UnsafeFindFrameByFrameTreeNodeId(
++          content::FrameTreeNodeId::FromUnsafeValue(frame_id));
++  if (!frame || !frame->IsRenderFrameLive() ||
++      !frame->IsActive()) {
++    return nullptr;
++  }
++  return frame;
++}
++
++}  // namespace
++
++// Runs the script in every live frame of the page shown in the tab, and
++// answers with a JSON list of {"f": frame, "r": result} for each frame that
++// returned something other than null. Videos often sit in an embedded player
++// from another site, which the main frame cannot see into.
++static void JNI_BarePlayerBridge_EvaluateAll(
++    JNIEnv* env,
++    const JavaRef<jobject>& jweb_contents,
++    const JavaRef<jstring>& jscript,
++    const JavaRef<jobject>& jcallback) {
++  ScopedJavaGlobalRef<jobject> callback(jcallback);
++  content::WebContents* web_contents =
++      content::WebContents::FromJavaWebContents(jweb_contents);
++  if (!web_contents) {
++    ReplyJson(callback, base::Value(base::ListValue()));
++    return;
++  }
++  std::vector<content::RenderFrameHost*> frames;
++  web_contents->GetPrimaryMainFrame()->ForEachRenderFrameHost(
++      [&frames](content::RenderFrameHost* frame) {
++        if (frame->IsRenderFrameLive() && frame->IsActive()) {
++          frames.push_back(frame);
++        }
++      });
++  if (frames.empty()) {
++    ReplyJson(callback, base::Value(base::ListValue()));
++    return;
++  }
++  auto barrier = base::BarrierCallback<base::Value>(
++      frames.size(), base::BindOnce(&OnFrameResults, callback));
++  std::u16string script = base::android::ConvertJavaStringToUTF16(env, jscript);
++  for (content::RenderFrameHost* frame : frames) {
++    frame->ExecuteJavaScriptInIsolatedWorld(
++        script,
++        base::BindOnce(&TagWithFrame, frame->GetFrameTreeNodeId().value())
++            .Then(barrier),
++        kBareWorld);
++  }
++}
++
++// Runs the script in one frame. With |activate|, the frame is first told the
++// user has just interacted with it: the tap that asked for this happened on
++// the player, outside the page, and a page may only enter fullscreen after one.
++static void JNI_BarePlayerBridge_EvaluateIn(JNIEnv* env,
++                                            const JavaRef<jobject>& jweb_contents,
++                                            jint frame_id,
++                                            const JavaRef<jstring>& jscript,
++                                            jboolean activate,
++                                            const JavaRef<jobject>& jcallback) {
++  ScopedJavaGlobalRef<jobject> callback(jcallback);
++  content::RenderFrameHost* frame = FindFrame(jweb_contents, frame_id);
++  if (!frame) {
++    ReplyJson(callback, base::Value());
++    return;
++  }
++  if (activate) {
++    frame->NotifyUserActivation(
++        blink::mojom::UserActivationNotificationType::kInteraction);
++  }
++  frame->ExecuteJavaScriptInIsolatedWorld(
++      base::android::ConvertJavaStringToUTF16(env, jscript),
++      base::BindOnce(
++          [](ScopedJavaGlobalRef<jobject> callback, base::Value value) {
++            ReplyJson(callback, value);
++          },
++          callback),
++      kBareWorld);
++}
++
++// The id evaluateIn() takes for a frame, from the frame the long-press menu
++// was opened in.
++static jint JNI_BarePlayerBridge_FrameIdOf(JNIEnv* env,
++                                         const JavaRef<jobject>& jframe) {
++  content::RenderFrameHost* frame =
++      content::RenderFrameHost::FromJavaRenderFrameHost(jframe);
++  if (!frame) {
++    return -1;
++  }
++  return frame->GetFrameTreeNodeId().value();
++}
++
++// Downloads the video file the player shows, the same way the long-press
++// menu's Save video does: from the page, with the page as referrer, through the
++// browser's own download handling (and the external download manager, if one is
++// chosen).
++static void JNI_BarePlayerBridge_Download(JNIEnv* env,
++                                          const JavaRef<jobject>& jweb_contents,
++                                          jint frame_id,
++                                          const JavaRef<jstring>& jurl) {
++  content::WebContents* web_contents =
++      content::WebContents::FromJavaWebContents(jweb_contents);
++  if (!web_contents) {
++    return;
++  }
++  GURL url(base::android::ConvertJavaStringToUTF8(env, jurl));
++  if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS()) {
++    return;
++  }
++  content::ContextMenuParams params;
++  params.page_url = web_contents->GetLastCommittedURL();
++  if (content::RenderFrameHost* frame = FindFrame(jweb_contents, frame_id)) {
++    params.frame_url = frame->GetLastCommittedURL();
++  }
++  params.src_url = url;
++  params.media_type = blink::mojom::ContextMenuDataMediaType::kVideo;
++  params.referrer_policy = network::mojom::ReferrerPolicy::kDefault;
++  DownloadControllerBase::Get()->StartContextMenuDownload(url, params,
++                                                          web_contents,
++                                                          /*is_media=*/true);
++}
++
++DEFINE_JNI(BarePlayerBridge)
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 1a2acf19901..77c061b15a5 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -541,6 +541,15 @@ public final class ChromePreferenceKeys {
+     public static final String BARE_MEDIA_FULLSCREEN_FOLLOWS_PHONE =
+             "Bare.Media.FullscreenFollowsPhone";
+ 
++    /**
++     * Whether Bare Player takes over fullscreen video. Absent until the user chooses; the build's
++     * default applies until then (off in a release build).
++     */
++    public static final String BARE_PLAYER_ENABLED = "Bare.Media.Player";
++
++    /** Whether the welcome or upgrade page has offered Bare Player, whatever the answer. */
++    public static final String BARE_PLAYER_OFFERED = "Bare.Media.PlayerOffered";
++
+     /**
+      * De-Googled build: package name of the chosen external download manager, or empty to ask
+      * every time. A package that is no longer installed falls back to asking.
+@@ -1449,6 +1458,8 @@ public final class ChromePreferenceKeys {
+                 BARE_INCOGNITO_ENTRY_HAPTIC,
+                 BARE_APP_MENU_EDIT_TIP_COUNT,
+                 BARE_MEDIA_FULLSCREEN_FOLLOWS_PHONE,
++                BARE_PLAYER_ENABLED,
++                BARE_PLAYER_OFFERED,
+                 BARE_USER_AGENT_PRESET,
+                 BARE_ADDRESS_BAR_SWIPE_TABS,
+                 BARE_EXTENSION_PRESENTATION,
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index e8b8d2b0208..078c321ad68 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4672,6 +4672,75 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_MEDIA_FULLSCREEN_ORIENTATION_SUMMARY" desc="Summary of the setting that stops pages from forcing landscape in fullscreen video.">
+         Fullscreen video turns only when the phone does, and respects your rotation lock. Turn this off to let a page switch to landscape itself.
+       </message>
++      <message name="IDS_BARE_PLAYER_TITLE" desc="Title of the setting that turns on Bare Player, the browser's own fullscreen video player. Bare Player is a product name. [CHAR_LIMIT=32]">
++        Bare Player
++      </message>
++      <message name="IDS_BARE_PLAYER_SUMMARY" desc="Summary of the Bare Player setting.">
++        Plays fullscreen video with Bare's own controls: double tap to skip, swipe for brightness, volume and seeking. It may not work on every site.
++      </message>
++      <message name="IDS_CONTEXTMENU_BARE_PLAYER" desc="Long-press menu item that opens the pressed video in Bare Player, the browser's own fullscreen player. [CHAR_LIMIT=32]">
++        Play in Bare Player
++      </message>
++      <message name="IDS_BARE_PLAYER_UNAVAILABLE" desc="Short message when a video cannot be opened in Bare Player.">
++        This video can't open in Bare Player
++      </message>
++      <message name="IDS_BARE_PLAYER_CLOSE" desc="Accessibility label of the button that closes the video player.">
++        Close player
++      </message>
++      <message name="IDS_BARE_PLAYER_PLAY" desc="Accessibility label of the play button in the video player.">
++        Play
++      </message>
++      <message name="IDS_BARE_PLAYER_PAUSE" desc="Accessibility label of the pause button in the video player.">
++        Pause
++      </message>
++      <message name="IDS_BARE_PLAYER_BACK_10" desc="Accessibility label of the button that goes back 10 seconds in the video.">
++        Back 10 seconds
++      </message>
++      <message name="IDS_BARE_PLAYER_FORWARD_10" desc="Accessibility label of the button that skips forward 10 seconds in the video.">
++        Forward 10 seconds
++      </message>
++      <message name="IDS_BARE_PLAYER_ROTATE" desc="Accessibility label of the button that turns the screen between portrait and landscape.">
++        Rotate screen
++      </message>
++      <message name="IDS_BARE_PLAYER_LOCK" desc="Accessibility label of the button that locks the player so touches are ignored.">
++        Lock controls
++      </message>
++      <message name="IDS_BARE_PLAYER_UNLOCK" desc="Accessibility label of the button that unlocks the player.">
++        Unlock controls
++      </message>
++      <message name="IDS_BARE_PLAYER_LOCKED" desc="Short message shown when the player's controls are locked. [CHAR_LIMIT=32]">
++        Controls locked
++      </message>
++      <message name="IDS_BARE_PLAYER_FIT" desc="Accessibility label of the button that shows the whole video picture.">
++        Fit to screen
++      </message>
++      <message name="IDS_BARE_PLAYER_FILL" desc="Accessibility label of the button that zooms the video to fill the screen.">
++        Fill screen
++      </message>
++      <message name="IDS_BARE_PLAYER_CAPTIONS" desc="Accessibility label of the subtitles button in the video player.">
++        Subtitles
++      </message>
++      <message name="IDS_BARE_PLAYER_SPEED" desc="Accessibility label of the playback speed button in the video player.">
++        Playback speed
++      </message>
++      <message name="IDS_BARE_PLAYER_LIVE" desc="Shown in place of the video length for a live stream. [CHAR_LIMIT=12]">
++        Live
++      </message>
++      <message name="IDS_BARE_PLAYER_PIP" desc="Accessibility label of the player button that moves the video into a small floating window.">
++        Picture in picture
++      </message>
++      <message name="IDS_BARE_PLAYER_PIP_UNAVAILABLE" desc="Short message when the video cannot move into a floating window.">
++        Picture in picture isn't available for this video
++      </message>
++      <message name="IDS_BARE_PLAYER_DOWNLOAD" desc="Accessibility label of the player button that downloads the video.">
++        Download video
++      </message>
++      <message name="IDS_BARE_PLAYER_BRIGHTNESS" desc="Label shown while a swipe changes screen brightness in the video player. [CHAR_LIMIT=20]">
++        Brightness
++      </message>
++      <message name="IDS_BARE_PLAYER_VOLUME" desc="Label shown while a swipe changes volume in the video player. [CHAR_LIMIT=20]">
++        Volume
++      </message>
+       <message name="IDS_BARE_USER_AGENT_FIT_TITLE" desc="Developer option: keep pages to the phone's width with the chosen user agent. [CHAR_LIMIT=48]">
+         Fit page to phone width
+       </message>

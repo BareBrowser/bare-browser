@@ -1,0 +1,215 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
+index 92013b25e4e..74144461537 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
+@@ -94,6 +94,8 @@ import org.chromium.chrome.browser.preferences.AllPreferenceKeyRegistries;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.preferences.SharedPreferencesMetrics;
++import org.chromium.chrome.browser.prefetch.settings.PreloadPagesSettingsBridge;
++import org.chromium.chrome.browser.prefetch.settings.PreloadPagesState;
+ import org.chromium.chrome.browser.prefs.LocalStatePrefs;
+ import org.chromium.chrome.browser.price_tracking.PriceTrackingFeatures;
+ import org.chromium.chrome.browser.privacy.settings.PrivacyPreferencesManagerImpl;
+@@ -138,6 +140,7 @@ import org.chromium.components.policy.CombinedPolicyProvider;
+ import org.chromium.components.policy.EnterpriseInfo;
+ import org.chromium.components.safe_browsing.SafeBrowsingApiBridge;
+ import org.chromium.components.webapps.AppBannerManager;
++import org.chromium.components.user_prefs.UserPrefs;
+ import org.chromium.components.webapps.AppDetailsDelegate;
+ import org.chromium.content_public.browser.ChildProcessLauncherHelper;
+ import org.chromium.content_public.browser.DeviceUtils;
+@@ -538,6 +541,7 @@ public class ProcessInitializationHandler {
+      */
+     @CallSuper
+     protected void handleProfileDependentPostNativeInitialization(Profile profile) {
++        applyBarePreloadPagesDefaults(profile);
+         HistoryDeletionBridge.getForProfile(profile)
+                 .addObserver(
+                         new ContentCaptureHistoryDeletionObserver(
+@@ -550,6 +554,24 @@ public class ProcessInitializationHandler {
+                 AccessibilitySettingsBridge.isCaretBrowsingEnabled(profile));
+     }
+ 
++    /**
++     * Bare: Preload pages is a switch, off unless the user turns it on. Chromium's default is
++     * standard preloading, so a profile that never set it is set to off. Extended preloading is
++     * not offered any more and becomes standard. A value set by policy is left alone.
++     */
++    private static void applyBarePreloadPagesDefaults(Profile profile) {
++        if (profile.isOffTheRecord()) return;
++        if (PreloadPagesSettingsBridge.isNetworkPredictionManaged(profile)) return;
++        if (UserPrefs.get(profile).isDefaultValuePreference("net.network_prediction_options")) {
++            PreloadPagesSettingsBridge.setState(profile, PreloadPagesState.NO_PRELOADING);
++            return;
++        }
++        if (PreloadPagesSettingsBridge.getState(profile)
++                == PreloadPagesState.EXTENDED_PRELOADING) {
++            PreloadPagesSettingsBridge.setState(profile, PreloadPagesState.STANDARD_PRELOADING);
++        }
++    }
++
+     /**
+      * We use the Android API to store key information which we can't afford to have wrong on our
+      * ANR reports. So, in this function, we store the version number before the native is loaded.
+diff --git a/chrome/browser/prefetch/android/java/res/xml/preload_pages_preferences.xml b/chrome/browser/prefetch/android/java/res/xml/preload_pages_preferences.xml
+index a6819115f28..d56e8b8b8d2 100644
+--- a/chrome/browser/prefetch/android/java/res/xml/preload_pages_preferences.xml
++++ b/chrome/browser/prefetch/android/java/res/xml/preload_pages_preferences.xml
+@@ -5,19 +5,16 @@ Use of this source code is governed by a BSD-style license that can be
+ found in the LICENSE file.
+ -->
+ 
++<!-- Bare: one switch. On is Chromium's standard preloading, off is no preloading. The Google
++     choices (standard and extended preloading through Google servers) are gone. -->
+ <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+     xmlns:app="http://schemas.android.com/apk/res-auto">
+ 
+-    <org.chromium.components.browser_ui.settings.TextMessagePreference
+-        android:key="summary"
+-        android:summary="@string/preload_pages_summary"
+-        app:allowDividerBelow="false" />
+-
+-    <org.chromium.chrome.browser.prefetch.settings.RadioButtonGroupPreloadPagesSettings
+-        android:key="preload_pages_radio_button_group"
+-        android:selectable="false"
+-        app:allowDividerAbove="false"
+-        app:allowDividerBelow="false" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="preload_pages_switch"
++        android:title="@string/preload_pages_title"
++        android:summary="@string/bare_preload_pages_switch_summary"
++        android:persistent="false" />
+ 
+     <Preference
+         android:key="managed_disclaimer_text"
+diff --git a/chrome/browser/prefetch/android/java/src/org/chromium/chrome/browser/prefetch/settings/PreloadPagesSettingsFragment.java b/chrome/browser/prefetch/android/java/src/org/chromium/chrome/browser/prefetch/settings/PreloadPagesSettingsFragment.java
+index 4ec33814cb9..8d0d86e3c13 100644
+--- a/chrome/browser/prefetch/android/java/src/org/chromium/chrome/browser/prefetch/settings/PreloadPagesSettingsFragment.java
++++ b/chrome/browser/prefetch/android/java/src/org/chromium/chrome/browser/prefetch/settings/PreloadPagesSettingsFragment.java
+@@ -4,7 +4,6 @@
+ 
+ package org.chromium.chrome.browser.prefetch.settings;
+ 
+-import android.content.Context;
+ import android.os.Bundle;
+ 
+ import androidx.annotation.VisibleForTesting;
+@@ -14,50 +13,42 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.settings.ChromeManagedPreferenceDelegate;
+-import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+ import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+ import org.chromium.components.browser_ui.settings.ManagedPreferenceDelegate;
+ 
+-/** Fragment containing Preload Pages settings. */
++/**
++ * Fragment containing Preload Pages settings.
++ *
++ * <p>Bare: a single switch. On is standard preloading, off is no preloading. Extended preloading
++ * is not offered, and an extended value left from before reads as on and is turned into standard
++ * at startup.
++ */
+ @NullMarked
+ public class PreloadPagesSettingsFragment extends PreloadPagesSettingsFragmentBase
+-        implements RadioButtonGroupPreloadPagesSettings.OnPreloadPagesStateDetailsRequested,
+-                Preference.OnPreferenceChangeListener {
++        implements Preference.OnPreferenceChangeListener {
+     @VisibleForTesting static final String PREF_MANAGED_DISCLAIMER_TEXT = "managed_disclaimer_text";
+-    @VisibleForTesting static final String PREF_PRELOAD_PAGES = "preload_pages_radio_button_group";
++    @VisibleForTesting static final String PREF_PRELOAD_PAGES = "preload_pages_switch";
+ 
+-    private RadioButtonGroupPreloadPagesSettings mPreloadPagesPreference;
++    private ChromeSwitchPreference mPreloadPagesSwitch;
+ 
+-    /**
+-     * @return A summary that describes the current Preload Pages state.
+-     */
+-    public static String getPreloadPagesSummaryString(Context context, Profile profile) {
+-        @PreloadPagesState int preloadPagesState = PreloadPagesSettingsBridge.getState(profile);
+-        if (preloadPagesState == PreloadPagesState.EXTENDED_PRELOADING) {
+-            return context.getString(R.string.preload_pages_extended_preloading_title);
+-        }
+-        if (preloadPagesState == PreloadPagesState.STANDARD_PRELOADING) {
+-            return context.getString(R.string.preload_pages_standard_preloading_title);
+-        }
+-        if (preloadPagesState == PreloadPagesState.NO_PRELOADING) {
+-            return context.getString(R.string.preload_pages_no_preloading_title);
+-        }
+-        assert false : "Should not be reached";
+-        return "";
++    /** Whether preloading is on, which is any state but no preloading. */
++    public static boolean isPreloadingOn(Profile profile) {
++        return PreloadPagesSettingsBridge.getState(profile) != PreloadPagesState.NO_PRELOADING;
+     }
+ 
+     @Override
+     protected void onCreatePreferencesInternal(@Nullable Bundle bundle, @Nullable String s) {
+         ManagedPreferenceDelegate managedPreferenceDelegate = createManagedPreferenceDelegate();
+ 
+-        mPreloadPagesPreference = findPreference(PREF_PRELOAD_PAGES);
+-        mPreloadPagesPreference.init(
+-                PreloadPagesSettingsBridge.getState(getProfile()), this, managedPreferenceDelegate);
+-        mPreloadPagesPreference.setOnPreferenceChangeListener(this);
++        mPreloadPagesSwitch = findPreference(PREF_PRELOAD_PAGES);
++        mPreloadPagesSwitch.setManagedPreferenceDelegate(managedPreferenceDelegate);
++        mPreloadPagesSwitch.setChecked(isPreloadingOn(getProfile()));
++        mPreloadPagesSwitch.setOnPreferenceChangeListener(this);
+ 
+         Preference disclaimerPref = findPreference(PREF_MANAGED_DISCLAIMER_TEXT);
+         disclaimerPref.setVisible(
+-                managedPreferenceDelegate.isPreferenceClickDisabled(mPreloadPagesPreference));
++                managedPreferenceDelegate.isPreferenceClickDisabled(mPreloadPagesSwitch));
+     }
+ 
+     @Override
+@@ -65,27 +56,6 @@ public class PreloadPagesSettingsFragment extends PreloadPagesSettingsFragmentBa
+         return R.xml.preload_pages_preferences;
+     }
+ 
+-    @Override
+-    public void onPreloadPagesStateDetailsRequested(@PreloadPagesState int preloadPagesState) {
+-        if (preloadPagesState == PreloadPagesState.EXTENDED_PRELOADING) {
+-            SettingsNavigationFactory.createSettingsNavigation(requireContext())
+-                    .startSettings(
+-                            getActivity(),
+-                            ExtendedPreloadingSettingsFragment.class,
+-                            /* fragmentArgs= */ null,
+-                            /* addToBackStack= */ true);
+-        } else if (preloadPagesState == PreloadPagesState.STANDARD_PRELOADING) {
+-            SettingsNavigationFactory.createSettingsNavigation(requireContext())
+-                    .startSettings(
+-                            getActivity(),
+-                            StandardPreloadingSettingsFragment.class,
+-                            /* fragmentArgs= */ null,
+-                            /* addToBackStack= */ true);
+-        } else {
+-            assert false : "Should not be reached";
+-        }
+-    }
+-
+     private ChromeManagedPreferenceDelegate createManagedPreferenceDelegate() {
+         return new ChromeManagedPreferenceDelegate(getProfile()) {
+             @Override
+@@ -102,12 +72,14 @@ public class PreloadPagesSettingsFragment extends PreloadPagesSettingsFragmentBa
+     public boolean onPreferenceChange(Preference preference, Object newValue) {
+         String key = preference.getKey();
+         assert PREF_PRELOAD_PAGES.equals(key) : "Unexpected preference key.";
+-        @PreloadPagesState int newState = (int) newValue;
+-        @PreloadPagesState int currentState = PreloadPagesSettingsBridge.getState(getProfile());
+-        if (newState == currentState) {
+-            return true;
++        @PreloadPagesState
++        int newState =
++                (boolean) newValue
++                        ? PreloadPagesState.STANDARD_PRELOADING
++                        : PreloadPagesState.NO_PRELOADING;
++        if (newState != PreloadPagesSettingsBridge.getState(getProfile())) {
++            PreloadPagesSettingsBridge.setState(getProfile(), newState);
+         }
+-        PreloadPagesSettingsBridge.setState(getProfile(), newState);
+         return true;
+     }
+ 

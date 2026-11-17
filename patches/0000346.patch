@@ -1,0 +1,679 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java
+index fc398614f43..87e59335dec 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java
+@@ -52,6 +52,42 @@ final class BarePlayerBridge {
+         BarePlayerBridgeJni.get().evaluateIn(webContents, frameId, script, activate, callback);
+     }
+ 
++    // The quality choices, and the download speed each one limits the page to, in megabits a
++    // second. Auto is no limit. The site's own adaptive player settles on what fits.
++    static final int QUALITY_AUTO = 0;
++    static final int QUALITY_HIGH = 1;
++    static final int QUALITY_MEDIUM = 2;
++    static final int QUALITY_LOW = 3;
++    private static final double CAP_HIGH_MBIT = 5;
++    private static final double CAP_MEDIUM_MBIT = 1.5;
++    private static final double CAP_LOW_MBIT = 0.5;
++
++    /** The limit for a choice in bytes a second, or 0 for none. */
++    static double capBytesPerSecond(int quality) {
++        switch (quality) {
++            case QUALITY_HIGH:
++                return CAP_HIGH_MBIT * 1_000_000 / 8;
++            case QUALITY_MEDIUM:
++                return CAP_MEDIUM_MBIT * 1_000_000 / 8;
++            case QUALITY_LOW:
++                return CAP_LOW_MBIT * 1_000_000 / 8;
++            default:
++                return 0;
++        }
++    }
++
++    /**
++     * Limits the download speed of the page in one frame's document (that frame's own requests
++     * only, not other frames, tabs, workers or downloads), or lifts the limit when {@code
++     * bytesPerSecond} is not above zero. The browser removes it by itself when the tab goes, the
++     * frame crashes or the document changes.
++     */
++    static void setNetworkCap(
++            @Nullable WebContents webContents, int frameId, double bytesPerSecond) {
++        if (webContents == null || webContents.isDestroyed()) return;
++        BarePlayerBridgeJni.get().setNetworkCap(webContents, frameId, bytesPerSecond);
++    }
++
+     /** Downloads {@code url} as the page's video, like the long-press menu's Save video. */
+     static void download(@Nullable WebContents webContents, int frameId, String url) {
+         if (webContents == null || webContents.isDestroyed()) return;
+@@ -84,6 +120,8 @@ final class BarePlayerBridge {
+ 
+         int frameIdOf(RenderFrameHost frame);
+ 
++        void setNetworkCap(WebContents webContents, int frameId, double bytesPerSecond);
++
+         void download(WebContents webContents, int frameId, String url);
+     }
+ }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerController.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerController.java
+index 127078526d4..427284c03f8 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerController.java
+@@ -71,6 +71,9 @@ public final class BarePlayerController implements FullscreenManager.Observer, B
+     private static @Nullable WeakReference<WebContents> sPipContents;
+     private static int sPipFrame = -1;
+ 
++    // The page whose quality cap stays on while its video is in the picture-in-picture window.
++    private static @Nullable WeakReference<WebContents> sCapContents;
++
+     private final Activity mActivity;
+     private final FullscreenManager mFullscreenManager;
+     private final Handler mHandler = new Handler(Looper.getMainLooper());
+@@ -87,6 +90,7 @@ public final class BarePlayerController implements FullscreenManager.Observer, B
+     private int mSavedOrientation;
+     private int mEntryOrientation;
+     private boolean mOrientationForced;
++    private boolean mCapActive;
+     private @Nullable Drawable mSavedWindowBackground;
+ 
+     // The video's own file, when it plays one straight from an http(s) address.
+@@ -139,6 +143,14 @@ public final class BarePlayerController implements FullscreenManager.Observer, B
+         }
+     }
+ 
++    /** The picture-in-picture window is gone (closed or expanded): the quality cap goes with it. */
++    public static void onPictureInPictureEnded(@Nullable WebContents webContents) {
++        WeakReference<WebContents> held = sCapContents;
++        sCapContents = null;
++        if (webContents == null || held == null || held.get() != webContents) return;
++        BarePlayerBridge.setNetworkCap(webContents, -1, 0);
++    }
++
+     /** Ten seconds back or forward for the video in picture-in-picture (the window's buttons). */
+     public static void seekPictureInPicture(@Nullable WebContents webContents, double seconds) {
+         BarePlayerBridge.evaluateAll(webContents, BarePlayerScripts.pipSeekBy(seconds), r -> {});
+@@ -283,6 +295,11 @@ public final class BarePlayerController implements FullscreenManager.Observer, B
+                     });
+             BarePlayerBridge.evaluateIn(
+                     mWebContents, mFrameId, BarePlayerScripts.CLEAN_UP, false, r -> {});
++            // The quality cap goes with the player, whichever way it closed.
++            if (mCapActive) {
++                BarePlayerBridge.setNetworkCap(mWebContents, mFrameId, 0);
++                mCapActive = false;
++            }
+             if (mSavedWindowBackground != null) {
+                 mActivity.getWindow().setBackgroundDrawable(mSavedWindowBackground);
+                 mSavedWindowBackground = null;
+@@ -381,6 +398,14 @@ public final class BarePlayerController implements FullscreenManager.Observer, B
+             return;
+         }
+         mRefound = false;
++        // The control is there only for adaptive video (a blob: source); a video that is not
++        // one loses any limit it had.
++        boolean stream = state.optBoolean("stream");
++        view.setQualityAvailable(stream);
++        if (!stream && mCapActive) {
++            BarePlayerBridge.setNetworkCap(mWebContents, mFrameId, 0);
++            mCapActive = false;
++        }
+         if (!state.optBoolean("any")) {
+             tearDown();
+             return;
+@@ -553,6 +578,13 @@ public final class BarePlayerController implements FullscreenManager.Observer, B
+         sendDrag(BarePlayerScripts.endDrag(scale, dxCss, dyCss));
+     }
+ 
++    @Override
++    public void onQuality(int quality) {
++        double cap = BarePlayerBridge.capBytesPerSecond(quality);
++        BarePlayerBridge.setNetworkCap(mWebContents, mFrameId, cap);
++        mCapActive = cap > 0;
++    }
++
+     @Override
+     public void onCaptions() {
+         run(BarePlayerScripts.TOGGLE_CAPTIONS, false);
+@@ -650,6 +682,11 @@ public final class BarePlayerController implements FullscreenManager.Observer, B
+                             json -> {
+                                 if (generation != mGeneration) return;
+                                 if ("true".equals(json)) {
++                                    // The cap stays on into the window; the window's end lifts it.
++                                    if (mCapActive && webContents != null) {
++                                        sCapContents = new WeakReference<>(webContents);
++                                        mCapActive = false;
++                                    }
+                                     onClose();
+                                 } else {
+                                     Toast.makeText(
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerScripts.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerScripts.java
+index 5c7b057c82b..798e13fee75 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerScripts.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerScripts.java
+@@ -148,6 +148,7 @@ final class BarePlayerScripts {
+                             + "pip:document.pictureInPictureEnabled===true,"
+                             + "inPip:document.pictureInPictureElement===v,"
+                             + "src:/^https?:/.test(v.currentSrc||'')?v.currentSrc:null,"
++                            + "stream:(v.currentSrc||'').startsWith('blob:'),"
+                             + "rt:v.getBoundingClientRect().top,"
+                             + "rw:v.getBoundingClientRect().width,rh:v.getBoundingClientRect().height,"
+                             + "iw:innerWidth,ih:innerHeight};");
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerView.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerView.java
+index 35625be4370..844abb9364c 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerView.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerView.java
+@@ -38,6 +38,7 @@ import android.view.WindowManager;
+ import android.widget.FrameLayout;
+ import android.widget.LinearLayout;
+ import android.widget.PopupMenu;
++import android.widget.PopupWindow;
+ import android.widget.SeekBar;
+ import android.widget.TextView;
+ 
+@@ -96,6 +97,9 @@ final class BarePlayerView extends FrameLayout {
+ 
+         /** Shows the frame at {@code seconds} while the timeline is dragged. */
+         void onScrub(double seconds);
++
++        /** Picks a quality; one of the BarePlayerBridge.QUALITY_* choices. */
++        void onQuality(int quality);
+     }
+ 
+     private static final long HIDE_AFTER_MS = 3500;
+@@ -119,6 +123,9 @@ final class BarePlayerView extends FrameLayout {
+     private final BarePlayerIcon mDownload;
+     private final BarePlayerIcon mUnlock;
+     private final TextView mSpeed;
++    private final TextView mQuality;
++    private int mQualityChoice = BarePlayerBridge.QUALITY_AUTO;
++    private @Nullable PopupWindow mQualityPopup;
+     private final TextView mPosition;
+     private final TextView mDuration;
+     private final TextView mBubble;
+@@ -265,6 +272,18 @@ final class BarePlayerView extends FrameLayout {
+         close.setOnClickListener(v -> mDelegate.onClose());
+         top.addView(close);
+         top.addView(new View(activity), new LinearLayout.LayoutParams(0, 1, 1f));
++        // Only for adaptive video, which a speed limit steers; absent otherwise.
++        mQuality = new TextView(activity);
++        mQuality.setTextColor(Color.WHITE);
++        mQuality.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
++        mQuality.setGravity(Gravity.CENTER);
++        mQuality.setMinWidth(dp(48));
++        mQuality.setPadding(dp(8), 0, dp(8), 0);
++        mQuality.setContentDescription(activity.getString(R.string.bare_player_quality));
++        mQuality.setOnClickListener(v -> showQualityPopup());
++        mQuality.setVisibility(GONE);
++        updateQualityLabel();
++        top.addView(mQuality, new LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, dp(48)));
+         mDownload = icon(BarePlayerIcon.DOWNLOAD, R.string.bare_player_download, 48, 24);
+         mDownload.setOnClickListener(v -> act(() -> mDelegate.onDownload(v)));
+         mDownload.setVisibility(GONE);
+@@ -1211,6 +1230,82 @@ final class BarePlayerView extends FrameLayout {
+         }
+     }
+ 
++    // ---- Quality ----
++
++    /** Shows or removes the quality control. It is absent unless the video is adaptive. */
++    void setQualityAvailable(boolean available) {
++        int visibility = available ? VISIBLE : GONE;
++        if (mQuality.getVisibility() == visibility) return;
++        mQuality.setVisibility(visibility);
++        if (!available) {
++            mQualityChoice = BarePlayerBridge.QUALITY_AUTO;
++            updateQualityLabel();
++            if (mQualityPopup != null) mQualityPopup.dismiss();
++        }
++    }
++
++    private void showQualityPopup() {
++        mHandler.removeCallbacks(mHideRunnable);
++        LinearLayout box = new LinearLayout(getContext());
++        box.setOrientation(LinearLayout.VERTICAL);
++        box.setPadding(0, dp(8), 0, dp(8));
++        GradientDrawable bg = new GradientDrawable();
++        bg.setCornerRadius(dp(12));
++        bg.setColor(0xF2202124);
++        box.setBackground(bg);
++        PopupWindow popup = new PopupWindow(box, dp(260), LayoutParams.WRAP_CONTENT, true);
++        popup.setElevation(dp(8));
++        for (int quality = BarePlayerBridge.QUALITY_AUTO;
++                quality <= BarePlayerBridge.QUALITY_LOW;
++                quality++) {
++            final int choice = quality;
++            TextView item = new TextView(getContext());
++            item.setTextColor(Color.WHITE);
++            item.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
++            item.setText((choice == mQualityChoice ? "✓  " : "      ") + qualityName(choice));
++            item.setGravity(Gravity.CENTER_VERTICAL);
++            item.setPadding(dp(16), 0, dp(16), 0);
++            item.setOnClickListener(
++                    v -> {
++                        mQualityChoice = choice;
++                        updateQualityLabel();
++                        mDelegate.onQuality(choice);
++                        popup.dismiss();
++                    });
++            box.addView(item, new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, dp(44)));
++        }
++        TextView hint = new TextView(getContext());
++        hint.setTextColor(0xB3FFFFFF);
++        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
++        hint.setText(R.string.bare_player_quality_hint);
++        hint.setPadding(dp(16), dp(8), dp(16), dp(4));
++        box.addView(hint);
++        popup.setOnDismissListener(
++                () -> {
++                    mQualityPopup = null;
++                    scheduleHide();
++                });
++        mQualityPopup = popup;
++        popup.showAsDropDown(mQuality);
++    }
++
++    private void updateQualityLabel() {
++        mQuality.setText(qualityName(mQualityChoice));
++    }
++
++    private String qualityName(int quality) {
++        switch (quality) {
++            case BarePlayerBridge.QUALITY_HIGH:
++                return getContext().getString(R.string.bare_player_quality_high);
++            case BarePlayerBridge.QUALITY_MEDIUM:
++                return getContext().getString(R.string.bare_player_quality_medium);
++            case BarePlayerBridge.QUALITY_LOW:
++                return getContext().getString(R.string.bare_player_quality_low);
++            default:
++                return getContext().getString(R.string.bare_player_quality_auto);
++        }
++    }
++
+     private float currentBrightness() {
+         float own = mActivity.getWindow().getAttributes().screenBrightness;
+         if (own >= 0) return own;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/media/PictureInPictureActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/media/PictureInPictureActivity.java
+index ae613602733..181d28e11b2 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/media/PictureInPictureActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/media/PictureInPictureActivity.java
+@@ -768,6 +768,8 @@ public class PictureInPictureActivity extends VideoOverlayActivity {
+ 
+     @Override
+     protected void cleanup() {
++        // Bare: a quality cap kept on for the window ends with it.
++        BarePlayerController.onPictureInPictureEnded(getInitiatorWebContents());
+         // If PiP window was dismissed, notify the native side. We must check that the
+         // native window still exists, as this cleanup path can be called after the native
+         // side has been destroyed.
+diff --git a/chrome/browser/android/bare_player_bridge.cc b/chrome/browser/android/bare_player_bridge.cc
+index 331770681bf..4e78c437a5d 100644
+--- a/chrome/browser/android/bare_player_bridge.cc
++++ b/chrome/browser/android/bare_player_bridge.cc
+@@ -15,9 +15,18 @@
+ #include "chrome/browser/download/android/download_controller_base.h"
+ #include "content/public/browser/context_menu_params.h"
+ #include "content/public/browser/frame_tree_node_id.h"
++#include "content/public/browser/global_routing_id.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/page.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/storage_partition.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "content/public/browser/web_contents_user_data.h"
+ #include "content/public/common/isolated_world_ids.h"
++#include "base/time/time.h"
++#include "base/unguessable_token.h"
++#include "services/network/public/mojom/network_context.mojom.h"
+ #include "services/network/public/mojom/referrer_policy.mojom.h"
+ #include "third_party/blink/public/mojom/context_menu/context_menu.mojom.h"
+ #include "url/gurl.h"
+@@ -85,8 +94,123 @@ content::RenderFrameHost* FindFrame(const JavaRef<jobject>& jweb_contents,
+   return frame;
+ }
+ 
++// Bare Player's quality cap: limits the download speed of one frame's document
++// in the shown tab, so the site's own adaptive player settles on a lower quality.
++//
++// How: the network service already throttles requests that carry a throttling
++// profile id registered with NetworkContext::SetNetworkConditions(). Blink only
++// ever stamped one when DevTools was attached; here the browser makes up a token,
++// registers a download cap for it, and hands it to the frame, whose document
++// stamps it on its own requests (see BareSetThrottlingToken). No DevTools
++// session is involved. One per tab, and it takes itself off when the tab goes,
++// crashes or leaves that document.
++class BareNetworkCap : public content::WebContentsObserver,
++                       public content::WebContentsUserData<BareNetworkCap> {
++ public:
++  ~BareNetworkCap() override { Clear(); }
++
++  void Set(content::RenderFrameHost* frame, double bytes_per_second) {
++    if (active_ && frame->GetGlobalId() != frame_id_) {
++      Clear();
++    }
++    if (!active_) {
++      token_ = base::UnguessableToken::Create();
++      client_id_ = base::UnguessableToken::Create();
++      frame_id_ = frame->GetGlobalId();
++      frame_node_id_ = frame->GetFrameTreeNodeId();
++      partition_ = frame->GetStoragePartition();
++      active_ = true;
++    }
++    std::vector<network::mojom::MatchedNetworkConditionsPtr> conditions;
++    conditions.push_back(network::mojom::MatchedNetworkConditions::New(
++        /*pattern=*/std::string(),
++        network::mojom::NetworkConditions::New(
++            /*offline=*/false, /*latency=*/base::TimeDelta(),
++            /*download_throughput=*/bytes_per_second,
++            /*upload_throughput=*/0, /*packet_loss=*/0,
++            /*packet_queue_length=*/0, /*packet_reordering=*/false,
++            /*rule_id=*/std::nullopt)));
++    partition_->GetNetworkContext()->SetNetworkConditions(
++        token_, client_id_, std::move(conditions));
++    frame->BareSetThrottlingToken(token_);
++  }
++
++  // Takes the cap off: the frame stops stamping, then the network service
++  // forgets the token (an unknown token means no throttling).
++  void Clear() {
++    if (!active_) {
++      return;
++    }
++    active_ = false;
++    if (content::RenderFrameHost* frame =
++            content::RenderFrameHost::FromID(frame_id_)) {
++      frame->BareSetThrottlingToken(std::nullopt);
++    }
++    partition_->GetNetworkContext()->SetNetworkConditions(token_, client_id_,
++                                                          {});
++    partition_ = nullptr;
++  }
++
++  // WebContentsObserver:
++  void WebContentsDestroyed() override { Clear(); }
++  void RenderFrameDeleted(content::RenderFrameHost* frame) override {
++    if (active_ && frame->GetGlobalId() == frame_id_) {
++      Clear();
++    }
++  }
++  void DidFinishNavigation(content::NavigationHandle* handle) override {
++    if (active_ && handle->HasCommitted() && !handle->IsSameDocument() &&
++        handle->GetFrameTreeNodeId() == frame_node_id_) {
++      Clear();
++    }
++  }
++
++ private:
++  friend class content::WebContentsUserData<BareNetworkCap>;
++  explicit BareNetworkCap(content::WebContents* web_contents)
++      : content::WebContentsObserver(web_contents),
++        content::WebContentsUserData<BareNetworkCap>(*web_contents) {}
++
++  bool active_ = false;
++  base::UnguessableToken token_;
++  base::UnguessableToken client_id_;
++  content::GlobalRenderFrameHostId frame_id_;
++  content::FrameTreeNodeId frame_node_id_;
++  raw_ptr<content::StoragePartition> partition_ = nullptr;
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(BareNetworkCap);
++
+ }  // namespace
+ 
++// Limits the page's download speed in one frame's document to
++// |bytes_per_second|, or takes the limit off when that is not above zero.
++static void JNI_BarePlayerBridge_SetNetworkCap(
++    JNIEnv* env,
++    const JavaRef<jobject>& jweb_contents,
++    jint frame_id,
++    jdouble bytes_per_second) {
++  content::WebContents* web_contents =
++      content::WebContents::FromJavaWebContents(jweb_contents);
++  if (!web_contents) {
++    return;
++  }
++  if (bytes_per_second <= 0) {
++    if (BareNetworkCap* cap = BareNetworkCap::FromWebContents(web_contents)) {
++      cap->Clear();
++    }
++    return;
++  }
++  content::RenderFrameHost* frame = FindFrame(jweb_contents, frame_id);
++  if (!frame || !frame->GetPage().IsPrimary()) {
++    return;
++  }
++  BareNetworkCap::CreateForWebContents(web_contents);
++  BareNetworkCap::FromWebContents(web_contents)->Set(frame, bytes_per_second);
++}
++
+ // Runs the script in every live frame of the page shown in the tab, and
+ // answers with a JSON list of {"f": frame, "r": result} for each frame that
+ // returned something other than null. Videos often sit in an embedded player
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 541062c6dc9..1bcfccab055 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4750,6 +4750,24 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_PLAYER_DOWNLOAD" desc="Accessibility label of the player button that downloads the video.">
+         Download video
+       </message>
++      <message name="IDS_BARE_PLAYER_QUALITY" desc="Accessibility label of the video quality button in the video player.">
++        Video quality
++      </message>
++      <message name="IDS_BARE_PLAYER_QUALITY_AUTO" desc="Video quality choice: no limit, the site picks. [CHAR_LIMIT=12]">
++        Auto
++      </message>
++      <message name="IDS_BARE_PLAYER_QUALITY_HIGH" desc="Video quality choice: high. [CHAR_LIMIT=12]">
++        High
++      </message>
++      <message name="IDS_BARE_PLAYER_QUALITY_MEDIUM" desc="Video quality choice: medium. [CHAR_LIMIT=12]">
++        Medium
++      </message>
++      <message name="IDS_BARE_PLAYER_QUALITY_LOW" desc="Video quality choice: low, to save data. [CHAR_LIMIT=12]">
++        Low
++      </message>
++      <message name="IDS_BARE_PLAYER_QUALITY_HINT" desc="Short note under the video quality choices, saying how they work.">
++        Works by limiting speed, so the site picks the quality. Takes a few seconds.
++      </message>
+       <message name="IDS_BARE_PLAYER_BRIGHTNESS" desc="Label shown while a swipe changes screen brightness in the video player. [CHAR_LIMIT=20]">
+         Brightness
+       </message>
+diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
+index 72f08405a90..31900006efb 100644
+--- a/content/browser/renderer_host/render_frame_host_impl.cc
++++ b/content/browser/renderer_host/render_frame_host_impl.cc
+@@ -3893,6 +3893,15 @@ void RenderFrameHostImpl::ExecuteJavaScriptInIsolatedWorld(
+       javascript, wants_result, world_id, std::move(callback));
+ }
+ 
++void RenderFrameHostImpl::BareSetThrottlingToken(
++    const std::optional<base::UnguessableToken>& token) {
++  CHECK_CURRENTLY_ON(BrowserThread::UI);
++  if (!IsRenderFrameLive()) {
++    return;
++  }
++  GetAssociatedLocalFrame()->BareSetThrottlingToken(token);
++}
++
+ void RenderFrameHostImpl::ExecuteJavaScriptForTests(
+     const std::u16string& javascript,
+     JavaScriptResultCallback callback,
+diff --git a/content/browser/renderer_host/render_frame_host_impl.h b/content/browser/renderer_host/render_frame_host_impl.h
+index 3831bf50af8..d269f453386 100644
+--- a/content/browser/renderer_host/render_frame_host_impl.h
++++ b/content/browser/renderer_host/render_frame_host_impl.h
+@@ -528,6 +528,8 @@ class CONTENT_EXPORT RenderFrameHostImpl
+   void ExecuteJavaScriptInIsolatedWorld(const std::u16string& javascript,
+                                         JavaScriptResultCallback callback,
+                                         int32_t world_id) override;
++  void BareSetThrottlingToken(
++      const std::optional<base::UnguessableToken>& token) override;
+   void ExecuteJavaScriptForTests(const std::u16string& javascript,
+                                  JavaScriptResultCallback callback,
+                                  int32_t world_id) override;
+diff --git a/content/public/browser/render_frame_host.h b/content/public/browser/render_frame_host.h
+index ea05c33f0f3..e05fdc22d53 100644
+--- a/content/public/browser/render_frame_host.h
++++ b/content/public/browser/render_frame_host.h
+@@ -14,6 +14,7 @@
+ #include "base/functional/callback_forward.h"
+ #include "base/functional/function_ref.h"
+ #include "base/memory/sanitized_object.h"
++#include "base/unguessable_token.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
+ #include "build/buildflag.h"
+@@ -626,6 +627,14 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
+       JavaScriptResultCallback callback,
+       int32_t world_id) = 0;
+ 
++  // Bare: asks the renderer to stamp `token` on every request this frame's
++  // current document makes, as the throttling profile id the network service
++  // matches NetworkContext::SetNetworkConditions() against. Null removes it. The
++  // token belongs to the document and goes with it on navigation. No script is
++  // run and nothing is exposed to the page.
++  virtual void BareSetThrottlingToken(
++      const std::optional<base::UnguessableToken>& token) = 0;
++
+   // This runs the JavaScript, but without restrictions. Specify a `world_id` of
+   // `ISOLATED_WORLD_ID_GLOBAL` to run the code in the global world. THIS IS
+   // ONLY FOR TESTS.
+diff --git a/content/public/test/fake_local_frame.cc b/content/public/test/fake_local_frame.cc
+index 75e024a8757..10234a35748 100644
+--- a/content/public/test/fake_local_frame.cc
++++ b/content/public/test/fake_local_frame.cc
+@@ -150,6 +150,9 @@ void FakeLocalFrame::JavaScriptExecuteRequestInIsolatedWorld(
+     int32_t world_id,
+     JavaScriptExecuteRequestInIsolatedWorldCallback callback) {}
+ 
++void FakeLocalFrame::BareSetThrottlingToken(
++    const std::optional<base::UnguessableToken>& token) {}
++
+ void FakeLocalFrame::GetSavableResourceLinks(
+     GetSavableResourceLinksCallback callback) {}
+ 
+diff --git a/content/public/test/fake_local_frame.h b/content/public/test/fake_local_frame.h
+index 8ce2f517e03..2209c682916 100644
+--- a/content/public/test/fake_local_frame.h
++++ b/content/public/test/fake_local_frame.h
+@@ -123,6 +123,8 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
+       bool wants_result,
+       int32_t world_id,
+       JavaScriptExecuteRequestInIsolatedWorldCallback callback) override;
++  void BareSetThrottlingToken(
++      const std::optional<base::UnguessableToken>& token) override;
+   void GetSavableResourceLinks(
+       GetSavableResourceLinksCallback callback) override;
+ #if BUILDFLAG(IS_MAC)
+diff --git a/third_party/blink/public/mojom/frame/frame.mojom b/third_party/blink/public/mojom/frame/frame.mojom
+index 777a72c8de7..e7f11e96714 100644
+--- a/third_party/blink/public/mojom/frame/frame.mojom
++++ b/third_party/blink/public/mojom/frame/frame.mojom
+@@ -1076,6 +1076,12 @@ interface LocalFrame {
+       bool wants_result,
+       int32 world_id) => (mojo_base.mojom.Value result);
+ 
++  // Bare: Bare Player's video quality cap. The token is stamped on every request
++  // this frame's current document makes, as the throttling profile id the
++  // network service matches network conditions against. Null removes it. It
++  // belongs to the document, so a navigation drops it.
++  BareSetThrottlingToken(mojo_base.mojom.UnguessableToken? token);
++
+   // Invokes a script tool in the frame. Returns true if the tool was found and
+   // invocation started.
+   // TODO(crbug.com/515541906): This method is to be merged with the InvokeTool
+diff --git a/third_party/blink/renderer/core/frame/local_dom_window.h b/third_party/blink/renderer/core/frame/local_dom_window.h
+index d9457ae5f06..8c48fa3e21e 100644
+--- a/third_party/blink/renderer/core/frame/local_dom_window.h
++++ b/third_party/blink/renderer/core/frame/local_dom_window.h
+@@ -28,8 +28,10 @@
+ #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_LOCAL_DOM_WINDOW_H_
+ 
+ #include <memory>
++#include <optional>
+ 
+ #include "base/task/single_thread_task_runner.h"
++#include "base/unguessable_token.h"
+ #include "services/metrics/public/cpp/ukm_recorder.h"
+ #include "services/metrics/public/cpp/ukm_source_id.h"
+ #include "services/network/public/mojom/content_security_policy.mojom-blink.h"
+@@ -636,9 +638,26 @@ class CORE_EXPORT LocalDOMWindow final : public DOMWindow,
+  private:
+   class NetworkStateObserver;
+ 
++ public:
++  // Bare: the profile id the browser asked this document's requests to carry
++  // (the network service throttles requests that match a registered one). Lives
++  // and dies with the document.
++  void SetBareThrottlingToken(
++      const std::optional<base::UnguessableToken>& token) {
++    bare_throttling_token_ = token;
++  }
++  const std::optional<base::UnguessableToken>& BareThrottlingToken() const {
++    return bare_throttling_token_;
++  }
++
++ private:
++
+   // Intentionally private to prevent redundant checks.
+   bool IsLocalDOMWindow() const override { return true; }
+ 
++  // Bare: set by Bare Player's quality cap, see BareSetThrottlingToken().
++  std::optional<base::UnguessableToken> bare_throttling_token_;
++
+   bool HasInsecureContextInAncestors() const override;
+ 
+   Document& GetDocumentForWindowEventHandler() const override {
+diff --git a/third_party/blink/renderer/core/frame/local_frame_mojo_handler.cc b/third_party/blink/renderer/core/frame/local_frame_mojo_handler.cc
+index e42771a3443..3a5746e3bc0 100644
+--- a/third_party/blink/renderer/core/frame/local_frame_mojo_handler.cc
++++ b/third_party/blink/renderer/core/frame/local_frame_mojo_handler.cc
+@@ -966,6 +966,13 @@ void LocalFrameMojoHandler::JavaScriptExecuteRequestForTests(
+   handler->SendException(script_state, error);
+ }
+ 
++void LocalFrameMojoHandler::BareSetThrottlingToken(
++    const std::optional<base::UnguessableToken>& token) {
++  if (LocalDOMWindow* window = frame_->DomWindow()) {
++    window->SetBareThrottlingToken(token);
++  }
++}
++
+ void LocalFrameMojoHandler::JavaScriptExecuteRequestInIsolatedWorld(
+     const String& javascript,
+     bool wants_result,
+diff --git a/third_party/blink/renderer/core/frame/local_frame_mojo_handler.h b/third_party/blink/renderer/core/frame/local_frame_mojo_handler.h
+index 807ce3edf0f..0521b520c45 100644
+--- a/third_party/blink/renderer/core/frame/local_frame_mojo_handler.h
++++ b/third_party/blink/renderer/core/frame/local_frame_mojo_handler.h
+@@ -172,6 +172,8 @@ class LocalFrameMojoHandler
+       bool wants_result,
+       int32_t world_id,
+       JavaScriptExecuteRequestInIsolatedWorldCallback callback) final;
++  void BareSetThrottlingToken(
++      const std::optional<base::UnguessableToken>& token) final;
+   void InvokeScriptToolForInspector(
+       const base::UnguessableToken& invocation_id,
+       const String& tool_name,
+diff --git a/third_party/blink/renderer/core/loader/frame_fetch_context.cc b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
+index ebc78261d36..aff193c6782 100644
+--- a/third_party/blink/renderer/core/loader/frame_fetch_context.cc
++++ b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
+@@ -447,6 +447,16 @@ void FrameFetchContext::PrepareRequest(
+   probe::PrepareRequest(Probe(), document_loader_, request, options,
+                         resource_type);
+ 
++  // Bare: Bare Player's quality cap. Requests of this document carry the token
++  // the browser gave it, unless DevTools already put its own on the request.
++  if (!request.GetDevToolsThrottlingToken().has_value()) {
++    if (LocalDOMWindow* window = document_->domWindow()) {
++      if (window->BareThrottlingToken().has_value()) {
++        request.SetDevToolsThrottlingToken(window->BareThrottlingToken());
++      }
++    }
++  }
++
+   // ServiceWorker hook ups.
+   if (document_loader_->GetServiceWorkerNetworkProvider()) {
+     WrappedResourceRequest webreq(request);

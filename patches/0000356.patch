@@ -1,0 +1,2098 @@
+diff --git a/chrome/browser/ui/webui/BUILD.gn b/chrome/browser/ui/webui/BUILD.gn
+index d591f473242..91375db99c2 100644
+--- a/chrome/browser/ui/webui/BUILD.gn
++++ b/chrome/browser/ui/webui/BUILD.gn
+@@ -236,6 +236,10 @@ source_set("configs") {
+     deps += [ "//chrome/browser/ui/webui/sandbox" ]
+   }
+ 
++  if (is_android) {
++    deps += [ "//chrome/browser/ui/webui/bare_games" ]
++  }
++
+   if (is_win || is_mac || is_linux) {
+     deps += [
+       "//chrome/browser/ui/webui/browser_switch",
+diff --git a/chrome/browser/ui/webui/bare_games/BUILD.gn b/chrome/browser/ui/webui/bare_games/BUILD.gn
+new file mode 100644
+index 00000000000..832e81b7813
+--- /dev/null
++++ b/chrome/browser/ui/webui/bare_games/BUILD.gn
+@@ -0,0 +1,21 @@
++# Copyright 2026 The Bare Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++assert(is_android)
++
++# chrome://games, reached as bare://games. The page and the games are stored
++# with the network error page resources in //components/resources.
++source_set("bare_games") {
++  sources = [ "bare_games_ui.cc" ]
++  public = [ "bare_games_ui.h" ]
++  deps = [
++    "//base",
++    "//chrome/browser/profiles:profile",
++    "//components/resources",
++    "//components/strings",
++    "//content/public/browser",
++    "//content/public/common",
++    "//ui/base",
++  ]
++}
+diff --git a/chrome/browser/ui/webui/bare_games/bare_games_ui.cc b/chrome/browser/ui/webui/bare_games/bare_games_ui.cc
+new file mode 100644
+index 00000000000..3e02b9d4d2f
+--- /dev/null
++++ b/chrome/browser/ui/webui/bare_games/bare_games_ui.cc
+@@ -0,0 +1,43 @@
++// Copyright 2026 The Bare Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/webui/bare_games/bare_games_ui.h"
++
++#include "chrome/browser/profiles/profile.h"
++#include "components/grit/components_resources.h"
++#include "components/strings/grit/components_strings.h"
++#include "content/public/browser/web_ui.h"
++#include "content/public/browser/web_ui_data_source.h"
++#include "ui/base/webui/resource_path.h"
++#include "ui/base/webui/web_ui_util.h"
++
++BareGamesUI::BareGamesUI(content::WebUI* web_ui)
++    : content::WebUIController(web_ui) {
++  content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
++      Profile::FromWebUI(web_ui), kBareGamesHost);
++
++  static constexpr webui::LocalizedString kStrings[] = {
++      {"bareGamesPageTitle", IDS_ERRORPAGES_BARE_GAMES_PAGE_TITLE},
++      {"bareGamesHeading", IDS_ERRORPAGES_BARE_GAMES_HEADING},
++      {"bareGamesBack", IDS_ERRORPAGES_BARE_GAMES_BACK},
++      {"bareGamesFlyDesc", IDS_ERRORPAGES_BARE_GAMES_FLY_DESC},
++      {"bareGamesRunDesc", IDS_ERRORPAGES_BARE_GAMES_RUN_DESC},
++      {"bareGamesRacerDesc", IDS_ERRORPAGES_BARE_GAMES_RACER_DESC},
++  };
++  source->AddLocalizedStrings(kStrings);
++
++  // The same files the offline error page uses.
++  static constexpr webui::ResourcePath kResources[] = {
++      {"bare_games.css", IDR_BARE_GAMES_CSS},
++      {"bare_games_page.css", IDR_BARE_GAMES_PAGE_CSS},
++      {"bare_games.js", IDR_BARE_GAMES_JS},
++      {"bare_fly.js", IDR_BARE_GAMES_FLY_JS},
++      {"bare_run.js", IDR_BARE_GAMES_RUN_JS},
++      {"bare_racer.js", IDR_BARE_GAMES_RACER_JS},
++  };
++  source->AddResourcePaths(kResources);
++  source->SetDefaultResource(IDR_BARE_GAMES_HTML);
++}
++
++BareGamesUI::~BareGamesUI() = default;
+diff --git a/chrome/browser/ui/webui/bare_games/bare_games_ui.h b/chrome/browser/ui/webui/bare_games/bare_games_ui.h
+new file mode 100644
+index 00000000000..75d61ba706c
+--- /dev/null
++++ b/chrome/browser/ui/webui/bare_games/bare_games_ui.h
+@@ -0,0 +1,32 @@
++// Copyright 2026 The Bare Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_WEBUI_BARE_GAMES_BARE_GAMES_UI_H_
++#define CHROME_BROWSER_UI_WEBUI_BARE_GAMES_BARE_GAMES_UI_H_
++
++#include "content/public/browser/web_ui_controller.h"
++#include "content/public/browser/webui_config.h"
++#include "content/public/common/url_constants.h"
++
++// chrome://games lists the offline games that the no-internet page offers.
++// The address bar shows it as bare://games.
++inline constexpr char kBareGamesHost[] = "games";
++
++class BareGamesUI;
++
++class BareGamesUIConfig : public content::DefaultWebUIConfig<BareGamesUI> {
++ public:
++  BareGamesUIConfig()
++      : DefaultWebUIConfig(content::kChromeUIScheme, kBareGamesHost) {}
++};
++
++class BareGamesUI : public content::WebUIController {
++ public:
++  explicit BareGamesUI(content::WebUI* web_ui);
++  BareGamesUI(const BareGamesUI&) = delete;
++  BareGamesUI& operator=(const BareGamesUI&) = delete;
++  ~BareGamesUI() override;
++};
++
++#endif  // CHROME_BROWSER_UI_WEBUI_BARE_GAMES_BARE_GAMES_UI_H_
+diff --git a/chrome/browser/ui/webui/chrome_urls/chrome_urls_handler.cc b/chrome/browser/ui/webui/chrome_urls/chrome_urls_handler.cc
+index cb38ff470dc..7975fc2046c 100644
+--- a/chrome/browser/ui/webui/chrome_urls/chrome_urls_handler.cc
++++ b/chrome/browser/ui/webui/chrome_urls/chrome_urls_handler.cc
+@@ -32,7 +32,6 @@ base::span<const base::cstring_view> WebUIHostsWithoutConfigs() {
+       std::to_array<base::cstring_view>({
+           chrome::kChromeUIProfileInternalsHost,
+           content::kChromeUIBlobInternalsHost,
+-          content::kChromeUIDinoHost,
+           chrome::kChromeUIExtensionsInternalsHost,
+           chrome::kChromeUIPrefsInternalsHost,
+       });
+diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+index d79e9dfdb0e..52f2eeead02 100644
+--- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
++++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+@@ -145,6 +145,7 @@
+ #include "chrome/browser/ui/webui/webui_gallery/webui_gallery_ui.h"
+ #include "chrome/browser/ui/webui/webui_js_error/webui_js_error_ui.h"
+ #else  // !BUILDFLAG(IS_ANDROID)
++#include "chrome/browser/ui/webui/bare_games/bare_games_ui.h"
+ #include "chrome/browser/ui/webui/chrome_finds_internals/chrome_finds_internals_ui.h"
+ #include "chrome/browser/ui/webui/feed_internals/feed_internals_ui.h"
+ #include "chrome/browser/ui/webui/notifications_internals/notifications_internals_ui.h"
+@@ -350,6 +351,7 @@ void RegisterChromeWebUIConfigs() {
+ #endif  // BUILDFLAG(ENABLE_WEBUI_HISTORY)
+ 
+ #if BUILDFLAG(IS_ANDROID)
++  map.AddWebUIConfig(std::make_unique<BareGamesUIConfig>());
+   map.AddWebUIConfig(
+       std::make_unique<chrome_finds_internals::ChromeFindsInternalsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<FeedInternalsUIConfig>());
+diff --git a/chrome/common/webui_url_constants.cc b/chrome/common/webui_url_constants.cc
+index bb97c63d197..b36541b74d9 100644
+--- a/chrome/common/webui_url_constants.cc
++++ b/chrome/common/webui_url_constants.cc
+@@ -199,7 +199,7 @@ base::span<const base::cstring_view> ChromeURLHosts() {
+       kChromeUIWebAppInternalsHost,
+ #endif
+       content::kChromeUIBlobInternalsHost,
+-      content::kChromeUIDinoHost,
++      "games",
+       content::kChromeUIGpuHost,
+       content::kChromeUIHistogramHost,
+       content::kChromeUIIndexedDBInternalsHost,
+diff --git a/chrome/renderer/net/net_error_helper.cc b/chrome/renderer/net/net_error_helper.cc
+index 247c4b30902..2654a2599da 100644
+--- a/chrome/renderer/net/net_error_helper.cc
++++ b/chrome/renderer/net/net_error_helper.cc
+@@ -98,6 +98,27 @@ bool IsRunningInForcedAppMode() {
+       switches::kForceAppMode);
+ }
+ 
++// neterror.html marks where the Bare games go. They are stored once in the
++// resource pack and shared with chrome://games, so the offline page gets them
++// here instead of having grit inline a second copy.
++constexpr std::string_view kBareGamesSlot = "<!--bare-games-->";
++
++void AddBareGames(std::string* html) {
++  const size_t pos = html->find(kBareGamesSlot);
++  if (pos == std::string::npos) {
++    return;
++  }
++  ui::ResourceBundle& bundle = ui::ResourceBundle::GetSharedInstance();
++  std::string games = base::StrCat(
++      {"<style>", bundle.LoadDataResourceString(IDR_BARE_GAMES_CSS),
++       "</style>\n<script>",
++       bundle.LoadDataResourceString(IDR_BARE_GAMES_FLY_JS), "\n",
++       bundle.LoadDataResourceString(IDR_BARE_GAMES_RUN_JS), "\n",
++       bundle.LoadDataResourceString(IDR_BARE_GAMES_RACER_JS), "\n",
++       bundle.LoadDataResourceString(IDR_BARE_GAMES_JS), "</script>"});
++  html->replace(pos, kBareGamesSlot.size(), games);
++}
++
+ }  // namespace
+ 
+ NetErrorHelper::NetErrorHelper(RenderFrame* render_frame)
+@@ -231,6 +252,9 @@ LocalizedError::PageState NetErrorHelper::GenerateLocalizedErrorPage(
+           resource_id);
+   DCHECK(!template_html.empty()) << "unable to load template.";
+   *error_html = webui::GetLocalizedHtml(template_html, page_state.strings);
++  if (resource_id == IDR_NET_ERROR_HTML && page_state.is_offline_error) {
++    AddBareGames(error_html);
++  }
+   return page_state;
+ }
+ 
+diff --git a/components/error_page/common/localized_error.cc b/components/error_page/common/localized_error.cc
+index 9f261d6877f..b0ea8bb1583 100644
+--- a/components/error_page/common/localized_error.cc
++++ b/components/error_page/common/localized_error.cc
+@@ -954,58 +954,19 @@ LocalizedError::PageState LocalizedError::GetPageState(
+       LocalizedError::IsOfflineError(error_domain, error_code));
+ 
+   if (result.is_offline_error) {
+-    // These strings are to be read by a screen reader during the dino game.
+-    result.strings.Set(
+-        "dinoGameA11yAriaLabel",
+-        l10n_util::GetStringUTF16(IDS_ERRORPAGE_DINO_ARIA_LABEL));
+-    result.strings.Set("dinoGameA11yGameOver",
+-                       l10n_util::GetStringUTF16(IDS_ERRORPAGE_DINO_GAME_OVER));
+-    result.strings.Set(
+-        "dinoGameA11yHighScore",
+-        l10n_util::GetStringUTF16(IDS_ERRORPAGE_DINO_HIGH_SCORE));
+-    result.strings.Set("dinoGameA11yJump",
+-                       l10n_util::GetStringUTF16(IDS_ERRORPAGE_DINO_JUMP));
+-    result.strings.Set(
+-        "dinoGameA11yStartGame",
+-        l10n_util::GetStringUTF16(IDS_ERRORPAGE_DINO_GAME_START));
+-    result.strings.Set(
+-        "dinoGameA11ySpeedToggle",
+-        l10n_util::GetStringUTF16(IDS_ERRORPAGE_DINO_SLOW_SPEED_TOGGLE));
+-    result.strings.Set(
+-        "dinoGameA11yDescription",
+-        l10n_util::GetStringUTF16(IDS_ERRORPAGE_DINO_GAME_DESCRIPTION));
+-    result.strings.Set(
+-        "dinoGameInstructionsTouch",
+-        l10n_util::GetStringUTF16(IDS_ERRORPAGES_GAME_INSTRUCTIONS_TOUCH));
+-    result.strings.Set(
+-        "dinoGameInstructionsKeyboard",
+-        l10n_util::GetStringUTF16(IDS_ERRORPAGES_GAME_INSTRUCTIONS_KEYBOARD));
+-    result.strings.Set(
+-        "dinoGameInstructionsHybrid",
+-        l10n_util::GetStringUTF16(IDS_ERRORPAGES_GAME_INSTRUCTIONS_HYBRID));
+-    result.strings.Set(
+-        "dinoGameA11yAriaLabelTouch",
+-        l10n_util::GetStringUTF16(IDS_ERRORPAGE_DINO_ARIA_LABEL_TOUCH));
+-    result.strings.Set(
+-        "dinoGameA11yAriaLabelKeyboard",
+-        l10n_util::GetStringUTF16(IDS_ERRORPAGE_DINO_ARIA_LABEL_KEYBOARD));
+-    result.strings.Set(
+-        "dinoGameA11yAriaLabelHybrid",
+-        l10n_util::GetStringUTF16(IDS_ERRORPAGE_DINO_ARIA_LABEL_HYBRID));
+-
+-    if (EnableAltGameMode()) {
+-      result.strings.Set("enableAltGameMode", true);
+-      // We don't know yet which scale the page will use, so both 1x and 2x
+-      // should be loaded.
+-      result.strings.Set("altGameCommonImage1x",
+-                         GetAltGameImage(/*image_id=*/0, /*scale=*/1));
+-      result.strings.Set("altGameCommonImage2x",
+-                         GetAltGameImage(/*image_id=*/0, /*scale=*/2));
+-      int choice = ChooseAltGame();
+-      result.strings.Set("altGameType", base::NumberToString(choice));
+-      result.strings.Set("altGameSpecificImage1x", GetAltGameImage(choice, 1));
+-      result.strings.Set("altGameSpecificImage2x", GetAltGameImage(choice, 2));
+-    }
++    // Strings for the Bare games list (bare_games/bare_games.js).
++    base::DictValue bare_games;
++    bare_games.Set("heading", l10n_util::GetStringUTF16(
++                                  IDS_ERRORPAGES_BARE_GAMES_HEADING));
++    bare_games.Set("back",
++                   l10n_util::GetStringUTF16(IDS_ERRORPAGES_BARE_GAMES_BACK));
++    bare_games.Set("flyDesc", l10n_util::GetStringUTF16(
++                                  IDS_ERRORPAGES_BARE_GAMES_FLY_DESC));
++    bare_games.Set("runDesc", l10n_util::GetStringUTF16(
++                                  IDS_ERRORPAGES_BARE_GAMES_RUN_DESC));
++    bare_games.Set("racerDesc", l10n_util::GetStringUTF16(
++                                    IDS_ERRORPAGES_BARE_GAMES_RACER_DESC));
++    result.strings.Set("bareGames", std::move(bare_games));
+   }
+ 
+   webui::SetLoadTimeDataDefaults(locale, &result.strings);
+@@ -1067,7 +1028,7 @@ LocalizedError::PageState LocalizedError::GetPageState(
+ 
+   base::DictValue heading;
+ 
+-  int msg_id = show_game_instructions ? IDS_ERRORPAGES_GAME_INSTRUCTIONS
++  int msg_id = show_game_instructions ? IDS_ERRORPAGES_BARE_GAMES_PAGE_TITLE
+                                       : options.heading_resource_id;
+   heading.Set("msg",
+               GetStringWithPlaceholder(msg_id, host_name, failed_url_string));
+diff --git a/components/error_page_strings.grdp b/components/error_page_strings.grdp
+index 1ace545a632..9daf608a66f 100644
+--- a/components/error_page_strings.grdp
++++ b/components/error_page_strings.grdp
+@@ -440,4 +440,24 @@
+   <message name="IDS_ERRORPAGES_SUMMARY_BLOCKED_IN_INCOGNITO_BY_ADMINISTRATOR" desc="Summary in the error page when an administrator policy blocks a URL in Incognito mode.">
+     Your organization has blocked this page in Incognito mode.
+   </message>
++
++  <!-- Bare: offline games on the no-internet page and chrome://games. -->
++  <message name="IDS_ERRORPAGES_BARE_GAMES_HEADING" desc="Short line under the BARE GAMES title, above the list of small offline games on the no-internet error page and the games page. Shown in capital letters.">
++    Pick a game
++  </message>
++  <message name="IDS_ERRORPAGES_BARE_GAMES_PAGE_TITLE" desc="Title of the page that lists the small offline games.">
++    Games
++  </message>
++  <message name="IDS_ERRORPAGES_BARE_GAMES_BACK" desc="Button that closes the game being played and returns to the list of games.">
++    Back to games
++  </message>
++  <message name="IDS_ERRORPAGES_BARE_GAMES_FLY_DESC" desc="Control hint for the Bare Fly game, shown under its name in capital letters. The player taps the screen to flap a wing through gaps.">
++    Tap to flap
++  </message>
++  <message name="IDS_ERRORPAGES_BARE_GAMES_RUN_DESC" desc="Control hint for the Bare Run game, shown under its name in capital letters. The player taps the screen to jump over obstacles.">
++    Tap to jump
++  </message>
++  <message name="IDS_ERRORPAGES_BARE_GAMES_RACER_DESC" desc="Control hint for the Bare Racer game, shown under its name in capital letters. The player drags a finger left or right to steer a car.">
++    Drag to steer
++  </message>
+ </grit-part>
+diff --git a/components/neterror/resources/BUILD.gn b/components/neterror/resources/BUILD.gn
+index f8c48878e85..613fbf7958c 100644
+--- a/components/neterror/resources/BUILD.gn
++++ b/components/neterror/resources/BUILD.gn
+@@ -12,25 +12,6 @@ import("//ui/webui/webui_features.gni")
+ ts_files = [
+   "constants.ts",
+   "neterror.ts",
+-  "dino_game/background_el.ts",
+-  "dino_game/cloud.ts",
+-  "dino_game/constants.ts",
+-  "dino_game/dimensions.ts",
+-  "dino_game/distance_meter.ts",
+-  "dino_game/game_config.ts",
+-  "dino_game/game_over_panel.ts",
+-  "dino_game/game_state_provider.ts",
+-  "dino_game/generated_sound_fx.ts",
+-  "dino_game/horizon_line.ts",
+-  "dino_game/horizon.ts",
+-  "dino_game/image_sprite_provider.ts",
+-  "dino_game/night_mode.ts",
+-  "dino_game/obstacle.ts",
+-  "dino_game/offline.ts",
+-  "dino_game/offline_sprite_definitions.ts",
+-  "dino_game/sprite_position.ts",
+-  "dino_game/trex.ts",
+-  "dino_game/utils.ts",
+ ]
+ 
+ preprocess_if_expr("preprocess") {
+diff --git a/components/neterror/resources/bare_games/bare_fly.js b/components/neterror/resources/bare_games/bare_fly.js
+new file mode 100644
+index 00000000000..8642b8420dc
+--- /dev/null
++++ b/components/neterror/resources/bare_games/bare_fly.js
+@@ -0,0 +1,68 @@
++// Copyright 2026 The Bare Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Bare Fly: flap the Bare wing through the gates. Shared by the network error
++// page and chrome://games. Everything is drawn on a canvas; no network, no
++// storage. bare_games.js runs one game at a time, full screen, calls pause()
++// when the page is hidden and destroy() when the player leaves.
++(() => {
++'use strict';
++const registry = window.bareGamesRegistry || (window.bareGamesRegistry = {});
++
++registry.fly = {
++// Card picture: the game's black and white pixel wing.
++icon(c) {
++  const kit = window.bareGamesKit;
++  kit.drawSprite(c.getContext('2d'), kit.wingSprite(-0.35, 0.03, 'game', 32), 0, 0);
++},
++
++create(host, ctx) {
++const kit=window.bareGamesKit,W=400,H=240;
++const ui=kit.shell(host,{width:W,height:H,label:'Bare Fly. Tap or press space to flap.',strings:ctx.strings,exit:ctx.exit});
++const g=ui.g,L=ui.layout;
++let mode='ready',score=0,best=0,tick=0,speed=1.35,spawn=0,bird={x:85,y:115,vy:0},pipes=[],gems=[];
++const clouds=[{x:70,y:38},{x:240,y:68},{x:360,y:30}];
++const fmt=n=>String(n).padStart(5,'0');
++function intro(){ui.panel('BARE FLY',['FLAP THROUGH THE GAPS','COLLECT DIAMONDS +5','SURVIVE THE SPEED'],'▶ START GAME',false,'TAP / CLICK / SPACE')}
++function start(){mode='play';score=0;tick=0;speed=1.35;spawn=0;bird={x:85,y:115,vy:-2};pipes=[];gems=[];ui.score(fmt(0));ui.speed('1.0X');ui.hidePanel()}
++function flap(){if(mode==='ready'||mode==='dead'){start();return}if(mode==='paused'){resume();return}bird.vy=-3.35}
++function resume(){mode='play';ui.hidePanel()}
++function pause(){if(mode==='play'){mode='paused';ui.panel('PAUSED',['READY TO CONTINUE?'],'▶ RESUME',true)}else if(mode==='paused')resume()}
++function die(){if(mode!=='play')return;mode='dead';best=Math.max(best,score);ui.best('HI '+fmt(best));ui.panel('GAME OVER',['SCORE '+fmt(score),'TRY AGAIN!'],'RETRY',false,'+1 GATE · +5 DIAMOND')}
++// New gates and diamonds start just past the right edge of the screen, which
++// is further out than the play area when the screen is wider.
++function addPipe(){const gap=Math.max(74,100-Math.floor(tick/700)*4),center=65+Math.random()*110;pipes.push({x:W+10+L.ox,w:31,top:center-gap/2,bottom:center+gap/2,passed:false});if(Math.random()<.8)gems.push({x:W+25+L.ox,y:center,active:true})}
++function rect(x,y,w,h){g.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h))}
++function cloud(x,y){rect(x,y,24,2);rect(x+5,y-4,14,2);rect(x+8,y-6,8,2)}
++function render(){
++ ui.begin(kit.SKY);const v=ui.view(),vw=v.x1-v.x0,span=vw+80;
++ // Clouds wrap across the whole screen; taller screens get more of them above.
++ g.fillStyle='#fff';for(const cl of clouds){const x=((cl.x-tick*.12)%span+span)%span-40+v.x0;cloud(x,cl.y);for(let row=1;cl.y-row*90>v.y0;row++)cloud(((x+row*130-v.x0)%span+span)%span-40+v.x0,cl.y-row*90)}
++ g.fillStyle=kit.GRASS;rect(v.x0,H-4,vw,v.y1-H+4);g.fillStyle=kit.GRASS_TOP;rect(v.x0,H-6,vw,2);
++ const n=Math.ceil(span/53),tufts=n*53;for(let i=0;i<n;i++){const x=((i*53-tick*.6)%tufts+tufts)%tufts-15+v.x0;rect(x,H-10,15,1)}
++ // Top pipes reach up to the top of the screen.
++ for(const p of pipes){g.fillStyle=kit.INK;rect(p.x,v.y0,p.w,p.top-v.y0);rect(p.x,p.bottom,p.w,H-p.bottom-6);rect(p.x-3,p.top-6,p.w+6,6);rect(p.x-3,p.bottom,p.w+6,6);g.fillStyle=kit.PANEL;rect(p.x+5,v.y0,2,p.top-6-v.y0);rect(p.x+5,p.bottom+6,2,H-p.bottom-12)}
++ for(const gem of gems){if(!gem.active)continue;g.fillStyle=kit.INK;const x=Math.round(gem.x),y=Math.round(gem.y);rect(x-3,y-7,6,3);rect(x-6,y-4,12,8);rect(x-3,y+4,6,3);g.fillStyle='#fff';rect(x-2,y-2,3,3)}
++ kit.drawWing(g,bird.x,bird.y,Math.max(-.65,Math.min(.05,bird.vy*.07-.35)),.055);
++}
++function update(dt){if(mode==='play'){
++ tick+=dt;speed=Math.min(3.8,1.35+Math.floor(tick/550)*.16);ui.speed((speed/1.35).toFixed(1)+'X');bird.vy+=.19*dt;bird.y+=bird.vy*dt;spawn+=dt;if(spawn>Math.max(75,115-speed*7)){spawn=0;addPipe()}
++ for(const p of pipes){p.x-=speed*dt;if(!p.passed&&p.x+p.w<bird.x){p.passed=true;score++;ui.score(fmt(score))}if(bird.x+10>p.x&&bird.x-10<p.x+p.w&&(bird.y-10<p.top||bird.y+10>p.bottom))die()}
++ for(const gem of gems){gem.x-=speed*dt;if(gem.active&&Math.hypot(gem.x-bird.x,gem.y-bird.y)<15){gem.active=false;score+=5;ui.score(fmt(score))}}
++ pipes=pipes.filter(p=>p.x>-40-L.ox);gems=gems.filter(gem=>gem.x>-20-L.ox&&gem.active);if(bird.y<10-L.oy||bird.y>H-17)die()
++}render()}
++let last=0,raf=0,alive=true;function loop(t){if(!alive)return;const dt=Math.min(2,(t-last)/16.67||1);last=t;update(dt);raf=requestAnimationFrame(loop)}
++ui.on('primary',()=>{if(mode==='paused')resume();else start()});ui.on('pause',pause);ui.on('restart',start);
++ui.root.addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;if(mode==='play')flap()});
++const onKey=e=>{if(e.code==='Space'&&!e.repeat&&!['INPUT','TEXTAREA','BUTTON'].includes(document.activeElement?.tagName)){e.preventDefault();flap()}};
++document.addEventListener('keydown',onKey);
++ui.score(fmt(0));ui.speed('1.0X');ui.best('HI '+fmt(0));intro();render();raf=requestAnimationFrame(loop);
++return {
++  pause(){if(mode==='play')pause()},
++  focus(){ui.focus()},
++  destroy(){alive=false;cancelAnimationFrame(raf);document.removeEventListener('keydown',onKey);ui.destroy()},
++};
++},
++};
++})();
+diff --git a/components/neterror/resources/bare_games/bare_games.css b/components/neterror/resources/bare_games/bare_games.css
+new file mode 100644
+index 00000000000..2701704e92c
+--- /dev/null
++++ b/components/neterror/resources/bare_games/bare_games.css
+@@ -0,0 +1,301 @@
++/* Copyright 2026 The Bare Authors
++ * Use of this source code is governed by a BSD-style license that can be
++ * found in the LICENSE file. */
++
++/* Game list shared by the offline error page and chrome://games, and the
++ * full-screen game frame. Text is drawn by bare_games.js in a built-in pixel
++ * font; .bg-mono is the fallback for text the font cannot draw. The colours
++ * stay the same in dark mode. */
++
++.bare-games,
++.bare-games-full {
++  --bg-ink: #0d0b1a;
++  --bg-sky: #8fd3ff;
++  --bg-grass: #3b9b4a;
++  --bg-grass-top: #2b7a37;
++  --bg-panel: #e9f7ff;
++  color: var(--bg-ink);
++}
++
++.bare-games,
++.bare-games-full,
++.bare-games canvas,
++.bare-games-full canvas {
++  -webkit-touch-callout: none;
++  user-select: none;
++  -webkit-user-select: none;
++}
++
++.bare-games {
++  background: var(--bg-sky);
++  border: 3px solid var(--bg-ink);
++  box-sizing: border-box;
++  clear: both;
++  display: flex;
++  flex-direction: column;
++  margin: 32px auto 0;
++  max-width: 600px;
++  width: 100%;
++}
++
++.bare-games *,
++.bare-games *::before,
++.bare-games *::after,
++.bare-games-full *,
++.bare-games-full *::before,
++.bare-games-full *::after {
++  box-sizing: border-box;
++}
++
++/* The error page styles plain buttons; start from browser defaults. */
++.bare-games button,
++.bare-games-full button {
++  all: revert;
++}
++
++.bare-games [hidden],
++.bare-games-full [hidden] {
++  display: none !important;
++}
++
++.bg-text {
++  display: block;
++  image-rendering: pixelated;
++}
++
++.bg-sr {
++  clip-path: inset(50%);
++  height: 1px;
++  overflow: hidden;
++  position: absolute;
++  white-space: nowrap;
++  width: 1px;
++}
++
++.bg-mono {
++  font-family: monospace;
++  font-size: calc(var(--bg-px, 2px) * 7);
++  font-weight: 900;
++  letter-spacing: 0.04em;
++  line-height: 1.3;
++  white-space: pre-line;
++}
++
++/* The list */
++.bare-games-list {
++  align-items: center;
++  display: flex;
++  flex: 1;
++  flex-direction: column;
++  padding: 24px 16px;
++}
++
++.bare-games-logo {
++  display: block;
++  height: 96px;
++  image-rendering: pixelated;
++  width: 96px;
++}
++
++.bare-games-title {
++  margin: 12px 0 0;
++}
++
++.bare-games-pick {
++  margin: 12px 0 20px;
++  text-align: center;
++}
++
++.bare-games-cards {
++  display: grid;
++  gap: 12px;
++  max-width: 420px;
++  width: 100%;
++}
++
++.bare-games .bare-games-card {
++  align-items: center;
++  background: var(--bg-panel);
++  border: 3px solid var(--bg-ink);
++  border-radius: 0;
++  color: var(--bg-ink);
++  cursor: pointer;
++  display: flex;
++  gap: 14px;
++  margin: 0;
++  padding: 10px 12px;
++  text-align: start;
++  width: 100%;
++}
++
++.bare-games .bare-games-card:hover {
++  background: #fff;
++}
++
++.bare-games .bare-games-card:active {
++  transform: translate(1px, 1px);
++}
++
++.bare-games .bare-games-card:focus-visible,
++.bare-games-full button:focus-visible {
++  outline: 3px solid #3d5af1;
++  outline-offset: 2px;
++}
++
++.bare-games-card-icon {
++  flex: none;
++  height: 64px;
++  image-rendering: pixelated;
++  width: 64px;
++}
++
++.bare-games-card-text {
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++  min-width: 0;
++}
++
++.bare-games-grass {
++  background: linear-gradient(var(--bg-grass-top) 0 4px, var(--bg-grass) 4px);
++  flex: none;
++  height: 20px;
++}
++
++/* The game frame. bare_games.js asks for full screen on it; if the page may
++ * not go full screen it still covers the whole page. */
++html.bare-games-playing,
++html.bare-games-playing body {
++  overflow: hidden;
++}
++
++.bare-games-full {
++  -webkit-tap-highlight-color: transparent;
++  background: var(--bg-sky);
++  font-family: monospace;
++  inset: 0;
++  overflow: hidden;
++  position: fixed;
++  touch-action: none;
++  user-select: none;
++  -webkit-user-select: none;
++  z-index: 2147483647;
++}
++
++.bare-games-full:fullscreen {
++  height: 100%;
++  width: 100%;
++}
++
++.bare-games-full::backdrop {
++  background: #8fd3ff;
++}
++
++.bg-game {
++  inset: 0;
++  outline: none;
++  overflow: hidden;
++  position: absolute;
++}
++
++.bg-canvas {
++  display: block;
++  image-rendering: pixelated;
++  position: absolute;
++}
++
++.bg-hud {
++  align-items: flex-start;
++  display: flex;
++  justify-content: space-between;
++  left: 0;
++  padding: max(10px, env(safe-area-inset-top))
++      max(10px, env(safe-area-inset-right)) 0
++      max(10px, env(safe-area-inset-left));
++  pointer-events: none;
++  position: absolute;
++  right: 0;
++  top: 0;
++}
++
++.bg-hud-side {
++  align-items: flex-start;
++  display: flex;
++  gap: 10px;
++}
++
++.bg-hud-right {
++  align-items: center;
++}
++
++.bg-hud-stats {
++  display: flex;
++  flex-direction: column;
++  gap: 6px;
++  padding-top: 4px;
++}
++
++.bare-games-full .bg-icon-btn {
++  align-items: center;
++  background: var(--bg-panel);
++  border: 3px solid var(--bg-ink);
++  border-radius: 0;
++  cursor: pointer;
++  display: flex;
++  height: 44px;
++  justify-content: center;
++  margin: 0;
++  padding: 0;
++  pointer-events: auto;
++  width: 44px;
++}
++
++.bg-overlay {
++  align-items: center;
++  background: rgba(13, 11, 26, 0.12);
++  display: flex;
++  inset: 0;
++  justify-content: center;
++  padding: 64px 16px 16px;
++  position: absolute;
++}
++
++.bg-panel {
++  align-items: center;
++  background: var(--bg-panel);
++  border: 3px solid var(--bg-ink);
++  display: flex;
++  flex-direction: column;
++  gap: 10px;
++  max-height: 100%;
++  max-width: 100%;
++  overflow: auto;
++  padding: 16px 20px;
++  text-align: center;
++}
++
++.bg-message {
++  margin-bottom: 4px;
++}
++
++.bare-games-full .bg-btn {
++  background: var(--bg-ink);
++  border: 3px solid var(--bg-ink);
++  border-radius: 0;
++  color: var(--bg-panel);
++  cursor: pointer;
++  display: flex;
++  justify-content: center;
++  margin: 0;
++  min-width: 200px;
++  padding: 9px 14px;
++}
++
++.bare-games-full .bg-btn-2 {
++  background: transparent;
++  color: var(--bg-ink);
++}
++
++.bg-tiny {
++  opacity: 0.65;
++}
+diff --git a/components/neterror/resources/bare_games/bare_games.html b/components/neterror/resources/bare_games/bare_games.html
+new file mode 100644
+index 00000000000..4ac33148c65
+--- /dev/null
++++ b/components/neterror/resources/bare_games/bare_games.html
+@@ -0,0 +1,27 @@
++<!doctype html>
++<html dir="$i18n{textdirection}" lang="$i18n{language}">
++<head>
++  <meta charset="utf-8">
++  <meta name="color-scheme" content="light">
++  <meta name="theme-color" content="#8fd3ff">
++  <meta name="viewport" content="width=device-width, initial-scale=1.0,
++                                 maximum-scale=1.0, user-scalable=no">
++  <title>$i18n{bareGamesPageTitle}</title>
++  <link rel="stylesheet" href="bare_games.css">
++  <link rel="stylesheet" href="bare_games_page.css">
++  <script src="bare_fly.js"></script>
++  <script src="bare_run.js"></script>
++  <script src="bare_racer.js"></script>
++  <script src="bare_games.js"></script>
++</head>
++<body>
++  <main class="bare-games-page">
++    <div data-bare-games-auto
++        data-heading="$i18n{bareGamesHeading}"
++        data-back="$i18n{bareGamesBack}"
++        data-fly-desc="$i18n{bareGamesFlyDesc}"
++        data-run-desc="$i18n{bareGamesRunDesc}"
++        data-racer-desc="$i18n{bareGamesRacerDesc}"></div>
++  </main>
++</body>
++</html>
+diff --git a/components/neterror/resources/bare_games/bare_games.js b/components/neterror/resources/bare_games/bare_games.js
+new file mode 100644
+index 00000000000..9b3d809f5fc
+--- /dev/null
++++ b/components/neterror/resources/bare_games/bare_games.js
+@@ -0,0 +1,599 @@
++// Copyright 2026 The Bare Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Game list shared by the offline error page and chrome://games, plus the
++// small kit the games draw with. Load it after bare_fly.js, bare_run.js and
++// bare_racer.js. The error page calls window.bareGames.mount(host, strings)
++// itself; chrome://games marks its host with data-bare-games-auto and passes
++// the strings as data attributes. Nothing here loads anything from the
++// network or stores anything.
++(() => {
++'use strict';
++const registry = window.bareGamesRegistry || (window.bareGamesRegistry = {});
++
++const INK = '#0d0b1a';
++const SKY = '#8fd3ff';
++const GRASS = '#3b9b4a';
++const GRASS_TOP = '#2b7a37';
++const PANEL = '#e9f7ff';
++
++// 5x7 pixel font. Each glyph is seven rows of five bits, one base-32 digit
++// per row. Text with characters outside this set (most translations) falls
++// back to a chunky monospace style instead.
++const FONT = {
++  "A":"ehhvhhh", "B":"uhhuhhu", "C":"ehggghe", "D":"uhhhhhu", "E":"vgguggv",
++  "F":"vgguggg", "G":"ehgnhhf", "H":"hhhvhhh", "I":"e44444e", "J":"72222ic",
++  "K":"hikokih", "L":"ggggggv", "M":"hrllhhh", "N":"hhpljhh", "O":"ehhhhhe",
++  "P":"uhhuggg", "Q":"ehhhlid", "R":"uhhukih", "S":"fgge11u", "T":"v444444",
++  "U":"hhhhhhe", "V":"hhhhha4", "W":"hhhllla", "X":"hha4ahh", "Y":"hha4444",
++  "Z":"v1248gv", "0":"ehjlphe", "1":"4c4444e", "2":"eh1248v", "3":"v2421he",
++  "4":"26aiv22", "5":"vgu11he", "6":"68guhhe", "7":"v124888", "8":"ehhehhe",
++  "9":"ehhf12c", " ":"0000000", ".":"00000cc", ",":"0000c48", ":":"0cc0cc0",
++  "!":"4444404", "?":"eh12404", "-":"000e000", "+":"044v440", "/":"122488g",
++  "'":"4480000", "(":"2488842", ")":"8422248", "%":"pp248jj",
++  "\u00b7":"0004000", "\u25c6":"04eve40", "\u25b6":"8cefec8",
++  "\u25c0":"26eue62", "\u2039":"0248420", "\u00d7":"0ha4ah0",
++  "\u2016":"0aaaaa0",
++};
++const ADVANCE = 6;
++const LINE = 9;
++
++function el(tag, className) {
++  const node = document.createElement(tag);
++  if (className) {
++    node.className = className;
++  }
++  return node;
++}
++
++function canDraw(text) {
++  for (const ch of text) {
++    if (ch !== '\n' && !(ch in FONT)) {
++      return false;
++    }
++  }
++  return true;
++}
++
++// Draws one line with its top-left corner at x, y, one unit per font pixel.
++function drawText(g, text, x, y, color) {
++  g.fillStyle = color;
++  let left = x;
++  for (const ch of text) {
++    const rows = FONT[ch];
++    for (let r = 0; r < 7; r++) {
++      const bits = parseInt(rows[r], 32);
++      for (let c = 0; c < 5; c++) {
++        if (bits & (16 >> c)) {
++          g.fillRect(left + c, y + r, 1, 1);
++        }
++      }
++    }
++    left += ADVANCE;
++  }
++}
++
++// Shows `text` in `node` in the pixel font, `size` CSS px per font pixel.
++// Screen readers get the plain text.
++function setText(node, text, size, color) {
++  text = String(text || '');
++  const upper = text.toUpperCase();
++  node.textContent = '';
++  node.style.setProperty('--bg-px', size + 'px');
++  if (!canDraw(upper)) {
++    node.classList.add('bg-mono');
++    node.textContent = upper;
++    return;
++  }
++  node.classList.remove('bg-mono');
++  const lines = upper.split('\n');
++  const cols = Math.max(...lines.map(l => [...l].length));
++  const c = el('canvas', 'bg-text');
++  c.width = Math.max(1, cols * ADVANCE - 1);
++  c.height = lines.length * LINE - 2;
++  const g = c.getContext('2d');
++  lines.forEach((line, i) => {
++    const w = [...line].length * ADVANCE - 1;
++    drawText(g, line, Math.floor((c.width - w) / 2), i * LINE, color || INK);
++  });
++  c.style.width = c.width * size + 'px';
++  c.style.height = c.height * size + 'px';
++  c.setAttribute('aria-hidden', 'true');
++  const label = el('span', 'bg-sr');
++  label.textContent = text.replace(/\n/g, ' ');
++  node.append(label, c);
++}
++
++// The Bare wing as the games draw it: mirrored with scale(-1, 1) around the
++// artwork centre (500, 500) of a 1000-unit box.
++const WING_A = [[234, 842], [108, 584, 230, 356, 452, 266],
++                [561, 221, 690, 189, 772, 183], [804, 301, 730, 453, 656, 519],
++                [466, 559, 322, 667, 234, 842]];
++const WING_B = [[234, 842], [310, 634, 526, 467, 828, 520],
++                [718, 746, 512, 862, 234, 842]];
++const LOOKS = {
++  // In the games: dark shape, white shape with a dark outline.
++  game: {a: INK, b: '#fff', outline: true},
++  // On the list page: Bare's two blues.
++  blue: {a: '#3d5af1', b: '#7db8fa', outline: false},
++  // The list logo: the Bare logo's own pose, as on the new tab page, so not
++  // mirrored.
++  logo: {a: '#3d5af1', b: '#7db8fa', outline: false, mirror: false},
++};
++
++// Turns the bezier outline into a polygon (flat list of x, y pairs).
++function flatten(pts) {
++  const out = [pts[0][0], pts[0][1]];
++  let x = pts[0][0];
++  let y = pts[0][1];
++  for (let i = 1; i < pts.length; i++) {
++    const [c1x, c1y, c2x, c2y, ex, ey] = pts[i];
++    for (let k = 1; k <= 24; k++) {
++      const t = k / 24;
++      const u = 1 - t;
++      out.push(u * u * u * x + 3 * u * u * t * c1x + 3 * u * t * t * c2x +
++                   t * t * t * ex,
++               u * u * u * y + 3 * u * u * t * c1y + 3 * u * t * t * c2y +
++                   t * t * t * ey);
++    }
++    x = ex;
++    y = ey;
++  }
++  return out;
++}
++const POLY_A = flatten(WING_A);
++const POLY_B = flatten(WING_B);
++
++function inside(poly, x, y) {
++  let hit = false;
++  for (let i = 0, j = poly.length - 2; i < poly.length; j = i, i += 2) {
++    const yi = poly[i + 1];
++    const yj = poly[j + 1];
++    if ((yi > y) !== (yj > y) &&
++        x < (poly[j] - poly[i]) * (y - yi) / (yj - yi) + poly[i]) {
++      hit = !hit;
++    }
++  }
++  return hit;
++}
++
++function nearEdge(poly, x, y, r) {
++  for (let i = 0, j = poly.length - 2; i < poly.length; j = i, i += 2) {
++    const ax = poly[j];
++    const ay = poly[j + 1];
++    const dx = poly[i] - ax;
++    const dy = poly[i + 1] - ay;
++    const len = dx * dx + dy * dy;
++    const t = len ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) /
++                                                  len)) : 0;
++    const ex = ax + t * dx - x;
++    const ey = ay + t * dy - y;
++    if (ex * ex + ey * ey <= r * r) {
++      return true;
++    }
++  }
++  return false;
++}
++
++const sprites = new Map();
++
++// A pixel sprite of the wing, worked out with plain geometry: each pixel is
++// sampled 3 x 3 against the outline, kept when at least 4 of 9 samples hit
++// (about the old alpha 110 cut) and given the colour most samples hit. It
++// never reads canvas pixels back, so Bare's canvas reading block cannot
++// blank it. `scale` maps the 1000-unit artwork to pixels; the sprite is
++// centred on the artwork centre. Returns {size, runs: [x, y, width, colour]}.
++function wingSprite(rotation, scale, lookName, size) {
++  rotation = Math.round(rotation * 40) / 40;
++  const key = rotation + '|' + scale + '|' + lookName + '|' + size;
++  let sprite = sprites.get(key);
++  if (sprite) {
++    return sprite;
++  }
++  const look = LOOKS[lookName];
++  size = size || Math.ceil(900 * scale) + 2;
++  const cos = Math.cos(rotation);
++  const sin = Math.sin(rotation);
++  const stroke = look.outline ? Math.max(20, 1.2 / scale) / 2 : 0;
++  const flip = look.mirror === false ? -1 : 1;
++  const runs = [];
++  for (let py = 0; py < size; py++) {
++    let run = null;
++    for (let px = 0; px < size; px++) {
++      let dark = 0;
++      let light = 0;
++      for (let sy = 0; sy < 3; sy++) {
++        for (let sx = 0; sx < 3; sx++) {
++          const X = px + (sx + 0.5) / 3 - size / 2;
++          const Y = py + (sy + 0.5) / 3 - size / 2;
++          // Undo rotate, mirror and scale to get artwork coordinates.
++          const ax = 500 - flip * (X * cos + Y * sin) / scale;
++          const ay = 500 + (-X * sin + Y * cos) / scale;
++          if (stroke && nearEdge(POLY_B, ax, ay, stroke)) {
++            dark++;
++          } else if (inside(POLY_B, ax, ay)) {
++            light++;
++          } else if (inside(POLY_A, ax, ay)) {
++            dark++;
++          }
++        }
++      }
++      const color = dark + light < 4 ? null : (light > dark ? look.b : look.a);
++      if (run && run[3] === color) {
++        run[2]++;
++      } else {
++        if (run && run[3]) {
++          runs.push(run);
++        }
++        run = [px, py, 1, color];
++      }
++    }
++    if (run && run[3]) {
++      runs.push(run);
++    }
++  }
++  sprite = {size, runs};
++  sprites.set(key, sprite);
++  return sprite;
++}
++
++// Draws a sprite with its top-left corner at x, y; plain rectangles only.
++function drawSprite(g, sprite, x, y) {
++  for (const [rx, ry, w, color] of sprite.runs) {
++    g.fillStyle = color;
++    g.fillRect(x + rx, y + ry, w, 1);
++  }
++}
++
++// Draws the in-game wing centred on x, y.
++function drawWing(g, x, y, rotation, scale) {
++  const s = wingSprite(rotation, scale, 'game');
++  drawSprite(g, s, Math.round(x - s.size / 2), Math.round(y - s.size / 2));
++}
++
++// Bounds of the drawn pixels of a sprite: [left, top, right, bottom].
++function spriteBounds(sprite) {
++  let l = Infinity;
++  let t = Infinity;
++  let r = -Infinity;
++  let b = -Infinity;
++  for (const [x, y, w] of sprite.runs) {
++    l = Math.min(l, x);
++    r = Math.max(r, x + w);
++    t = Math.min(t, y);
++    b = Math.max(b, y + 1);
++  }
++  return [l, t, r, b];
++}
++
++function button(className, text, size, color, label) {
++  const b = el('button', className);
++  b.type = 'button';
++  setText(b, text, size, color);
++  if (label) {
++    b.setAttribute('aria-label', label);
++  }
++  return b;
++}
++
++// The full-screen frame every game uses: a canvas that covers the screen,
++// score and buttons in the corners, and a centred panel for start, pause
++// and game over.
++//
++// The game keeps its own W x H play area. That area is scaled to fit the
++// screen without changing its shape and stays centred; the canvas is made
++// big enough, in game pixels, to cover the rest of the screen, and the game
++// paints its sky and ground into that extra room. layout.ox/oy is where the
++// play area starts on the canvas, layout.cw/ch the canvas size.
++function shell(host, opts) {
++  const W = opts.width;
++  const H = opts.height;
++  const strings = opts.strings || {};
++  const root = el('div', 'bg-game');
++  root.tabIndex = 0;
++  root.setAttribute('aria-label', opts.label);
++  const canvas = el('canvas', 'bg-canvas');
++  const g = canvas.getContext('2d');
++
++  const hud = el('div', 'bg-hud');
++  const left = el('div', 'bg-hud-side');
++  const exit = button('bg-icon-btn', '‹', 3, INK, strings.back || 'Back');
++  const stats = el('div', 'bg-hud-stats');
++  const score = el('div', 'bg-score');
++  const speed = el('div', 'bg-speed');
++  stats.append(score, speed);
++  left.append(exit, stats);
++  const right = el('div', 'bg-hud-side bg-hud-right');
++  const best = el('div', 'bg-best');
++  const pause = button('bg-icon-btn', '‖', 3, INK, 'Pause');
++  right.append(best, pause);
++  hud.append(left, right);
++
++  const overlay = el('div', 'bg-overlay');
++  const panel = el('div', 'bg-panel');
++  const title = el('div', 'bg-title');
++  const message = el('div', 'bg-message');
++  const primary = el('button', 'bg-btn');
++  primary.type = 'button';
++  const restart = button('bg-btn bg-btn-2', 'RESTART', 2, INK);
++  const back = button(
++      'bg-btn bg-btn-2', '‹ ' + (strings.back || 'Back to games'), 2, INK);
++  const tiny = el('div', 'bg-tiny');
++  panel.append(title, message, primary, restart, back, tiny);
++  overlay.appendChild(panel);
++
++  root.append(canvas, overlay, hud);
++  host.appendChild(root);
++
++  const layout = {cw: W, ch: H, ox: 0, oy: 0, s: 1};
++  function fit() {
++    const vw = root.clientWidth || W;
++    const vh = root.clientHeight || H;
++    const s = Math.min(vw / W, vh / H);
++    const cw = Math.ceil(vw / s);
++    const ch = Math.ceil(vh / s);
++    if (canvas.width !== cw || canvas.height !== ch) {
++      canvas.width = cw;
++      canvas.height = ch;
++    }
++    canvas.style.width = cw * s + 'px';
++    canvas.style.height = ch * s + 'px';
++    canvas.style.left = (vw - cw * s) / 2 + 'px';
++    canvas.style.top = (vh - ch * s) / 2 + 'px';
++    layout.cw = cw;
++    layout.ch = ch;
++    layout.ox = Math.floor((cw - W) / 2);
++    layout.oy = Math.floor((ch - H) / 2);
++    layout.s = s;
++    g.imageSmoothingEnabled = false;
++  }
++  const observer = new ResizeObserver(fit);
++  observer.observe(root);
++  fit();
++
++  const shown = {};
++  function set(node, key, text, size) {
++    if (shown[key] === text) {
++      return;
++    }
++    shown[key] = text;
++    setText(node, text, size, INK);
++  }
++
++  const handlers = {primary: null, pause: null, restart: null};
++  for (const [node, name] of [[primary, 'primary'], [restart, 'restart'],
++                              [pause, 'pause']]) {
++    node.addEventListener('click', () => handlers[name] && handlers[name]());
++  }
++  exit.addEventListener('click', () => opts.exit && opts.exit());
++  back.addEventListener('click', () => opts.exit && opts.exit());
++
++  return {
++    root,
++    g,
++    layout,
++    // Resets the drawing state and fills the whole canvas with sky. The
++    // caller then draws in play-area coordinates.
++    begin(sky) {
++      g.setTransform(1, 0, 0, 1, 0, 0);
++      g.fillStyle = sky || SKY;
++      g.fillRect(0, 0, layout.cw, layout.ch);
++      g.translate(layout.ox, layout.oy);
++    },
++    // Visible area in play-area coordinates.
++    view() {
++      return {x0: -layout.ox, x1: layout.cw - layout.ox,
++              y0: -layout.oy, y1: layout.ch - layout.oy};
++    },
++    score(text) { set(score, 'score', text, 3); },
++    speed(text) { set(speed, 'speed', text, 2); },
++    best(text) { set(best, 'best', text, 2); },
++    on(name, fn) { handlers[name] = fn; },
++    // Shows the centred panel. `paused` adds the restart button.
++    panel(titleText, lines, primaryText, paused, tinyText) {
++      setText(title, titleText, 4, INK);
++      setText(message, lines.join('\n'), 2, INK);
++      setText(primary, primaryText, 2, PANEL);
++      restart.hidden = !paused;
++      tiny.hidden = !tinyText;
++      if (tinyText) {
++        setText(tiny, tinyText, 1.5, INK);
++      }
++      overlay.hidden = false;
++      setText(pause, paused ? '▶' : '‖', 3, INK);
++      pause.setAttribute('aria-label', paused ? 'Resume' : 'Pause');
++      pause.hidden = !paused;
++      primary.focus({preventScroll: true});
++    },
++    hidePanel() {
++      overlay.hidden = true;
++      setText(pause, '‖', 3, INK);
++      pause.setAttribute('aria-label', 'Pause');
++      pause.hidden = false;
++      root.focus({preventScroll: true});
++    },
++    focus() {
++      if (overlay.hidden) {
++        root.focus({preventScroll: true});
++      } else {
++        primary.focus({preventScroll: true});
++      }
++    },
++    destroy() {
++      observer.disconnect();
++      root.remove();
++    },
++  };
++}
++
++window.bareGamesKit = {
++  INK, SKY, GRASS, GRASS_TOP, PANEL, setText, drawWing, drawSprite, wingSprite,
++  spriteBounds, shell,
++};
++
++const GAMES = [
++  {id: 'fly', name: 'Bare Fly', descKey: 'flyDesc'},
++  {id: 'run', name: 'Bare Run', descKey: 'runDesc'},
++  {id: 'racer', name: 'Bare Racer', descKey: 'racerDesc'},
++];
++
++// The big wing at the top of the list: a 28 x 28 pixel grid in Bare's blues.
++function logo() {
++  const c = el('canvas', 'bare-games-logo');
++  c.width = c.height = 28;
++  drawSprite(c.getContext('2d'), wingSprite(0, 0.028, 'logo', 28), 0, 0);
++  c.setAttribute('aria-hidden', 'true');
++  return c;
++}
++
++let current = null;
++let lastCard = null;
++
++function stop() {
++  if (!current) {
++    return;
++  }
++  const playing = current;
++  current = null;
++  playing.game.destroy();
++  if (document.fullscreenElement === playing.frame && document.exitFullscreen) {
++    document.exitFullscreen().catch(() => {});
++  }
++  playing.frame.remove();
++  document.documentElement.classList.remove('bare-games-playing');
++  if (lastCard && lastCard.isConnected) {
++    lastCard.focus({preventScroll: true});
++  }
++}
++
++function play(entry, card, strings) {
++  if (current) {
++    stop();
++  }
++  lastCard = card;
++  const frame = el('div', 'bare-games-full');
++  document.body.appendChild(frame);
++  document.documentElement.classList.add('bare-games-playing');
++  const game = entry.create(frame, {strings, exit: stop});
++  current = {frame, game, fullscreen: false};
++  // Full screen needs the tap that opened the game. If the page may not go
++  // full screen, the frame still covers the whole page.
++  let request = null;
++  try {
++    request = frame.requestFullscreen &&
++        frame.requestFullscreen({navigationUI: 'hide'});
++  } catch (e) {
++    request = null;
++  }
++  if (request && request.catch) {
++    request.catch(() => frame.classList.add('bare-games-nofs'));
++  } else {
++    frame.classList.add('bare-games-nofs');
++  }
++  game.focus();
++}
++
++// Leaving full screen (Back on Android, Esc on desktop) leaves the game.
++document.addEventListener('fullscreenchange', () => {
++  if (!current) {
++    return;
++  }
++  if (document.fullscreenElement === current.frame) {
++    current.fullscreen = true;
++  } else if (current.fullscreen) {
++    current.game.pause();
++    stop();
++  }
++});
++
++document.addEventListener('keydown', e => {
++  if (current && !current.fullscreen && e.key === 'Escape') {
++    stop();
++  }
++});
++
++// Never keep a game running while the page is not visible.
++function pauseCurrent() {
++  if (current) {
++    current.game.pause();
++  }
++}
++document.addEventListener('visibilitychange', () => {
++  if (document.hidden) {
++    pauseCurrent();
++  }
++});
++window.addEventListener('pagehide', pauseCurrent);
++window.addEventListener('blur', pauseCurrent);
++
++// No context menu, callout, selection or dragging on the list or in a game.
++// In a game a long press is just a held tap.
++function inGames(e) {
++  return e.target instanceof Element &&
++      !!e.target.closest('.bare-games, .bare-games-full');
++}
++for (const type of ['contextmenu', 'selectstart', 'dragstart']) {
++  document.addEventListener(type, e => {
++    if (inGames(e)) {
++      e.preventDefault();
++    }
++  }, true);
++}
++
++function mount(host, strings) {
++  if (!host || host.dataset.bareGamesMounted) {
++    return;
++  }
++  host.dataset.bareGamesMounted = 'true';
++  host.classList.add('bare-games');
++  strings = strings || {};
++
++  const list = el('section', 'bare-games-list');
++  const title = el('h2', 'bare-games-title');
++  const pick = el('p', 'bare-games-pick');
++  const cards = el('div', 'bare-games-cards');
++  list.append(logo(), title, pick, cards);
++  const grass = el('div', 'bare-games-grass');
++  host.append(list, grass);
++  setText(title, 'BARE GAMES', 4, INK);
++  setText(pick, strings.heading || 'Pick a game', 2, INK);
++
++  for (const game of GAMES) {
++    const entry = registry[game.id];
++    if (!entry) {
++      continue;
++    }
++    const card = el('button', 'bare-games-card');
++    card.type = 'button';
++    const icon = el('canvas', 'bare-games-card-icon');
++    icon.width = icon.height = 32;
++    icon.setAttribute('aria-hidden', 'true');
++    entry.icon(icon);
++    const text = el('span', 'bare-games-card-text');
++    const name = el('span', 'bare-games-card-name');
++    const hint = el('span', 'bare-games-card-hint');
++    text.append(name, hint);
++    card.append(icon, text);
++    cards.appendChild(card);
++    setText(name, game.name, 3, INK);
++    setText(hint, strings[game.descKey] || '', 2, INK);
++    card.addEventListener('click', () => play(entry, card, strings));
++  }
++}
++
++window.bareGames = {mount};
++
++function autoMount() {
++  const host = document.querySelector('[data-bare-games-auto]');
++  if (host) {
++    mount(host, host.dataset);
++  }
++}
++
++if (document.readyState === 'loading') {
++  document.addEventListener('DOMContentLoaded', autoMount);
++} else {
++  autoMount();
++}
++})();
+diff --git a/components/neterror/resources/bare_games/bare_games_page.css b/components/neterror/resources/bare_games/bare_games_page.css
+new file mode 100644
+index 00000000000..f645d07ea62
+--- /dev/null
++++ b/components/neterror/resources/bare_games/bare_games_page.css
+@@ -0,0 +1,37 @@
++/* Copyright 2026 The Bare Authors
++ * Use of this source code is governed by a BSD-style license that can be
++ * found in the LICENSE file. */
++
++/* Page frame for chrome://games: the list fills the page, sky on top and
++ * grass along the bottom. The list itself is in bare_games.css. */
++
++html {
++  background: #8fd3ff;
++}
++
++body {
++  display: flex;
++  flex-direction: column;
++  font-family: monospace;
++  margin: 0;
++  min-height: 100vh;
++  min-height: 100dvh;
++}
++
++.bare-games-page {
++  display: flex;
++  flex: 1;
++  flex-direction: column;
++}
++
++.bare-games-page .bare-games {
++  border: 0;
++  flex: 1;
++  margin: 0;
++  max-width: none;
++}
++
++.bare-games-page .bare-games-list {
++  justify-content: center;
++  padding: 32px 16px;
++}
+diff --git a/components/neterror/resources/bare_games/bare_racer.js b/components/neterror/resources/bare_games/bare_racer.js
+new file mode 100644
+index 00000000000..b15ad25735e
+--- /dev/null
++++ b/components/neterror/resources/bare_games/bare_racer.js
+@@ -0,0 +1,58 @@
++// Copyright 2026 The Bare Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Bare Racer: retro pseudo-3D endless racer. Drag left or right to steer. Shared by the network error page and chrome://games.
++// Canvas only; no network, no storage.
++(() => {
++'use strict';
++const registry = window.bareGamesRegistry || (window.bareGamesRegistry = {});
++
++const logoA=new Path2D('M 235.0 840.7 C 199.5 766.9 187.8 680.1 204.1 599.0 C 220.3 517.8 264.6 442.2 323.8 383.9 C 383.0 325.7 457.2 284.7 533.9 253.2 C 610.5 221.7 689.7 199.7 771.6 183.3 C 790.3 242.4 776.4 305.9 754.7 364.8 C 732.9 423.6 703.2 477.8 653.7 519.1 Z');const logoB=new Path2D('M 235.0 840.7 C 255.8 785.4 285.6 731.8 325.4 685.7 C 365.2 639.6 415.0 600.9 469.8 573.3 C 524.6 545.7 584.2 529.1 644.7 520.5 C 705.2 511.9 766.4 511.3 827.1 520.7 C 807.1 565.1 783.7 607.4 754.6 646.0 C 725.5 684.6 690.6 719.5 651.2 747.7 C 611.9 776.0 568.1 797.7 521.9 811.4 C 494.2 819.6 465.6 824.9 436.8 828.5 C 412.7 831.4 388.5 833.1 364.4 831.8 C 345.1 830.7 325.8 827.7 306.7 828.7 C 282.7 830.1 258.7 837.9 235.0 840.7 Z');
++
++// Cars and roadside scenery, drawn on any 2D context.
++function art(g){
++function rect(x,y,w,h,color){g.fillStyle=color;g.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h))}
++function logoBadge(){g.save();g.fillStyle='#173e80';g.beginPath();g.arc(0,-2,10.8,0,Math.PI*2);g.fill();g.fillStyle='#fff';g.beginPath();g.arc(0,-2,9.4,0,Math.PI*2);g.fill();g.translate(0,-2);g.scale(.024,.024);g.translate(-530,-520);g.fillStyle='#3f70f5';g.fill(logoA);g.fillStyle='#73cdfa';g.fill(logoB);g.restore()}
++function drawCar(x,y,scale,color,player=false){g.save();g.translate(Math.round(x),Math.round(y));g.scale(scale,scale);if(player){rect(-22,-4,44,16,'#1d2433');rect(-18,-21,36,23,color);rect(-14,-19,28,9,'#a5dced');rect(-23,0,8,15,'#1d1d26');rect(15,0,8,15,'#1d1d26');rect(-18,-7,36,13,'#1854ac');rect(-19,-8,38,3,'#368df3');rect(-18,4,10,5,'#ff6a69');rect(8,4,10,5,'#ff6a69');rect(-13,10,26,4,'#2876e4');rect(-6,11,12,3,'#f5e5a7');logoBadge()}else{rect(-15,-4,30,13,'#202537');rect(-12,-17,24,15,color);rect(-8,-15,16,7,'#b6e9f5');rect(-19,0,7,12,'#1d1d26');rect(12,0,7,12,'#1d1d26');rect(-13,-3,7,5,'#f5a36b');rect(6,-3,7,5,'#f5a36b');rect(-10,7,20,4,color)}g.restore()}
++function scenery(x,y,size,type){if(type===0){rect(x-2,y-size,4,size,'#634a3e');rect(x-size*.3,y-size*1.3,size*.6,size*.55,'#238d59');rect(x-size*.22,y-size*1.55,size*.44,size*.45,'#36b76d')}else{rect(x-2,y-size*.9,4,size*.9,'#5d5852');rect(x-size*.3,y-size*.9,size*.6,size*.2,'#f8e6a1');rect(x-size*.25,y-size*1.25,size*.5,size*.38,'#e76e72')}}
++return {rect,drawCar,scenery};
++}
++
++registry.racer = {
++// Card picture: the player's car with the Bare badge.
++icon(c) {
++  const g = c.getContext('2d');
++  art(g).drawCar(16, 22, .62, '#2876e4', true);
++},
++
++create(host, ctx) {
++const kit=window.bareGamesKit,W=480,H=300,horizon=107;
++const ui=kit.shell(host,{width:W,height:H,label:'Bare Racer. Drag left or right to steer.',strings:ctx.strings,exit:ctx.exit});
++const g=ui.g,L=ui.layout,stage=ui.root,{rect,drawCar,scenery}=art(g);
++let mode='ready',score=0,best=0,frame=0,speed=120,dist=0,carX=0,traffic=[],spawn=0,shake=0;const keys={left:false,right:false},fmt=n=>String(Math.floor(n)).padStart(5,'0');
++function intro(){ui.panel('BARE RACER',['DRAG LEFT OR RIGHT','TO STEER','DODGE TRAFFIC · GET FASTER'],'▶ START ENGINE',false,'◀ DRAG · ARROW KEYS ▶')}
++function start(){mode='play';score=0;frame=0;speed=120;dist=0;carX=0;traffic=[];spawn=0;shake=0;keys.left=keys.right=false;ui.hidePanel();ui.score(fmt(0));ui.speed('120 KM/H')}function pause(){if(mode==='play'){mode='paused';keys.left=keys.right=false;ui.panel('PAUSED',['READY TO RACE?'],'▶ RESUME',true)}else if(mode==='paused')resume()}function resume(){mode='play';ui.hidePanel()}function crash(){if(mode!=='play')return;mode='dead';keys.left=keys.right=false;shake=8;best=Math.max(best,score);ui.best('HI '+fmt(best));ui.panel('CRASH!',['DISTANCE SCORE '+fmt(score)],'RACE AGAIN',false)}
++function roadAt(t){const bend=Math.sin(dist*.0007+t*1.9)*25+Math.sin(dist*.0003+t*.9)*17;return{center:W/2+bend*t,width:14+195*t*t}}
++// Below the play area on tall screens the road runs straight on at its
++// nearest width; on wide screens grass, hills and roadside scenery run on
++// to the sides.
++function draw(){ui.begin(kit.SKY);const v=ui.view(),vw=v.x1-v.x0;if(shake>0){g.translate((Math.random()-.5)*shake,(Math.random()-.5)*shake);shake*=.85;if(shake<.3)shake=0}rect(v.x0-10,78,vw+20,32,'#b5e5f5');g.fillStyle='#f6f0bd';g.beginPath();g.arc(375,57,22,0,Math.PI*2);g.fill();g.fillStyle='#7ca3b1';g.beginPath();const hx0=Math.floor((v.x0-10)/10)*10;g.moveTo(hx0,107);for(let x=hx0;x<=v.x1+10;x+=10)g.lineTo(x,93+Math.sin(x*.028)*15+Math.sin(x*.067)*5);g.lineTo(v.x1+10,130);g.lineTo(hx0,130);g.fill();for(let y=horizon;y<v.y1+10;y+=2){const tr=(y-horizon)/(H-horizon),t=Math.min(1,tr),a=roadAt(t),band=Math.floor(dist*.025+tr*15)%2;rect(v.x0-10,y,vw+20,2,band?'#3b9b4a':'#348c43');rect(a.center-a.width-9*t,y,2*a.width+18*t,2,band?'#f6eee7':'#e26e66');rect(a.center-a.width,y,2*a.width,2,band?'#555761':'#62636c');if(band&&t>.18){rect(a.center-a.width/3-1*t,y,2*t+1,2,'#f6ebc1');rect(a.center+a.width/3-1*t,y,2*t+1,2,'#f6ebc1')}}for(let i=19;i>=0;i--){const z=((i*115-dist*.7)%2300+2300)%2300/2300,t=1-z;if(t<.08)continue;const r=roadAt(t),y=horizon+t*t*(H-horizon),size=6+t*38,side=i%2?1:-1;if(L.ox>0)for(let k=1;k<4;k++){const x=r.center+(r.width+18+10*t+k*(90+150*t))*side;if(x>v.x0-60&&x<v.x1+60)scenery(x,y,size,(i+k)%5===0?1:0)}scenery(r.center+(r.width+18+10*t)*side,y,size,i%5===0?1:0)}for(const e of traffic.slice().sort((a,b)=>b.z-a.z)){const t=1-e.z;if(t<=0||t>=1)continue;const r=roadAt(t);drawCar(r.center+e.lane*r.width*.56,horizon+t*t*(H-horizon),.2+t*1.15,e.color)}const px=W/2+carX*125;rect(px-32,H-20,64,5,'#36383c55');drawCar(px,H-29,1.6,'#2876e4',true)}
++function update(dt){if(mode==='play'){frame+=dt;speed=Math.min(340,120+frame*.042);dist+=speed*.065*dt;if(keys.left)carX-=.029*dt;if(keys.right)carX+=.029*dt;carX=Math.max(-1.5,Math.min(1.5,carX));score=Math.floor(dist/8);ui.score(fmt(score));ui.speed(Math.floor(speed)+' KM/H');spawn+=dt;if(spawn>Math.max(36,95-speed*.12)){spawn=0;traffic.push({z:1,lane:[-.72,0,.72][Math.floor(Math.random()*3)],color:['#d85253','#f4bc48','#55aa98','#9b76ce'][Math.floor(Math.random()*4)]})}for(const e of traffic){e.z-=speed*.000033*dt;if(e.z<.12&&e.z>-.02&&Math.abs(carX-e.lane*.56)<.28)crash()}traffic=traffic.filter(e=>e.z>-.1);if(Math.abs(carX)>1.18)speed=Math.max(90,speed-.6*dt)}draw()}
++let last=0,raf=0,alive=true;function loop(t){if(!alive)return;const dt=Math.min(2,(t-last)/16.67||1);last=t;update(dt);raf=requestAnimationFrame(loop)}
++// Drag to steer, relative: the car moves by as much as the finger moves
++// sideways (times DRAG, in screen pixels), from wherever the touch started,
++// and stays on the road.
++const DRAG=1.5,ROAD=1.1;let dragX=null;stage.addEventListener('pointerdown',e=>{if(e.target.closest('button')||mode!=='play')return;e.preventDefault();stage.setPointerCapture(e.pointerId);dragX=e.clientX});stage.addEventListener('pointermove',e=>{if(dragX===null||mode!=='play')return;const dx=e.clientX-dragX;dragX=e.clientX;carX=Math.max(-ROAD,Math.min(ROAD,carX+dx*DRAG/(L.s*125)))});function stopSteer(){dragX=null}for(const ev of ['pointerup','pointercancel','lostpointercapture'])stage.addEventListener(ev,stopSteer);
++const onKeyDown=e=>{if(!stage.contains(document.activeElement))return;if(['ArrowLeft','ArrowRight','KeyA','KeyD'].includes(e.code))e.preventDefault();if(e.code==='ArrowLeft'||e.code==='KeyA')keys.left=true;if(e.code==='ArrowRight'||e.code==='KeyD')keys.right=true};
++const onKeyUp=e=>{if(e.code==='ArrowLeft'||e.code==='KeyA')keys.left=false;if(e.code==='ArrowRight'||e.code==='KeyD')keys.right=false};
++window.addEventListener('keydown',onKeyDown);window.addEventListener('keyup',onKeyUp);ui.on('primary',()=>mode==='paused'?resume():start());ui.on('pause',pause);ui.on('restart',start);
++ui.score(fmt(0));ui.speed('120 KM/H');ui.best('HI '+fmt(0));intro();draw();raf=requestAnimationFrame(loop);
++return {
++  pause(){if(mode==='play')pause()},
++  focus(){ui.focus()},
++  destroy(){alive=false;cancelAnimationFrame(raf);window.removeEventListener('keydown',onKeyDown);window.removeEventListener('keyup',onKeyUp);ui.destroy()},
++};
++},
++};
++})();
+diff --git a/components/neterror/resources/bare_games/bare_run.js b/components/neterror/resources/bare_games/bare_run.js
+new file mode 100644
+index 00000000000..e804193a424
+--- /dev/null
++++ b/components/neterror/resources/bare_games/bare_run.js
+@@ -0,0 +1,65 @@
++// Copyright 2026 The Bare Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Bare Run: one-tap endless runner. Shared by the network error page and
++// chrome://games. Canvas only; no network, no storage.
++(() => {
++'use strict';
++const registry = window.bareGamesRegistry || (window.bareGamesRegistry = {});
++
++// The runner: Bare wing body on two legs. stride moves the legs.
++function runner(g,kit,x,y,stride,wingScale){g.fillStyle=kit.INK;const r=(a,b,w,h)=>g.fillRect(Math.round(a),Math.round(b),Math.round(w),Math.round(h));r(x-7,y+23,4,7+stride);r(x+3,y+23,4,7-stride);r(x-10,y+28+stride,9,3);r(x+2,y+28-stride,9,3);kit.drawWing(g,x,y+12,-.35,wingScale)}
++
++registry.run = {
++// Card picture: the whole runner, wing and feet, centred in the icon.
++icon(c) {
++  const kit = window.bareGamesKit;
++  c.width = c.height = 48;
++  const s = kit.wingSprite(-.35, .045, 'game'), [l, t, r, b] = kit.spriteBounds(s);
++  const wx = Math.round(-s.size / 2), wy = Math.round(12 - s.size / 2);
++  const left = Math.min(wx + l, -10), right = Math.max(wx + r, 11);
++  const top = Math.min(wy + t, 23), bottom = Math.max(wy + b, 31);
++  runner(c.getContext('2d'), kit, Math.round((48 - (right - left)) / 2 - left),
++         Math.round((48 - (bottom - top)) / 2 - top), 0, .045);
++},
++
++create(host, ctx) {
++const kit=window.bareGamesKit,W=480,H=270,G=225;
++const ui=kit.shell(host,{width:W,height:H,label:'Bare Run. Tap or press space to jump.',strings:ctx.strings,exit:ctx.exit});
++const g=ui.g,L=ui.layout;
++let mode='ready',score=0,best=0,frame=0,speed=2.1,spawn=0,distance=0;
++let bird={x:95,y:G-29,vy:0,ground:true},obstacles=[],gems=[];
++const fmt=n=>String(n).padStart(5,'0');
++function rect(x,y,w,h){g.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h))}
++function intro(){ui.panel('BARE RUN',['RUN AUTOMATICALLY','TAP TO JUMP','COLLECT DIAMONDS ◆'],'▶ START RUNNING',false,'TAP · CLICK · SPACE')}
++function start(){mode='play';score=0;frame=0;speed=2.1;spawn=0;distance=0;bird={x:95,y:G-29,vy:0,ground:true};obstacles=[];gems=[];ui.score(fmt(0));ui.speed('1.0X');ui.hidePanel()}
++function jump(){if(mode==='ready'||mode==='dead'){start();return}if(mode==='paused'){resume();return}if(bird.ground){bird.vy=-7.8;bird.ground=false}}
++function resume(){mode='play';ui.hidePanel()}
++function pause(){if(mode==='play'){mode='paused';ui.panel('PAUSED',['READY TO CONTINUE?'],'▶ RESUME',true)}else if(mode==='paused')resume()}
++function die(){if(mode!=='play')return;mode='dead';best=Math.max(best,score);ui.best('HI '+fmt(best));ui.panel('GAME OVER',['SCORE '+fmt(score),'TRY AGAIN!'],'RUN AGAIN',false,'ONE TAP TO JUMP · ◆ +10')}
++// New obstacles start just past the right edge of the screen.
++function addObstacle(){const type=Math.random()<.6?'block':'spike';obstacles.push({x:W+20+L.ox,y:G-(type==='block'?22:17),w:type==='block'?22:24,h:type==='block'?22:17,type,passed:false});if(Math.random()<.8)gems.push({x:W+55+L.ox,y:G-48-Math.random()*35,got:false})}
++function render(){ui.begin(kit.SKY);const v=ui.view(),vw=v.x1-v.x0;
++ // Clouds and ground marks wrap across the whole screen.
++ g.fillStyle='#fff';const cspan=Math.max(620,vw+120),cn=Math.ceil(cspan/110);for(let i=0;i<cn;i++){const x=((i*110-distance*.13)%cspan+cspan)%cspan-40+v.x0;for(let row=0;42+i%3*22-row*80>v.y0;row++){const y=42+i%3*22-row*80;rect(x+row*55,y,32,2);rect(x+row*55+7,y-4,18,2)}}
++ g.fillStyle=kit.GRASS;rect(v.x0,G+3,vw,v.y1-G-3);g.fillStyle=kit.GRASS_TOP;rect(v.x0,G,vw,3);
++ const dspan=Math.max(585,vw+40),dn=Math.ceil(dspan/39);for(let i=0;i<dn;i++){const x=((i*39-distance)%dspan+dspan)%dspan-12+v.x0;rect(x,G+9,12,2)}
++ for(const o of obstacles){g.fillStyle=kit.INK;if(o.type==='block'){rect(o.x,o.y,o.w,o.h);g.fillStyle=kit.PANEL;rect(o.x+4,o.y+4,4,4);rect(o.x+14,o.y+12,4,4)}else{g.beginPath();g.moveTo(Math.round(o.x),G);g.lineTo(Math.round(o.x+o.w/2),o.y);g.lineTo(Math.round(o.x+o.w),G);g.closePath();g.fill()}}
++ for(const d of gems){if(d.got)continue;g.fillStyle=kit.INK;rect(d.x-3,d.y-8,6,3);rect(d.x-6,d.y-5,12,10);rect(d.x-3,d.y+5,6,3);g.fillStyle='#fff';rect(d.x-2,d.y-2,3,3)}
++ const stride=bird.ground?Math.sin(frame*.35)*4:0;runner(g,kit,bird.x,bird.y,stride,.045)}
++function update(dt){if(mode==='play'){frame+=dt;speed=Math.min(6,2.1+Math.floor(frame/600)*.25);ui.speed((speed/2.1).toFixed(1)+'X');distance+=speed*dt;bird.vy+=.38*dt;bird.y+=bird.vy*dt;if(bird.y>=G-29){bird.y=G-29;bird.vy=0;bird.ground=true}spawn+=dt;if(spawn>Math.max(62,105-speed*6)){spawn=0;addObstacle()}for(const o of obstacles){o.x-=speed*dt;if(!o.passed&&o.x+o.w<bird.x-10){o.passed=true;score++;ui.score(fmt(score))}if(bird.x+10>o.x+3&&bird.x-10<o.x+o.w-3&&bird.y+28>o.y+4&&bird.y+4<G)die()}for(const d of gems){d.x-=speed*dt;if(!d.got&&Math.abs(d.x-bird.x)<17&&Math.abs(d.y-(bird.y+12))<19){d.got=true;score+=10;ui.score(fmt(score))}}obstacles=obstacles.filter(o=>o.x>-40-L.ox);gems=gems.filter(d=>d.x>-20-L.ox&&!d.got)}render()}
++let last=0,raf=0,alive=true;function loop(t){if(!alive)return;let dt=Math.min(2,(t-last)/16.67||1);last=t;update(dt);raf=requestAnimationFrame(loop)}
++ui.on('primary',()=>{if(mode==='paused')resume();else start()});ui.on('pause',pause);ui.on('restart',start);
++ui.root.addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;if(mode==='play')jump()});
++const onKey=e=>{if(!ui.root.contains(document.activeElement))return;if(e.target.closest&&e.target.closest('button')&&e.code==='Space')return;if(e.code==='Space'||e.code==='ArrowUp'){e.preventDefault();if(!e.repeat)jump()}};
++window.addEventListener('keydown',onKey);
++ui.score(fmt(0));ui.speed('1.0X');ui.best('HI '+fmt(0));intro();render();raf=requestAnimationFrame(loop);
++return {
++  pause(){if(mode==='play')pause()},
++  focus(){ui.focus()},
++  destroy(){alive=false;cancelAnimationFrame(raf);window.removeEventListener('keydown',onKey);ui.destroy()},
++};
++},
++};
++})();
+diff --git a/components/neterror/resources/neterror.css b/components/neterror/resources/neterror.css
+index dbdbeac156b..d24d5923a58 100644
+--- a/components/neterror/resources/neterror.css
++++ b/components/neterror/resources/neterror.css
+@@ -45,17 +45,10 @@ a {
+ }
+ 
+ .icon-offline {
+-  content: image-set(
+-      url(images/default_100_percent/offline/100-error-offline.png) 1x,
+-      url(images/default_200_percent/offline/200-error-offline.png) 2x);
++  content: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 72 72' fill='none' stroke='%235f6368' stroke-width='5' stroke-linecap='round'%3E%3Cpath d='M8 28a40 40 0 0 1 56 0'/%3E%3Cpath d='M18 39a26 26 0 0 1 36 0'/%3E%3Cpath d='M28 50a12 12 0 0 1 16 0'/%3E%3Ccircle cx='36' cy='60' r='3' fill='%235f6368' stroke='none'/%3E%3Cpath d='M12 10l48 52'/%3E%3C/svg%3E");
++  height: 72px;
+   position: relative;
+-}
+-
+-.icon-disabled {
+-  content: image-set(
+-      url(images/default_100_percent/offline/100-disabled.png) 1x,
+-      url(images/default_200_percent/offline/200-disabled.png) 2x);
+-  width: 112px;
++  width: 72px;
+ }
+ 
+ .hidden {
+@@ -323,208 +316,25 @@ html[subframe] body {
+ }
+ 
+ /* Offline page */
+-html[dir='rtl'] .runner-container,
+ html[dir='rtl'].offline .icon-offline {
+   transform: scaleX(-1);
+ }
+ 
+-.offline {
+-  transition: filter 1.5s cubic-bezier(0.65, 0.05, 0.36, 1),
+-              background-color 1.5s cubic-bezier(0.65, 0.05, 0.36, 1);
+-<if expr="not is_ios">
+-  will-change: filter, background-color;
+-</if>
+-}
+-
+-.offline body {
+-  transition: background-color 1.5s cubic-bezier(0.65, 0.05, 0.36, 1);
+-}
+-
+ .offline #main-message > p {
+   display: none;
+ }
+ 
+-.offline.inverted {
+-  background-color: #fff;
+-  filter: invert(1);
+-}
+-
+-.offline.inverted body {
+-  background-color: #fff;
+-}
+-
+ .offline .interstitial-wrapper {
+   color: var(--text-color);
+   font-size: 1em;
+   line-height: 1.55;
+   margin: 0 auto;
+   max-width: 600px;
+-  padding-top: 100px;
++  padding-top: 40px;
+   position: relative;
+   width: 100%;
+ }
+ 
+-.offline .runner-container {
+-  direction: ltr;
+-  height: 150px;
+-  max-width: 600px;
+-  overflow: hidden;
+-  position: absolute;
+-  top: 35px;
+-  width: 44px;
+-}
+-
+-.offline .runner-container:focus {
+-  outline: none;
+-}
+-
+-.offline .runner-container:focus-visible {
+-  outline: 3px solid var(--google-blue-300);
+-}
+-
+-.offline .runner-canvas {
+-  height: 150px;
+-  max-width: 600px;
+-  opacity: 1;
+-  overflow: hidden;
+-  position: absolute;
+-  top: 0;
+-  z-index: 10;
+-}
+-
+-.offline .controller {
+-  height: 100vh;
+-  left: 0;
+-  position: absolute;
+-  top: 0;
+-  width: 100vw;
+-  z-index: 9;
+-}
+-
+-#offline-resources {
+-  display: none;
+-}
+-
+-#offline-instruction {
+-  image-rendering: pixelated;
+-  left: 0;
+-  margin: auto;
+-  position: absolute;
+-  right: 0;
+-  top: 60px;
+-  width: fit-content;
+-}
+-
+-.offline-runner-live-region {
+-  bottom: 0;
+-  clip-path: polygon(0 0, 0 0, 0 0);
+-  color: var(--background-color);
+-  display: block;
+-  font-size: xx-small;
+-  overflow: hidden;
+-  position: absolute;
+-  text-align: center;
+-  transition: color 1.5s cubic-bezier(0.65, 0.05, 0.36, 1);
+-  user-select: none;
+-}
+-
+-/* Custom toggle */
+-.slow-speed-option {
+-  align-items: center;
+-  background: var(--google-gray-50);
+-  border-radius: 24px/50%;
+-  bottom: 0;
+-  color: var(--error-code-color);
+-  display: inline-flex;
+-  font-size: 1em;
+-  left: 0;
+-  line-height: 1.1em;
+-  margin: 5px auto;
+-  padding: 2px 12px 3px 20px;
+-  position: absolute;
+-  right: 0;
+-  width: max-content;
+-  z-index: 999;
+-}
+-
+-.slow-speed-option.hidden {
+-  display: none;
+-}
+-
+-.slow-speed-option [type=checkbox] {
+-  opacity: 0;
+-  pointer-events: none;
+-  position: absolute;
+-}
+-
+-.slow-speed-option .slow-speed-toggle {
+-  cursor: pointer;
+-  margin-inline-start: 8px;
+-  padding: 8px 4px;
+-  position: relative;
+-}
+-
+-.slow-speed-option [type=checkbox]:disabled ~ .slow-speed-toggle {
+-  cursor: default;
+-}
+-
+-.slow-speed-option-label [type=checkbox] {
+-  opacity: 0;
+-  pointer-events: none;
+-  position: absolute;
+-}
+-
+-.slow-speed-option .slow-speed-toggle::before,
+-.slow-speed-option .slow-speed-toggle::after {
+-  content: '';
+-  display: block;
+-  margin: 0 3px;
+-  transition: all 100ms cubic-bezier(0.4, 0, 1, 1);
+-}
+-
+-.slow-speed-option .slow-speed-toggle::before {
+-  background: rgb(189,193,198);
+-  border-radius: 0.65em;
+-  height: 0.9em;
+-  width: 2em;
+-}
+-
+-.slow-speed-option .slow-speed-toggle::after {
+-  background: #fff;
+-  border-radius: 50%;
+-  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 40%);
+-  height: 1.2em;
+-  position: absolute;
+-  top: 51%;
+-  transform: translate(-20%, -50%);
+-  width: 1.1em;
+-}
+-
+-.slow-speed-option [type=checkbox]:focus + .slow-speed-toggle {
+-  box-shadow: 0 0 8px rgb(94, 158, 214);
+-  outline: 1px solid rgb(93, 157, 213);
+-}
+-
+-.slow-speed-option [type=checkbox]:checked + .slow-speed-toggle::before {
+-  background: var(--google-blue-600);
+-  opacity: 0.5;
+-}
+-
+-.slow-speed-option [type=checkbox]:checked + .slow-speed-toggle::after {
+-  background: var(--google-blue-600);
+-  transform: translate(calc(2em - 90%), -50%);
+-}
+-
+-.slow-speed-option [type=checkbox]:checked:disabled +
+-  .slow-speed-toggle::before {
+-  background: rgb(189,193,198);
+-}
+-
+-.slow-speed-option [type=checkbox]:checked:disabled +
+-  .slow-speed-toggle::after {
+-  background: var(--google-gray-50);
+-}
+-
+ @media (max-width: 420px) {
+   #download-button {
+     padding-bottom: 12px;
+@@ -574,10 +384,6 @@ html[dir='rtl'].offline .icon-offline {
+   .offline .interstitial-wrapper {
+     padding-top: 60px;
+   }
+-
+-  .offline .runner-container {
+-    top: 8px;
+-  }
+ }
+ 
+ @media (min-height: 240px) and (orientation: landscape) {
+@@ -594,10 +400,6 @@ html[dir='rtl'].offline .icon-offline {
+   .icon-offline {
+     margin-bottom: 0;
+   }
+-
+-  .offline .runner-container {
+-    top: 10px;
+-  }
+ }
+ 
+ @media (max-width: 240px) {
+@@ -618,76 +420,14 @@ html[dir='rtl'].offline .icon-offline {
+   }
+ }
+ 
+-.arcade-mode,
+-.arcade-mode .runner-container,
+-.arcade-mode .runner-canvas {
+-  image-rendering: pixelated;
+-  max-width: 100%;
+-  overflow: hidden;
+-}
+-
+-.arcade-mode #buttons,
+-.arcade-mode #main-content {
+-  opacity: 0;
+-  overflow: hidden;
+-}
+-
+-.arcade-mode .interstitial-wrapper {
+-  height: 100vh;
+-  max-width: 100%;
+-  overflow: hidden;
+-}
+-
+-.arcade-mode .runner-container {
+-  left: 0;
+-  margin: auto;
+-  right: 0;
+-  transform-origin: top center;
+-  transition: transform 250ms cubic-bezier(0.4, 0, 1, 1) 400ms;
+-  z-index: 2;
+-}
+-
+ @media (prefers-color-scheme: dark) {
+   .icon {
+     filter: invert(1);
+   }
+ 
+-  .offline .runner-canvas {
+-    filter: invert(1);
+-  }
+-
+-  .offline.inverted {
+-    background-color: var(--background-color);
+-    filter: invert(0);
+-  }
+-
+-  .offline.inverted body {
+-    background-color: #fff;
+-  }
+-
+-  .offline.inverted .offline-runner-live-region {
+-    color: #fff;
+-  }
+-
+   #suggestions-list a {
+     color: var(--link-color);
+   }
+-
+-  .slow-speed-option {
+-    background: var(--google-gray-800);
+-    color: var(--google-gray-100);
+-  }
+-
+-  .slow-speed-option .slow-speed-toggle::before,
+-  .slow-speed-option [type=checkbox]:checked:disabled +
+-    .slow-speed-toggle::before {
+-     background: rgb(189,193,198);
+-  }
+-
+-  .slow-speed-option [type=checkbox]:checked + .slow-speed-toggle::after,
+-  .slow-speed-option [type=checkbox]:checked + .slow-speed-toggle::before {
+-    background: var(--google-blue-300);
+-  }
+ }
+ 
+ #main-frame-error:not(.showing-details) #details {
+@@ -696,8 +436,7 @@ html[dir='rtl'].offline .icon-offline {
+ 
+ @media (min-width: 240px) and (max-width: 420px) and (min-height: 401px),
+        (min-height: 240px) and (max-height: 560px) and (min-width: 421px) {
+-  #main-frame-error.showing-details #main-content,
+-  #main-frame-error.showing-details .runner-container {
++  #main-frame-error.showing-details #main-content {
+     display: none;
+   }
+ }
+diff --git a/components/neterror/resources/neterror.html b/components/neterror/resources/neterror.html
+index ead5b8a13da..6c78641d884 100644
+--- a/components/neterror/resources/neterror.html
++++ b/components/neterror/resources/neterror.html
+@@ -19,14 +19,6 @@
+ </head>
+ <body class="neterror" style="font-family: $i18n{fontfamily}; font-size: $i18n{fontsize}">
+   <div id="content"></div>
+-  <div id="offline-resources">
+-    <img id="offline-resources-1x" src="images/default_100_percent/offline/100-offline-sprite.png">
+-    <img id="offline-resources-2x" src="images/default_200_percent/offline/200-offline-sprite.png">
+-    <template id="audio-resources">
+-      <audio id="offline-sound-press" src="sounds/button-press.mp3"></audio>
+-      <audio id="offline-sound-hit" src="sounds/hit.mp3"></audio>
+-      <audio id="offline-sound-reached" src="sounds/score-reached.mp3"></audio>
+-    </template>
+-  </div>
++  <!--bare-games-->
+ </body>
+ </html>
+diff --git a/components/neterror/resources/neterror.ts b/components/neterror/resources/neterror.ts
+index c638ccd028a..40337fb532b 100644
+--- a/components/neterror/resources/neterror.ts
++++ b/components/neterror/resources/neterror.ts
+@@ -3,23 +3,33 @@
+ // found in the LICENSE file.
+ 
+ import {assert} from 'chrome://resources/js/assert.js';
+-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+ import type {LoadTimeDataRaw} from 'chrome://resources/js/load_time_data.js';
+ import {getRequiredElement} from 'chrome://resources/js/util.js';
+ import {html, render} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+ 
+ import {HIDDEN_CLASS} from './constants.js';
+-import {Runner} from './dino_game/offline.js';
+ 
+ declare global {
+   interface Window {
+     errorPageController?: ErrorPageController;
+     // `loadTimeDataRaw` is injected to the `window` scope from C++.
+     loadTimeDataRaw: LoadTimeDataRaw;
+-    initializeEasterEggHighScore: (score: number) => void;
++    // Added by the renderer next to the page on offline errors; see
++    // bare_games/bare_games.js.
++    bareGames?: {
++      mount(host: HTMLElement, strings: BareGamesStrings): void,
++    };
+   }
+ }
+ 
++interface BareGamesStrings {
++  heading: string;
++  back: string;
++  flyDesc: string;
++  runDesc: string;
++  racerDesc: string;
++}
++
+ interface ErrorPageController {
+   downloadButtonClick(): void;
+   reloadButtonClick(url?: string): void;
+@@ -34,7 +44,7 @@ interface ErrorPageController {
+ }
+ 
+ interface TemplateData {
+-  // Properties that exist in both error pages and chrome://dino.
++  // Properties that exist in both error pages and the games-only page.
+   errorCode: string;
+   heading: {
+     msg: string,
+@@ -42,7 +52,7 @@ interface TemplateData {
+   iconClass: string;
+ 
+   // Properties that exist only when there is an actual error and not when
+-  // visiting chrome://dino directly.
++  // visiting the games-only page directly.
+   details?: string;
+   hideDetails?: string;
+   suggestionsDetails?: Array<{header: string, body: string}>;
+@@ -70,22 +80,11 @@ interface TemplateData {
+     cancelMsg: string,
+   };
+   isOfflineError?: boolean;
+-  dinoGameA11yAriaLabel: string;
+-  dinoGameInstructionsTouch: string;
+-  dinoGameInstructionsKeyboard: string;
+-  dinoGameInstructionsHybrid: string;
+-  dinoGameA11yAriaLabelTouch: string;
+-  dinoGameA11yAriaLabelKeyboard: string;
+-  dinoGameA11yAriaLabelHybrid: string;
++  bareGames?: BareGamesStrings;
+ }
+ 
+ let showingDetails: boolean = false;
+ let lastData: TemplateData|null = null;
+-// Flag to ensure that the Dino game's global singletons (like loadTimeData.data
+-// and the Runner instance) are only initialized once. This prevents assertion
+-// errors that occur if these are set/initialized multiple times, which can
+-// happen in cases such as during testing
+-let dinoGameInitialized: boolean = false;
+ 
+ function toggleHelpBox() {
+   showingDetails = !showingDetails;
+@@ -117,7 +116,6 @@ if (window.top!.location !== window.location) {
+ // Re-renders the error page using |data| as the dictionary of values.
+ // Used by NetErrorTabHelper to update DNS error pages with probe results.
+ function updateForDnsProbe(newData: TemplateData) {
+-  updateInitialInstruction(newData);
+   onTemplateDataReceived(newData);
+ }
+ 
+@@ -239,36 +237,8 @@ function getButtonsCssClass(): string {
+   return primaryControlOnLeft ? 'suggested-left' : 'suggested-right';
+ }
+ 
+-// Use device capabilities to guess the most appropriate initial instruction.
+-function updateInitialInstruction(data: TemplateData) {
+-  // This method can be called for various error types. Only errors that
+-  // represent an offline state (as determined by LocalizedError::IsOfflineError
+-  // in C++, such as net::ERR_INTERNET_DISCONNECTED) result in the dino game
+-  // being shown. Other errors (e.g., 404, connection reset) do not have the
+-  // dino game or the localized strings for it, so we skip this logic.
+-  if (!data.isOfflineError) {
+-    return;
+-  }
+-
+-  if (navigator.maxTouchPoints === 0) {
+-    // No touch support, so it must be a keyboard/mouse device.
+-    data.heading.msg = data.dinoGameInstructionsKeyboard;
+-    data.dinoGameA11yAriaLabel = data.dinoGameA11yAriaLabelKeyboard;
+-  } else if (window.matchMedia('(hover: hover)').matches) {
+-    // Touch is supported, but so is hovering (e.g. mouse/trackpad).
+-    // This implies a hybrid device or a tablet with a keyboard/trackpad.
+-    data.heading.msg = data.dinoGameInstructionsHybrid;
+-    data.dinoGameA11yAriaLabel = data.dinoGameA11yAriaLabelHybrid;
+-  } else {
+-    // Touch is supported and hovering is not (e.g. mobile/tablet).
+-    data.heading.msg = data.dinoGameInstructionsTouch;
+-    data.dinoGameA11yAriaLabel = data.dinoGameA11yAriaLabelTouch;
+-  }
+-}
+-
+ function onDocumentLoad() {
+   const data = window.loadTimeDataRaw as TemplateData;
+-  updateInitialInstruction(data);
+   onTemplateDataReceived(data);
+ }
+ 
+@@ -279,11 +249,11 @@ function onTemplateDataReceived(newData: TemplateData) {
+   if (!isSubFrame && newData.iconClass === 'icon-offline') {
+     document.documentElement.classList.add('offline');
+ 
+-    // Set loadTimeData.data because it is used by the dino code.
+-    if (!dinoGameInitialized) {
+-      loadTimeData.data = newData;
+-      Runner.initializeInstance('.interstitial-wrapper');
+-      dinoGameInitialized = true;
++    // Offer the Bare games while there is no connection. The renderer only
++    // adds the game scripts to offline error pages.
++    const host = document.querySelector<HTMLElement>('#bare-games');
++    if (host && newData.bareGames && window.bareGames) {
++      window.bareGames.mount(host, newData.bareGames);
+     }
+   }
+ }
+@@ -365,6 +335,7 @@ function getHtml(data: TemplateData, showingDetails: boolean) {
+           `)}
+         </div>
+       ` : ''}
++      <div id="bare-games"></div>
+     </div>
+     ${data.summary ? html`
+       <div id="sub-frame-error">
+@@ -390,7 +361,6 @@ Object.assign(window, {
+   portalSignin,
+   toggleHelpBox,
+   updateForDnsProbe,
+-  updateInitialInstruction,
+ });
+ 
+ document.addEventListener('DOMContentLoaded', onDocumentLoad);
+diff --git a/components/resources/neterror_resources.grdp b/components/resources/neterror_resources.grdp
+index d13a11bfa2f..742e5b72351 100644
+--- a/components/resources/neterror_resources.grdp
++++ b/components/resources/neterror_resources.grdp
+@@ -1,4 +1,11 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <grit-part>
+   <include name="IDR_NET_ERROR_HTML" file="../neterror/resources/neterror.html" flattenhtml="true" type="BINDATA"/>
++  <include name="IDR_BARE_GAMES_HTML" file="../neterror/resources/bare_games/bare_games.html" type="BINDATA" compress="brotli" />
++  <include name="IDR_BARE_GAMES_CSS" file="../neterror/resources/bare_games/bare_games.css" type="BINDATA" compress="brotli" />
++  <include name="IDR_BARE_GAMES_PAGE_CSS" file="../neterror/resources/bare_games/bare_games_page.css" type="BINDATA" compress="brotli" />
++  <include name="IDR_BARE_GAMES_JS" file="../neterror/resources/bare_games/bare_games.js" type="BINDATA" compress="brotli" />
++  <include name="IDR_BARE_GAMES_FLY_JS" file="../neterror/resources/bare_games/bare_fly.js" type="BINDATA" compress="brotli" />
++  <include name="IDR_BARE_GAMES_RUN_JS" file="../neterror/resources/bare_games/bare_run.js" type="BINDATA" compress="brotli" />
++  <include name="IDR_BARE_GAMES_RACER_JS" file="../neterror/resources/bare_games/bare_racer.js" type="BINDATA" compress="brotli" />
+ </grit-part>

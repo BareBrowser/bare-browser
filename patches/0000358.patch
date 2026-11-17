@@ -1,0 +1,119 @@
+diff --git a/chrome/browser/segmentation_platform/segmentation_platform_config.cc b/chrome/browser/segmentation_platform/segmentation_platform_config.cc
+index 89863ce0791..48f92a62bae 100644
+--- a/chrome/browser/segmentation_platform/segmentation_platform_config.cc
++++ b/chrome/browser/segmentation_platform/segmentation_platform_config.cc
+@@ -67,34 +67,9 @@ using proto::SegmentId;
+ namespace {
+ 
+ #if BUILDFLAG(IS_ANDROID)
+-
+-constexpr int kAdaptiveToolbarDefaultSelectionTTLDays = 56;
+-
+-#endif  // BUILDFLAG(IS_ANDROID)
+-
+-#if BUILDFLAG(IS_ANDROID)
+-std::unique_ptr<Config> GetConfigForAdaptiveToolbar() {
+-  auto config = std::make_unique<Config>();
+-  config->segmentation_key = kAdaptiveToolbarSegmentationKey;
+-  config->segmentation_uma_name = kAdaptiveToolbarUmaName;
+-  config->auto_execute_and_cache = true;
+-
+-  if (base::FeatureList::IsEnabled(
+-          segmentation_platform::features::
+-              kSegmentationPlatformAdaptiveToolbarV2Feature)) {
+-    config->AddSegmentId(
+-        SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_ADAPTIVE_TOOLBAR);
+-  } else {
+-    config->segment_selection_ttl =
+-        base::Days(kAdaptiveToolbarDefaultSelectionTTLDays);
+-    // A hardcoded list of segment IDs known to the segmentation platform.
+-    config->AddSegmentId(SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_NEW_TAB);
+-    config->AddSegmentId(SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_SHARE);
+-    config->AddSegmentId(SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_VOICE);
+-  }
+-
+-  return config;
+-}
++// Bare: no adaptive toolbar config. The address bar shortcut is the one the
++// user chose and never one predicted from usage, so the segment that would
++// predict it is not registered, and its model does not run or collect signals.
+ 
+ std::unique_ptr<Config> GetConfigForContextualPageActions(
+     content::BrowserContext* context) {
+@@ -138,7 +113,6 @@ std::vector<std::unique_ptr<Config>> GetSegmentationPlatformConfig(
+     home_modules::HomeModulesCardRegistry* home_modules_card_registry) {
+   std::vector<std::unique_ptr<Config>> configs;
+ #if BUILDFLAG(IS_ANDROID)
+-  configs.emplace_back(GetConfigForAdaptiveToolbar());
+   if (base::FeatureList::IsEnabled(features::kContextualPageActions)) {
+     configs.emplace_back(GetConfigForContextualPageActions(context));
+   }
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarPrefs.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarPrefs.java
+index fbc2d853e76..f7a7d3c414e 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarPrefs.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarPrefs.java
+@@ -54,18 +54,27 @@ public class AdaptiveToolbarPrefs {
+         // you cannot build muscle memory for, and the segmentation it depends on is exactly the
+         // kind of behavioural profiling this build removes elsewhere.
+         //
+-        // Share is the most broadly useful of the fixed options. This only changes the default:
+-        // every choice, AUTO included, is still offered under Settings > Appearance > Toolbar
+-        // shortcut, and an explicit choice is stored and wins over this.
++        // Share is the most broadly useful of the fixed options. An explicit choice is stored
++        // and wins over this.
+         //
+         // With the minimal layout there is no bottom bar to hold a New tab button, so the shortcut
+         // takes that place until the user picks something else.
+-        return ChromeSharedPreferences.getInstance()
+-                .readInt(
+-                        ADAPTIVE_TOOLBAR_CUSTOMIZATION_SETTINGS,
+-                        BottomBarConfigUtils.isMinimalLayout()
+-                                ? AdaptiveToolbarButtonVariant.NEW_TAB
+-                                : AdaptiveToolbarButtonVariant.SHARE);
++        @AdaptiveToolbarButtonVariant
++        int byDefault =
++                BottomBarConfigUtils.isMinimalLayout()
++                        ? AdaptiveToolbarButtonVariant.NEW_TAB
++                        : AdaptiveToolbarButtonVariant.SHARE;
++        int stored =
++                ChromeSharedPreferences.getInstance()
++                        .readInt(ADAPTIVE_TOOLBAR_CUSTOMIZATION_SETTINGS, byDefault);
++        // "Based on your usage" and Voice search are no longer offered, and the microphone is gone.
++        // Either one, stored before, reads as the default: the button such a user was already
++        // shown, because without segmentation results or a microphone the bar fell back to it.
++        if (stored == AdaptiveToolbarButtonVariant.AUTO
++                || stored == AdaptiveToolbarButtonVariant.VOICE) {
++            return byDefault;
++        }
++        return stored;
+     }
+ 
+     /**
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictor.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictor.java
+index 6af23a0a329..a8fab358f27 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictor.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictor.java
+@@ -11,6 +11,8 @@ import androidx.annotation.VisibleForTesting;
+ 
+ import org.chromium.base.Callback;
+ import org.chromium.base.ResettersForTesting;
++import org.chromium.base.task.PostTask;
++import org.chromium.base.task.TaskTraits;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionUtil;
+@@ -233,8 +235,12 @@ public class AdaptiveToolbarStatePredictor {
+             return;
+         }
+ 
+-        AdaptiveToolbarBridge.getSessionVariantButtons(
+-                mProfile, mBehavior.useRawResults(), result -> callback.onResult(result.second));
++        // Bare: the shortcut is the one the user chose, or the default, never one picked from how
++        // the browser is used, so the segmentation platform is not asked. The answer is posted,
++        // as the platform's was, so callers see the same order of events.
++        ArrayList<Integer> noPrediction = new ArrayList<>();
++        noPrediction.add(AdaptiveToolbarButtonVariant.UNKNOWN);
++        PostTask.postTask(TaskTraits.UI_DEFAULT, () -> callback.onResult(noPrediction));
+     }
+ 
+     /**

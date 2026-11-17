@@ -1,0 +1,418 @@
+diff --git a/chrome/browser/bare/backup/backup_settings.cc b/chrome/browser/bare/backup/backup_settings.cc
+index 5b8de0b2328..e531c0ef1b5 100644
+--- a/chrome/browser/bare/backup/backup_settings.cc
++++ b/chrome/browser/bare/backup/backup_settings.cc
+@@ -369,6 +369,7 @@ constexpr Setting kSettings[] = {
+     {P, kSetup, "bare.background_media_playback", kBool, AnyBool},
+     {P, kSetup, "bare.omnibox.suggest_history_urls", kBool, AnyBool},
+     {P, kSetup, "search.suggest_enabled", kBool, AnyBool},
++    {A, kSetup, "Bare.Incognito.SearchEngine", kString, AnyString},
+     {P, kSetup, "net.network_prediction_options", kInt, IntRange<0, 3>},
+     {A, kSetup, "Chrome.Download.UseExternalDownloadManager", kBool, AnyBool},
+     {A, kSetup, "Bare.Downloads.ExternalSignIn", kBool, AnyBool},
+diff --git a/chrome/browser/ui/android/omnibox/BUILD.gn b/chrome/browser/ui/android/omnibox/BUILD.gn
+index bfc461cb55e..351a69398dd 100644
+--- a/chrome/browser/ui/android/omnibox/BUILD.gn
++++ b/chrome/browser/ui/android/omnibox/BUILD.gn
+@@ -49,6 +49,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/omnibox/BareEngineCard.java",
+     "java/src/org/chromium/chrome/browser/omnibox/BareEnginePicker.java",
+     "java/src/org/chromium/chrome/browser/omnibox/BareEngineLetterDrawable.java",
++    "java/src/org/chromium/chrome/browser/omnibox/BareIncognitoEngine.java",
+     "java/src/org/chromium/chrome/browser/omnibox/BareSearchOverride.java",
+     "java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java",
+     "java/src/org/chromium/chrome/browser/omnibox/LocationBarMetrics.java",
+diff --git a/chrome/browser/ui/android/omnibox/java/res/values/bare_strings.xml b/chrome/browser/ui/android/omnibox/java/res/values/bare_strings.xml
+index 3e37f292c8b..d76096fcfbf 100644
+--- a/chrome/browser/ui/android/omnibox/java/res/values/bare_strings.xml
++++ b/chrome/browser/ui/android/omnibox/java/res/values/bare_strings.xml
+@@ -6,4 +6,5 @@ found in the LICENSE file.
+ -->
+ <resources>
+     <string name="bare_engine_once_title" translatable="false">Search once with</string>
++    <string name="bare_engine_incognito_title" translatable="false">Search in Incognito with</string>
+ </resources>
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEngineCard.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEngineCard.java
+index c9351b08654..83acad41e73 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEngineCard.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEngineCard.java
+@@ -58,6 +58,19 @@ public final class BareEngineCard implements BottomSheetContent {
+      */
+     public static boolean show(
+             Context context, WindowAndroid window, TemplateUrlService service, Object owner) {
++        return show(context, window, service, owner, /* incognito= */ false);
++    }
++
++    /**
++     * As {@link #show(Context, WindowAndroid, TemplateUrlService, Object)}; in Incognito the pick
++     * is kept as Incognito's own engine by {@link BareIncognitoEngine} instead of used once.
++     */
++    public static boolean show(
++            Context context,
++            WindowAndroid window,
++            TemplateUrlService service,
++            Object owner,
++            boolean incognito) {
+         // A sheet will not open over the keyboard or while the address bar has focus, and the
+         // engine icon is often tapped with the bar open. Let the bar go and put the keyboard away
+         // first, then open the card once they have gone.
+@@ -71,19 +84,23 @@ public final class BareEngineCard implements BottomSheetContent {
+                 window.getKeyboardDelegate().hideKeyboard(decor);
+                 decor.postDelayed(
+                         () -> {
+-                            if (!present(context, window, service, owner)) {
+-                                BareEnginePicker.show(context, service, owner);
++                            if (!present(context, window, service, owner, incognito)) {
++                                BareEnginePicker.show(context, service, owner, incognito);
+                             }
+                         },
+                         KEYBOARD_GONE_MS);
+                 return true;
+             }
+         }
+-        return present(context, window, service, owner);
++        return present(context, window, service, owner, incognito);
+     }
+ 
+     private static boolean present(
+-            Context context, WindowAndroid window, TemplateUrlService service, Object owner) {
++            Context context,
++            WindowAndroid window,
++            TemplateUrlService service,
++            Object owner,
++            boolean incognito) {
+         BottomSheetController controller = BottomSheetControllerProvider.from(window);
+         if (controller == null) return false;
+         List<TemplateUrl> engines = new ArrayList<>();
+@@ -95,18 +112,23 @@ public final class BareEngineCard implements BottomSheetContent {
+         }
+         if (engines.isEmpty()) return false;
+         @Nullable TemplateUrl defaultEngine = service.getDefaultSearchEngineTemplateUrl();
+-        @Nullable String chosen = BareSearchOverride.getName();
++        @Nullable String chosen = incognito ? null : BareSearchOverride.getName();
++        @Nullable TemplateUrl incognitoEngine =
++                incognito ? BareIncognitoEngine.get(service) : null;
+         BareEngineCard[] holder = new BareEngineCard[1];
+         LinearLayout column = new LinearLayout(context);
+         column.setOrientation(LinearLayout.VERTICAL);
+         float density = context.getResources().getDisplayMetrics().density;
+         column.setPadding(0, Math.round(4 * density), 0, 0);
+-        column.addView(titleView(context, density));
++        column.addView(titleView(context, density, incognito));
+         for (TemplateUrl tu : engines) {
+             boolean current =
+-                    chosen != null
+-                            ? tu.getShortName().equals(chosen)
+-                            : defaultEngine != null && tu.getURL().equals(defaultEngine.getURL());
++                    incognitoEngine != null
++                            ? tu.getURL().equals(incognitoEngine.getURL())
++                            : chosen != null
++                                    ? tu.getShortName().equals(chosen)
++                                    : defaultEngine != null
++                                            && tu.getURL().equals(defaultEngine.getURL());
+             column.addView(
+                     row(
+                             context,
+@@ -115,7 +137,9 @@ public final class BareEngineCard implements BottomSheetContent {
+                             current,
+                             v -> {
+                                 controller.hideContent(holder[0], true);
+-                                if (defaultEngine != null
++                                if (incognito) {
++                                    BareIncognitoEngine.set(tu);
++                                } else if (defaultEngine != null
+                                         && tu.getURL().equals(defaultEngine.getURL())) {
+                                     BareSearchOverride.clear(owner);
+                                 } else {
+@@ -139,9 +163,10 @@ public final class BareEngineCard implements BottomSheetContent {
+         mContainer.setPadding(0, 0, 0, Math.round(16 * density));
+     }
+ 
+-    private static TextView titleView(Context context, float density) {
++    private static TextView titleView(Context context, float density, boolean incognito) {
+         TextView title = new TextView(context);
+-        title.setText(R.string.bare_engine_once_title);
++        title.setText(
++                incognito ? R.string.bare_engine_incognito_title : R.string.bare_engine_once_title);
+         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+         title.setTextColor(SemanticColorUtils.getDefaultTextColor(context));
+         title.setAlpha(0.7f);
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEnginePicker.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEnginePicker.java
+index c84ef6be725..803612cb22d 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEnginePicker.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareEnginePicker.java
+@@ -29,6 +29,12 @@ public final class BareEnginePicker {
+     /** Shows the list; the choice is held in {@link BareSearchOverride} for {@code owner}. */
+     public static @Nullable AlertDialog show(
+             Context context, TemplateUrlService service, Object owner) {
++        return show(context, service, owner, /* incognito= */ false);
++    }
++
++    /** As {@link #show(Context, TemplateUrlService, Object)}; see {@link BareEngineCard}. */
++    public static @Nullable AlertDialog show(
++            Context context, TemplateUrlService service, Object owner, boolean incognito) {
+         List<TemplateUrl> engines = new ArrayList<>();
+         Set<String> seen = new HashSet<>();
+         for (TemplateUrl tu : service.getTemplateUrls()) {
+@@ -38,28 +44,38 @@ public final class BareEnginePicker {
+         }
+         if (engines.isEmpty()) return null;
+         @Nullable TemplateUrl defaultEngine = service.getDefaultSearchEngineTemplateUrl();
+-        @Nullable String chosen = BareSearchOverride.getName();
++        @Nullable String chosen = incognito ? null : BareSearchOverride.getName();
++        @Nullable TemplateUrl incognitoEngine =
++                incognito ? BareIncognitoEngine.get(service) : null;
+         String[] names = new String[engines.size()];
+         int checked = -1;
+         for (int i = 0; i < names.length; i++) {
+             TemplateUrl tu = engines.get(i);
+             names[i] = tu.getShortName();
+             boolean current =
+-                    chosen != null
+-                            ? tu.getShortName().equals(chosen)
+-                            : defaultEngine != null && tu.getURL().equals(defaultEngine.getURL());
++                    incognitoEngine != null
++                            ? tu.getURL().equals(incognitoEngine.getURL())
++                            : chosen != null
++                                    ? tu.getShortName().equals(chosen)
++                                    : defaultEngine != null
++                                            && tu.getURL().equals(defaultEngine.getURL());
+             if (current) checked = i;
+         }
+         AlertDialog dialog =
+                 new AlertDialog.Builder(context)
+-                        .setTitle(R.string.bare_engine_once_title)
++                        .setTitle(
++                                incognito
++                                        ? R.string.bare_engine_incognito_title
++                                        : R.string.bare_engine_once_title)
+                         .setSingleChoiceItems(
+                                 names,
+                                 checked,
+                                 (d, which) -> {
+                                     d.dismiss();
+                                     TemplateUrl picked = engines.get(which);
+-                                    if (defaultEngine != null
++                                    if (incognito) {
++                                        BareIncognitoEngine.set(picked);
++                                    } else if (defaultEngine != null
+                                             && picked.getURL().equals(defaultEngine.getURL())) {
+                                         BareSearchOverride.clear(owner);
+                                     } else {
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareIncognitoEngine.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareIncognitoEngine.java
+new file mode 100644
+index 00000000000..fd5352b1b52
+--- /dev/null
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareIncognitoEngine.java
+@@ -0,0 +1,69 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.omnibox;
++
++import android.text.TextUtils;
++
++import org.chromium.base.ContextUtils;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.profiles.Profile;
++import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
++import org.chromium.components.search_engines.TemplateUrl;
++import org.chromium.components.search_engines.TemplateUrlService;
++import org.chromium.url.GURL;
++
++/**
++ * The search engine Incognito uses.
++ *
++ * <p>Incognito shares the regular profile's engines and its default, so its own pick is kept here,
++ * by keyword, and outlives Incognito tabs and restarts. A search sent from an Incognito address bar
++ * is built for the default engine first and then rebuilt for this one from the same query. With no
++ * pick, or when the picked engine has been deleted, Incognito follows the default.
++ */
++@NullMarked
++public final class BareIncognitoEngine {
++    /** Also listed in the Bare backup (chrome/browser/bare/backup/backup_settings.cc). */
++    private static final String KEY = "Bare.Incognito.SearchEngine";
++
++    private BareIncognitoEngine() {}
++
++    /** The picked engine, or null with no pick or when it no longer exists. */
++    public static @Nullable TemplateUrl get(@Nullable TemplateUrlService service) {
++        if (service == null || !service.isLoaded()) return null;
++        String keyword = ContextUtils.getAppSharedPreferences().getString(KEY, null);
++        if (TextUtils.isEmpty(keyword)) return null;
++        return service.getTemplateUrlForKeyword(keyword);
++    }
++
++    /** As {@link #get}, for the address bar of {@code profile}; null outside Incognito. */
++    public static @Nullable TemplateUrl forProfile(@Nullable Profile profile) {
++        if (profile == null || !profile.isIncognitoBranded()) return null;
++        return get(TemplateUrlServiceFactory.getForProfile(profile));
++    }
++
++    /** Makes {@code engine} the one Incognito searches with. */
++    public static void set(TemplateUrl engine) {
++        ContextUtils.getAppSharedPreferences().edit().putString(KEY, engine.getKeyword()).apply();
++        BareSearchOverride.notifyObservers();
++    }
++
++    /**
++     * The address to load instead of {@code url}, or null to load it as it is. Only a search
++     * results address for the default engine is rewritten, so a typed web address is never touched.
++     */
++    public static @Nullable String rewrite(@Nullable TemplateUrlService service, String url) {
++        @Nullable TemplateUrl engine = get(service);
++        if (engine == null || service == null) return null;
++        GURL parsed = new GURL(url);
++        if (!service.isSearchResultsPageFromDefaultSearchProvider(parsed)) return null;
++        @Nullable TemplateUrl defaultEngine = service.getDefaultSearchEngineTemplateUrl();
++        if (defaultEngine != null && defaultEngine.getURL().equals(engine.getURL())) return null;
++        String query = service.getSearchQueryForUrl(parsed);
++        if (query == null || query.isEmpty()) return null;
++        @Nullable GURL expanded = service.expandUrlTemplate(engine.getURL(), query);
++        return expanded == null ? null : expanded.getSpec();
++    }
++}
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareSearchOverride.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareSearchOverride.java
+index 555f8ace102..aa241a46bec 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareSearchOverride.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/BareSearchOverride.java
+@@ -54,7 +54,7 @@ public final class BareSearchOverride {
+         sObservers.removeObserver(observer);
+     }
+ 
+-    private static void notifyObservers() {
++    static void notifyObservers() {
+         for (Runnable observer : sObservers) observer.run();
+     }
+ 
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/HintTextUpdater.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/HintTextUpdater.java
+index 1f69f592cd9..ea3307aef96 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/HintTextUpdater.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/HintTextUpdater.java
+@@ -38,6 +38,7 @@ import org.chromium.components.omnibox.ToolConfigProto.ToolConfig;
+ import org.chromium.components.omnibox.ToolModeProtoIntDef.ToolMode;
+ import org.chromium.components.omnibox.ToolModeUtils;
+ import org.chromium.components.search_engines.AiModeButtonUiConfig;
++import org.chromium.components.search_engines.TemplateUrl;
+ import org.chromium.url.GURL;
+ 
+ /**
+@@ -236,8 +237,16 @@ public class HintTextUpdater implements LocationBarDataProvider.Observer {
+ 
+         assert mSearchEngineService != null;
+         SearchEngineService searchEngineService = mSearchEngineService;
+-        // Bare: an engine picked for the next search names itself in the hint.
+-        String onceName = BareSearchOverride.getName();
++        // Bare: an engine picked for the next search names itself in the hint, and Incognito
++        // names the engine it searches with.
++        @Nullable Profile profile = mProfileSupplier.get();
++        @Nullable TemplateUrl incognitoEngine = BareIncognitoEngine.forProfile(profile);
++        @Nullable String onceName =
++                incognitoEngine != null
++                        ? incognitoEngine.getShortName()
++                        : profile != null && profile.isIncognitoBranded()
++                                ? null
++                                : BareSearchOverride.getName();
+         if (onceName != null) {
+             return mResourceProvider.getString(R.string.omnibox_empty_hint_with_dse_name, onceName);
+         }
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
+index 220d3e9669d..162a9cbb490 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
+@@ -1173,9 +1173,13 @@ public class LocationBarMediator
+ 
+             // Bare: a search sent from a New tab page that picked its own engine goes to that
+             // engine, once, and the default is left alone.
++            // Incognito searches go to Incognito's own engine (BareIncognitoEngine).
+             @Nullable String chosen =
+-                    BareSearchOverride.rewrite(
+-                            mTemplateUrlServiceSupplier.get(), omniboxLoadUrlParams.url);
++                    mLocationBarDataProvider.isIncognitoBranded()
++                            ? BareIncognitoEngine.rewrite(
++                                    mTemplateUrlServiceSupplier.get(), omniboxLoadUrlParams.url)
++                            : BareSearchOverride.rewrite(
++                                    mTemplateUrlServiceSupplier.get(), omniboxLoadUrlParams.url);
+             if (chosen != null) omniboxLoadUrlParams = omniboxLoadUrlParams.withUrl(chosen);
+ 
+             if (mNavigator.loadUrl(omniboxLoadUrlParams)) {
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
+index 8f563441a05..d830bd379f2 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
+@@ -35,6 +35,8 @@ import org.chromium.chrome.browser.ui.actions.ActionHaptics;
+ import org.chromium.chrome.browser.omnibox.BareEngineLetterDrawable;
+ import org.chromium.chrome.browser.omnibox.BareEngineCard;
+ import org.chromium.chrome.browser.omnibox.BareEnginePicker;
++import org.chromium.chrome.browser.omnibox.BareIncognitoEngine;
++import org.chromium.chrome.browser.search_engines.settings.BareEngineLogos;
+ import org.chromium.chrome.browser.omnibox.BareSearchOverride;
+ import org.chromium.chrome.browser.omnibox.FuseboxSessionState;
+ import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
+@@ -866,14 +868,17 @@ public class StatusMediator
+ 
+         // Bare: the icon opens a list for sending the next search to another engine, and shows
+         // that engine while the choice holds.
+-        String onceName = BareSearchOverride.getName();
++        // In Incognito the icon opens the same list, and the pick stays as Incognito's engine.
++        String onceName =
++                mLocationBarDataProvider.isIncognitoBranded()
++                        ? null
++                        : BareSearchOverride.getName();
+         mModel.set(
+                 StatusProperties.STATUS_ICON_RESOURCE,
+                 onceName != null
+                         ? new StatusIconResource(new BareEngineLetterDrawable(onceName))
+                         : getStatusIconResourceForSearchEngineIcon());
+-        setStatusClickListener(
+-                mLocationBarDataProvider.isIncognitoBranded() ? null : this::onClickEngineIcon);
++        setStatusClickListener(this::onClickEngineIcon);
+         updateStatusViewVisibility();
+         return true;
+     }
+@@ -945,6 +950,9 @@ public class StatusMediator
+                     ThemeUtils.getThemedToolbarIconTintRes(mBrandedColorScheme));
+         }
+ 
++        StatusIconResource incognitoIcon = getStatusIconResourceForIncognitoEngine();
++        if (incognitoIcon != null) return incognitoIcon;
++
+         if (mSearchEngineIcon == null) {
+             return new StatusIconResource(
+                     R.drawable.ic_search_24dp,
+@@ -954,6 +962,21 @@ public class StatusMediator
+         return mSearchEngineIcon;
+     }
+ 
++    /** Bare: the engine Incognito searches with, when it is not the default. */
++    private @Nullable StatusIconResource getStatusIconResourceForIncognitoEngine() {
++        if (!mLocationBarDataProvider.isIncognitoBranded()) return null;
++        TemplateUrlService service = mTemplateUrlServiceSupplier.get();
++        TemplateUrl engine = BareIncognitoEngine.get(service);
++        if (engine == null || service == null) return null;
++        TemplateUrl defaultEngine = service.getDefaultSearchEngineTemplateUrl();
++        if (defaultEngine != null && defaultEngine.getURL().equals(engine.getURL())) return null;
++        Bitmap logo = BareEngineLogos.get(mContext, engine.getURL());
++        if (logo != null) {
++            return new StatusIconResource("bare_incognito_" + engine.getKeyword(), logo, 0);
++        }
++        return new StatusIconResource(new BareEngineLetterDrawable(engine.getShortName()));
++    }
++
+     private @Nullable StatusIconResource getStatusIconResourceForExtensionSuppliedDse() {
+         if (mSiteSearchDataSupplier == null) return null;
+ 
+@@ -1021,8 +1044,9 @@ public class StatusMediator
+         TemplateUrlService service = mTemplateUrlServiceSupplier.get();
+         if (service == null) return;
+         ActionHaptics.tick(view);
+-        if (!BareEngineCard.show(mContext, mWindowAndroid, service, this)) {
+-            BareEnginePicker.show(mContext, service, this);
++        boolean incognito = mLocationBarDataProvider.isIncognitoBranded();
++        if (!BareEngineCard.show(mContext, mWindowAndroid, service, this, incognito)) {
++            BareEnginePicker.show(mContext, service, this, incognito);
+         }
+     }
+ 

@@ -1,0 +1,270 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedNavigationBarColorController.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedNavigationBarColorController.java
+index acaabe0455b..3540a8687cc 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedNavigationBarColorController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedNavigationBarColorController.java
+@@ -29,8 +29,10 @@ import org.chromium.build.annotations.EnsuresNonNullIf;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.chrome.browser.browser_controls.BottomControlsStacker;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
++import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
+ import org.chromium.chrome.browser.contextualsearch.ContextualSearchManager;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ import org.chromium.chrome.browser.fullscreen.FullscreenManager;
+@@ -49,6 +51,7 @@ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
+ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
+ import org.chromium.chrome.browser.ui.edge_to_edge.NavigationBarColorProvider;
+ import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
++import org.chromium.components.browser_ui.styles.IncognitoColors;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.ui.edge_to_edge.EdgeToEdgeSupplier.ChangeObserver;
+ import org.chromium.ui.edge_to_edge.EdgeToEdgeSystemBarColorHelper;
+@@ -77,6 +80,10 @@ class TabbedNavigationBarColorController
+     private final Callback<EdgeToEdgeController> mEdgeToEdgeRegisterChangeObserverCallback;
+     private EdgeToEdgeSystemBarColorHelper mEdgeToEdgeSystemBarColorHelper;
+     private final BottomAttachedUiObserver mBottomAttachedUiObserver;
++    // Bare: where the bar really is now. The minimal bar's strip follows the bar only while the
++    // bar sits at the bottom; the per-tab guess in ToolbarPositionController says "top" for the
++    // New tab page, which Bare keeps at the bottom.
++    private @Nullable BrowserControlsStateProvider mBareControlsState;
+     private final TabObserver mTabObserver;
+     private final ObserverList<Observer> mObservers = new ObserverList<>();
+ 
+@@ -173,6 +180,7 @@ class TabbedNavigationBarColorController
+                         omniboxSuggestionsVisualState,
+                         manualFillingComponent,
+                         insetObserver));
++        mBareControlsState = browserControlsStateProvider;
+     }
+ 
+     @VisibleForTesting
+@@ -483,6 +491,13 @@ class TabbedNavigationBarColorController
+     private @ColorInt int getNavigationBarColor(boolean forceDarkNavigationBar) {
+         if (mOverviewMode && mOverviewColorSupplier.get() != null) {
+             return mOverviewColorSupplier.get();
++        } else if (BottomBarConfigUtils.isMinimalLayout()
++                && mBareControlsState != null
++                && mBareControlsState.getControlsPosition() == ControlsPosition.BOTTOM) {
++            // Bare: the minimal bar sits right on the navigation bar, so the strip under it takes
++            // the bar's own colour instead of the page's.
++            return IncognitoColors.getColorSurfaceContainerHigh(
++                    mContext, mTabModelSelector.isIncognitoSelected());
+         } else if (useBottomAttachedUiColor()) {
+             return mBottomAttachedUiColor;
+         } else if (useActiveTabColor()) {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index d234d85e6df..c19450765de 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -3882,8 +3882,10 @@ public class ToolbarManager
+         if (previousTab != tab) {
+             boolean isBottomBarEnabled = BottomBarConfigUtils.isBottomBarEnabled(mActivity);
+             boolean isBottomPosition = mToolbarPositionSupplier.get() == ControlsPosition.BOTTOM;
++            // Bare: the minimal layout's bar has the full layout's bar colour too.
+             int defaultPrimaryColor =
+-                    (isBottomBarEnabled && isBottomPosition)
++                    ((isBottomBarEnabled && isBottomPosition)
++                                    || (BottomBarConfigUtils.isMinimalLayout() && !mIsCustomTab))
+                             ? IncognitoColors.getColorSurfaceContainerHigh(
+                                     mActivity, isIncognitoBranded)
+                             : ChromeColors.getDefaultThemeColor(mActivity, isIncognitoBranded);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
+index 71781d2462c..042470b4d4e 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
+@@ -879,12 +879,15 @@ public class RootUiCoordinator
+                         mIncognitoStateProvider,
+                         mActivity);
+ 
++        // Bare: in the browser the minimal layout's bar takes the full layout's bar colour.
++        boolean minimalBar = mActivityType == ActivityType.TABBED;
+         mToolbarThemeColorProvider =
+                 new ToolbarThemeColorProvider(
+                         mActivity,
+                         mTopUiThemeColorProvider,
+                         mBottomUiThemeColorProvider,
+-                        mBrowserControlsManager);
++                        mBrowserControlsManager,
++                        minimalBar);
+ 
+         if (mAdjustedTopUiThemeColorProvider != null) {
+             mAdjustedToolbarThemeColorProvider =
+@@ -892,7 +895,8 @@ public class RootUiCoordinator
+                             mActivity,
+                             mAdjustedTopUiThemeColorProvider,
+                             mBottomUiThemeColorProvider,
+-                            mBrowserControlsManager);
++                            mBrowserControlsManager,
++                            minimalBar);
+         }
+ 
+         if (BrowserControlsUtils.doSyncMinHeightWithTotalHeightV2(mActivity)) {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java b/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
+index af9cec4007d..242fcaa14b6 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
+@@ -758,8 +758,11 @@ public class StatusBarColorController
+     }
+ 
+     private boolean isBottomBarEnabledAndBottomControls() {
++        // Bare: the minimal layout's bar at the bottom leaves the status bar to the page, as the
++        // full layout does, now that it has the bar colour rather than the page's.
+         return mBrowserControlsStateProvider.getControlsPosition() == ControlsPosition.BOTTOM
+-                && BottomBarConfigUtils.isBottomBarEnabled(mActivity);
++                && (BottomBarConfigUtils.isBottomBarEnabled(mActivity)
++                        || BottomBarConfigUtils.isMinimalLayout());
+     }
+ 
+     @ColorInt
+diff --git a/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/theme/ToolbarThemeColorProvider.java b/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/theme/ToolbarThemeColorProvider.java
+index c89a55c831a..f8bd51be724 100644
+--- a/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/theme/ToolbarThemeColorProvider.java
++++ b/chrome/browser/ui/android/theme/java/src/org/chromium/chrome/browser/theme/ToolbarThemeColorProvider.java
+@@ -17,7 +17,9 @@ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.theme.ThemeColorProvider.ThemeColorObserver;
+ import org.chromium.chrome.browser.theme.ThemeColorProvider.TintObserver;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
++import org.chromium.chrome.browser.ui.native_page.NativePage;
+ import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
++import org.chromium.components.browser_ui.styles.IncognitoColors;
+ 
+ /**
+  * Theme color provider for the toolbar. It listens to {@link TopUiThemeColorProvider} by default.
+@@ -33,6 +35,12 @@ public class ToolbarThemeColorProvider extends ThemeColorProvider
+     private final boolean mIsBottomBarEnabled;
+     private @ControlsPosition int mControlsPosition;
+     private @Nullable ThemeColorProvider mActiveProvider;
++    // Bare: the minimal layout's bar takes the full layout's bar colour, so the address bar stands
++    // out from it the same way.
++    private final Context mContext;
++    private final boolean mMinimalBar;
++    private @Nullable ColorStateList mMinimalTint;
++    private int mMinimalTintScheme = -1;
+ 
+     /**
+      * @param context The {@link Context} to check if bottom bar is enabled.
+@@ -47,11 +55,33 @@ public class ToolbarThemeColorProvider extends ThemeColorProvider
+             TopUiThemeColorProvider topUiThemeColorProvider,
+             BottomUiThemeColorProvider bottomUiThemeColorProvider,
+             BrowserControlsStateProvider browserControlsStateProvider) {
++        this(
++                context,
++                topUiThemeColorProvider,
++                bottomUiThemeColorProvider,
++                browserControlsStateProvider,
++                /* minimalBar= */ false);
++    }
++
++    /**
++     * As above. With {@code minimalBar} and the minimal layout on, the bar is drawn in the colour
++     * the full layout's bar has, on every page, with the icons in the plain day, night or
++     * Incognito tint.
++     */
++    public ToolbarThemeColorProvider(
++            Context context,
++            TopUiThemeColorProvider topUiThemeColorProvider,
++            BottomUiThemeColorProvider bottomUiThemeColorProvider,
++            BrowserControlsStateProvider browserControlsStateProvider,
++            boolean minimalBar) {
+         super(context);
+         mTopUiThemeColorProvider = topUiThemeColorProvider;
+         mBottomUiThemeColorProvider = bottomUiThemeColorProvider;
+         mBrowserControlsStateProvider = browserControlsStateProvider;
+         mIsBottomBarEnabled = BottomBarConfigUtils.isBottomBarEnabled(context);
++        mContext = context;
++        mMinimalBar =
++                minimalBar && !mIsBottomBarEnabled && BottomBarConfigUtils.isMinimalLayout();
+         mControlsPosition = browserControlsStateProvider.getControlsPosition();
+ 
+         mBrowserControlsStateProvider.addObserver(this);
+@@ -77,6 +107,11 @@ public class ToolbarThemeColorProvider extends ThemeColorProvider
+      * @return Returns the toolbar background color.
+      */
+     public @ColorInt int getToolbarBackgroundColor(Tab tab) {
++        if (mMinimalBar) {
++            @ColorInt int bar = minimalBarColor(tab.isIncognitoBranded());
++            NativePage nativePage = tab.getNativePage();
++            return nativePage != null ? nativePage.getToolbarSceneLayerBackground(bar) : bar;
++        }
+         if (mActiveProvider == mTopUiThemeColorProvider) {
+             return mTopUiThemeColorProvider.getToolbarBackgroundColor(tab);
+         }
+@@ -102,6 +137,10 @@ public class ToolbarThemeColorProvider extends ThemeColorProvider
+ 
+     @Override
+     public void onThemeColorChanged(int color, boolean shouldAnimate) {
++        if (mMinimalBar) {
++            updateMinimalBar(shouldAnimate);
++            return;
++        }
+         updatePrimaryColor(color, shouldAnimate);
+     }
+ 
+@@ -110,6 +149,10 @@ public class ToolbarThemeColorProvider extends ThemeColorProvider
+             @Nullable ColorStateList tint,
+             @Nullable ColorStateList activityFocusTint,
+             @BrandedColorScheme int brandedColorScheme) {
++        if (mMinimalBar) {
++            updateMinimalBar(/* animate= */ false);
++            return;
++        }
+         updateTint(tint, activityFocusTint, brandedColorScheme);
+     }
+ 
+@@ -130,6 +173,10 @@ public class ToolbarThemeColorProvider extends ThemeColorProvider
+             mActiveProvider.addThemeColorObserver(this);
+             mActiveProvider.addTintObserver(this);
+ 
++            if (mMinimalBar) {
++                updateMinimalBar(animate);
++                return;
++            }
+             updatePrimaryColor(mActiveProvider.getThemeColor(), animate);
+             updateTint(
+                     mActiveProvider.getTint(),
+@@ -137,4 +184,28 @@ public class ToolbarThemeColorProvider extends ThemeColorProvider
+                     mActiveProvider.getBrandedColorScheme());
+         }
+     }
++
++    /** The full layout's bar colour, which the minimal layout's bar takes too. */
++    private @ColorInt int minimalBarColor(boolean incognito) {
++        return IncognitoColors.getColorSurfaceContainerHigh(mContext, incognito);
++    }
++
++    /**
++     * Bare: the minimal bar keeps the bar colour on every page, as the full layout does, so the
++     * address bar stands out from it in day, night and Incognito alike, and on sites with a theme
++     * colour. Only Incognito is taken from the page provider.
++     */
++    private void updateMinimalBar(boolean animate) {
++        ThemeColorProvider source = mActiveProvider;
++        if (source == null) return;
++        boolean incognito = source.getBrandedColorScheme() == BrandedColorScheme.INCOGNITO;
++        @BrandedColorScheme
++        int scheme = incognito ? BrandedColorScheme.INCOGNITO : BrandedColorScheme.APP_DEFAULT;
++        if (mMinimalTint == null || mMinimalTintScheme != scheme) {
++            mMinimalTintScheme = scheme;
++            mMinimalTint = ThemeUtils.getThemedToolbarIconTint(mContext, scheme);
++        }
++        updatePrimaryColor(minimalBarColor(incognito), animate);
++        updateTint(mMinimalTint, mMinimalTint, scheme);
++    }
+ }
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+index 1b39a491e15..6c81c9e452a 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+@@ -1215,7 +1215,9 @@ public class ToolbarPhone extends ToolbarLayout
+                         mBrowserControlsStateProvider != null
+                                 && mBrowserControlsStateProvider.getControlsPosition()
+                                         == ControlsPosition.BOTTOM;
+-                return (isBottomBarEnabled && isBottomPosition)
++                // Bare: the minimal layout's bar has the full layout's bar colour too.
++                return ((isBottomBarEnabled && isBottomPosition)
++                                || BottomBarConfigUtils.isMinimalLayout())
+                         ? IncognitoColors.getColorSurfaceContainerHigh(
+                                 getContext(), /* isIncognito= */ true)
+                         : ChromeColors.getDefaultThemeColor(getContext(), /* isIncognito= */ true);

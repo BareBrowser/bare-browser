@@ -1,0 +1,196 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index 435c46e4f95..fae2c248e96 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -1969,6 +1969,10 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+ 
+         super.onStartWithNative();
+ 
++        // Bare: finish a clear left by an earlier exit as soon as the tabs are there, rather than
++        // after the restored page has loaded.
++        finishInterruptedClear();
++
+         if (ChromeFeatureList.isEnabled(ChromeFeatureList.GLIC_BACKGROUND_ACTUATION)) {
+             TabModelSelector tabModelSelector = getTabModelSelector();
+             assert tabModelSelector != null;
+@@ -2680,7 +2684,9 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                 shouldShowNtpAsHomeSurfaceAtStartup = shouldShowNtpHomeSurfaceOnStartup();
+                 mHomeSurfaceTracker = new HomeSurfaceTracker();
+                 bareOpenOnNewTab =
+-                        !shouldShowNtpAsHomeSurfaceAtStartup && shouldBareOpenOnNewTab(intent);
++                        !shouldShowNtpAsHomeSurfaceAtStartup
++                                && (shouldBareOpenOnNewTab(intent)
++                                        || isBareCloseTabsPending());
+                 if (shouldShowNtpAsHomeSurfaceAtStartup || bareOpenOnNewTab) {
+                     onStandardActiveIndexRead =
+                             url -> {
+@@ -4291,10 +4297,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+ 
+         LauncherShortcutActivity.updateDynamicLauncherShortcuts(profile);
+ 
+-        // If an earlier exit began deleting and the process went away before it finished, do it
+-        // now. Ordinarily the flag is clear and this returns immediately.
+-        BareClearOnExit.resumeIfInterrupted(
+-                getProfileProviderSupplier().get().getOriginalProfile());
++        // Normally already done from onStartWithNative. This catches a start where the profile
++        // was not ready by then.
+         finishInterruptedClear();
+ 
+         ChromeSurveyController.initialize(
+@@ -4567,6 +4571,17 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                 .closeTabs(TabClosureParams.closeAllTabs().build(), /* allowDialog= */ false);
+     }
+ 
++    /**
++     * Bare: the tabs of the last run are about to be closed by a pending clear. Starting on a new
++     * tab, as "Open Bare on a new tab" does, keeps the old active tab from loading under the cover.
++     */
++    private boolean isBareCloseTabsPending() {
++        if (!BareClearVeil.isPending() || !BareClearOnExit.isCloseTabs()) return false;
++        if (getSavedInstanceState() != null) return false;
++        return mSupportedProfileType != SupportedProfileType.OFF_THE_RECORD
++                && !isIncognitoModeForced();
++    }
++
+     /**
+      * Bare: whether this launch should start on a new tab ("Open Bare on a new tab" in Tabs
+      * settings). Only when Bare was closed, so this window starts with no saved state, and only
+@@ -6051,23 +6066,46 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+         BareClearOnExit.clearThen(original, () -> finishClear(closeTabs));
+     }
+ 
++    /** Set once this activity has taken over what an earlier run left pending. */
++    private boolean mInterruptedClearTaken;
++
+     /**
+-     * Finishes a clear that an exit or a leave from an earlier run left pending, once the tabs are
+-     * there to close: shows nothing but the cover until the restored tabs are gone.
++     * Finishes a clear that an exit or a leave from an earlier run left pending: deletes again
++     * whatever the deletion had not finished, and closes the restored tabs once tab state has
++     * loaded. The cover stays up until both are done, so a new tab never shows history or site data
++     * that is still being deleted.
+      *
+-     * <p>On a cold start onStart can come before the profile is ready, and the new tab needs it.
+-     * The cover stays up and onDeferredStartup calls this again.
++     * <p>Called from onStartWithNative. On a cold start onStart can come before the profile is
++     * ready, and the new tab needs it, so onStart and onDeferredStartup call this too. Only the
++     * first call that finds everything ready does anything.
+      */
+     private void finishInterruptedClear() {
+-        if (!BareClearVeil.isPending()
++        ProfileProvider profileProvider = getProfileProviderSupplier().get();
++        if (mInterruptedClearTaken
+                 || BareClearVeil.isRunning()
+                 || !areTabModelsInitialized()
+-                || getProfileProviderSupplier().get() == null) {
++                || profileProvider == null) {
++            return;
++        }
++        mInterruptedClearTaken = true;
++        Profile original = profileProvider.getOriginalProfile();
++        if (!BareClearVeil.isPending()) {
++            BareClearOnExit.resumeIfInterrupted(original, () -> {});
+             return;
+         }
+         boolean closeTabs = BareClearOnExit.isCloseTabs();
+-        if (closeTabs) BareClearOnExit.closeAllTabs(getTabModelSelector());
+-        finishClear(closeTabs);
++        int[] stepsLeft = {2};
++        Runnable step =
++                () -> {
++                    if (--stepsLeft[0] == 0) finishClear(closeTabs);
++                };
++        BareClearOnExit.resumeIfInterrupted(original, step);
++        TabModelUtils.runOnTabStateInitialized(
++                getTabModelSelector(),
++                (selector) -> {
++                    if (closeTabs) BareClearOnExit.closeAllTabs(selector);
++                    step.run();
++                });
+     }
+ 
+     /** Opens a fresh tab if every tab was closed, then lets the cover go. */
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java
+index aa93706854a..47a1024de53 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearOnExit.java
+@@ -41,6 +41,9 @@ import org.chromium.components.user_prefs.UserPrefs;
+ @NullMarked
+ public final class BareClearOnExit {
+ 
++    /** Set once this process has looked for a deletion left over from an earlier run. */
++    private static boolean sResumeChecked;
++
+     private BareClearOnExit() {}
+ 
+     /** The types Exit may be asked to delete, in the order the settings screen lists them. */
+@@ -150,12 +153,18 @@ public final class BareClearOnExit {
+     /**
+      * Finishes a deletion that an earlier exit started but did not see through.
+      *
+-     * <p>Called once the profile is available on a normal start. Does nothing in the usual case,
+-     * where the flag is clear.
++     * <p>Called once the profile is available on a normal start, and only looks the first time in
++     * a process, so a second caller cannot start the deletion again while it runs. {@code whenDone}
++     * runs once the deletion has finished, or at once when there is nothing to finish.
+      */
+-    public static void resumeIfInterrupted(Profile profile) {
+-        if (!UserPrefs.get(profile).getBoolean(Pref.CLEAR_ON_EXIT_PENDING)) return;
+-        clearThen(profile, () -> {});
++    public static void resumeIfInterrupted(Profile profile, Runnable whenDone) {
++        if (sResumeChecked || !UserPrefs.get(profile).getBoolean(Pref.CLEAR_ON_EXIT_PENDING)) {
++            sResumeChecked = true;
++            whenDone.run();
++            return;
++        }
++        sResumeChecked = true;
++        clearThen(profile, whenDone);
+     }
+ 
+     private static int[] selectedTypes(int mask) {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearVeil.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearVeil.java
+index bb7e43874a6..e1ab41a1081 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearVeil.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareClearVeil.java
+@@ -26,9 +26,6 @@ public final class BareClearVeil {
+     /** The cover is taken down after this long even if the clear never reports back. */
+     private static final long GIVE_UP_MS = 15000;
+ 
+-    /** How long the new tab is given to appear before the cover starts to fade. */
+-    private static final long HOLD_MS = 400;
+-
+     private static final long FADE_MS = 200;
+ 
+     private static @Nullable View sView;
+@@ -68,7 +65,11 @@ public final class BareClearVeil {
+         view.postDelayed(() -> end(), GIVE_UP_MS);
+     }
+ 
+-    /** The clear is over and the new tab is up: unmarks it and fades the cover away. */
++    /**
++     * The clear is over: unmarks it and fades the cover away. The fade waits two frames, one for
++     * the new tab to lay out and draw and one to show it, so the cover never lifts on an empty
++     * window.
++     */
+     public static void end() {
+         ChromeSharedPreferences.getInstance()
+                 .writeBoolean(ChromePreferenceKeys.BARE_CLEAR_VEIL_PENDING, false);
+@@ -76,7 +77,7 @@ public final class BareClearVeil {
+         View view = sView;
+         if (view == null) return;
+         sView = null;
+-        view.postDelayed(
++        Runnable fade =
+                 () ->
+                         view.animate()
+                                 .alpha(0f)
+@@ -86,7 +87,7 @@ public final class BareClearVeil {
+                                             ViewGroup parent = (ViewGroup) view.getParent();
+                                             if (parent != null) parent.removeView(view);
+                                         })
+-                                .start(),
+-                HOLD_MS);
++                                .start();
++        view.postOnAnimation(() -> view.postOnAnimation(fade));
+     }
+ }

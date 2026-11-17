@@ -1,0 +1,268 @@
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 814b9d649a3..b88021d6bc6 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -1854,6 +1854,7 @@ source_set("core") {
+       "//chrome/android:jni_headers",
+       "//chrome/browser/android",
+       "//chrome/browser/android:profile_key_startup_accessor",
++      "//chrome/browser/bare/background_audio",
+       "//chrome/browser/autocomplete",
+       "//chrome/browser/bookmarks",
+       "//chrome/browser/commerce",
+diff --git a/chrome/browser/bare/background_audio/BUILD.gn b/chrome/browser/bare/background_audio/BUILD.gn
+new file mode 100644
+index 00000000000..e0666c3f13d
+--- /dev/null
++++ b/chrome/browser/bare/background_audio/BUILD.gn
+@@ -0,0 +1,16 @@
++# Copyright 2026 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++assert(is_android)
++
++static_library("background_audio") {
++  sources = [
++    "background_audio_tracker.cc",
++    "background_audio_tracker.h",
++  ]
++  public_deps = [
++    "//base",
++    "//content/public/browser",
++  ]
++}
+diff --git a/chrome/browser/bare/background_audio/background_audio_tracker.cc b/chrome/browser/bare/background_audio/background_audio_tracker.cc
+new file mode 100644
+index 00000000000..b9b539cb483
+--- /dev/null
++++ b/chrome/browser/bare/background_audio/background_audio_tracker.cc
+@@ -0,0 +1,72 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/bare/background_audio/background_audio_tracker.h"
++
++#include "base/functional/bind.h"
++#include "base/time/time.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/web_contents.h"
++
++namespace bare {
++
++namespace {
++
++// How long it stays on after the audio stops.
++constexpr base::TimeDelta kLingerTime = base::Seconds(30);
++
++}  // namespace
++
++BackgroundAudioTracker::BackgroundAudioTracker(
++    content::WebContents* web_contents)
++    : content::WebContentsObserver(web_contents),
++      content::WebContentsUserData<BackgroundAudioTracker>(*web_contents),
++      active_(web_contents->IsCurrentlyAudible()) {}
++
++BackgroundAudioTracker::~BackgroundAudioTracker() = default;
++
++// static
++bool BackgroundAudioTracker::IsActive(content::WebContents* web_contents) {
++  BackgroundAudioTracker::CreateForWebContents(web_contents);
++  return BackgroundAudioTracker::FromWebContents(web_contents)->active_;
++}
++
++void BackgroundAudioTracker::OnAudioStateChanged(bool audible) {
++  if (audible) {
++    linger_timer_.Stop();
++    SetActive(true);
++  } else if (active_) {
++    linger_timer_.Start(FROM_HERE, kLingerTime,
++                        base::BindOnce(&BackgroundAudioTracker::OnLingerTimeout,
++                                       base::Unretained(this)));
++  }
++}
++
++void BackgroundAudioTracker::DidFinishNavigation(
++    content::NavigationHandle* handle) {
++  if (!handle->IsInPrimaryMainFrame() || !handle->HasCommitted() ||
++      handle->IsSameDocument()) {
++    return;
++  }
++  // A new page starts from scratch. If it plays sound, the audio state change
++  // turns this back on.
++  linger_timer_.Stop();
++  active_ = false;
++}
++
++void BackgroundAudioTracker::OnLingerTimeout() {
++  SetActive(false);
++}
++
++void BackgroundAudioTracker::SetActive(bool active) {
++  if (active_ == active) {
++    return;
++  }
++  active_ = active;
++  web_contents()->NotifyPreferencesChanged();
++}
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(BackgroundAudioTracker);
++
++}  // namespace bare
+diff --git a/chrome/browser/bare/background_audio/background_audio_tracker.h b/chrome/browser/bare/background_audio/background_audio_tracker.h
+new file mode 100644
+index 00000000000..5787d4bae9b
+--- /dev/null
++++ b/chrome/browser/bare/background_audio/background_audio_tracker.h
+@@ -0,0 +1,51 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_BARE_BACKGROUND_AUDIO_BACKGROUND_AUDIO_TRACKER_H_
++#define CHROME_BROWSER_BARE_BACKGROUND_AUDIO_BACKGROUND_AUDIO_TRACKER_H_
++
++#include "base/timer/timer.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "content/public/browser/web_contents_user_data.h"
++
++namespace bare {
++
++// Remembers whether a tab is playing audio, so background media playback can
++// be switched on for it. Web preferences are cached per tab, so when the
++// answer changes this asks the tab to compute them again.
++//
++// It stays on for a short while after the sound stops, so a pause does not
++// switch it off just before the user leaves the app. It also resets when the
++// tab navigates to a new document.
++class BackgroundAudioTracker
++    : public content::WebContentsObserver,
++      public content::WebContentsUserData<BackgroundAudioTracker> {
++ public:
++  ~BackgroundAudioTracker() override;
++
++  // True while the tab is playing audio, and for a short while after.
++  // Creates the tracker for this tab on first use.
++  static bool IsActive(content::WebContents* web_contents);
++
++  // WebContentsObserver:
++  void OnAudioStateChanged(bool audible) override;
++  void DidFinishNavigation(content::NavigationHandle* handle) override;
++
++ private:
++  friend class content::WebContentsUserData<BackgroundAudioTracker>;
++
++  explicit BackgroundAudioTracker(content::WebContents* web_contents);
++
++  void SetActive(bool active);
++  void OnLingerTimeout();
++
++  bool active_ = false;
++  base::OneShotTimer linger_timer_;
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++}  // namespace bare
++
++#endif  // CHROME_BROWSER_BARE_BACKGROUND_AUDIO_BACKGROUND_AUDIO_TRACKER_H_
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 8d29a354368..0bef671a47f 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -393,6 +393,9 @@
+ #include "content/public/browser/url_loader_request_interceptor.h"
+ #include "content/public/browser/weak_document_ptr.h"
+ #include "content/public/browser/web_contents.h"
++#if BUILDFLAG(IS_ANDROID)
++#include "chrome/browser/bare/background_audio/background_audio_tracker.h"
++#endif
+ #include "content/public/browser/web_contents_delegate.h"
+ #include "content/public/browser/web_contents_view_delegate.h"
+ #include "content/public/browser/web_ui_url_loader_factory.h"
+@@ -4738,8 +4741,9 @@ namespace {
+ //
+ // Chromium already keeps background audio going on its own. These sites are
+ // listed because they pause themselves once their page sees it was hidden, so
+-// they keep playing only if they are never told. Everything is opt in and
+-// listed explicitly, so no other site's visibility handling changes.
++// they keep playing only if they are never told. Any tab that is playing audio
++// gets the same treatment (see ShouldReportVisibleForBackgroundMedia); the
++// list covers these sites even before their audio starts.
+ //
+ // To support another site, add its host and the path its player lives on, or
+ // nullptr to match any path.
+@@ -4777,7 +4781,12 @@ bool ShouldReportVisibleForBackgroundMedia(WebContents* web_contents) {
+       !profile->GetPrefs()->GetBoolean(prefs::kBackgroundMediaPlayback)) {
+     return false;
+   }
+-  return IsBackgroundMediaSite(web_contents->GetLastCommittedURL());
++  if (IsBackgroundMediaSite(web_contents->GetLastCommittedURL())) {
++    return true;
++  }
++  // Any other tab that is playing audio, so the sound keeps going when the
++  // user switches to another app. Silent tabs are left alone to save battery.
++  return bare::BackgroundAudioTracker::IsActive(web_contents);
+ }
+ 
+ }  // namespace
+diff --git a/third_party/blink/renderer/core/frame/settings.json5 b/third_party/blink/renderer/core/frame/settings.json5
+index f94cee0d402..c5f9e4d36ae 100644
+--- a/third_party/blink/renderer/core/frame/settings.json5
++++ b/third_party/blink/renderer/core/frame/settings.json5
+@@ -1068,11 +1068,13 @@
+     },
+ 
+     // Bare Browser: report this document as visible to script even when the
+-    // page is hidden. Set per navigation by the browser, for supported sites
+-    // only. Affects script-visible state only, so nothing needs invalidating.
++    // page is hidden. Set by the browser for supported sites and for tabs
++    // that are playing audio. Players that are already loaded are told again
++    // when it changes (through the MediaControls invalidation).
+     {
+       name: "backgroundMediaPlaybackEnabled",
+       initial: false,
++      invalidate: ["MediaControls"],
+     },
+ 
+     {
+diff --git a/third_party/blink/renderer/core/html/media/html_media_element.cc b/third_party/blink/renderer/core/html/media/html_media_element.cc
+index ca5c20c54e7..8976ea57b74 100644
+--- a/third_party/blink/renderer/core/html/media/html_media_element.cc
++++ b/third_party/blink/renderer/core/html/media/html_media_element.cc
+@@ -422,10 +422,19 @@ void HTMLMediaElement::OnMediaControlsEnabledChange(Document* document) {
+     return;
+   DCHECK(it->value);
+   WeakMediaElementSet& elements = *it->value;
++  // Bare: background playback can turn on after a player has loaded (a tab
++  // becomes audible), so pass the current value to every loaded player.
++  Settings* settings = document->GetSettings();
++  const bool background_media =
++      settings && settings->GetBackgroundMediaPlaybackEnabled();
+   for (const auto& element : elements) {
+     element->UpdateControlsVisibility();
+     if (element->GetMediaControls())
+       element->GetMediaControls()->OnMediaControlsEnabledChange();
++    if (element->web_media_player_) {
++      element->web_media_player_->SetBackgroundMediaPlaybackEnabled(
++          background_media);
++    }
+   }
+ }
+ 
+diff --git a/third_party/blink/renderer/platform/media/web_media_player_impl.cc b/third_party/blink/renderer/platform/media/web_media_player_impl.cc
+index 997c9c6d434..eac08dbb097 100644
+--- a/third_party/blink/renderer/platform/media/web_media_player_impl.cc
++++ b/third_party/blink/renderer/platform/media/web_media_player_impl.cc
+@@ -1303,6 +1303,10 @@ bool WebMediaPlayerImpl::GetShouldPauseWhenFrameIsHidden() {
+ 
+ void WebMediaPlayerImpl::SetBackgroundMediaPlaybackEnabled(bool enabled) {
+   background_media_playback_enabled_ = enabled;
++  // Bare: turned on while already hidden, so give the permission back.
++  if (enabled) {
++    allow_background_video_playback_ = true;
++  }
+ }
+ 
+ void WebMediaPlayerImpl::OnRequestPictureInPicture() {

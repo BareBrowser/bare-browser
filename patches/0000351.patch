@@ -1,0 +1,762 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
+index e6010f0bc74..2df3cc8332f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
+@@ -17,6 +17,7 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.ui.actions.ActionId;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarPrefs;
+ import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+@@ -80,6 +81,10 @@ public final class BareToolbarPreviewBinder {
+             leftButton.setClickable(onSlotClicked != null);
+             leftButton.setFocusable(onSlotClicked != null);
+             markEditable(leftButton, editable);
++            // Bare: a button set to None keeps its outline but its icon is drawn faint, so it
++            // can still be tapped to change.
++            boolean leftHidden = BareToolbarPrefs.isMinimalSlotHidden(BareToolbarSlot.HOME);
++            leftButton.setImageAlpha(leftHidden ? 77 : 255);
+             ImageView rightButton = root.findViewById(R.id.bare_preview_minimal_tab_switcher);
+             setIcon(rightButton, fourth);
+             rightButton.setContentDescription(
+@@ -96,6 +101,10 @@ public final class BareToolbarPreviewBinder {
+             rightButton.setClickable(onSlotClicked != null);
+             rightButton.setFocusable(onSlotClicked != null);
+             rightButton.setAlpha(1f);
++            rightButton.setImageAlpha(
++                    BareToolbarPrefs.isMinimalSlotHidden(BareToolbarSlot.TAB_SWITCHER)
++                            ? 77
++                            : 255);
+             markEditable(rightButton, editable);
+             bindFixed(root, R.id.bare_preview_minimal_new_tab, ActionId.NEW_TAB, editable);
+             bindFixed(root, R.id.bare_preview_minimal_app_menu, ActionId.APP_MENU, editable);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+index 1778cae214a..b9c4413bd78 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+@@ -214,8 +214,12 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+         @ActionId int primary = BareToolbarLayout.actionForSlot(slot);
+         int secondary = BareToolbarPrefs.getSecondaryAction(slot);
+ 
++        String tap =
++                isMinimalSlotHidden(slot)
++                        ? getString(R.string.bare_toolbar_action_none)
++                        : getString(BareToolbarActionUi.labelFor(primary));
+         CharSequence[] rows = {
+-            roleSummary(R.string.bare_toolbar_tap, getString(BareToolbarActionUi.labelFor(primary))),
++            roleSummary(R.string.bare_toolbar_tap, tap),
+             roleSummary(R.string.bare_toolbar_hold, secondaryLabel(secondary)),
+         };
+ 
+@@ -235,6 +239,20 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+                 .show();
+     }
+ 
++    /**
++     * The minimal bar's left and right buttons can be set to None, which leaves them out and gives
++     * their room to the address bar. The full bottom bar always keeps its buttons.
++     */
++    private static boolean canHide(@BareToolbarSlot int slot) {
++        return ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, false)
++                && (slot == BareToolbarSlot.HOME || slot == BareToolbarSlot.TAB_SWITCHER);
++    }
++
++    private static boolean isMinimalSlotHidden(@BareToolbarSlot int slot) {
++        return canHide(slot) && BareToolbarPrefs.isMinimalSlotHidden(slot);
++    }
++
+     private String roleSummary(int gestureRes, String action) {
+         return getString(R.string.bare_toolbar_role_summary, getString(gestureRes), action);
+     }
+@@ -258,13 +276,18 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+      */
+     private void showPrimaryChooser(@BareToolbarSlot int slot) {
+         @ActionId int[] catalogue = BareToolbarDefaults.CATALOGUE;
+-        CharSequence[] labels = new CharSequence[catalogue.length];
++        // Bare: on the minimal bar the left and right buttons also offer None, listed first.
++        boolean hideable = canHide(slot);
++        int offset = hideable ? 1 : 0;
++        CharSequence[] labels = new CharSequence[catalogue.length + offset];
++        if (hideable) labels[0] = getString(R.string.bare_toolbar_action_none);
+         int checked = -1;
+         @ActionId int current = BareToolbarLayout.actionForSlot(slot);
+         for (int i = 0; i < catalogue.length; i++) {
+-            labels[i] = getString(BareToolbarActionUi.labelFor(catalogue[i]));
+-            if (catalogue[i] == current) checked = i;
++            labels[i + offset] = getString(BareToolbarActionUi.labelFor(catalogue[i]));
++            if (catalogue[i] == current) checked = i + offset;
+         }
++        if (isMinimalSlotHidden(slot)) checked = 0;
+ 
+         new AlertDialog.Builder(getContext(), R.style.ThemeOverlay_BrowserUI_AlertDialog)
+                 .setTitle(R.string.bare_toolbar_settings_choose_action)
+@@ -274,7 +297,13 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+                         (dialog, which) -> {
+                             // Swaps when the chosen button is already somewhere else, so the bar
+                             // keeps the same buttons and only their order changes.
+-                            BareToolbarPrefs.assignPrimaryAction(slot, catalogue[which]);
++                            if (hideable && which == 0) {
++                                BareToolbarPrefs.setMinimalSlotHidden(slot, true);
++                            } else {
++                                if (hideable) BareToolbarPrefs.setMinimalSlotHidden(slot, false);
++                                BareToolbarPrefs.assignPrimaryAction(
++                                        slot, catalogue[which - offset]);
++                            }
+                             if (mPreview != null) mPreview.refresh();
+                             dialog.dismiss();
+                         })
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 97e8b84ebe3..debf5c4fd5e 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -156,6 +156,13 @@ public final class ChromePreferenceKeys {
+     public static final KeyPrefix BOTTOM_BAR_SLOT_SECONDARY_ACTION =
+             new KeyPrefix("Chrome.BottomBar.SlotSecondaryAction.*");
+ 
++    /**
++     * Whether a button of the minimal toolbar was set to None and is left out. Absent means shown.
++     * Kept apart from the slot actions so the full bottom bar is not affected.
++     */
++    public static final KeyPrefix BARE_MINIMAL_SLOT_HIDDEN =
++            new KeyPrefix("Chrome.Bare.MinimalSlotHidden.*");
++
+     /**
+      * What a horizontal drag along the bottom bar does. Absent means it does nothing, which is
+      * what the bar has always done and remains the default.
+@@ -1522,6 +1529,7 @@ public final class ChromePreferenceKeys {
+                 BOTTOM_BAR_GLIC_BUTTON_ENABLED,
+                 BOTTOM_BAR_SLOT_PRIMARY_ACTION.pattern(),
+                 BOTTOM_BAR_SLOT_SECONDARY_ACTION.pattern(),
++                BARE_MINIMAL_SLOT_HIDDEN.pattern(),
+                 BOTTOM_BAR_SWIPE_ACTION,
+                 CLIPBOARD_SHARED_URI,
+                 CLIPBOARD_SHARED_URI_TIMESTAMP,
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefs.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefs.java
+index 5875aaf9efa..c98da87a581 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefs.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefs.java
+@@ -157,10 +157,25 @@ public final class BareToolbarPrefs {
+      * asked for, so this is where they go rather than in a migration that runs at startup to
+      * change nothing anybody can see.
+      */
++    /** Whether this button of the minimal toolbar was set to None. */
++    public static boolean isMinimalSlotHidden(@BareToolbarSlot int slot) {
++        return ChromeSharedPreferences.getInstance().readBoolean(hiddenKey(slot), false);
++    }
++
++    /** Leaves this button out of the minimal toolbar, or puts it back. */
++    public static void setMinimalSlotHidden(@BareToolbarSlot int slot, boolean hidden) {
++        if (hidden) {
++            ChromeSharedPreferences.getInstance().writeBoolean(hiddenKey(slot), true);
++        } else {
++            ChromeSharedPreferences.getInstance().removeKey(hiddenKey(slot));
++        }
++    }
++
+     public static void resetAll() {
+         for (int slot = 0; slot < BareToolbarSlot.COUNT; slot++) {
+             ChromeSharedPreferences.getInstance().removeKey(primaryKey(slot));
+             ChromeSharedPreferences.getInstance().removeKey(secondaryKey(slot));
++            ChromeSharedPreferences.getInstance().removeKey(hiddenKey(slot));
+         }
+         BareToolbarLayout.invalidate();
+     }
+@@ -169,6 +184,10 @@ public final class BareToolbarPrefs {
+         return ChromePreferenceKeys.BOTTOM_BAR_SLOT_PRIMARY_ACTION.createKey(slot);
+     }
+ 
++    private static String hiddenKey(@BareToolbarSlot int slot) {
++        return ChromePreferenceKeys.BARE_MINIMAL_SLOT_HIDDEN.createKey(slot);
++    }
++
+     private static String secondaryKey(@BareToolbarSlot int slot) {
+         return ChromePreferenceKeys.BOTTOM_BAR_SLOT_SECONDARY_ACTION.createKey(slot);
+     }
+diff --git a/chrome/browser/ui/android/omnibox/BUILD.gn b/chrome/browser/ui/android/omnibox/BUILD.gn
+index 3c086c89d1f..bfc461cb55e 100644
+--- a/chrome/browser/ui/android/omnibox/BUILD.gn
++++ b/chrome/browser/ui/android/omnibox/BUILD.gn
+@@ -404,6 +404,7 @@ android_resources("java_resources") {
+     "java/res/color/fusebox_popover_plus_button_ripple_color_incognito.xml",
+     "java/res/drawable-night/search_spark_rainbow.xml",
+     "java/res/drawable/bare_engine_check.xml",
++    "java/res/drawable/bare_ic_content_paste.xml",
+     "java/res/drawable/action_button_foreground_selector.xml",
+     "java/res/drawable/activation_chip_focus_ring.xml",
+     "java/res/drawable/circle_button_focus_ring.xml",
+diff --git a/chrome/browser/ui/android/omnibox/java/res/drawable/bare_ic_content_paste.xml b/chrome/browser/ui/android/omnibox/java/res/drawable/bare_ic_content_paste.xml
+new file mode 100644
+index 00000000000..d8d4ef4ee2f
+--- /dev/null
++++ b/chrome/browser/ui/android/omnibox/java/res/drawable/bare_ic_content_paste.xml
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2021 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24"
++    android:tint="?attr/colorControlNormal">
++  <path
++      android:fillColor="@android:color/white"
++      android:pathData="M19,3h-4.18C14.4,1.84 13.3,1 12,1S9.6,1.84 9.18,3H5C3.9,3 3,3.9 3,5v14c0,1.1 0.9,2 2,2h14c1.1,0 2,-0.9 2,-2V5C21,3.9 20.1,3 19,3zM12,3c0.55,0 1,0.45 1,1s-0.45,1 -1,1s-1,-0.45 -1,-1S11.45,3 12,3zM19,19H5V5h2v3h10V5h2V19z"/>
++</vector>
+diff --git a/chrome/browser/ui/android/omnibox/java/res/layout/url_action_container.xml b/chrome/browser/ui/android/omnibox/java/res/layout/url_action_container.xml
+index ea3f99c6506..668a748d1b6 100644
+--- a/chrome/browser/ui/android/omnibox/java/res/layout/url_action_container.xml
++++ b/chrome/browser/ui/android/omnibox/java/res/layout/url_action_container.xml
+@@ -113,6 +113,18 @@ found in the LICENSE file.
+         app:layout_constraintTop_toBottomOf="@id/location_bar_attachments"
+         app:layout_constraintEnd_toStartOf="@id/bare_share_button"/>
+ 
++    <!-- Bare: pastes the clipboard text into an empty field. -->
++    <org.chromium.ui.widget.ChromeImageButton
++        style="@style/LocationBarActionButton.AdaptiveDensity"
++        android:id="@+id/bare_paste_button"
++        android:foreground="@drawable/circle_button_focus_ring"
++        android:visibility="gone"
++        android:src="@drawable/bare_ic_content_paste"
++        android:contentDescription="@android:string/paste"
++        android:tooltipText="@android:string/paste"
++        app:layout_constraintTop_toBottomOf="@id/location_bar_attachments"
++        app:layout_constraintEnd_toStartOf="@id/margin_spacer"/>
++
+     <!-- LINT.ThenChange(/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarUtils.java:toolbar_tablet_components) -->
+ 
+     <Space
+@@ -127,7 +139,7 @@ found in the LICENSE file.
+         android:layout_width="0dp"
+         android:layout_height="0dp"
+         app:barrierDirection="start"
+-        app:constraint_referenced_ids="omnibox_chip_container,fusebox_activation_chip,composeplate_button,install_button,delete_button,bare_share_button,bare_copy_button,mic_button,margin_spacer"/>
++        app:constraint_referenced_ids="omnibox_chip_container,fusebox_activation_chip,composeplate_button,install_button,delete_button,bare_share_button,bare_copy_button,bare_paste_button,mic_button,margin_spacer"/>
+ 
+     <!-- URL Bar barrier for multimodal location bar -->
+     <androidx.constraintlayout.widget.Barrier
+@@ -135,6 +147,6 @@ found in the LICENSE file.
+         android:layout_width="0dp"
+         android:layout_height="0dp"
+         app:barrierDirection="start"
+-        app:constraint_referenced_ids="omnibox_chip_container,fusebox_activation_chip,composeplate_button,install_button,delete_button,bare_share_button,bare_copy_button,margin_spacer"/>
++        app:constraint_referenced_ids="omnibox_chip_container,fusebox_activation_chip,composeplate_button,install_button,delete_button,bare_share_button,bare_copy_button,bare_paste_button,margin_spacer"/>
+ 
+ </merge>
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarLayout.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarLayout.java
+index a755df71d43..5a203d15230 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarLayout.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarLayout.java
+@@ -57,6 +57,7 @@ public class LocationBarLayout extends ConstraintLayout {
+     protected ImageButton mMicButton;
+     private @Nullable ImageButton mBareShareButton;
+     private @Nullable ImageButton mBareCopyButton;
++    private @Nullable ImageButton mBarePasteButton;
+     protected ImageButton mLensButton;
+     protected ImageButton mZoomButton;
+     protected ImageButton mInstallButton;
+@@ -114,6 +115,13 @@ public class LocationBarLayout extends ConstraintLayout {
+         mMicButton = findViewById(R.id.mic_button);
+         mBareShareButton = findViewById(R.id.bare_share_button);
+         mBareCopyButton = findViewById(R.id.bare_copy_button);
++        mBarePasteButton = findViewById(R.id.bare_paste_button);
++        if (mBarePasteButton != null) {
++            // The clipboard is read only here, on the tap, so Android shows no access notice
++            // while the button merely sits in the field.
++            mBarePasteButton.setOnClickListener(
++                    v -> mUrlBar.onTextContextMenuItem(android.R.id.paste));
++        }
+         mLensButton = findViewById(R.id.lens_camera_button);
+         mZoomButton = findViewById(R.id.zoom_button);
+         mInstallButton = findViewById(R.id.install_button);
+@@ -229,6 +237,9 @@ public class LocationBarLayout extends ConstraintLayout {
+ 
+     /* package */ void setDeleteButtonTint(ColorStateList colorStateList) {
+         ImageViewCompat.setImageTintList(mDeleteButton, colorStateList);
++        if (mBarePasteButton != null) {
++            ImageViewCompat.setImageTintList(mBarePasteButton, colorStateList);
++        }
+     }
+ 
+     /* package */ void setDeleteButtonBackground(@DrawableRes int resourceId) {
+@@ -335,6 +346,11 @@ public class LocationBarLayout extends ConstraintLayout {
+         setButtonVisibility(mBareCopyButton, shouldShow);
+     }
+ 
++    /** Bare: shows or hides the paste button of an empty field. */
++    /* package */ void setBarePasteVisibility(boolean shouldShow) {
++        setButtonVisibility(mBarePasteButton, shouldShow);
++    }
++
+     /** Bare: what the share and copy buttons do. */
+     /* package */ void setBareActionHandlers(Runnable share, Runnable copy) {
+         if (mBareShareButton != null) mBareShareButton.setOnClickListener(v -> share.run());
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
+index 98ca7b101a7..220d3e9669d 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
+@@ -14,12 +14,18 @@ import android.animation.AnimatorListenerAdapter;
+ import android.animation.AnimatorSet;
+ import android.animation.ObjectAnimator;
+ import android.annotation.SuppressLint;
++import android.content.ClipDescription;
++import android.content.ClipboardManager;
+ import android.content.ComponentCallbacks;
+ import android.content.Context;
+ import android.content.res.ColorStateList;
+ import android.content.res.Configuration;
+ import android.graphics.Rect;
+ import android.text.TextUtils;
++import android.transition.ChangeBounds;
++import android.transition.Fade;
++import android.transition.TransitionManager;
++import android.transition.TransitionSet;
+ import android.util.FloatProperty;
+ import android.view.KeyEvent;
+ import android.view.View;
+@@ -315,6 +321,10 @@ public class LocationBarMediator
+     // buttons are hidden if the window size is < 600dp.
+     private boolean mShouldShowButtonsWhenUnfocused;
+     private float mUrlFocusChangeFraction;
++    /** Bare: set while a focus change updates the buttons, so the back arrow is animated. */
++    private boolean mBareAnimateBackButton;
++    /** Bare: matches ToolbarPhone's focus animation, which fades the extensions. */
++    private static final long BARE_FOCUS_FADE_DURATION_MS = 225;
+     private @Deprecated boolean mUrlHasFocus; // Please check mCurrentInput instead.
+     private final NonNullObservableSupplier<Boolean> mWindowHasFocusSupplier;
+     private final Callback<Boolean> mOnWindowFocusChanged = this::onWindowFocusChanged;
+@@ -733,7 +743,9 @@ public class LocationBarMediator
+         mUrlHasFocus = hasFocus;
+         // Intercept back press if it has focus.
+         mBackPressStateSupplier.set(mUrlHasFocus);
++        mBareAnimateBackButton = !mIsTablet;
+         updateButtonVisibility();
++        mBareAnimateBackButton = false;
+         updateShouldAnimateIconChanges();
+         onPrimaryColorChanged();
+         updateUrlBarAccessibilityWarning();
+@@ -764,6 +776,12 @@ public class LocationBarMediator
+ 
+         if (!mUrlFocusedWithoutAnimations) handleUrlFocusAnimation(hasFocus);
+ 
++        // Bare: the keyboard rises as the bar takes focus, in the same motion as the back arrow and
++        // extensions fading, not after the toolbar's focus animation has ended.
++        if (hasFocus && !mIsTablet && !mUrlFocusedWithoutAnimations && mUrlCoordinator != null) {
++            mUrlCoordinator.showKeyboardNow();
++        }
++
+         if (hasFocus
+                 && mCurrentInput != null
+                 && displayStateEquals(DisplayState.DRAFTING_NO_FOCUS)) {
+@@ -2297,6 +2315,14 @@ public class LocationBarMediator
+         if (showBareActions) showDeleteButton = false;
+         mLocationBarLayout.setBareActionsVisibility(showBareActions);
+         mLocationBarLayout.setDeleteButtonVisibility(showDeleteButton);
++        // Bare: an empty field offers to paste what is on the clipboard.
++        boolean showPaste =
++                mUrlHasFocus
++                        && !mIsTablet
++                        && mUrlCoordinator != null
++                        && TextUtils.isEmpty(mUrlCoordinator.getTextWithAutocomplete())
++                        && clipboardHasText();
++        mLocationBarLayout.setBarePasteVisibility(showPaste);
+         updateUrlBarAccessibilityOrder(mActivationChipVisibilitySupplier.get());
+ 
+         if (showDeleteButton) {
+@@ -2314,6 +2340,21 @@ public class LocationBarMediator
+         }
+     }
+ 
++    /**
++     * Bare: whether the clipboard holds text. Only the clip's description is looked at, which does
++     * not make Android show its clipboard access notice; the text itself is read on paste.
++     */
++    private boolean clipboardHasText() {
++        ClipboardManager clipboard =
++                (ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
++        if (clipboard == null || !clipboard.hasPrimaryClip()) return false;
++        ClipDescription description = clipboard.getPrimaryClipDescription();
++        return description != null
++                && (description.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN)
++                        || description.hasMimeType(ClipDescription.MIMETYPE_TEXT_HTML)
++                        || description.hasMimeType(ClipDescription.MIMETYPE_TEXT_URILIST));
++    }
++
+     /* package */ void updateBackButtonVisibility() {
+         Tab tab = mLocationBarDataProvider.getTab();
+         if (tab == null) {
+@@ -2328,6 +2369,21 @@ public class LocationBarMediator
+                         && !mMiniOriginMode
+                         && !mUrlHasFocus
+                         && !isNtp;
++        // Bare: when focus comes or goes, the back arrow fades and the site icon and address slide
++        // into place over the same time as the keyboard moves.
++        if (mBareAnimateBackButton
++                && showBackButton != mLocationBarLayout.isBackButtonVisible()
++                && mLocationBarLayout.isLaidOut()) {
++            TransitionSet transition = new TransitionSet();
++            transition.addTransition(new Fade());
++            transition.addTransition(new ChangeBounds());
++            transition.addTarget(R.id.omnibox_back_button);
++            transition.addTarget(R.id.location_bar_status);
++            transition.addTarget(R.id.url_bar);
++            transition.setDuration(BARE_FOCUS_FADE_DURATION_MS);
++            transition.setInterpolator(Interpolators.FAST_OUT_SLOW_IN_INTERPOLATOR);
++            TransitionManager.beginDelayedTransition(mLocationBarLayout, transition);
++        }
+         mLocationBarLayout.setBackButtonVisibility(showBackButton);
+         mLocationBarLayout.setBackButtonEnabled(tab.canGoBack());
+     }
+@@ -2573,8 +2629,12 @@ public class LocationBarMediator
+         return mCurrentInput;
+     }
+ 
++    private static final boolean BARE_NO_MIC = true;
++
+     @VisibleForTesting
+     boolean shouldShowMicButton() {
++        // Bare: no mic in the address bar, at rest or while typing.
++        if (BARE_NO_MIC) return false;
+         boolean useDesktopBehavior =
+                 mFuseboxCoordinator.getFuseboxLayoutModeSupplier().get()
+                         == FuseboxLayoutMode.SUGGESTIONS_POPOVER;
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
+index acb219ee097..9cb8c3168fe 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
+@@ -436,10 +436,13 @@ class LocationBarPhone extends LocationBarLayout {
+         return maxComponentWidth - statusView.getMeasuredWidth();
+     }
+ 
++    private static final boolean BARE_REST_LIKE_FOCUS = true;
++
+     /** Returns whether the URL and status should be centered. */
+     private boolean shouldCenterUrlAndStatus() {
+-        // Bare centres the name at rest whatever the toolbar variation, with the site icon beside
+-        // it; site settings is at the end of the bar.
++        // Bare: the bar looks the same at rest as with focus, so the address always runs from the
++        // site icon at the start.
++        if (BARE_REST_LIKE_FOCUS) return false;
+ 
+         // Do not center when the URL bar is focused.
+         if (mUrlBar == null || mUrlBar.hasFocus()) {
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarCoordinator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarCoordinator.java
+index 3692fc3de4e..d57c563f729 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarCoordinator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarCoordinator.java
+@@ -383,6 +383,16 @@ public class UrlBarCoordinator
+         mKeyboardVisibilityDelegate.hideKeyboard(mUrlBar);
+     }
+ 
++    /**
++     * Bare: shows the keyboard at once, skipping the debounce, so it rises together with the
++     * address bar's own focus change instead of after it.
++     */
++    public void showKeyboardNow() {
++        mUrlBar.removeCallbacks(mKeyboardTransitionRunnable);
++        mKeyboardState = KeyboardState.SHOWN;
++        mKeyboardVisibilityDelegate.showKeyboard(mUrlBar);
++    }
++
+     private void setKeyboardVisibilityDebounced(boolean showKeyboard) {
+         boolean isCurrentlyShowing =
+                 mKeyboardState == KeyboardState.SHOWN || mKeyboardState == KeyboardState.SHOWING;
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarControlContainer.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarControlContainer.java
+index 95f3df32799..af1a984dbb0 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarControlContainer.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarControlContainer.java
+@@ -1251,17 +1251,12 @@ public class ToolbarControlContainer extends OptimizedFrameLayout
+                             == TopToolbarBlockCaptureReason.SNAPSHOT_SAME) {
+                         setDirtyRectEmpty();
+                     } else {
+-                        // Motion is starting, and we don't have a good capture. Lock the
+-                        // controls so that we keep using the Java view. After the touch
+-                        // event is over we'll unlock and try to capture.
+-                        mControlsToken =
+-                                mBrowserStateBrowserControlsVisibilityDelegate
+-                                        .showControlsPersistentAndClearOldToken(mControlsToken);
+-                        // Utilize posted task in ConstraintsChecker to drive new capture.
+-                        mConstraintsObserver.scheduleRequestResourceOnUnlock();
+-                        CaptureReadinessResult.logCaptureReasonFromResult(
+-                                CaptureReadinessResult.notReady(
+-                                        TopToolbarBlockCaptureReason.COMPOSITOR_IN_MOTION));
++                        // Bare: motion is starting and the toolbar picture is out of date, as
++                        // it is on the first scroll after every page change. Stock code locks
++                        // the bars on screen until the finger lifts, so that scroll could never
++                        // fold them. Take a new picture now instead and let the scroll fold
++                        // the bars.
++                        onResourceRequested();
+                     }
+                 }
+             }
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+index 9936f433d46..1b39a491e15 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
+@@ -103,6 +103,8 @@ import org.chromium.chrome.browser.toolbar.top.CaptureReadinessResult.TopToolbar
+ import org.chromium.chrome.browser.toolbar.top.NavigationPopup.HistoryDelegate;
+ import org.chromium.chrome.browser.toolbar.top.TopToolbarCoordinator.ToolbarColorObserver;
+ import org.chromium.chrome.browser.ui.actions.ActionHaptics;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarPrefs;
++import org.chromium.chrome.browser.ui.bottombar.BareToolbarSlot;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
+ import org.chromium.chrome.browser.ui.theme.ChromeSemanticColorUtils;
+@@ -605,7 +607,9 @@ public class ToolbarPhone extends ToolbarLayout
+         int radius =
+                 (int)
+                         MathUtils.interpolate(
+-                                nonFocusedRadius, focusedRadius, mUrlFocusChangeFraction);
++                                nonFocusedRadius,
++                                focusedRadius,
++                                bareStyleFraction(mUrlFocusChangeFraction));
+         mLocationBarBackground.setCornerRadius(radius);
+         if (ChromeFeatureList.sToolbarPhoneAnimationRefactor.isEnabled()) {
+             mLocationBar.getContainerView().invalidateOutline();
+@@ -811,6 +815,8 @@ public class ToolbarPhone extends ToolbarLayout
+                         || (shortcut != null && shortcut.getVisibility() == View.VISIBLE);
+         int share = Math.round((shortcutShown ? 52 : 10) * density);
+         int margin = extensions > 0 && !minimal ? mToolbarSidePadding + share : 0;
++        // The minimal layout's menu sits a little in from the edge of the screen.
++        if (minimal) margin = Math.round(6 * density);
+         ViewGroup.MarginLayoutParams params =
+                 (ViewGroup.MarginLayoutParams) mToolbarButtonsContainer.getLayoutParams();
+         if (params.getMarginEnd() != margin) {
+@@ -818,9 +824,12 @@ public class ToolbarPhone extends ToolbarLayout
+             mToolbarButtonsContainer.setLayoutParams(params);
+         }
+         int end = mBareLocationBarEndPadding;
+-        if (extensions > 0) {
++        // On the minimal layout the extensions sit at the end of the address bar and fade out with
++        // focus, so while typing the bar's own buttons, share and copy, take the end instead.
++        if (extensions > 0 && !(minimal && urlHasFocus())) {
+             end = minimal ? end + extensions : Math.round(2 * density);
+         }
++        if (minimal) applyMinimalButtonSpacing(density);
+         if (locationBar.getPaddingEnd() != end) {
+             locationBar.setPaddingRelative(
+                     locationBar.getPaddingStart(),
+@@ -830,6 +839,24 @@ public class ToolbarPhone extends ToolbarLayout
+         }
+     }
+ 
++    /**
++     * Bare: on the minimal layout the buttons beside the address bar sit a little closer together.
++     */
++    private void applyMinimalButtonSpacing(float density) {
++        int width = Math.round(44 * density);
++        setBareWidth(findViewById(R.id.optional_toolbar_button_container), width);
++        setBareWidth(findViewById(R.id.tab_switcher_button), width);
++        setBareWidth(findViewById(R.id.menu_button), width);
++    }
++
++    private static void setBareWidth(@Nullable View view, int width) {
++        if (view == null) return;
++        ViewGroup.LayoutParams params = view.getLayoutParams();
++        if (params == null || params.width == width) return;
++        params.width = width;
++        view.setLayoutParams(params);
++    }
++
+     @Override
+     protected void onLayout(boolean changed, int l, int t, int r, int b) {
+         super.onLayout(changed, l, t, r, b);
+@@ -861,8 +888,8 @@ public class ToolbarPhone extends ToolbarLayout
+                 && container.getWidth() > 0) {
+             int[] containerAt = new int[2];
+             container.getLocationInWindow(containerAt);
+-            // The icon sits in the middle of its box, 14dp in from the left edge.
+-            iconsLeft = containerAt[0] + Math.round(14 * density) - Math.round(8 * density);
++            // The icon sits in the middle of its 40dp box, 10dp in from the left edge.
++            iconsLeft = containerAt[0] + Math.round(10 * density) - Math.round(8 * density);
+         } else if (shortcut != null && shortcut.getVisibility() == View.VISIBLE) {
+             int[] shortcutAt = new int[2];
+             shortcut.getLocationInWindow(shortcutAt);
+@@ -960,7 +987,8 @@ public class ToolbarPhone extends ToolbarLayout
+         // those in this current layout pass as they are needed for animations.
+         boolean changed = updateUnfocusedLocationBarLayoutParams();
+ 
+-        if (mLayoutLocationBarInFocusedMode
++        boolean focusedLayout = mLayoutLocationBarInFocusedMode || bareRestsLikeFocused();
++        if (focusedLayout
+                 || (mVisualState == VisualState.NEW_TAB_NORMAL
+                         && mTabSwitcherState == STATIC_TAB)) {
+             if (mIsAuroraEnabled
+@@ -975,11 +1003,8 @@ public class ToolbarPhone extends ToolbarLayout
+             int priorVisibleWidth =
+                     mLocationBar.getPhoneCoordinator().getOffsetOfFirstVisibleFocusedView();
+             width =
+-                    getFocusedLocationBarWidth(
+-                            containerWidth, priorVisibleWidth, mLayoutLocationBarInFocusedMode);
+-            leftMargin =
+-                    getFocusedLocationBarLeftMargin(
+-                            priorVisibleWidth, mLayoutLocationBarInFocusedMode);
++                    getFocusedLocationBarWidth(containerWidth, priorVisibleWidth, focusedLayout);
++            leftMargin = getFocusedLocationBarLeftMargin(priorVisibleWidth, focusedLayout);
+         } else {
+             width = mUnfocusedLocationBarLayoutWidth;
+             leftMargin = mUnfocusedLocationBarLayoutLeft;
+@@ -1108,6 +1133,12 @@ public class ToolbarPhone extends ToolbarLayout
+         }
+ 
+         toolbarButtonsContainerWidth -= getExtensionsWidthInsideLocationBar();
++        // Bare: the minimal layout's buttons keep a small gap from the edge of the screen.
++        if (BottomBarConfigUtils.isMinimalLayout()) {
++            toolbarButtonsContainerWidth +=
++                    ((ViewGroup.MarginLayoutParams) mToolbarButtonsContainer.getLayoutParams())
++                            .getMarginEnd();
++        }
+         return Math.max(mToolbarSidePaddingForNtp, toolbarButtonsContainerWidth);
+     }
+ 
+@@ -1443,9 +1474,10 @@ public class ToolbarPhone extends ToolbarLayout
+     }
+ 
+     private float getExpansionFractionForVisualState(@VisualState int visualState) {
+-        return visualState == VisualState.NEW_TAB_NORMAL && mTabSwitcherState == STATIC_TAB
+-                ? mUrlFocusChangeFraction
+-                : mUrlExpansionFraction;
++        return bareShapeFraction(
++                visualState == VisualState.NEW_TAB_NORMAL && mTabSwitcherState == STATIC_TAB
++                        ? mUrlFocusChangeFraction
++                        : mUrlExpansionFraction);
+     }
+ 
+     /**
+@@ -1460,6 +1492,37 @@ public class ToolbarPhone extends ToolbarLayout
+         invokeTransition(/* resetNtpTransition= */ false, skipUrlExpansion);
+     }
+ 
++    /**
++     * Bare: at rest the address bar already has its focused size, shape and layout, so a tap only
++     * fades the back arrow and the extensions while the keyboard rises. Applies with the bottom bar
++     * on the full layout; the minimal layout and an NTP search box keep the stock expansion.
++     */
++    private boolean bareRestsLikeFocused() {
++        return bareRestStyle() && !BottomBarConfigUtils.isMinimalLayout();
++    }
++
++    /**
++     * Bare: the bar rests with its focused height, corners and contents. On the minimal layout the
++     * buttons beside it take room, so there it still widens on focus, in the same short animation
++     * that fades the buttons and extensions while the keyboard rises.
++     */
++    private boolean bareRestStyle() {
++        return mTabSwitcherState == STATIC_TAB
++                && (BottomBarConfigUtils.isBottomBarEnabled(getContext())
++                        || BottomBarConfigUtils.isMinimalLayout())
++                && !isLocationBarShownInNtp();
++    }
++
++    /** Bare: the expansion fraction that drives the bar's position and width. */
++    private float bareShapeFraction(float fraction) {
++        return bareRestsLikeFocused() ? 1f : fraction;
++    }
++
++    /** Bare: the expansion fraction that drives the bar's height and corners. */
++    private float bareStyleFraction(float fraction) {
++        return bareRestStyle() ? 1f : fraction;
++    }
++
+     private void updateUrlExpansionFraction() {
+         mUrlExpansionFraction = Math.max(mNtpSearchBoxScrollFraction, mUrlFocusChangeFraction);
+         assert mUrlExpansionFraction >= 0;
+@@ -1477,6 +1540,8 @@ public class ToolbarPhone extends ToolbarLayout
+ 
+         int toolbarButtonVisibility = getToolbarButtonVisibility();
+         mToolbarButtonsContainer.setVisibility(toolbarButtonVisibility);
++        // Bare: the extensions fade out with the focus animation.
++        mToolbarButtonsContainer.setAlpha(bareRestStyle() ? 1f - mUrlFocusChangeFraction : 1f);
+         boolean showBackButtonOutside = shouldShowBackButtonOutside();
+         // Enforce mutual exclusivity: if the back button should be shown outside,
+         // we must hide the home button to prevent them from overlapping during transitions.
+@@ -1555,7 +1620,7 @@ public class ToolbarPhone extends ToolbarLayout
+             locationBarBaseTranslationX += mUnfocusedLocationBarLayoutWidth - currentWidth;
+         }
+ 
+-        locationBarBaseTranslationX *= 1f - mUrlExpansionFraction;
++        locationBarBaseTranslationX *= 1f - bareShapeFraction(mUrlExpansionFraction);
+ 
+         float locationBarTranslationX =
+                 locationBarBaseTranslationX + getLocationBarNtpStartOffset(isLocationBarRtl);
+@@ -1981,7 +2046,11 @@ public class ToolbarPhone extends ToolbarLayout
+ 
+             int translationY = (int) mLocationBar.getPhoneCoordinator().getTranslationY();
+             int clipTop = mLocationBarBackgroundBounds.top + translationY;
+-            if (mUrlExpansionFraction != 0f && clipTop < child.getBottom()) {
++            // Bare: the bar keeps its size on focus, so the extensions inside it are not clipped
++            // away but fade.
++            if (mUrlExpansionFraction != 0f
++                    && !bareRestStyle()
++                    && clipTop < child.getBottom()) {
+                 // For other child views, use the inverse clipping of the URL viewport.
+                 // Only necessary during animations.
+                 // Hardware mode does not support unioned clip regions, so clip using the
+@@ -2110,7 +2179,8 @@ public class ToolbarPhone extends ToolbarLayout
+             // viewport used to draw the background.  During expansion transitions, compensation
+             // is applied to increase the clip regions such that when the location bar converts
+             // to the narrower collapsed layout the visible content is the same.
+-            if (mUrlExpansionFraction != 1f && !mOptionalButtonAnimationRunning) {
++            if (bareShapeFraction(mUrlExpansionFraction) != 1f
++                    && !mOptionalButtonAnimationRunning) {
+                 int leftDelta =
+                         mUnfocusedLocationBarLayoutLeft
+                                 - getViewBoundsLeftOfLocationBar(mVisualState);
+@@ -2360,7 +2430,10 @@ public class ToolbarPhone extends ToolbarLayout
+         boolean hideHomeButton =
+                 (!mIsHomeButtonEnabled && !BottomBarConfigUtils.isMinimalLayout())
+                         || dropHomeForRoom
+-                        || mIsToolbarUiRefactorEnabled;
++                        || mIsToolbarUiRefactorEnabled
++                        // Bare: the minimal bar's left button was set to None.
++                        || (BottomBarConfigUtils.isMinimalLayout()
++                                && BareToolbarPrefs.isMinimalSlotHidden(BareToolbarSlot.HOME));
+         if (hideHomeButton) {
+             mHomeButton.setVisibility(View.GONE);
+         } else {
+@@ -2375,7 +2448,12 @@ public class ToolbarPhone extends ToolbarLayout
+ 
+         var tabSwitcherButtonCoordinator = getTabSwitcherButtonCoordinator();
+         if (tabSwitcherButtonCoordinator != null) {
+-            tabSwitcherButtonCoordinator.setHasSpaceToShow(!mIsToolbarUiRefactorEnabled);
++            // Bare: or the minimal bar's right button was set to None.
++            tabSwitcherButtonCoordinator.setHasSpaceToShow(
++                    !mIsToolbarUiRefactorEnabled
++                            && !(BottomBarConfigUtils.isMinimalLayout()
++                                    && BareToolbarPrefs.isMinimalSlotHidden(
++                                            BareToolbarSlot.TAB_SWITCHER)));
+         }
+     }
+ 
+@@ -2735,7 +2813,11 @@ public class ToolbarPhone extends ToolbarLayout
+         } else {
+             createAndRunFocusAnimatorLegacy(hasFocus, shouldShowKeyboard);
+         }
+-        if (!hasFocus || mLocationBar.shouldShortCircuitFocusAnimation(true)) {
++        // Bare: a bar that rests in its focused shape keeps the short focus animation even at the
++        // bottom; it only fades the extensions and blends the colour while the keyboard rises.
++        if (!hasFocus
++                || (mLocationBar.shouldShortCircuitFocusAnimation(true)
++                        && !bareRestStyle())) {
+             TraceEvent.instant("ToolbarPhone.ShortCircuitUnfocusAnimation");
+             endUrlFocusAnimation();
+         }
+@@ -3970,6 +4052,12 @@ public class ToolbarPhone extends ToolbarLayout
+     }
+ 
+     private int calculateOnFocusHeightIncrease() {
++        // Bare: the bar keeps one height at rest and while typing, a little under the stock
++        // focused height.
++        if (bareRestStyle()) {
++            float trim = 2.5f * getResources().getDisplayMetrics().density;
++            return Math.round(mBackgroundHeightIncreaseWhenFocus / 2f - trim);
++        }
+         return (int) (mBackgroundHeightIncreaseWhenFocus * mUrlFocusChangeFraction / 2);
+     }
+ 

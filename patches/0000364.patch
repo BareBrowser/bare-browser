@@ -1,0 +1,312 @@
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+index 823b000f333..9fbb953c6ef 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+@@ -38,6 +38,7 @@ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.ui.actions.ActionHaptics;
+ import org.chromium.chrome.browser.ui.appmenu.internal.R;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.components.browser_ui.widget.RiseSheet;
+ import org.chromium.ui.interpolators.Interpolators;
+ import org.chromium.ui.modelutil.MVCListAdapter;
+ 
+@@ -212,7 +213,9 @@ final class BareMenuSheet {
+         }
+         if (bar == null) bar = find(root, "bottom_app_bar_container");
+         Integer color = bar == null ? null : plainColor(bar, 3);
+-        return color != null ? color : SemanticColorUtils.getColorSurfaceContainerHigh(context);
++        // The minimal layout's bar is drawn rather than set as a background, and see-through with
++        // Frosted glass, so it is read the way the other cards read it.
++        return color != null ? color : RiseSheet.barColor(root);
+     }
+ 
+     private static @Nullable Integer plainColor(View view, int depth) {
+diff --git a/chrome/browser/ui/android/extensions/java/res/layout/extensions_menu_item.xml b/chrome/browser/ui/android/extensions/java/res/layout/extensions_menu_item.xml
+index d0b01444da3..5d53c4f2c17 100644
+--- a/chrome/browser/ui/android/extensions/java/res/layout/extensions_menu_item.xml
++++ b/chrome/browser/ui/android/extensions/java/res/layout/extensions_menu_item.xml
+@@ -33,7 +33,7 @@ found in the LICENSE file.
+             app:layout_constraintStart_toStartOf="parent"
+             app:layout_constraintTop_toTopOf="parent"
+             app:layout_constraintBottom_toBottomOf="parent"
+-            app:layout_constraintEnd_toStartOf="@id/extensions_menu_item_toggle">
++            app:layout_constraintEnd_toStartOf="@id/extensions_menu_item_context_menu">
+ 
+             <ImageView
+                 android:id="@+id/extensions_menu_item_icon"
+@@ -61,29 +61,31 @@ found in the LICENSE file.
+ 
+         </androidx.constraintlayout.widget.ConstraintLayout>
+ 
+-        <org.chromium.components.browser_ui.widget.MaterialSwitchWithText
+-            android:id="@+id/extensions_menu_item_toggle"
+-            android:layout_width="wrap_content"
+-            android:layout_height="48dp"
+-            android:layout_marginEnd="8dp"
+-            app:layout_constraintEnd_toStartOf="@id/extensions_menu_item_context_menu"
+-            app:layout_constraintTop_toTopOf="parent"
+-            app:layout_constraintBottom_toBottomOf="parent" />
+-
++        <!-- Bare: the more button sits before the switch, so every switch on the card lines up
++             at the right edge. -->
+         <org.chromium.ui.listmenu.ListMenuButton
+             android:id="@+id/extensions_menu_item_context_menu"
+-            android:layout_width="@dimen/extensions_menu_header_button_size"
++            android:layout_width="40dp"
+             android:layout_height="@dimen/extensions_menu_header_button_size"
++            android:layout_marginEnd="4dp"
+             android:src="@drawable/extensions_menu_context_menu_icon_selector"
+             android:background="@drawable/default_icon_background_selector"
+             android:contentDescription="@string/extensions_menu_context_menu_tooltip"
+             android:scaleType="center"
+-            app:layout_constraintEnd_toEndOf="parent"
++            app:layout_constraintEnd_toStartOf="@id/extensions_menu_item_toggle"
+             app:layout_constraintTop_toTopOf="parent"
+             app:layout_constraintBottom_toBottomOf="parent"
+             app:menuVerticalOverlapAnchor="false"
+             app:menuMaxWidth="@dimen/extension_action_button_list_menu_width" />
+ 
++        <org.chromium.components.browser_ui.widget.MaterialSwitchWithText
++            android:id="@+id/extensions_menu_item_toggle"
++            android:layout_width="wrap_content"
++            android:layout_height="48dp"
++            app:layout_constraintEnd_toEndOf="parent"
++            app:layout_constraintTop_toTopOf="parent"
++            app:layout_constraintBottom_toBottomOf="parent" />
++
+     </androidx.constraintlayout.widget.ConstraintLayout>
+ 
+     <LinearLayout
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
+index 58194015a3a..d70090d7168 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
+@@ -316,24 +316,46 @@ public class ExtensionsMenuCoordinator
+     }
+ 
+     private void showMenu() {
+-        BottomSheetController controller = BottomSheetControllerProvider.from(mWindowAndroid);
+-        if (controller == null) {
+-            mExtensionsMenuButton.showMenu();
+-            return;
+-        }
+-        mSheetContent = new ExtensionsMenuSheetContent(mContext, mContentView);
+-        mIsMenuOpen = true;
+-        // Bare: the card rises from behind the toolbar, like the menu.
++        // Bare: the card rises from behind the toolbar, like the menu, on every layout. It does
++        // not wait on the window having a bottom sheet, and never falls back to that sheet.
+         android.app.Activity activity = ContextUtils.activityFromContext(mContext);
+         if (activity != null) {
++            ExtensionsMenuSheetContent content =
++                    new ExtensionsMenuSheetContent(mContext, mContentView);
++            mSheetContent = content;
+             ScrollView scroll = new ScrollView(mContext);
+-            scroll.addView(mSheetContent.getContentView());
++            scroll.addView(content.getContentView());
+             if (RiseSheet.show(
+                     activity.getWindow().getDecorView(), scroll, scroll, this::onSheetGone)) {
++                mIsMenuOpen = true;
+                 mRiseSheetShown = true;
++                // The card takes a tap on the puzzle that closes it, so the button never sees
++                // it; the tick is given here instead, once.
++                RiseSheet.setCloseTapTarget(
++                        mExtensionsMenuButton, () -> ActionHaptics.tick(mExtensionsMenuButton));
+                 return;
+             }
++            // Another card is still up, so nothing opens. The mediator can still be in the middle
++            // of being made here, so it is let go a moment later.
++            scroll.removeAllViews();
++            content.release();
++            mSheetContent = null;
++            new Handler(Looper.getMainLooper())
++                    .post(
++                            () -> {
++                                if (mIsMenuOpen || mSheetContent != null) return;
++                                destroyMediator();
++                                mExtensionModels.clear();
++                            });
++            return;
+         }
++        BottomSheetController controller = BottomSheetControllerProvider.from(mWindowAndroid);
++        if (controller == null) {
++            mExtensionsMenuButton.showMenu();
++            return;
++        }
++        mSheetContent = new ExtensionsMenuSheetContent(mContext, mContentView);
++        mIsMenuOpen = true;
+         mSheetController = controller;
+         controller.addObserver(mSheetObserver);
+         controller.requestShowContent(mSheetContent, /* animate= */ true);
+diff --git a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
+index 505f2fa9d9c..5d220111dde 100644
+--- a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
++++ b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
+@@ -95,10 +95,29 @@ public final class RiseSheet {
+     private @Nullable ValueAnimator mAnimator;
+     private boolean mClosing;
+     private @Nullable Runnable mOnDismissed;
++    private @Nullable View mTapTarget;
++    private @Nullable Runnable mOnTapTarget;
++    private final long mShownAt = SystemClock.uptimeMillis();
+ 
+     /** Whether a card is up, including one that is folding away. */
+     public static boolean isOpen() {
+-        return sActive != null;
++        return busy();
++    }
++
++    /**
++     * Whether a card is up. A card whose window went away without it closing, as when the activity
++     * is made again under it, would block every card after it, so it is let go.
++     */
++    private static boolean busy() {
++        RiseSheet active = sActive;
++        if (active == null) return false;
++        // A card is only attached a frame after it is shown.
++        boolean starting = SystemClock.uptimeMillis() - active.mShownAt < 1000;
++        if (active.mPopup.isShowing() && (starting || active.mFrame.isAttachedToWindow())) {
++            return true;
++        }
++        sActive = null;
++        return false;
+     }
+ 
+     /** Folds the card away with its closing animation, if one is up. */
+@@ -106,6 +125,31 @@ public final class RiseSheet {
+         if (sActive != null) sActive.close();
+     }
+ 
++    /**
++     * Runs {@code onTap} when a tap on {@code button} closes the card that is up. The card takes
++     * that tap, so the button's own click never runs. Back and other taps do not run it.
++     */
++    public static void setCloseTapTarget(View button, Runnable onTap) {
++        if (sActive == null) return;
++        sActive.mTapTarget = button;
++        sActive.mOnTapTarget = onTap;
++    }
++
++    /** Runs the close tap callback, once, if {@code event} is on the button it was given for. */
++    private void onCloseTap(MotionEvent event) {
++        View target = mTapTarget;
++        Runnable onTap = mOnTapTarget;
++        if (mClosing || target == null || onTap == null || !target.isShown()) return;
++        int[] at = new int[2];
++        target.getLocationOnScreen(at);
++        float x = event.getRawX();
++        float y = event.getRawY();
++        if (x < at[0] || y < at[1] || x >= at[0] + target.getWidth()) return;
++        if (y >= at[1] + target.getHeight()) return;
++        mOnTapTarget = null;
++        onTap.run();
++    }
++
+     /**
+      * Shows {@code content} as the card and returns whether it did; it does not while another card
+      * is up. {@code scroll} is the part of it that scrolls, so a drag on it moves the card only when
+@@ -113,7 +157,7 @@ public final class RiseSheet {
+      */
+     public static boolean show(
+             View root, View content, View scroll, @Nullable Runnable onDismissed) {
+-        if (sActive != null) return false;
++        if (busy()) return false;
+         Context context = root.getContext();
+         Rect frame = new Rect();
+         root.getWindowVisibleDisplayFrame(frame);
+@@ -133,7 +177,7 @@ public final class RiseSheet {
+         sActive = sheet;
+         sheet.mPopup.setOnDismissListener(
+                 () -> {
+-                    sActive = null;
++                    if (sActive == sheet) sActive = null;
+                     if (sheet.mOnDismissed != null) sheet.mOnDismissed.run();
+                 });
+         sheet.mPopup.showAtLocation(root, Gravity.NO_GRAVITY, frame.left, frame.top);
+@@ -200,7 +244,7 @@ public final class RiseSheet {
+             @Nullable Runnable[] actions,
+             boolean closesItself,
+             @Nullable Runnable onDismissed) {
+-        if (sActive != null) return false;
++        if (busy()) return false;
+         boolean hasButtons = labels.length > 0;
+         Context context = root.getContext();
+         float density = context.getResources().getDisplayMetrics().density;
+@@ -287,7 +331,7 @@ public final class RiseSheet {
+         sheet.mPopup.setOnDismissListener(
+                 () -> {
+                     sheet.mFrame.removeCallbacks(sheet.mTimeout);
+-                    sActive = null;
++                    if (sActive == sheet) sActive = null;
+                     if (sheet.mOnDismissed != null) sheet.mOnDismissed.run();
+                 });
+         // The popup is only as tall as the card and sits on the toolbar, so the card rises from
+@@ -320,7 +364,7 @@ public final class RiseSheet {
+             float openFraction,
+             float maxFraction,
+             @Nullable Runnable onDismissed) {
+-        if (sActive != null) return null;
++        if (busy()) return null;
+         Context context = root.getContext();
+         Rect frame = new Rect();
+         root.getWindowVisibleDisplayFrame(frame);
+@@ -341,7 +385,7 @@ public final class RiseSheet {
+         sActive = sheet;
+         sheet.mPopup.setOnDismissListener(
+                 () -> {
+-                    sActive = null;
++                    if (sActive == sheet) sActive = null;
+                     if (sheet.mOnDismissed != null) sheet.mOnDismissed.run();
+                 });
+         // A tap on the toolbar folds the card and also reaches the button under it, so tapping
+@@ -476,6 +520,8 @@ public final class RiseSheet {
+                                                     || event.getX() > view.getWidth()
+                                                     || event.getY() > view.getHeight()));
+                     if (outside) {
++                        // An ACTION_OUTSIDE touch also reaches the window under the card.
++                        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) onCloseTap(event);
+                         close();
+                         return true;
+                     }
+@@ -501,6 +547,11 @@ public final class RiseSheet {
+         return fallback;
+     }
+ 
++    /** The colour cards take: the toolbar's, as it is drawn. For other cards such as the menu. */
++    public static @ColorInt int barColor(View root) {
++        return toolbarColor(root, root.getContext());
++    }
++
+     /**
+      * The colour the bottom toolbar is drawn in, read by drawing the bar itself, so the card is the
+      * colour the user sees whatever the theme says.
+@@ -520,6 +571,12 @@ public final class RiseSheet {
+             Integer color = sample(row);
+             if (color != null) return color;
+         }
++        // The minimal layout has no bottom row, so its address bar's strip is the toolbar, at the
++        // top as well as at the bottom.
++        if (address != null && address.isShown()) {
++            Integer color = sample(address);
++            if (color != null) return color;
++        }
+         return SemanticColorUtils.getColorSurfaceContainerHigh(context);
+     }
+ 
+@@ -533,7 +590,8 @@ public final class RiseSheet {
+         bar.draw(canvas);
+         int pixel = bitmap.getPixel(0, 0);
+         bitmap.recycle();
+-        return Color.alpha(pixel) == 255 ? pixel : null;
++        // Frosted glass draws the bar a little see-through; the card takes its colour solid.
++        return Color.alpha(pixel) >= 0xC0 ? pixel | 0xFF000000 : null;
+     }
+ 
+     private static boolean isLight(@ColorInt int color) {
+@@ -798,6 +856,7 @@ public final class RiseSheet {
+                         }
+                         release(mStartY, velocity);
+                     } else if (mAbove) {
++                        onCloseTap(event);
+                         close();
+                     }
+                     clearVelocity();

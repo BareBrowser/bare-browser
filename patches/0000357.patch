@@ -1,0 +1,2858 @@
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 2b24aaee1bb..ad453679e56 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -524,6 +524,7 @@ chrome_java_resources = [
+   "java/res/layout/bare_welcome_page_welcome.xml",
+   "java/res/layout/bare_welcome_page_security.xml",
+   "java/res/layout/bare_made_with_love_preference.xml",
++  "java/res/layout/bare_about_header.xml",
+   "java/res/layout/bare_welcome_page_translate.xml",
+   "java/res/layout/bare_welcome_page_toolbar.xml",
+   "java/res/layout/bare_welcome_page_yours.xml",
+@@ -747,11 +748,13 @@ chrome_java_resources = [
+   "java/res/drawable/bare_menu_tap.xml",
+   "java/res/values/bare_incognito_arrays.xml",
+   "java/res/xml/bare_extensions_preferences.xml",
++  "java/res/xml/bare_incognito_preferences.xml",
+   "java/res/xml/bare_push_preferences.xml",
+   "java/res/xml/bare_security_preferences.xml",
+   "java/res/xml/bare_backup_create_preferences.xml",
+   "java/res/xml/bare_backup_preferences.xml",
+   "java/res/xml/bare_translate_preferences.xml",
++  "java/res/xml/bare_look_and_feel_preferences.xml",
+   "java/res/xml/bare_toolbar_preferences.xml",
+   "java/res/xml/bookmark_bar_preferences.xml",
+   "java/res/xml/bookmark_widget_info.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 90c980e8b3e..e68f2feb283 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -58,6 +58,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/ZoomController.java",
+   "java/src/org/chromium/chrome/browser/about_settings/AboutChromePreferenceOSVersion.java",
+   "java/src/org/chromium/chrome/browser/about_settings/AboutChromeSettings.java",
++  "java/src/org/chromium/chrome/browser/about_settings/BareAboutLogoView.java",
+   "java/src/org/chromium/chrome/browser/about_settings/AboutSettingsBridge.java",
+   "java/src/org/chromium/chrome/browser/about_settings/HyperlinkPreference.java",
+   "java/src/org/chromium/chrome/browser/about_settings/LegalInformationSettings.java",
+@@ -275,6 +276,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/backup/BareDirectTls.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareScreenLock.java",
+   "java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java",
++  "java/src/org/chromium/chrome/browser/bare/settings/BareLookAndFeelSettingsFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java",
+@@ -1117,6 +1119,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/photo_picker/DecoderServiceImpl.java",
+   "java/src/org/chromium/chrome/browser/policy/PolicyAuditor.java",
+   "java/src/org/chromium/chrome/browser/policy/PolicyAuditorBridge.java",
++  "java/src/org/chromium/chrome/browser/privacy/settings/BareIncognitoSettings.java",
+   "java/src/org/chromium/chrome/browser/privacy/settings/DoNotTrackSettings.java",
+   "java/src/org/chromium/chrome/browser/privacy/settings/IncognitoLockSettings.java",
+   "java/src/org/chromium/chrome/browser/privacy/settings/PasswordEchoSettingHandler.java",
+diff --git a/chrome/android/java/res/drawable/bare_preview_editable.xml b/chrome/android/java/res/drawable/bare_preview_editable.xml
+index c0b4ead52e6..7ea01a205fe 100644
+--- a/chrome/android/java/res/drawable/bare_preview_editable.xml
++++ b/chrome/android/java/res/drawable/bare_preview_editable.xml
+@@ -3,13 +3,17 @@
+ Copyright 2026 The Chromium Authors
+ Use of this source code is governed by a BSD-style license that can be
+ found in the LICENSE file.
++
++The dashed ring and pencil on a toolbar button that can be changed. The ring has a fixed size and
++sits in the middle of the button, so it stays a circle however wide the button's view is. The
++pencil sits on the ring's top right: centred, then moved 15dp right and 15dp up by the uneven
++insets, which puts it on the ring at 45 degrees.
+ -->
+ <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+     <item
+-        android:top="3dp"
+-        android:bottom="3dp"
+-        android:left="3dp"
+-        android:right="3dp">
++        android:width="44dp"
++        android:height="44dp"
++        android:gravity="center">
+         <shape android:shape="oval">
+             <solid android:color="?attr/colorSurfaceContainerHigh" />
+             <stroke
+@@ -22,7 +26,9 @@ found in the LICENSE file.
+     <item
+         android:width="16dp"
+         android:height="16dp"
+-        android:gravity="top|end">
++        android:gravity="center"
++        android:left="30dp"
++        android:bottom="30dp">
+         <layer-list>
+             <item>
+                 <shape android:shape="oval">
+diff --git a/chrome/android/java/res/layout/bare_about_header.xml b/chrome/android/java/res/layout/bare_about_header.xml
+new file mode 100644
+index 00000000000..d115b872786
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_about_header.xml
+@@ -0,0 +1,40 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<!-- The top of About Bare: the wing, the name and the tagline. Not a setting. -->
++<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content"
++    android:orientation="vertical"
++    android:gravity="center_horizontal"
++    android:paddingTop="24dp"
++    android:paddingBottom="16dp"
++    android:clickable="false"
++    android:focusable="false">
++
++    <org.chromium.chrome.browser.about_settings.BareAboutLogoView
++        android:layout_width="96dp"
++        android:layout_height="96dp"
++        android:importantForAccessibility="no" />
++
++    <TextView
++        android:layout_width="wrap_content"
++        android:layout_height="wrap_content"
++        android:layout_marginTop="8dp"
++        android:text="@string/app_name"
++        android:textSize="22sp"
++        android:fontFamily="sans-serif-medium"
++        android:textColor="?android:attr/textColorPrimary" />
++
++    <TextView
++        android:layout_width="wrap_content"
++        android:layout_height="wrap_content"
++        android:layout_marginTop="2dp"
++        android:text="@string/bare_about_tagline"
++        android:textAppearance="?android:attr/textAppearanceSmall"
++        android:textColor="?android:attr/textColorSecondary" />
++</LinearLayout>
+diff --git a/chrome/android/java/res/layout/bare_toolbar_preview.xml b/chrome/android/java/res/layout/bare_toolbar_preview.xml
+index e57753c7d3e..ce72d16f71e 100644
+--- a/chrome/android/java/res/layout/bare_toolbar_preview.xml
++++ b/chrome/android/java/res/layout/bare_toolbar_preview.xml
+@@ -6,7 +6,9 @@ found in the LICENSE file.
+ 
+ A picture of the toolbar, used by Settings and by the welcome so that both show the same thing.
+ Full layout: the address bar with the bottom bar's five equal positions under it, the new tab
+-button in the middle. Minimal layout: one row, the address bar with New tab, Tabs and Menu.
++button in the middle, and the address bar shortcut inside the end of the address bar. Minimal
++layout: one row, the address bar with New tab, Tabs and Menu; there New tab's place is the address
++bar shortcut's, which is where that layout puts it.
+ The two positions the user can change are focusable and respond to a press; the others are shown
+ so the picture reads as the toolbar, and not lighting up under a finger is what says they are
+ fixed.
+@@ -99,14 +101,32 @@ fixed.
+             android:layout_height="wrap_content"
+             android:orientation="vertical">
+ 
+-            <View
+-                android:id="@+id/bare_preview_pill"
++            <!-- The address bar. Settings draws the address bar shortcut inside its end, where
++                 the full layout shows it; the frame is a little taller than the bar so the
++                 shortcut's ring is not cut off. -->
++            <FrameLayout
++                android:id="@+id/bare_preview_pill_frame"
+                 android:layout_width="match_parent"
+-                android:layout_height="40dp"
++                android:layout_height="48dp"
+                 android:layout_marginStart="4dp"
+-                android:layout_marginEnd="4dp"
+-                android:background="@drawable/bare_toolbar_preview_pill"
+-                android:importantForAccessibility="no" />
++                android:layout_marginEnd="4dp">
++
++                <View
++                    android:id="@+id/bare_preview_pill"
++                    android:layout_width="match_parent"
++                    android:layout_height="40dp"
++                    android:layout_gravity="center_vertical"
++                    android:background="@drawable/bare_toolbar_preview_pill"
++                    android:importantForAccessibility="no" />
++
++                <ImageView
++                    android:id="@+id/bare_preview_shortcut"
++                    android:layout_width="48dp"
++                    android:layout_height="48dp"
++                    android:layout_gravity="end|center_vertical"
++                    android:scaleType="center"
++                    android:visibility="gone" />
++            </FrameLayout>
+ 
+             <LinearLayout
+                 android:id="@+id/bare_toolbar_preview_row"
+diff --git a/chrome/android/java/res/xml/about_chrome_preferences.xml b/chrome/android/java/res/xml/about_chrome_preferences.xml
+index fb1dfed2305..b9e0b8d87f4 100644
+--- a/chrome/android/java/res/xml/about_chrome_preferences.xml
++++ b/chrome/android/java/res/xml/about_chrome_preferences.xml
+@@ -6,9 +6,16 @@ found in the LICENSE file.
+ -->
+ 
+ <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
++    <Preference
++        android:layout="@layout/bare_about_header"
++        android:selectable="false"
++        android:persistent="false" />
+     <org.chromium.chrome.browser.about_settings.LongClickCopySummaryPreference
+         android:key="application_version"
+-        android:title="@string/application_version_title" />
++        android:title="@string/bare_about_version_title" />
++    <org.chromium.chrome.browser.about_settings.LongClickCopySummaryPreference
++        android:key="chromium_version"
++        android:title="@string/bare_about_chromium_title" />
+     <org.chromium.chrome.browser.about_settings.AboutChromePreferenceOSVersion
+         android:key="os_version"
+         android:title="@string/os_version_title" />
+diff --git a/chrome/android/java/res/xml/appearance_preferences.xml b/chrome/android/java/res/xml/appearance_preferences.xml
+index 746444ff1b6..8c2e7ad26bf 100644
+--- a/chrome/android/java/res/xml/appearance_preferences.xml
++++ b/chrome/android/java/res/xml/appearance_preferences.xml
+@@ -28,7 +28,7 @@ found in the LICENSE file.
+         android:fragment="org.chromium.chrome.browser.bare.settings.BareToolbarSettingsFragment"
+         android:key="bare_toolbar"
+         android:order="2"
+-        android:title="@string/bare_toolbar_settings_title" />
++        android:title="@string/bare_toolbar_page_title" />
+ 
+ <!--The following bookmarks bar settings preferences repeat
+ the same order, title and summary because they are mutually
+diff --git a/chrome/android/java/res/xml/bare_incognito_preferences.xml b/chrome/android/java/res/xml/bare_incognito_preferences.xml
+new file mode 100644
+index 00000000000..ece4618113b
+--- /dev/null
++++ b/chrome/android/java/res/xml/bare_incognito_preferences.xml
+@@ -0,0 +1,33 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
++
++    <org.chromium.chrome.browser.incognito.reauth.IncognitoReauthSettingSwitchPreference
++        android:key="incognito_lock"
++        android:title="@string/settings_incognito_tab_lock_title"
++        android:summary="@string/settings_incognito_tab_lock_summary_android_setting_off"
++        android:persistent="false" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_incognito_biometric_only"
++        android:title="@string/bare_incognito_biometric_only_title"
++        android:summary="@string/bare_incognito_biometric_only_summary"
++        android:persistent="false" />
++    <androidx.preference.ListPreference
++        android:key="bare_incognito_wipe_after"
++        android:title="@string/bare_incognito_wipe_title"
++        android:summary="%s"
++        android:persistent="false"
++        android:entries="@array/bare_incognito_wipe_entries"
++        android:entryValues="@array/bare_incognito_wipe_values" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_incognito_block_screenshots"
++        android:title="@string/bare_incognito_block_screenshots_title"
++        android:summary="@string/bare_incognito_block_screenshots_summary"
++        android:persistent="false" />
++
++</PreferenceScreen>
+diff --git a/chrome/android/java/res/xml/bare_look_and_feel_preferences.xml b/chrome/android/java/res/xml/bare_look_and_feel_preferences.xml
+new file mode 100644
+index 00000000000..01f22996534
+--- /dev/null
++++ b/chrome/android/java/res/xml/bare_look_and_feel_preferences.xml
+@@ -0,0 +1,43 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++<PreferenceScreen
++    xmlns:android="http://schemas.android.com/apk/res/android">
++
++    <org.chromium.components.browser_ui.settings.ChromeBasePreference
++        android:key="bare_app_icon"
++        android:order="0"
++        android:title="@string/bare_app_icon_title" />
++
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_ntp_logo"
++        android:order="1"
++        android:persistent="false"
++        android:title="@string/bare_ntp_logo_title"
++        android:summary="@string/bare_ntp_logo_summary" />
++
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_menu_card"
++        android:order="2"
++        android:persistent="false"
++        android:title="@string/bare_menu_card_title"
++        android:summary="@string/bare_menu_card_summary" />
++
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_glass"
++        android:order="3"
++        android:persistent="false"
++        android:title="@string/bare_glass_title"
++        android:summary="@string/bare_glass_summary" />
++
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_snackbars"
++        android:order="4"
++        android:persistent="false"
++        android:title="@string/bare_snackbars_title"
++        android:summary="@string/bare_snackbars_summary" />
++
++</PreferenceScreen>
+diff --git a/chrome/android/java/res/xml/bare_security_preferences.xml b/chrome/android/java/res/xml/bare_security_preferences.xml
+index fc417384ca6..1704099436b 100644
+--- a/chrome/android/java/res/xml/bare_security_preferences.xml
++++ b/chrome/android/java/res/xml/bare_security_preferences.xml
+@@ -5,56 +5,73 @@ Use of this source code is governed by a BSD-style license that can be
+ found in the LICENSE file.
+ -->
+ 
++<!-- Bare Guard. Each switch is a setting Chromium already has; Chromium's own rows for the same
++     settings are gone from Privacy & security, so each one is set here only. -->
+ <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+ 
+-    <org.chromium.components.browser_ui.settings.TextMessagePreference
+-        android:key="bare_security_about"
+-        android:order="0"
+-        android:summary="@string/bare_security_about" />
+-
+     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+-        android:key="bare_sec_https"
+-        android:order="1"
++        android:key="bare_sec_canvas"
++        android:order="0"
+         android:persistent="false"
+-        android:title="@string/bare_security_https_title"
+-        android:summary="@string/bare_security_https_summary" />
++        android:title="@string/bare_security_canvas_title"
++        android:summary="@string/bare_security_canvas_summary" />
+ 
+-    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+-        android:key="bare_sec_cookies"
+-        android:order="2"
+-        android:persistent="false"
+-        android:title="@string/bare_security_cookies_title"
+-        android:summary="@string/bare_security_cookies_summary" />
++    <PreferenceCategory
++        android:key="bare_sec_canvas_allowed"
++        android:order="1"
++        android:title="@string/bare_security_canvas_allowed" />
+ 
+     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+         android:key="bare_sec_webrtc"
+-        android:order="3"
++        android:order="2"
+         android:persistent="false"
+         android:title="@string/bare_security_webrtc_title"
+         android:summary="@string/bare_security_webrtc_summary" />
+ 
+     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+         android:key="bare_sec_hardened"
+-        android:order="4"
++        android:order="3"
+         android:persistent="false"
+         android:title="@string/bare_security_hardened_title"
+         android:summary="@string/bare_security_hardened_summary" />
+ 
+-    <org.chromium.components.browser_ui.settings.TextMessagePreference
+-        android:key="bare_security_phishing"
+-        android:order="5"
+-        android:summary="@string/bare_security_phishing_note" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_sec_https"
++        android:order="4"
++        android:persistent="false"
++        android:title="@string/bare_security_https_title"
++        android:summary="@string/bare_security_https_summary" />
+ 
+     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+-        android:key="bare_sec_canvas"
+-        android:order="6"
++        android:key="bare_sec_cookies"
++        android:order="5"
+         android:persistent="false"
+-        android:title="@string/bare_security_canvas_title"
+-        android:summary="@string/bare_security_canvas_summary" />
++        android:title="@string/bare_security_cookies_title"
++        android:summary="@string/bare_security_cookies_summary" />
+ 
+-    <PreferenceCategory
+-        android:key="bare_sec_canvas_allowed"
++    <org.chromium.components.browser_ui.settings.ChromeBasePreference
++        android:key="bare_link_tracking"
++        android:order="6"
++        android:selectable="false"
++        android:title="@string/bare_link_tracking_title"
++        android:summary="@string/bare_link_tracking_summary" />
++
++    <org.chromium.components.browser_ui.settings.ChromeBasePreference
++        android:key="secure_dns"
+         android:order="7"
+-        android:title="@string/bare_security_canvas_allowed" />
++        android:title="@string/settings_secure_dns_title"
++        android:fragment="org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings" />
++
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_sec_barefilter"
++        android:order="8"
++        android:persistent="false"
++        android:title="@string/bare_filter_title"
++        android:summary="@string/bare_filter_summary" />
++
++    <org.chromium.components.browser_ui.settings.TextMessagePreference
++        android:key="bare_security_phishing"
++        android:order="9"
++        android:summary="@string/bare_security_phishing_note" />
+ 
+ </PreferenceScreen>
+diff --git a/chrome/android/java/res/xml/bare_toolbar_preferences.xml b/chrome/android/java/res/xml/bare_toolbar_preferences.xml
+index ab2c180e961..59b70672186 100644
+--- a/chrome/android/java/res/xml/bare_toolbar_preferences.xml
++++ b/chrome/android/java/res/xml/bare_toolbar_preferences.xml
+@@ -8,14 +8,15 @@ found in the LICENSE file.
+     xmlns:android="http://schemas.android.com/apk/res/android">
+ 
+     <PreferenceCategory
+-        android:key="bare_toolbar_general"
++        android:key="bare_toolbar_layout"
+         android:order="0"
+-        android:title="@string/bare_toolbar_general_title">
++        android:title="@string/bare_toolbar_section_layout">
+ 
+-        <org.chromium.chrome.browser.bare.settings.BareToolbarPreviewPreference
+-            android:key="bare_toolbar_layout_preview"
++        <ListPreference
++            android:key="bare_address_bar_position"
+             android:order="0"
+-            android:selectable="false" />
++            android:persistent="false"
++            android:title="@string/address_bar_settings" />
+ 
+         <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+             android:key="bare_toolbar_minimal"
+@@ -33,14 +34,17 @@ found in the LICENSE file.
+     </PreferenceCategory>
+ 
+     <PreferenceCategory
+-        android:key="bare_toolbar_shortcuts"
++        android:key="bare_toolbar_buttons"
+         android:order="1"
+-        android:title="@string/bare_toolbar_shortcuts_section">
++        android:title="@string/bare_toolbar_section_buttons">
+ 
++        <!-- The picture of the bar, the address bar shortcut included. The title is not shown;
++             it is what settings search finds. -->
+         <org.chromium.chrome.browser.bare.settings.BareToolbarPreviewPreference
+             android:key="bare_toolbar_preview"
+             android:order="0"
+-            android:selectable="false" />
++            android:selectable="false"
++            android:title="@string/toolbar_shortcut" />
+ 
+         <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+             android:key="bare_toolbar_menu_left"
+@@ -48,23 +52,29 @@ found in the LICENSE file.
+             android:persistent="false"
+             android:title="@string/bare_toolbar_menu_left_title"
+             android:summary="@string/bare_toolbar_menu_left_summary" />
++    </PreferenceCategory>
++
++    <PreferenceCategory
++        android:key="bare_toolbar_gestures"
++        android:order="2"
++        android:title="@string/bare_toolbar_section_gestures">
+ 
+         <ListPreference
+             android:key="bare_toolbar_swipe_action"
+-            android:order="2"
++            android:order="0"
+             android:title="@string/bare_toolbar_swipe_title" />
+ 
+         <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+             android:key="bare_address_bar_swipe_tabs"
+-            android:order="3"
++            android:order="1"
+             android:persistent="false"
+             android:title="@string/bare_address_bar_swipe_title"
+             android:summary="@string/bare_address_bar_swipe_summary" />
+-
+-        <Preference
+-            android:key="bare_toolbar_reset"
+-            android:order="4"
+-            android:title="@string/bare_toolbar_settings_reset" />
+     </PreferenceCategory>
+ 
++    <Preference
++        android:key="bare_toolbar_reset"
++        android:order="3"
++        android:title="@string/bare_toolbar_settings_reset" />
++
+ </PreferenceScreen>
+diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/java/res/xml/main_preferences.xml
+index 1f1596d57ab..b01c4459f85 100644
+--- a/chrome/android/java/res/xml/main_preferences.xml
++++ b/chrome/android/java/res/xml/main_preferences.xml
+@@ -28,12 +28,12 @@ found in the LICENSE file.
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
+         android:fragment="org.chromium.chrome.browser.privacy.settings.PrivacySettings"
+         android:key="privacy"
+-        android:order="8"
+-        android:title="@string/prefs_privacy_security"/>
++        android:order="24"
++        android:title="@string/privacy_section_title"/>
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
+         android:fragment="org.chromium.chrome.browser.safety_hub.SafetyHubFragment"
+         android:key="safety_hub"
+-        android:order="9"
++        android:order="26"
+         android:title="@string/prefs_safety_check"/>
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
+         android:key="default_browser"
+@@ -103,21 +103,30 @@ found in the LICENSE file.
+         android:key="bare_ui_theme"
+         android:order="3"
+         android:title="@string/theme_settings" />
+-    <org.chromium.components.browser_ui.settings.ChromeBasePreference
+-        android:fragment="org.chromium.chrome.browser.toolbar.adaptive.settings.AdaptiveToolbarSettingsFragment"
+-        android:key="bare_toolbar_shortcut"
+-        android:order="8"
+-        android:title="@string/toolbar_shortcut" />
+     <Preference
+         android:fragment="org.chromium.chrome.browser.bare.settings.BareToolbarSettingsFragment"
+         android:key="bare_toolbar"
+         android:order="9"
+-        android:title="@string/bare_toolbar_settings_title" />
++        android:title="@string/bare_toolbar_page_title" />
+     <Preference
+         android:fragment="org.chromium.chrome.browser.bare.settings.BareSecuritySettingsFragment"
+         android:key="bare_security"
+         android:order="23"
+         android:title="@string/bare_security_title" />
++    <!-- Privacy & security lists Bare Guard (23), Privacy (24), Incognito (25),
++         Safety check (26) and Site settings (27), in that order. -->
++    <Preference
++        android:fragment="org.chromium.chrome.browser.privacy.settings.BareIncognitoSettings"
++        android:key="bare_incognito"
++        android:order="25"
++        android:title="@string/bare_incognito_settings_title" />
++    <!-- Moved from the Privacy page to Autofill & payments; the same pref as before. -->
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_can_make_payment"
++        android:order="16"
++        android:persistent="false"
++        android:title="@string/can_make_payment_title"
++        android:summary="@string/settings_can_make_payment_toggle_label" />
+     <Preference
+         android:fragment="org.chromium.chrome.browser.bare.settings.BarePushSettingsFragment"
+         android:key="bare_push"
+@@ -182,40 +191,18 @@ found in the LICENSE file.
+         android:key="bare_check_for_updates"
+         android:order="32"
+         android:title="@string/bare_check_for_updates"/>
+-    <org.chromium.components.browser_ui.settings.ChromeBasePreference
+-        android:key="bare_app_icon"
++    <!-- App icon, Bare icon on new tab, Bare menu, Frosted glass and Snackbar notifications. -->
++    <Preference
++        android:fragment="org.chromium.chrome.browser.bare.settings.BareLookAndFeelSettingsFragment"
++        android:key="bare_look_and_feel"
+         android:order="33"
+-        android:title="@string/bare_app_icon_title"/>
++        android:title="@string/bare_look_and_feel_title" />
+     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+         android:key="bare_smooth_scrolling"
+         android:order="32"
+         android:persistent="false"
+         android:title="@string/bare_smooth_scrolling_title"
+         android:summary="@string/bare_smooth_scrolling_summary"/>
+-    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+-        android:key="bare_glass"
+-        android:order="33"
+-        android:persistent="false"
+-        android:title="@string/bare_glass_title"
+-        android:summary="@string/bare_glass_summary"/>
+-    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+-        android:key="bare_snackbars"
+-        android:order="33"
+-        android:persistent="false"
+-        android:title="@string/bare_snackbars_title"
+-        android:summary="@string/bare_snackbars_summary"/>
+-    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+-        android:key="bare_menu_card"
+-        android:order="33"
+-        android:persistent="false"
+-        android:title="@string/bare_menu_card_title"
+-        android:summary="@string/bare_menu_card_summary"/>
+-    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+-        android:key="bare_ntp_logo"
+-        android:order="33"
+-        android:persistent="false"
+-        android:title="@string/bare_ntp_logo_title"
+-        android:summary="@string/bare_ntp_logo_summary"/>
+     <org.chromium.chrome.browser.bare.settings.BareMadeWithLovePreference
+         android:key="bare_made_with_love"
+         android:order="34"/>
+diff --git a/chrome/android/java/res/xml/privacy_preferences.xml b/chrome/android/java/res/xml/privacy_preferences.xml
+index 02126e5dcb1..8d9c6826c7e 100644
+--- a/chrome/android/java/res/xml/privacy_preferences.xml
++++ b/chrome/android/java/res/xml/privacy_preferences.xml
+@@ -4,12 +4,12 @@ Use of this source code is governed by a BSD-style license that can be
+ found in the LICENSE file.
+ -->
+ 
++<!-- Bare: the Privacy page of Privacy & security. The security rows are on Bare Guard, the
++     Incognito lock rows on their own Incognito page, and Access payment methods is under
++     Autofill & payments. -->
+ <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+     xmlns:app="http://schemas.android.com/apk/res-auto">
+ 
+-    <org.chromium.components.browser_ui.settings.ChromeBasePreferenceCategory
+-        android:key="privacy_section"
+-        android:title="@string/privacy_section_title" />
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
+         android:key="clear_browsing_data"
+         android:title="@string/clear_browsing_data_title"
+@@ -20,15 +20,6 @@ found in the LICENSE file.
+         android:title="@string/bare_clear_on_exit_title"
+         android:summary="@string/bare_clear_on_exit_summary"
+         android:fragment="org.chromium.chrome.browser.bare.settings.BareClearOnExitSettings" />
+-    <org.chromium.components.browser_ui.settings.ChromeBasePreference
+-        android:key="privacy_guide"
+-        android:title="@string/privacy_guide_pref_title"
+-        android:summary="@string/privacy_guide_pref_summary"
+-        android:fragment="org.chromium.chrome.browser.privacy_guide.PrivacyGuideFragment" />
+-    <org.chromium.components.browser_ui.settings.ChromeBasePreference
+-        android:key="third_party_cookies"
+-        android:title="@string/third_party_cookies_link_row_label"
+-        android:fragment="org.chromium.components.browser_ui.site_settings.SingleCategorySettings" />
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
+         android:key="do_not_track"
+         android:title="@string/do_not_track_title"
+@@ -42,69 +33,9 @@ found in the LICENSE file.
+         android:title="@string/preload_pages_title"
+         android:summary="@string/preload_pages_summary"
+         android:fragment="org.chromium.chrome.browser.prefetch.settings.PreloadPagesSettingsFragment" />
+-    <org.chromium.chrome.browser.incognito.reauth.IncognitoReauthSettingSwitchPreference
+-        android:key="incognito_lock"
+-        android:title="@string/settings_incognito_tab_lock_title"
+-        android:summary="@string/settings_incognito_tab_lock_summary_android_setting_off"
+-        android:persistent="false" />
+-    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+-        android:key="bare_incognito_biometric_only"
+-        android:title="@string/bare_incognito_biometric_only_title"
+-        android:summary="@string/bare_incognito_biometric_only_summary"
+-        android:persistent="false" />
+-    <androidx.preference.ListPreference
+-        android:key="bare_incognito_wipe_after"
+-        android:title="@string/bare_incognito_wipe_title"
+-        android:summary="%s"
+-        android:persistent="false"
+-        android:entries="@array/bare_incognito_wipe_entries"
+-        android:entryValues="@array/bare_incognito_wipe_values" />
+-    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+-        android:key="bare_incognito_block_screenshots"
+-        android:title="@string/bare_incognito_block_screenshots_title"
+-        android:summary="@string/bare_incognito_block_screenshots_summary"
+-        android:persistent="false" />
+-
+-    <org.chromium.components.browser_ui.settings.ChromeBasePreferenceCategory
+-        android:key="security_section"
+-      android:title="@string/security_section_title" />
+-     <org.chromium.chrome.browser.safety_hub.SafetyHubExpandablePreference
+-            android:key="advanced_protection_info"
+-            android:title="@string/settings_privacy_and_security_advanced_protection_section_title"/>
+-    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+-        android:key="password_leak_detection"
+-        android:title="@string/passwords_leak_detection_switch_title"
+-        android:summary="@string/passwords_leak_detection_switch_summary"
+-        android:persistent="false" />
+-    <!-- Old HTTPS-First Mode toggle. Hidden if HttpsFirstBalancedMode flag is enabled.
+-         TODO(crbug.com/349860796): Remove once new settings are fully rolled out. -->
+-    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+-        android:key="https_first_mode_legacy"
+-        android:title="@string/settings_https_first_mode_title" />
+-    <!-- New HTTPS-First Mode settings sub-page. Hidden if HttpsFirstBalancedMode flag is disabled. -->
+-    <org.chromium.components.browser_ui.settings.ChromeBasePreference
+-        android:key="https_first_mode"
+-        android:title="@string/settings_https_first_mode_title"
+-        android:fragment="org.chromium.chrome.browser.ssl.HttpsFirstModeSettingsFragment" />
+-    <org.chromium.components.browser_ui.settings.ChromeBasePreference
+-        android:key="secure_dns"
+-        android:title="@string/settings_secure_dns_title"
+-        android:fragment="org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings" />
+-    <org.chromium.components.browser_ui.settings.ChromeBasePreference
+-        android:key="javascript_optimizer"
+-        android:title="@string/website_settings_privacy_and_security_javascript_optimizer_row_label"
+-        android:fragment="org.chromium.components.browser_ui.site_settings.SingleCategorySettings" />
+-    <org.chromium.components.browser_ui.settings.ChromeBasePreference
+-        android:key="bare_link_tracking"
+-        android:selectable="false"
+-        android:title="@string/bare_link_tracking_title"
+-        android:summary="@string/bare_link_tracking_summary" />
+-    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+-        android:key="can_make_payment"
+-        android:title="@string/can_make_payment_title"
+-        android:summary="@string/settings_can_make_payment_toggle_label" />
+-    <org.chromium.components.browser_ui.settings.TextMessagePreference
+-        android:key="sync_and_services_link"
+-        android:summary="@string/privacy_sync_and_services_link_legacy"
+-        app:allowDividerBelow="false" />
++    <!-- Shown only while Android's Advanced Protection is on. The advanced-protection message
++         opens this page scrolled to it. -->
++    <org.chromium.chrome.browser.safety_hub.SafetyHubExpandablePreference
++        android:key="advanced_protection_info"
++        android:title="@string/settings_privacy_and_security_advanced_protection_section_title"/>
+ </PreferenceScreen>
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index d3f99e470c9..0afc7b0dd09 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -24,8 +24,11 @@ found in the LICENSE file.
+     <string name="bare_welcome_step" translatable="false">Step %1$d of %2$d</string>
+     <string name="bare_welcome_yours_title" translatable="false">Make Bare yours</string>
+     <string name="bare_welcome_yours_intro" translatable="false">Set up the essentials. You can change any of these later in Settings.</string>
+-    <string name="bare_toolbar_general_title" translatable="false">General</string>
+-    <string name="bare_toolbar_shortcuts_section" translatable="false">Shortcuts</string>
++    <string name="bare_toolbar_page_title" translatable="false">Address bar &amp; toolbar</string>
++    <string name="bare_toolbar_section_layout" translatable="false">Layout</string>
++    <string name="bare_toolbar_section_buttons" translatable="false">Buttons</string>
++    <string name="bare_toolbar_section_gestures" translatable="false">Gestures</string>
++    <string name="bare_look_and_feel_title" translatable="false">Look &amp; feel</string>
+     <string name="bare_toolbar_menu_left_title" translatable="false">Menu on the left</string>
+     <string name="bare_toolbar_menu_left_summary" translatable="false">Swaps the menu and the first button: menu on the left, sidebar on the right</string>
+     <string name="bare_toolbar_always_visible_title" translatable="false">Keep toolbar visible</string>
+@@ -46,7 +49,7 @@ found in the LICENSE file.
+     <string name="bare_welcome_opt_bar_swipe" translatable="false">Swipe the bottom bar</string>
+     <string name="bare_welcome_hint_bar_swipe" translatable="false">What a sideways drag along the bar does</string>
+     <string name="bare_welcome_security_title">Security</string>
+-    <string name="bare_welcome_security_intro">Settings that limit what pages can reach or learn about your connection. You can change them later in Settings, Security options.</string>
++    <string name="bare_welcome_security_intro">Settings that limit what pages can reach or learn about your connection. You can change them later in Settings, Bare Guard.</string>
+     <string name="bare_welcome_opt_https">Secure connections</string>
+     <string name="bare_welcome_hint_https">Open pages over https and warn before a plain http page</string>
+     <string name="bare_welcome_opt_cookies">Block third-party cookies</string>
+@@ -83,7 +86,7 @@ found in the LICENSE file.
+     <string name="bare_welcome_canvas_picture_description" translatable="false">A site reads canvas pixels, Bare hands over a blank canvas, and the site gets nothing to recognize. What you see is unchanged.</string>
+     <string name="bare_welcome_opt_canvas" translatable="false">Block canvas reading</string>
+     <string name="bare_welcome_hint_canvas" translatable="false">Applies to new pages</string>
+-    <string name="bare_welcome_canvas_note" translatable="false">Canvas only. Not audio, fonts or device info. Fingerprint tests may still call you unique. Some sites need canvas reading to work; allow them from the menu. Also in Settings, Security options.</string>
++    <string name="bare_welcome_canvas_note" translatable="false">Canvas only. Not audio, fonts or device info. Fingerprint tests may still call you unique. Some sites need canvas reading to work; allow them from the menu. Also in Settings, Bare Guard.</string>
+     <string name="bare_welcome_translate_title" translatable="false">Page translation</string>
+     <string name="bare_welcome_translate_intro" translatable="false">Bare translates a page only when you send it. It never suggests translating on its own.</string>
+     <string name="bare_welcome_opt_translate" translatable="false">Translate pages with Google</string>
+@@ -143,6 +146,9 @@ found in the LICENSE file.
+     <string name="bare_settings_cat_appearance_summary" translatable="false">Theme, toolbar, homepage</string>
+     <string name="bare_settings_cat_privacy" translatable="false">Privacy &amp; security</string>
+     <string name="bare_settings_cat_privacy_summary" translatable="false">Protection, permissions, site data</string>
++    <string name="bare_incognito_settings_title" translatable="false">Incognito</string>
++    <string name="bare_filter_title" translatable="false">BareFilter</string>
++    <string name="bare_filter_summary" translatable="false">Hides app banners and pop-ups on a few sites, and updates itself from GitHub. A change applies the next time Bare starts.</string>
+     <string name="bare_settings_cat_extensions" translatable="false">Extensions</string>
+     <string name="bare_settings_cat_extensions_summary" translatable="false">Manage add-ons and blocking</string>
+     <string name="bare_settings_cat_browsing" translatable="false">Browsing</string>
+@@ -191,6 +197,11 @@ found in the LICENSE file.
+         <item quantity="one">%d private tab</item>
+         <item quantity="other">%d private tabs</item>
+     </plurals>
++    <!-- About Bare. The tagline sits under the name at the top. -->
++    <string name="bare_about_tagline" translatable="false">Private by default</string>
++    <string name="bare_about_version_title" translatable="false">Bare version</string>
++    <string name="bare_about_chromium_title" translatable="false">Chromium version</string>
++    <string name="bare_about_built_on" translatable="false">Bare is built on Chromium.</string>
+     <string name="bare_made_with_love" translatable="false">Made with ❤️ in San Francisco</string>
+     <string name="bare_welcome_made_with" translatable="false">Made with</string>
+     <string name="bare_welcome_heart" translatable="false">❤️</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AboutChromeSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AboutChromeSettings.java
+index 70db74f9c1e..665d0e42c07 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AboutChromeSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AboutChromeSettings.java
+@@ -9,9 +9,11 @@ import static org.chromium.build.NullUtil.assumeNonNull;
+ import android.content.Context;
+ import android.content.pm.PackageInfo;
+ import android.content.pm.PackageManager.NameNotFoundException;
++import android.os.Build;
+ import android.os.Bundle;
+ import android.text.format.DateUtils;
+ 
++import androidx.core.content.pm.PackageInfoCompat;
+ import androidx.preference.Preference;
+ 
+ import org.chromium.base.supplier.MonotonicObservableSupplier;
+@@ -43,6 +45,7 @@ public class AboutChromeSettings extends ChromeBaseSettingsFragment
+     private static final int TAPS_FOR_DEVELOPER_SETTINGS = 7;
+ 
+     private static final String PREF_APPLICATION_VERSION = "application_version";
++    private static final String PREF_CHROMIUM_VERSION = "chromium_version";
+     private static final String PREF_OS_VERSION = "os_version";
+     private static final String PREF_LEGAL_INFORMATION = "legal_information";
+ 
+@@ -70,18 +73,35 @@ public class AboutChromeSettings extends ChromeBaseSettingsFragment
+ 
+         Preference p = findPreference(PREF_APPLICATION_VERSION);
+         assumeNonNull(p);
+-        p.setSummary(
+-                getApplicationVersion(getActivity(), AboutSettingsBridge.getApplicationVersion()));
++        // Bare: its own version first, then the Chromium it is built on.
++        p.setSummary(getBareVersion(requireContext()));
+         p.setOnPreferenceClickListener(this);
++        p = findPreference(PREF_CHROMIUM_VERSION);
++        assumeNonNull(p);
++        p.setSummary(getApplicationVersion(getActivity(), VersionInfo.getProductVersion()));
+         p = findPreference(PREF_OS_VERSION);
+         assumeNonNull(p);
+-        p.setSummary(AboutSettingsBridge.getOSVersion());
++        p.setSummary("Android " + Build.VERSION.RELEASE + "; " + Build.MODEL);
+         p = findPreference(PREF_LEGAL_INFORMATION);
+         assumeNonNull(p);
+         Calendar calendar = CalendarFactory.get();
+         calendar.setTimeInMillis(System.currentTimeMillis());
+         int currentYear = calendar.get(Calendar.YEAR);
+-        p.setSummary(getString(R.string.legal_information_summary, currentYear));
++        p.setSummary(
++                getString(R.string.bare_about_built_on)
++                        + " "
++                        + getString(R.string.legal_information_summary, currentYear));
++    }
++
++    /** Bare's versionName and versionCode, such as "2.0.5 (802000515)". */
++    private static String getBareVersion(Context context) {
++        try {
++            PackageInfo info =
++                    context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
++            return info.versionName + " (" + PackageInfoCompat.getLongVersionCode(info) + ")";
++        } catch (NameNotFoundException e) {
++            return VersionInfo.getProductVersion();
++        }
+     }
+ 
+     @Override
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/about_settings/BareAboutLogoView.java b/chrome/android/java/src/org/chromium/chrome/browser/about_settings/BareAboutLogoView.java
+new file mode 100644
+index 00000000000..5bb7ab83331
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/about_settings/BareAboutLogoView.java
+@@ -0,0 +1,23 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.about_settings;
++
++import android.content.Context;
++import android.util.AttributeSet;
++
++import androidx.appcompat.widget.AppCompatImageView;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.logo.BareAnimatedLogo;
++
++/** Bare: the flying Bare at the top of About, the same leaf as the new tab page. */
++@NullMarked
++public class BareAboutLogoView extends AppCompatImageView {
++    public BareAboutLogoView(Context context, @Nullable AttributeSet attrs) {
++        super(context, attrs);
++        setImageDrawable(BareAnimatedLogo.leaf(context));
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/appearance/settings/AppearanceSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/appearance/settings/AppearanceSettingsFragment.java
+index 7d3d0bdf7ad..e733fca9cbb 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/appearance/settings/AppearanceSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/appearance/settings/AppearanceSettingsFragment.java
+@@ -478,6 +478,11 @@ public class AppearanceSettingsFragment extends ChromeBaseSettingsFragment
+                         indexData.removeEntryForKey(prefFragment, PREF_BOTTOM_BAR_SWITCH);
+                     }
+ 
++                    // Bare: on a phone the shortcut is chosen on the Address bar & toolbar page.
++                    if (!DeviceFormFactor.isNonMultiDisplayContextOnTablet(context)) {
++                        indexData.removeEntryForKey(prefFragment, PREF_TOOLBAR_SHORTCUT);
++                    }
++
+                     shouldShowToolbarShortcutPrefAsync(
+                             context,
+                             profile,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareLookAndFeelSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareLookAndFeelSettingsFragment.java
+new file mode 100644
+index 00000000000..73ca79be1b9
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareLookAndFeelSettingsFragment.java
+@@ -0,0 +1,121 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.settings;
++
++import android.app.Activity;
++import android.content.Context;
++import android.os.Bundle;
++
++import androidx.preference.Preference;
++
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.BareLauncherIcon;
++import org.chromium.chrome.browser.bare.notices.BareNotices;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
++import org.chromium.components.browser_ui.settings.SettingsUtils;
++
++/**
++ * Look & feel: the app icon, the Bare icon on a new tab, the Bare menu, frosted glass and
++ * snackbars. These were rows on the Appearance screen and moved here as they were, each stored in
++ * the same place and read the same way.
++ */
++@NullMarked
++public class BareLookAndFeelSettingsFragment extends ChromeBaseSettingsFragment {
++    public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
++            new ChromeBaseSearchIndexProvider(
++                    BareLookAndFeelSettingsFragment.class.getName(),
++                    R.xml.bare_look_and_feel_preferences);
++
++    static final String PREF_APP_ICON = "bare_app_icon";
++    static final String PREF_NTP_LOGO = "bare_ntp_logo";
++    static final String PREF_MENU_CARD = "bare_menu_card";
++    static final String PREF_GLASS = "bare_glass";
++    static final String PREF_SNACKBARS = "bare_snackbars";
++
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++            ObservableSuppliers.createMonotonic();
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        mPageTitle.set(getTitle(getContext()));
++        SettingsUtils.addPreferencesFromResource(this, R.xml.bare_look_and_feel_preferences);
++
++        setUpAppIconRow();
++        setUpSwitch(PREF_NTP_LOGO, ChromePreferenceKeys.BARE_NTP_LOGO);
++        setUpSwitch(PREF_MENU_CARD, ChromePreferenceKeys.BARE_MENU_CARD);
++        setUpSwitch(PREF_GLASS, ChromePreferenceKeys.BARE_GLASS);
++        setUpSnackbarsRow();
++    }
++
++    /** The row for the app icon: it says which one is in use and opens the three to choose from. */
++    private void setUpAppIconRow() {
++        Preference row = findPreference(PREF_APP_ICON);
++        if (row == null) return;
++        row.setSummary(BareIconChooser.labelFor(BareLauncherIcon.getChoice()));
++        row.setOnPreferenceClickListener(
++                pref -> {
++                    Activity activity = getActivity();
++                    if (activity == null) return true;
++                    BareIconChooser.show(
++                            activity,
++                            choice -> pref.setSummary(BareIconChooser.labelFor(choice)));
++                    return true;
++                });
++    }
++
++    /**
++     * A switch kept in Bare's own preference, on unless the user turned it off: the Bare icon on a
++     * new tab, the Bare menu and frosted glass. Each is read where it is used, so the next new
++     * tab, menu or panel follows it.
++     */
++    private void setUpSwitch(String key, String stored) {
++        ChromeSwitchPreference row = findPreference(key);
++        if (row == null) return;
++        row.setChecked(ChromeSharedPreferences.getInstance().readBoolean(stored, true));
++        row.setOnPreferenceChangeListener(
++                (pref, newValue) -> {
++                    ChromeSharedPreferences.getInstance().writeBoolean(stored, (boolean) newValue);
++                    return true;
++                });
++    }
++
++    /**
++     * The switch for snackbars, the short messages at the bottom of the screen. Off unless the
++     * user turned it on; while off they are listed under Notifications in the menu.
++     */
++    private void setUpSnackbarsRow() {
++        ChromeSwitchPreference row = findPreference(PREF_SNACKBARS);
++        if (row == null) return;
++        row.setChecked(BareNotices.areSnackbarsShown());
++        row.setOnPreferenceChangeListener(
++                (pref, newValue) -> {
++                    BareNotices.setSnackbarsShown((boolean) newValue);
++                    return true;
++                });
++    }
++
++    @Override
++    public MonotonicObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    public static String getTitle(Context context) {
++        return context.getString(R.string.bare_look_and_feel_title);
++    }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSecuritySettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSecuritySettingsFragment.java
+index a2f7c8d1979..49f8e262455 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSecuritySettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSecuritySettingsFragment.java
+@@ -18,22 +18,31 @@ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.bare.BareSecurityChoices;
+ import org.chromium.chrome.browser.bare.canvas.BareCanvasBlockBridge;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
+ import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+ import org.chromium.components.browser_ui.settings.SettingsUtils;
+-import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
+ 
+ import java.util.function.BiConsumer;
+ import java.util.function.Function;
+ 
+-/** Settings for the browser's security choices, each a switch over a setting Chromium has. */
++/**
++ * Bare Guard: the browser's protections in one place. Each switch is a setting Chromium already
++ * has, and the only switch for it in Settings.
++ */
+ @NullMarked
+ public class BareSecuritySettingsFragment extends ChromeBaseSettingsFragment {
+     public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
+             new ChromeBaseSearchIndexProvider(
+                     BareSecuritySettingsFragment.class.getName(), R.xml.bare_security_preferences);
+ 
++    private static final String PREF_SECURE_DNS = "secure_dns";
++    private static final String PREF_BAREFILTER = "bare_sec_barefilter";
++
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+             ObservableSuppliers.createMonotonic();
+ 
+@@ -52,9 +61,36 @@ public class BareSecuritySettingsFragment extends ChromeBaseSettingsFragment {
+                 BareSecurityChoices::setHardenedJavaScript);
+         bind("bare_sec_canvas", profile, BareSecurityChoices::isBlockCanvasReading,
+                 BareSecurityChoices::setBlockCanvasReading);
++        bindBareFilter();
+         showAllowedCanvasSites(profile);
+     }
+ 
++    @Override
++    public void onStart() {
++        super.onStart();
++        // Back from the Secure DNS page, the mode may have changed.
++        Preference secureDns = findPreference(PREF_SECURE_DNS);
++        if (secureDns != null) secureDns.setSummary(SecureDnsSettings.getSummary(getContext()));
++    }
++
++    /**
++     * The BareFilter switch, the same one the extensions card had. uBlock Origin reads the list when
++     * it starts, so a change is picked up the next time Bare starts.
++     */
++    private void bindBareFilter() {
++        ChromeSwitchPreference preference = findPreference(PREF_BAREFILTER);
++        assert preference != null;
++        preference.setChecked(
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_FILTER_ENABLED, true));
++        preference.setOnPreferenceChangeListener(
++                (p, newValue) -> {
++                    ChromeSharedPreferences.getInstance()
++                            .writeBoolean(ChromePreferenceKeys.BARE_FILTER_ENABLED, (boolean) newValue);
++                    return true;
++                });
++    }
++
+     /**
+      * Lists the sites canvas reading is allowed on, each removed with a tap. Sites are added from
+      * the menu on the page itself. The heading goes when the list is empty.
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
+index bca1ea3f7ad..e47fe3c5c64 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayout.java
+@@ -107,26 +107,19 @@ public final class BareSettingsLayout {
+                                             R.string.bare_settings_cat_appearance_summary,
+                                             R.drawable.bare_settings_ic_palette,
+                                             "bare_ui_theme",
+-                                            "address_bar",
+-                                            "homepage",
+-                                            "bare_toolbar_shortcut",
+                                             "bare_toolbar",
+-                                            "bare_app_icon",
+-                                            "bare_glass",
+-                                            "bare_snackbars",
+-                                            "bare_menu_card",
+-                                            "bare_ntp_logo"),
++                                            "homepage",
++                                            "bare_look_and_feel"),
+                                     new Entry(
+                                             "privacy",
+                                             R.string.bare_settings_cat_privacy,
+                                             R.string.bare_settings_cat_privacy_summary,
+                                             R.drawable.ic_shield_24dp,
++                                            "bare_security",
+                                             "privacy",
++                                            "bare_incognito",
+                                             "safety_hub",
+-                                            "bare_security",
+-                                            "content_settings",
+-                                            "bare_open_links_in_apps",
+-                                            "default_browser"),
++                                            "content_settings"),
+                                     Entry.direct(
+                                             "extensions",
+                                             R.string.bare_settings_cat_extensions,
+@@ -139,7 +132,9 @@ public final class BareSettingsLayout {
+                                             R.string.bare_settings_cat_browsing_summary,
+                                             R.drawable.ic_tune_24dp,
+                                             "search_engine",
++                                            "default_browser",
+                                             "tabs",
++                                            "bare_open_links_in_apps",
+                                             "media",
+                                             "downloads",
+                                             "bare_smooth_scrolling")),
+@@ -159,6 +154,7 @@ public final class BareSettingsLayout {
+                                             R.drawable.ic_credit_card_black,
+                                             "autofill_and_passwords",
+                                             "autofill_payment_methods",
++                                            "bare_can_make_payment",
+                                             "autofill_addresses",
+                                             "autofill_options"),
+                                     new Entry(
+@@ -200,7 +196,7 @@ public final class BareSettingsLayout {
+ 
+     /**
+      * Settings kept in {@code main_preferences.xml} that no category lists, and why. The first four
+-     * are not settings: headings and the promo card. Passwords, Google and the sign-in rows do not
++     * are not settings: headings and the promo card. Address bar is part of another setting's page. Passwords, Google and the sign-in rows do not
+      * work in this build and are removed from the page. The rest are shown on the homepage rather
+      * than on a category screen.
+      */
+@@ -212,6 +208,9 @@ public final class BareSettingsLayout {
+                             "basics_section",
+                             "autofill_section",
+                             "advanced_section",
++                            // Top or bottom is on the Address bar & toolbar page. The row stays
++                            // for the tablet settings page, which has no categories.
++                            "address_bar",
+                             "passwords",
+                             "glic",
+                             "sign_in",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
+index 2df3cc8332f..d271ccf7ee9 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewBinder.java
+@@ -10,6 +10,7 @@ import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.ImageView;
+ 
++import androidx.annotation.DrawableRes;
+ import androidx.core.widget.ImageViewCompat;
+ 
+ import org.chromium.base.Callback;
+@@ -34,8 +35,22 @@ public final class BareToolbarPreviewBinder {
+         BareToolbarSlot.HOME, BareToolbarSlot.EXTRA, BareToolbarSlot.TAB_SWITCHER
+     };
+ 
++    /** The address bar shortcut is on but set to nothing: an empty ring. */
++    public static final int SHORTCUT_NONE = 0;
++
+     private BareToolbarPreviewBinder() {}
+ 
++    /** Draws the picture without the address bar shortcut, as the welcome does. */
++    public static void bind(
++            View root,
++            @ActionId int first,
++            @ActionId int second,
++            @ActionId int fourth,
++            boolean minimal,
++            @Nullable Callback<Integer> onSlotClicked) {
++        bind(root, first, second, fourth, minimal, onSlotClicked, SHORTCUT_NONE, null, null);
++    }
++
+     /**
+      * Draws the picture.
+      *
+@@ -45,6 +60,10 @@ public final class BareToolbarPreviewBinder {
+      * @param fourth The action in the fourth position, which is the third changeable one.
+      * @param minimal Whether to draw the one-row layout.
+      * @param onSlotClicked Called with the slot pressed, or null to leave the picture inert.
++     * @param shortcutIcon The address bar shortcut's icon, or {@link #SHORTCUT_NONE}.
++     * @param shortcutLabel The shortcut's name, for accessibility.
++     * @param onShortcutClicked Called when the shortcut is pressed. Null leaves the shortcut out of
++     *     the picture, and the minimal layout then shows New tab in its place.
+      */
+     public static void bind(
+             View root,
+@@ -52,7 +71,10 @@ public final class BareToolbarPreviewBinder {
+             @ActionId int second,
+             @ActionId int fourth,
+             boolean minimal,
+-            @Nullable Callback<Integer> onSlotClicked) {
++            @Nullable Callback<Integer> onSlotClicked,
++            @DrawableRes int shortcutIcon,
++            @Nullable CharSequence shortcutLabel,
++            @Nullable Runnable onShortcutClicked) {
+         Context context = root.getContext();
+         boolean editable = onSlotClicked != null;
+         // Bare: the picture says what to do and which buttons it applies to.
+@@ -106,7 +128,17 @@ public final class BareToolbarPreviewBinder {
+                             ? 77
+                             : 255);
+             markEditable(rightButton, editable);
+-            bindFixed(root, R.id.bare_preview_minimal_new_tab, ActionId.NEW_TAB, editable);
++            // The minimal layout shows the address bar shortcut just past the end of the address
++            // bar, in the place New tab has when the shortcut is left at its default.
++            if (onShortcutClicked != null) {
++                bindShortcut(
++                        root.findViewById(R.id.bare_preview_minimal_new_tab),
++                        shortcutIcon,
++                        shortcutLabel,
++                        onShortcutClicked);
++            } else {
++                bindFixed(root, R.id.bare_preview_minimal_new_tab, ActionId.NEW_TAB, editable);
++            }
+             bindFixed(root, R.id.bare_preview_minimal_app_menu, ActionId.APP_MENU, editable);
+             return;
+         }
+@@ -135,6 +167,15 @@ public final class BareToolbarPreviewBinder {
+         bindFixed(root, R.id.bare_preview_new_tab, ActionId.NEW_TAB, editable);
+         bindFixed(root, R.id.bare_preview_slot_app_menu, ActionId.APP_MENU, editable);
+ 
++        // The full layout shows the address bar shortcut inside the end of the address bar.
++        ImageView shortcut = root.findViewById(R.id.bare_preview_shortcut);
++        if (onShortcutClicked != null) {
++            shortcut.setVisibility(View.VISIBLE);
++            bindShortcut(shortcut, shortcutIcon, shortcutLabel, onShortcutClicked);
++        } else {
++            shortcut.setVisibility(View.GONE);
++        }
++
+         // The menu and the first button trade ends when the menu is on the left.
+         boolean menuLeft = BottomBarConfigUtils.isMenuOnLeft();
+         ViewGroup row = root.findViewById(R.id.bare_toolbar_preview_row);
+@@ -148,6 +189,38 @@ public final class BareToolbarPreviewBinder {
+         }
+     }
+ 
++    /**
++     * The address bar shortcut, drawn with the same ring as the other buttons that can be changed.
++     * Set to None it is an empty ring, which can still be pressed to choose one.
++     */
++    private static void bindShortcut(
++            ImageView view,
++            @DrawableRes int icon,
++            @Nullable CharSequence label,
++            Runnable onClicked) {
++        Context context = view.getContext();
++        if (icon == SHORTCUT_NONE) {
++            view.setImageDrawable(null);
++        } else {
++            view.setImageResource(icon);
++            ImageViewCompat.setImageTintList(
++                    view, ColorStateList.valueOf(SemanticColorUtils.getDefaultIconColor(context)));
++        }
++        view.setAlpha(1f);
++        view.setImageAlpha(255);
++        view.setContentDescription(
++                context.getString(
++                        R.string.bare_toolbar_position_description,
++                        context.getString(R.string.toolbar_shortcut),
++                        label == null
++                                ? context.getString(R.string.bare_toolbar_action_none)
++                                : label));
++        view.setOnClickListener(v -> onClicked.run());
++        view.setClickable(true);
++        view.setFocusable(true);
++        markEditable(view, true);
++    }
++
+     /** A ring and a pencil on the buttons that can be changed, so they read as pressable. */
+     private static void markEditable(ImageView view, boolean editable) {
+         view.setBackgroundResource(
+@@ -164,6 +237,10 @@ public final class BareToolbarPreviewBinder {
+         Context context = root.getContext();
+         ImageView view = root.findViewById(viewId);
+         view.setAlpha(dim ? 0.38f : 1f);
++        view.setBackground(null);
++        view.setOnClickListener(null);
++        view.setClickable(false);
++        view.setFocusable(false);
+         setIcon(view, actionId);
+         view.setContentDescription(
+                 context.getString(
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java
+index 1249f61e1e6..03d403950fd 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarPreviewPreference.java
+@@ -8,6 +8,7 @@ import android.content.Context;
+ import android.util.AttributeSet;
+ import android.view.View;
+ 
++import androidx.annotation.DrawableRes;
+ import androidx.preference.Preference;
+ import androidx.preference.PreferenceViewHolder;
+ 
+@@ -33,6 +34,9 @@ import org.chromium.components.browser_ui.widget.containment.ContainmentItem;
+  * drawn in the row exactly where they are on the bar, and do not light up or respond when pressed;
+  * the two that can, do. That is the whole explanation, and it is the same one the bar gives.
+  *
++ * <p>The address bar shortcut is drawn too, with the same ring, inside the address bar where the
++ * full layout shows it, or just past its end on the minimal layout.
++ *
+  * <p>It is a picture and not the toolbar. The real buttons know whether the page is bookmarked and
+  * whether it can be translated; those answers belong to a tab, and there is no tab here. What it
+  * shows is which button is where.
+@@ -42,6 +46,9 @@ public class BareToolbarPreviewPreference extends Preference implements Containm
+ 
+     private @Nullable Callback<Integer> mOnSlotClicked;
+     private @Nullable View mRoot;
++    private @DrawableRes int mShortcutIcon = BareToolbarPreviewBinder.SHORTCUT_NONE;
++    private @Nullable CharSequence mShortcutLabel;
++    private @Nullable Runnable mOnShortcutClicked;
+ 
+     public BareToolbarPreviewPreference(Context context, @Nullable AttributeSet attrs) {
+         super(context, attrs);
+@@ -65,6 +72,21 @@ public class BareToolbarPreviewPreference extends Preference implements Containm
+         mOnSlotClicked = callback;
+     }
+ 
++    /**
++     * The address bar shortcut, drawn in the address bar where the bar shows it. Call {@link
++     * #refresh} after.
++     *
++     * @param icon Its icon, or {@link BareToolbarPreviewBinder#SHORTCUT_NONE} when set to None.
++     * @param label Its name, or null when set to None.
++     * @param onClicked Called when it is pressed.
++     */
++    public void setShortcut(
++            @DrawableRes int icon, @Nullable CharSequence label, Runnable onClicked) {
++        mShortcutIcon = icon;
++        mShortcutLabel = label;
++        mOnShortcutClicked = onClicked;
++    }
++
+     /** Redraws from the current arrangement. */
+     public void refresh() {
+         if (mRoot != null) bind(mRoot);
+@@ -74,6 +96,11 @@ public class BareToolbarPreviewPreference extends Preference implements Containm
+     public void onBindViewHolder(PreferenceViewHolder holder) {
+         super.onBindViewHolder(holder);
+         mRoot = holder.itemView;
++        // With no background the list gives the row no margins either, so the picture's card is
++        // inset here by the margin the rows below it get, and its edges line up with theirs.
++        View row = holder.itemView;
++        int margin = row.getResources().getDimensionPixelSize(R.dimen.settings_item_margin);
++        row.setPaddingRelative(margin, row.getPaddingTop(), margin, row.getPaddingBottom());
+         bind(holder.itemView);
+     }
+ 
+@@ -85,6 +112,9 @@ public class BareToolbarPreviewPreference extends Preference implements Containm
+                 BareToolbarLayout.actionForSlot(BareToolbarSlot.TAB_SWITCHER),
+                 ChromeSharedPreferences.getInstance()
+                         .readBoolean(ChromePreferenceKeys.BARE_MINIMAL_LAYOUT, false),
+-                mOnSlotClicked);
++                mOnSlotClicked,
++                mShortcutIcon,
++                mShortcutLabel,
++                mOnShortcutClicked);
+     }
+ }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+index b9c4413bd78..8397aec2ced 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+@@ -11,6 +11,7 @@ import androidx.appcompat.app.AlertDialog;
+ import androidx.preference.ListPreference;
+ import androidx.preference.Preference;
+ 
++import org.chromium.base.DeviceInfo;
+ import org.chromium.base.supplier.MonotonicObservableSupplier;
+ import org.chromium.base.supplier.ObservableSuppliers;
+ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+@@ -22,6 +23,11 @@ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
+ import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
+ import org.chromium.chrome.browser.toolbar.BareMinimalLayoutToggle;
++import org.chromium.chrome.browser.toolbar.ToolbarPositionController.ToolbarPositionAndSource;
++import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
++import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarFeatures;
++import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarPrefs;
++import org.chromium.chrome.browser.toolbar.settings.AddressBarPreference;
+ import org.chromium.chrome.browser.ui.actions.ActionId;
+ import org.chromium.chrome.browser.ui.bottombar.BareToolbarDefaults;
+ import org.chromium.chrome.browser.ui.bottombar.BareToolbarLayout;
+@@ -32,9 +38,17 @@ import org.chromium.chrome.browser.ui.bottombar.BareToolbarSwipePrefs;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+ import org.chromium.components.browser_ui.settings.SettingsUtils;
++import org.chromium.ui.base.DeviceFormFactor;
++
++import java.util.ArrayList;
++import java.util.List;
+ 
+ /**
+- * Lets the user choose which button sits in each of the two positions the bottom bar leaves open.
++ * Address bar & toolbar: where the address bar sits, which layout the bar has, which button sits
++ * in each position the bar leaves open, the address bar shortcut, and the gestures on the bar.
++ *
++ * <p>It took in what used to be two more pages, Address bar and Address bar shortcut. Each setting
++ * is stored where it always was; only where it is shown changed.
+  *
+  * <p>The screen writes preferences and nothing else. The bar is listening for them and rebuilds
+  * itself, so there is no path from here into the browser and nothing to keep in step: what the
+@@ -50,8 +64,8 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+                     BareToolbarSettingsFragment.class.getName(), R.xml.bare_toolbar_preferences);
+ 
+ 
++    static final String PREF_ADDRESS_BAR_POSITION = "bare_address_bar_position";
+     static final String PREF_PREVIEW = "bare_toolbar_preview";
+-    static final String PREF_LAYOUT_PREVIEW = "bare_toolbar_layout_preview";
+     static final String PREF_MINIMAL = "bare_toolbar_minimal";
+     static final String PREF_ALWAYS_VISIBLE = "bare_toolbar_always_visible";
+     static final String PREF_MENU_LEFT = "bare_toolbar_menu_left";
+@@ -72,7 +86,9 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+         mPreview = (BareToolbarPreviewPreference) findPreference(PREF_PREVIEW);
+         assert mPreview != null;
+         mPreview.setOnSlotClicked(this::showPositionConfig);
++        updateShortcutInPreview();
+ 
++        initAddressBarPositionPref();
+         initGeneralPrefs();
+         initSwipeActionPref();
+ 
+@@ -110,15 +126,186 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+                 });
+     }
+ 
++    @Override
++    public void onResume() {
++        super.onResume();
++        // The address bar's long press menu may have changed the layout or the position while
++        // this screen was behind another.
++        ChromeSwitchPreference minimal = findPreference(PREF_MINIMAL);
++        if (minimal != null && minimal.isVisible()) {
++            minimal.setChecked(BottomBarConfigUtils.isMinimalLayoutChosen());
++        }
++        ListPreference position = findPreference(PREF_ADDRESS_BAR_POSITION);
++        if (position != null && position.isVisible()) updateAddressBarPositionPref(position);
++        updateShortcutInPreview();
++    }
++
++    private static final String POSITION_TOP = "top";
++    private static final String POSITION_BOTTOM = "bottom";
++
++    /**
++     * Top or bottom, stored exactly as the Address bar page stored it. Not offered where the
++     * address bar cannot move, as that page was not.
++     */
++    private void initAddressBarPositionPref() {
++        ListPreference position = findPreference(PREF_ADDRESS_BAR_POSITION);
++        assert position != null;
++        if (!canMoveAddressBar()) {
++            position.setVisible(false);
++            return;
++        }
++        position.setEntries(
++                new CharSequence[] {
++                    getString(R.string.address_bar_settings_top),
++                    getString(R.string.address_bar_settings_bottom)
++                });
++        position.setEntryValues(new CharSequence[] {POSITION_TOP, POSITION_BOTTOM});
++        updateAddressBarPositionPref(position);
++        position.setOnPreferenceChangeListener(
++                (pref, newValue) -> {
++                    boolean top = POSITION_TOP.equals(newValue);
++                    AddressBarPreference.setToolbarPositionAndSource(
++                            top
++                                    ? ToolbarPositionAndSource.TOP_SETTINGS
++                                    : ToolbarPositionAndSource.BOTTOM_SETTINGS);
++                    pref.setSummary(
++                            top
++                                    ? R.string.address_bar_settings_top
++                                    : R.string.address_bar_settings_bottom);
++                    return true;
++                });
++    }
++
++    private void updateAddressBarPositionPref(ListPreference position) {
++        boolean top = AddressBarPreference.isToolbarConfiguredToShowOnTop();
++        position.setValue(top ? POSITION_TOP : POSITION_BOTTOM);
++        position.setSummary(
++                top ? R.string.address_bar_settings_top : R.string.address_bar_settings_bottom);
++    }
++
++    /** The same test the Address bar row in Settings uses. */
++    private boolean canMoveAddressBar() {
++        return !DeviceInfo.isAutomotive()
++                && (DeviceInfo.isFoldable()
++                        || !DeviceFormFactor.isNonMultiDisplayContextOnTablet(getContext()));
++    }
++
++    /**
++     * The address bar shortcuts on offer, None first. New tab only on the minimal layout, where
++     * the shortcut is the bar's New tab button; the full layout has New tab on the bottom bar.
++     * Translate only while page translation is on, as before.
++     */
++    private List<Integer> shortcutChoices() {
++        List<Integer> choices = new ArrayList<>();
++        choices.add(AdaptiveToolbarButtonVariant.NONE);
++        if (BottomBarConfigUtils.isMinimalLayoutChosen()) {
++            choices.add(AdaptiveToolbarButtonVariant.NEW_TAB);
++        }
++        choices.add(AdaptiveToolbarButtonVariant.SHARE);
++        if (AdaptiveToolbarFeatures.isTranslateEnabled(getProfile())) {
++            choices.add(AdaptiveToolbarButtonVariant.TRANSLATE);
++        }
++        choices.add(AdaptiveToolbarButtonVariant.ADD_TO_BOOKMARKS);
++        return choices;
++    }
++
++    /**
++     * The shortcut the bar shows. A stored choice this screen does not offer, such as New tab on
++     * the full layout, is one the bar cannot show either, and it shows its default instead.
++     */
++    private @AdaptiveToolbarButtonVariant int currentShortcut() {
++        if (!AdaptiveToolbarPrefs.isCustomizationPreferenceEnabled()) {
++            return AdaptiveToolbarButtonVariant.NONE;
++        }
++        int stored = AdaptiveToolbarPrefs.getCustomizationSetting();
++        if (shortcutChoices().contains(stored)) return stored;
++        return BottomBarConfigUtils.isMinimalLayoutChosen()
++                ? AdaptiveToolbarButtonVariant.NEW_TAB
++                : AdaptiveToolbarButtonVariant.SHARE;
++    }
++
++    private void updateShortcutInPreview() {
++        if (mPreview == null) return;
++        @AdaptiveToolbarButtonVariant int shortcut = currentShortcut();
++        mPreview.setShortcut(
++                shortcutIcon(shortcut),
++                shortcut == AdaptiveToolbarButtonVariant.NONE
++                        ? null
++                        : getString(shortcutLabel(shortcut)),
++                this::showShortcutChooser);
++        mPreview.refresh();
++    }
++
++    /**
++     * None turns the shortcut off, as the switch on the old Address bar shortcut page did. Any
++     * other choice turns it on and stores the choice, as that page's list did.
++     */
++    private void showShortcutChooser() {
++        List<Integer> choices = shortcutChoices();
++        CharSequence[] labels = new CharSequence[choices.size()];
++        int current = currentShortcut();
++        int checked = 0;
++        for (int i = 0; i < choices.size(); i++) {
++            labels[i] = getString(shortcutLabel(choices.get(i)));
++            if (choices.get(i) == current) checked = i;
++        }
++
++        new AlertDialog.Builder(getContext(), R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                .setTitle(R.string.toolbar_shortcut)
++                .setSingleChoiceItems(
++                        labels,
++                        checked,
++                        (dialog, which) -> {
++                            int chosen = choices.get(which);
++                            if (chosen == AdaptiveToolbarButtonVariant.NONE) {
++                                AdaptiveToolbarPrefs.saveToolbarSettingsToggleState(false);
++                            } else {
++                                AdaptiveToolbarPrefs.saveToolbarButtonManualOverride(chosen);
++                                AdaptiveToolbarPrefs.saveToolbarSettingsToggleState(true);
++                            }
++                            updateShortcutInPreview();
++                            dialog.dismiss();
++                        })
++                .setNegativeButton(R.string.cancel, null)
++                .show();
++    }
++
++    private static int shortcutLabel(@AdaptiveToolbarButtonVariant int shortcut) {
++        switch (shortcut) {
++            case AdaptiveToolbarButtonVariant.NEW_TAB:
++                return R.string.adaptive_toolbar_button_preference_new_tab;
++            case AdaptiveToolbarButtonVariant.SHARE:
++                return R.string.adaptive_toolbar_button_preference_share;
++            case AdaptiveToolbarButtonVariant.TRANSLATE:
++                return R.string.adaptive_toolbar_button_preference_translate;
++            case AdaptiveToolbarButtonVariant.ADD_TO_BOOKMARKS:
++                return R.string.adaptive_toolbar_button_preference_add_to_bookmarks;
++            default:
++                return R.string.bare_toolbar_action_none;
++        }
++    }
++
++    /** The icons the toolbar's own buttons for the same things use. */
++    private static int shortcutIcon(@AdaptiveToolbarButtonVariant int shortcut) {
++        switch (shortcut) {
++            case AdaptiveToolbarButtonVariant.NEW_TAB:
++                return BareToolbarActionUi.iconFor(ActionId.NEW_TAB);
++            case AdaptiveToolbarButtonVariant.SHARE:
++                return BareToolbarActionUi.iconFor(ActionId.SHARE);
++            case AdaptiveToolbarButtonVariant.TRANSLATE:
++                return BareToolbarActionUi.iconFor(ActionId.TRANSLATE);
++            case AdaptiveToolbarButtonVariant.ADD_TO_BOOKMARKS:
++                return BareToolbarActionUi.iconFor(ActionId.BOOKMARK);
++            default:
++                return BareToolbarPreviewBinder.SHORTCUT_NONE;
++        }
++    }
++
+     /**
+      * The layout and whether the toolbar stays on screen. Both apply to the full and the minimal
+      * toolbar.
+      */
+     private void initGeneralPrefs() {
+-        BareToolbarPreviewPreference layoutPreview =
+-                (BareToolbarPreviewPreference) findPreference(PREF_LAYOUT_PREVIEW);
+-        assert layoutPreview != null;
+-
+         ChromeSwitchPreference minimal = findPreference(PREF_MINIMAL);
+         assert minimal != null;
+         if (BareMinimalLayoutToggle.isAvailable(getContext())) {
+@@ -126,14 +313,13 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+             minimal.setOnPreferenceChangeListener(
+                     (pref, newValue) -> {
+                         BareMinimalLayoutToggle.set(getContext(), (boolean) newValue);
+-                        layoutPreview.refresh();
+-                        assert mPreview != null;
+-                        mPreview.refresh();
++                        // The shortcuts on offer, and where the shortcut is drawn, follow the
++                        // layout.
++                        updateShortcutInPreview();
+                         return true;
+                     });
+         } else {
+             minimal.setVisible(false);
+-            layoutPreview.setVisible(false);
+         }
+ 
+         ChromeSwitchPreference alwaysVisible = findPreference(PREF_ALWAYS_VISIBLE);
+@@ -358,7 +544,7 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+     }
+ 
+     public static String getTitle(Context context) {
+-        return context.getString(R.string.bare_toolbar_settings_title);
++        return context.getString(R.string.bare_toolbar_page_title);
+     }
+ 
+     @Override
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/BareIncognitoSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/BareIncognitoSettings.java
+new file mode 100644
+index 00000000000..dd8a97b0b4b
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/BareIncognitoSettings.java
+@@ -0,0 +1,143 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.privacy.settings;
++
++import android.os.Bundle;
++
++import androidx.preference.ListPreference;
++
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.incognito.reauth.BareIncognitoLockPolicy;
++import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthManager;
++import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthSettingSwitchPreference;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
++import org.chromium.components.browser_ui.settings.SettingsUtils;
++
++/**
++ * The Incognito page of Privacy & security: the Incognito lock, how it unlocks, wiping after failed
++ * unlocks, and screenshots. These were the Incognito rows of Chromium's Privacy and security page
++ * and keep the same settings.
++ */
++@NullMarked
++public class BareIncognitoSettings extends ChromeBaseSettingsFragment {
++    public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
++            new ChromeBaseSearchIndexProvider(
++                    BareIncognitoSettings.class.getName(), R.xml.bare_incognito_preferences);
++
++    private static final String PREF_INCOGNITO_LOCK = "incognito_lock";
++    private static final String PREF_BIOMETRIC_ONLY = "bare_incognito_biometric_only";
++    private static final String PREF_BLOCK_SCREENSHOTS = "bare_incognito_block_screenshots";
++    private static final String PREF_WIPE_AFTER = "bare_incognito_wipe_after";
++
++    private @Nullable IncognitoLockSettings mIncognitoLockSettings;
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++            ObservableSuppliers.createMonotonic();
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        mPageTitle.set(getString(R.string.bare_incognito_settings_title));
++        SettingsUtils.addPreferencesFromResource(this, R.xml.bare_incognito_preferences);
++
++        IncognitoReauthSettingSwitchPreference lock = findPreference(PREF_INCOGNITO_LOCK);
++        assert lock != null;
++        mIncognitoLockSettings = new IncognitoLockSettings(lock, getProfile());
++        mIncognitoLockSettings.setUpIncognitoReauthPreference(getActivity());
++
++        ChromeSwitchPreference biometricOnly = findPreference(PREF_BIOMETRIC_ONLY);
++        if (biometricOnly != null) {
++            biometricOnly.setChecked(BareIncognitoLockPolicy.isBiometricOnly());
++            biometricOnly.setOnPreferenceChangeListener(
++                    (preference, newValue) -> {
++                        BareIncognitoLockPolicy.setBiometricOnly((boolean) newValue);
++                        return true;
++                    });
++        }
++        ChromeSwitchPreference blockScreenshots = findPreference(PREF_BLOCK_SCREENSHOTS);
++        if (blockScreenshots != null) {
++            refreshBlockScreenshots(blockScreenshots);
++            blockScreenshots.setOnPreferenceChangeListener(
++                    (preference, newValue) -> {
++                        ChromeSharedPreferences.getInstance()
++                                .writeBoolean(
++                                        ChromePreferenceKeys.BARE_INCOGNITO_BLOCK_SCREENSHOTS,
++                                        (boolean) newValue);
++                        return true;
++                    });
++        }
++        ListPreference wipe = findPreference(PREF_WIPE_AFTER);
++        if (wipe != null) {
++            wipe.setValue(String.valueOf(BareIncognitoLockPolicy.getWipeAfter()));
++            wipe.setOnPreferenceChangeListener(
++                    (preference, newValue) -> {
++                        BareIncognitoLockPolicy.setWipeAfter(Integer.parseInt((String) newValue));
++                        return true;
++                    });
++        }
++    }
++
++    /**
++     * While the Incognito lock is on, screenshots are always blocked, so the switch shows on and
++     * can't be changed. The user's own choice is kept and shown again when the lock is off.
++     */
++    private void refreshBlockScreenshots(ChromeSwitchPreference blockScreenshots) {
++        // Allowed until the user turns it on, so the stored value is whether to block.
++        boolean stored =
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_INCOGNITO_BLOCK_SCREENSHOTS, false);
++        boolean locked = IncognitoReauthManager.isIncognitoReauthEnabled(getProfile());
++        blockScreenshots.setEnabled(!locked);
++        blockScreenshots.setChecked(locked || stored);
++        blockScreenshots.setSummary(
++                locked
++                        ? R.string.bare_incognito_block_screenshots_locked
++                        : R.string.bare_incognito_block_screenshots_summary);
++    }
++
++    @Override
++    public void onStart() {
++        super.onStart();
++        if (mIncognitoLockSettings != null) {
++            mIncognitoLockSettings.updateIncognitoReauthPreferenceIfNeeded(getActivity());
++        }
++    }
++
++    @Override
++    public void onResume() {
++        super.onResume();
++        // Back from the system's lock settings, the lock may have changed.
++        ChromeSwitchPreference blockScreenshots = findPreference(PREF_BLOCK_SCREENSHOTS);
++        if (blockScreenshots != null) refreshBlockScreenshots(blockScreenshots);
++    }
++
++    @Override
++    public void onDestroy() {
++        if (mIncognitoLockSettings != null) mIncognitoLockSettings.destroy();
++        super.onDestroy();
++    }
++
++    @Override
++    public MonotonicObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++
++    @Override
++    public @Nullable String getMainMenuKey() {
++        return "bare_incognito";
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
+index e36a15baefd..b343bd89ce0 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
+@@ -4,9 +4,7 @@
+ 
+ package org.chromium.chrome.browser.privacy.settings;
+ 
+-import static org.chromium.build.NullUtil.assumeNonNull;
+ import static org.chromium.chrome.browser.privacy.settings.UniversalOptOutSettings.shouldShowUniversalOptOutSettings;
+-import static org.chromium.components.content_settings.PrefNames.COOKIE_CONTROLS_MODE;
+ 
+ import android.content.Context;
+ import android.content.Intent;
+@@ -20,53 +18,37 @@ import android.view.MenuItem;
+ import android.view.View;
+ 
+ import androidx.annotation.VisibleForTesting;
+-import androidx.preference.ListPreference;
+ import androidx.preference.Preference;
+ 
+ import org.chromium.base.ApiCompatibilityUtils;
+ import org.chromium.base.Callback;
+ import org.chromium.base.IntentUtils;
+ import org.chromium.base.metrics.RecordHistogram;
+-import org.chromium.base.metrics.RecordUserAction;
+ import org.chromium.base.supplier.MonotonicObservableSupplier;
+ import org.chromium.base.supplier.ObservableSuppliers;
+ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+-import org.chromium.chrome.browser.enterprise.util.ManagedBrowserUtils;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+-import org.chromium.chrome.browser.incognito.reauth.BareIncognitoLockPolicy;
+-import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthSettingSwitchPreference;
+-import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthManager;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.preferences.Pref;
+ import org.chromium.chrome.browser.prefetch.settings.PreloadPagesSettingsFragment;
+-import org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings;
+-import org.chromium.chrome.browser.privacy_guide.PrivacyGuideFragment;
+-import org.chromium.chrome.browser.privacy_guide.PrivacyGuideInteractions;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.safe_browsing.AdvancedProtectionStatusManagerAndroidBridge;
+ import org.chromium.chrome.browser.safety_hub.SafetyHubExpandablePreference;
+ import org.chromium.chrome.browser.safety_hub.SafetyHubModuleProperties;
+ import org.chromium.chrome.browser.safety_hub.SafetyHubModuleViewBinder;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
+-import org.chromium.chrome.browser.settings.ChromeManagedPreferenceDelegate;
+ import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+ import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
+-import org.chromium.chrome.browser.ssl.HttpsFirstModeSettingsFragment;
+-import org.chromium.chrome.browser.usage_stats.UsageStatsConsentDialog;
+-import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+ import org.chromium.components.browser_ui.settings.SettingsFragment;
+ import org.chromium.components.browser_ui.settings.SettingsNavigation;
+ import org.chromium.components.browser_ui.settings.SettingsUtils;
+ import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
+-import org.chromium.components.browser_ui.site_settings.ContentSettingsResources;
+ import org.chromium.components.browser_ui.site_settings.SingleCategorySettings;
+-import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge;
+ import org.chromium.components.browser_ui.util.TraceEventVectorDrawableCompat;
+-import org.chromium.components.content_settings.ContentSettingsType;
+ import org.chromium.components.safe_browsing.OsAdditionalSecurityProvider;
+ import org.chromium.components.safe_browsing.OsAdditionalSecurityUtil;
+ import org.chromium.components.user_prefs.UserPrefs;
+@@ -79,29 +61,19 @@ import org.chromium.ui.widget.ChromeBulletSpan;
+ import java.util.concurrent.TimeUnit;
+ import java.util.function.Consumer;
+ 
+-/** Fragment to keep track of the all the privacy related preferences. */
++/**
++ * The Privacy page of Privacy & security.
++ *
++ * <p>Bare: Chromium's Privacy and security page, cut down to its privacy rows. The security rows it
++ * shared with Bare's own switches are on Bare Guard, the Incognito lock rows are on {@link
++ * BareIncognitoSettings}, Access payment methods is under Autofill & payments, and the Privacy
++ * Guide and the leaked-password check are gone.
++ */
+ @NullMarked
+-public class PrivacySettings extends ChromeBaseSettingsFragment
+-        implements Preference.OnPreferenceChangeListener {
+-    private static final String PREF_CAN_MAKE_PAYMENT = "can_make_payment";
++public class PrivacySettings extends ChromeBaseSettingsFragment {
+     private static final String PREF_PRELOAD_PAGES = "preload_pages";
+-    private static final String PREF_HTTPS_FIRST_MODE = "https_first_mode";
+-    // TODO(crbug.com/349860796): Remove once new settings are fully rolled out.
+-    private static final String PREF_HTTPS_FIRST_MODE_LEGACY = "https_first_mode_legacy";
+-    private static final String PREF_SECURE_DNS = "secure_dns";
+-    private static final String PREF_USAGE_STATS = "usage_stats_reporting";
+-    private static final String PREF_PASSWORD_LEAK_DETECTION = "password_leak_detection";
+-    private static final String PREF_SYNC_AND_SERVICES_LINK = "sync_and_services_link";
+-    private static final String PREF_PRIVACY_GUIDE = "privacy_guide";
+-    private static final String PREF_INCOGNITO_LOCK = "incognito_lock";
+-    private static final String PREF_BARE_INCOGNITO_BIOMETRIC_ONLY = "bare_incognito_biometric_only";
+-    private static final String PREF_BARE_INCOGNITO_BLOCK_SCREENSHOTS =
+-            "bare_incognito_block_screenshots";
+-    private static final String PREF_BARE_INCOGNITO_WIPE_AFTER = "bare_incognito_wipe_after";
+-    private static final String PREF_JAVASCRIPT_OPTIMIZER = "javascript_optimizer";
+     @VisibleForTesting static final String PREF_DO_NOT_TRACK = "do_not_track";
+     @VisibleForTesting static final String PREF_UNIVERSAL_OPT_OUT = "universal_opt_out";
+-    @VisibleForTesting static final String PREF_THIRD_PARTY_COOKIES = "third_party_cookies";
+     private static final String PREF_ADVANCED_PROTECTION_INFO = "advanced_protection_info";
+     private static final int SECURE_CONNECTIONS_MESSAGE_ID =
+             R.string.settings_privacy_and_security_advanced_protection_secure_connections_bullet;
+@@ -110,7 +82,6 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+     private static final int WEB_GPU_DISABLED_MESSAGE_ID =
+             R.string.settings_privacy_and_security_advanced_protection_webgpu_disabled_bullet;
+ 
+-    private IncognitoLockSettings mIncognitoLockSettings;
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+             ObservableSuppliers.createMonotonic();
+ 
+@@ -139,131 +110,14 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+ 
+     @Override
+     public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
+-        mPageTitle.set(getString(R.string.prefs_privacy_security));
++        mPageTitle.set(getString(R.string.privacy_section_title));
+ 
+         SettingsUtils.addPreferencesFromResource(this, R.xml.privacy_preferences);
+ 
+-        Preference privacyGuidePreference = findPreference(PREF_PRIVACY_GUIDE);
+-        // Record the launch of PG from the S&P link-row entry point
+-        privacyGuidePreference.setOnPreferenceClickListener(
+-                preference -> {
+-                    RecordUserAction.record("Settings.PrivacyGuide.StartPrivacySettings");
+-                    RecordHistogram.recordEnumeratedHistogram(
+-                            "Settings.PrivacyGuide.EntryExit",
+-                            PrivacyGuideInteractions.SETTINGS_LINK_ROW_ENTRY,
+-                            PrivacyGuideInteractions.MAX_VALUE + 1);
+-                    UserPrefs.get(getProfile()).setBoolean(Pref.PRIVACY_GUIDE_VIEWED, true);
+-
+-                    // Explicitly launch PrivacyGuideFragment from here so that the click is
+-                    // recorded above before navigating. The fragment implements
+-                    // EmbeddableSettingsPage, so it is shown as a regular settings page rather
+-                    // than in standalone mode.
+-                    SettingsNavigationFactory.createSettingsNavigation(requireContext())
+-                            .startSettings(
+-                                    getActivity(),
+-                                    PrivacyGuideFragment.class,
+-                                    /* fragmentArgs= */ null,
+-                                    /* addToBackStack= */ true);
+-                    return true;
+-                });
+-        if (getProfile().isChild()
+-                || ManagedBrowserUtils.isBrowserManaged(getProfile())
+-                || ManagedBrowserUtils.isProfileManaged(getProfile())) {
+-            getPreferenceScreen().removePreference(privacyGuidePreference);
+-        }
+-
+-        IncognitoReauthSettingSwitchPreference incognitoReauthPreference =
+-                (IncognitoReauthSettingSwitchPreference) findPreference(PREF_INCOGNITO_LOCK);
+-        mIncognitoLockSettings = new IncognitoLockSettings(incognitoReauthPreference, getProfile());
+-        mIncognitoLockSettings.setUpIncognitoReauthPreference(getActivity());
+-        initBareIncognitoPreferences();
+-
+         maybeShowAdvancedProtectionSection();
+ 
+-        // De-Googled build: the Safe Browsing row is not in the layout, so there is
+-        // nothing here to give a summary or a click listener to.
+-
+         setHasOptionsMenu(true);
+ 
+-        ChromeSwitchPreference passwordLeakTogglePref =
+-                (ChromeSwitchPreference) findPreference(PREF_PASSWORD_LEAK_DETECTION);
+-        passwordLeakTogglePref.setOnPreferenceChangeListener(this);
+-
+-        ChromeSwitchPreference canMakePaymentPref =
+-                (ChromeSwitchPreference) findPreference(PREF_CAN_MAKE_PAYMENT);
+-        canMakePaymentPref.setOnPreferenceChangeListener(this);
+-
+-        // TODO(crbug.com/349860796): Remove old version (PREF_HTTPS_FIRST_MODE_LEGACY)
+-        // when new settings are fully rolled out.
+-        Preference httpsFirstModePref = findPreference(PREF_HTTPS_FIRST_MODE);
+-        ChromeSwitchPreference httpsFirstModeLegacySwitchPref =
+-                (ChromeSwitchPreference) findPreference(PREF_HTTPS_FIRST_MODE_LEGACY);
+-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.HTTPS_FIRST_BALANCED_MODE)) {
+-            // Hide the old toggle pref if the feature flag is enabled.
+-            httpsFirstModeLegacySwitchPref.setVisible(false);
+-
+-            httpsFirstModePref.setSummary(
+-                    HttpsFirstModeSettingsFragment.getSummary(getContext(), getProfile()));
+-        } else {
+-            // Hide the new pref item if the feature flag isn't enabled.
+-            httpsFirstModePref.setVisible(false);
+-
+-            httpsFirstModeLegacySwitchPref.setOnPreferenceChangeListener(this);
+-            httpsFirstModeLegacySwitchPref.setManagedPreferenceDelegate(
+-                    new ChromeManagedPreferenceDelegate(getProfile()) {
+-                        @Override
+-                        public boolean isPreferenceControlledByPolicy(Preference preference) {
+-                            String key = preference.getKey();
+-                            assert PREF_HTTPS_FIRST_MODE_LEGACY.equals(key)
+-                                    : "Unexpected preference key: " + key;
+-                            return UserPrefs.get(getProfile())
+-                                    .isManagedPreference(Pref.HTTPS_ONLY_MODE_ENABLED);
+-                        }
+-
+-                        @Override
+-                        public boolean isPreferenceClickDisabled(Preference preference) {
+-                            // Advanced Protection automatically enables HTTPS-Only Mode so
+-                            // lock the setting.
+-                            return isPreferenceControlledByPolicy(preference)
+-                                    || AdvancedProtectionStatusManagerAndroidBridge
+-                                            .isUnderAdvancedProtection();
+-                        }
+-                    });
+-            httpsFirstModeLegacySwitchPref.setChecked(
+-                    UserPrefs.get(getProfile()).getBoolean(Pref.HTTPS_ONLY_MODE_ENABLED));
+-            int summaryId = httpsFirstLegacySummaryId(isAdvancedProtectionEnabled());
+-            httpsFirstModeLegacySwitchPref.setSummary(getContext().getString(summaryId));
+-        }
+-
+-        // De-Googled build: this footer only explains what Google does with sync
+-        // and account data, and its links open pages this build does not offer.
+-        Preference syncAndServicesLink = findPreference(PREF_SYNC_AND_SERVICES_LINK);
+-        if (syncAndServicesLink != null) {
+-            getPreferenceScreen().removePreference(syncAndServicesLink);
+-        }
+-
+-        Preference thirdPartyCookies = findPreference(PREF_THIRD_PARTY_COOKIES);
+-        if (thirdPartyCookies != null) {
+-            thirdPartyCookies
+-                    .getExtras()
+-                    .putString(SingleCategorySettings.EXTRA_CATEGORY, thirdPartyCookies.getKey());
+-            thirdPartyCookies
+-                    .getExtras()
+-                    .putString(
+-                            SingleCategorySettings.EXTRA_TITLE,
+-                            assumeNonNull(thirdPartyCookies.getTitle()).toString());
+-        }
+-
+-        Preference javascriptOptimizerPref = findPreference(PREF_JAVASCRIPT_OPTIMIZER);
+-        javascriptOptimizerPref
+-                .getExtras()
+-                .putString(SingleCategorySettings.EXTRA_CATEGORY, javascriptOptimizerPref.getKey());
+-        javascriptOptimizerPref
+-                .getExtras()
+-                .putString(
+-                        SingleCategorySettings.EXTRA_TITLE,
+-                        assumeNonNull(javascriptOptimizerPref.getTitle()).toString());
+-
+         Bundle arguments = getArguments();
+         if (arguments != null
+                 && arguments
+@@ -288,40 +142,11 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+                 "Privacy.UniversalOptOut.SettingsVisibility", universalOptOutSettingsVisible);
+     }
+ 
+-    private static boolean isAdvancedProtectionEnabled() {
+-        return AdvancedProtectionStatusManagerAndroidBridge.isUnderAdvancedProtection();
+-    }
+-
+-    private static int httpsFirstLegacySummaryId(boolean advancedProtection) {
+-        if (advancedProtection) {
+-            return R.string.settings_https_first_mode_with_advanced_protection_summary;
+-        } else {
+-            return R.string.settings_https_first_mode_summary;
+-        }
+-    }
+-
+     @Override
+     public MonotonicObservableSupplier<String> getPageTitle() {
+         return mPageTitle;
+     }
+ 
+-    @Override
+-    public boolean onPreferenceChange(Preference preference, Object newValue) {
+-        String key = preference.getKey();
+-        if (PREF_CAN_MAKE_PAYMENT.equals(key)) {
+-            UserPrefs.get(getProfile())
+-                    .setBoolean(Pref.CAN_MAKE_PAYMENT_ENABLED, (boolean) newValue);
+-        } else if (PREF_HTTPS_FIRST_MODE_LEGACY.equals(key)) {
+-            // TODO(crbug.com/349860796): Remove once new settings are fully rolled out.
+-            UserPrefs.get(getProfile())
+-                    .setBoolean(Pref.HTTPS_ONLY_MODE_ENABLED, (boolean) newValue);
+-        } else if (PREF_PASSWORD_LEAK_DETECTION.equals(key)) {
+-            UserPrefs.get(getProfile())
+-                    .setBoolean(Pref.PASSWORD_LEAK_DETECTION_ENABLED, (boolean) newValue);
+-        }
+-        return true;
+-    }
+-
+     @Override
+     public void onStart() {
+         super.onStart();
+@@ -330,23 +155,6 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+ 
+     /** Updates the preferences. */
+     public void updatePreferences() {
+-        ChromeSwitchPreference passwordLeakTogglePref =
+-                (ChromeSwitchPreference) findPreference(PREF_PASSWORD_LEAK_DETECTION);
+-        if (passwordLeakTogglePref != null) {
+-            passwordLeakTogglePref.setEnabled(
+-                    !UserPrefs.get(getProfile())
+-                            .isManagedPreference(Pref.PASSWORD_LEAK_DETECTION_ENABLED));
+-            passwordLeakTogglePref.setChecked(
+-                    UserPrefs.get(getProfile()).getBoolean(Pref.PASSWORD_LEAK_DETECTION_ENABLED));
+-        }
+-
+-        ChromeSwitchPreference canMakePaymentPref =
+-                (ChromeSwitchPreference) findPreference(PREF_CAN_MAKE_PAYMENT);
+-        if (canMakePaymentPref != null) {
+-            canMakePaymentPref.setChecked(
+-                    UserPrefs.get(getProfile()).getBoolean(Pref.CAN_MAKE_PAYMENT_ENABLED));
+-        }
+-
+         Preference doNotTrackPref = findPreference(PREF_DO_NOT_TRACK);
+         if (doNotTrackPref != null) {
+             doNotTrackPref.setSummary(
+@@ -366,58 +174,10 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+         Preference preloadPagesPreference = findPreference(PREF_PRELOAD_PAGES);
+         if (preloadPagesPreference != null) {
+             preloadPagesPreference.setSummary(
+-                    PreloadPagesSettingsFragment.getPreloadPagesSummaryString(
+-                            getContext(), getProfile()));
+-        }
+-
+-        Preference secureDnsPref = findPreference(PREF_SECURE_DNS);
+-        if (secureDnsPref != null && secureDnsPref.isVisible()) {
+-            secureDnsPref.setSummary(SecureDnsSettings.getSummary(getContext()));
+-        }
+-
+-        Preference httpsFirstModePreference = findPreference(PREF_HTTPS_FIRST_MODE);
+-        if (httpsFirstModePreference != null && httpsFirstModePreference.isVisible()) {
+-            httpsFirstModePreference.setSummary(
+-                    HttpsFirstModeSettingsFragment.getSummary(getContext(), getProfile()));
+-        }
+-
+-        Preference usageStatsPref = findPreference(PREF_USAGE_STATS);
+-        if (usageStatsPref != null) {
+-            if (UserPrefs.get(getProfile()).getBoolean(Pref.USAGE_STATS_ENABLED)) {
+-                usageStatsPref.setOnPreferenceClickListener(
+-                        preference -> {
+-                            UsageStatsConsentDialog.create(
+-                                            getActivity(),
+-                                            getProfile(),
+-                                            true,
+-                                            (didConfirm) -> {
+-                                                if (didConfirm) {
+-                                                    updatePreferences();
+-                                                }
+-                                            })
+-                                    .show();
+-                            return true;
+-                        });
+-            } else {
+-                getPreferenceScreen().removePreference(usageStatsPref);
+-            }
+-        }
+-
+-        mIncognitoLockSettings.updateIncognitoReauthPreferenceIfNeeded(getActivity());
+-
+-        Preference thirdPartyCookies = findPreference(PREF_THIRD_PARTY_COOKIES);
+-        if (thirdPartyCookies != null) {
+-            thirdPartyCookies.setSummary(
+-                    ContentSettingsResources.getThirdPartyCookieListSummary(
+-                            UserPrefs.get(getProfile()).getInteger(COOKIE_CONTROLS_MODE)));
++                    PreloadPagesSettingsFragment.isPreloadingOn(getProfile())
++                            ? R.string.text_on
++                            : R.string.text_off);
+         }
+-
+-        Preference javascriptOptimizerPref = findPreference(PREF_JAVASCRIPT_OPTIMIZER);
+-        javascriptOptimizerPref.setSummary(
+-                WebsitePreferenceBridge.isCategoryEnabled(
+-                                getProfile(), ContentSettingsType.JAVASCRIPT_OPTIMIZER)
+-                        ? R.string.website_settings_category_javascript_optimizer_allowed_list
+-                        : R.string.website_settings_category_javascript_optimizer_blocked_list);
+     }
+ 
+     /** Shows the advanced-protection-section if needed. */
+@@ -542,14 +302,6 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+         return false;
+     }
+ 
+-    @Override
+-    public void onDestroy() {
+-        if (mIncognitoLockSettings != null) {
+-            mIncognitoLockSettings.destroy();
+-        }
+-        super.onDestroy();
+-    }
+-
+     @Override
+     public @SettingsFragment.AnimationType int getAnimationType() {
+         return SettingsFragment.AnimationType.PROPERTY;
+@@ -573,15 +325,6 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+                     indexData.updateEntrySummaryForKey(
+                             frag, PREF_PRELOAD_PAGES, /* summaryId= */ 0);
+ 
+-                    if (ChromeFeatureList.isEnabled(ChromeFeatureList.HTTPS_FIRST_BALANCED_MODE)) {
+-                        indexData.removeEntry(getUniqueId(PREF_HTTPS_FIRST_MODE_LEGACY));
+-                    } else {
+-                        indexData.removeEntry(getUniqueId(PREF_HTTPS_FIRST_MODE));
+-                        var textId = httpsFirstLegacySummaryId(isAdvancedProtectionEnabled());
+-                        indexData.updateEntrySummaryForKey(
+-                                frag, PREF_HTTPS_FIRST_MODE_LEGACY, textId);
+-                    }
+-
+                     if (!shouldShowUniversalOptOutSettings(profile)) {
+                         indexData.removeEntry(getUniqueId(PREF_UNIVERSAL_OPT_OUT));
+                     }
+@@ -589,69 +332,6 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+                     if (shouldHideAdvancedProtectionInfoPref()) {
+                         indexData.removeEntry(getUniqueId(PREF_ADVANCED_PROTECTION_INFO));
+                     }
+-
+                 }
+             };
+-
+-    /** Bare's additions to the Incognito section: how it unlocks, wiping, and how it is entered. */
+-    private void initBareIncognitoPreferences() {
+-        ChromeSwitchPreference biometricOnly = findPreference(PREF_BARE_INCOGNITO_BIOMETRIC_ONLY);
+-        if (biometricOnly != null) {
+-            biometricOnly.setChecked(BareIncognitoLockPolicy.isBiometricOnly());
+-            biometricOnly.setOnPreferenceChangeListener(
+-                    (preference, newValue) -> {
+-                        BareIncognitoLockPolicy.setBiometricOnly((boolean) newValue);
+-                        return true;
+-                    });
+-        }
+-        ChromeSwitchPreference blockScreenshots =
+-                findPreference(PREF_BARE_INCOGNITO_BLOCK_SCREENSHOTS);
+-        if (blockScreenshots != null) {
+-            refreshBareBlockScreenshots(blockScreenshots);
+-            blockScreenshots.setOnPreferenceChangeListener(
+-                    (preference, newValue) -> {
+-                        ChromeSharedPreferences.getInstance()
+-                                .writeBoolean(
+-                                        ChromePreferenceKeys.BARE_INCOGNITO_BLOCK_SCREENSHOTS,
+-                                        (boolean) newValue);
+-                        return true;
+-                    });
+-        }
+-        ListPreference wipe = findPreference(PREF_BARE_INCOGNITO_WIPE_AFTER);
+-        if (wipe != null) {
+-            wipe.setValue(String.valueOf(BareIncognitoLockPolicy.getWipeAfter()));
+-            wipe.setOnPreferenceChangeListener(
+-                    (preference, newValue) -> {
+-                        BareIncognitoLockPolicy.setWipeAfter(Integer.parseInt((String) newValue));
+-                        return true;
+-                    });
+-        }
+-    }
+-
+-    /**
+-     * Bare: while the Incognito lock is on, screenshots are always blocked, so the switch shows on
+-     * and can't be changed. The user's own choice is kept and shown again when the lock is off.
+-     */
+-    private void refreshBareBlockScreenshots(ChromeSwitchPreference blockScreenshots) {
+-        // Allowed until the user turns it on, so the stored value is whether to block.
+-        boolean stored =
+-                ChromeSharedPreferences.getInstance()
+-                        .readBoolean(ChromePreferenceKeys.BARE_INCOGNITO_BLOCK_SCREENSHOTS, false);
+-        boolean locked = IncognitoReauthManager.isIncognitoReauthEnabled(getProfile());
+-        blockScreenshots.setEnabled(!locked);
+-        blockScreenshots.setChecked(locked || stored);
+-        blockScreenshots.setSummary(
+-                locked
+-                        ? R.string.bare_incognito_block_screenshots_locked
+-                        : R.string.bare_incognito_block_screenshots_summary);
+-    }
+-
+-    @Override
+-    public void onResume() {
+-        super.onResume();
+-        // Back from the Incognito lock settings, the lock may have changed.
+-        ChromeSwitchPreference blockScreenshots =
+-                findPreference(PREF_BARE_INCOGNITO_BLOCK_SCREENSHOTS);
+-        if (blockScreenshots != null) refreshBareBlockScreenshots(blockScreenshots);
+-    }
+ }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+index d4b5b95d932..ac8e78fa588 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
+@@ -47,7 +47,6 @@ import org.chromium.build.annotations.Initializer;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+-import org.chromium.chrome.browser.bare.notices.BareNotices;
+ import org.chromium.chrome.browser.lifetime.ApplicationLifetime;
+ import org.chromium.chrome.browser.appearance.settings.AppearanceSettingsFragment;
+ import org.chromium.chrome.browser.night_mode.NightModeUtils;
+@@ -55,8 +54,6 @@ import org.chromium.chrome.browser.autofill.settings.SettingsNavigationHelper;
+ import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsFragment;
+ import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsMediator;
+ import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsReferrer;
+-import org.chromium.chrome.browser.bare.BareLauncherIcon;
+-import org.chromium.chrome.browser.bare.settings.BareIconChooser;
+ import org.chromium.chrome.browser.bare.settings.BareSettingsIcons;
+ import org.chromium.chrome.browser.bare.settings.BareSettingsLayout;
+ import org.chromium.chrome.browser.bare.BareOpenInAppsMode;
+@@ -141,15 +138,10 @@ public class MainSettings extends ChromeBaseSettingsFragment
+     public static final String PREF_GOOGLE_SERVICES = "google_services";
+     public static final String PREF_BARE_UPDATES = "bare_check_for_updates";
+     public static final String PREF_BARE_OPEN_LINKS_IN_APPS = "bare_open_links_in_apps";
+-    public static final String PREF_BARE_APP_ICON = "bare_app_icon";
+-    private static final String PREF_BARE_GLASS = "bare_glass";
+-    private static final String PREF_BARE_SNACKBARS = "bare_snackbars";
+-    private static final String PREF_BARE_MENU_CARD = "bare_menu_card";
+-    private static final String PREF_BARE_NTP_LOGO = "bare_ntp_logo";
+     private static final String PREF_BARE_SMOOTH_SCROLLING = "bare_smooth_scrolling";
++    private static final String PREF_BARE_CAN_MAKE_PAYMENT = "bare_can_make_payment";
+     private static @Nullable Boolean sRunningSmoothScrolling;
+     private static final String PREF_BARE_THEME = "bare_ui_theme";
+-    private static final String PREF_BARE_SHORTCUT = "bare_toolbar_shortcut";
+     private static final String PREF_BARE_TOOLBAR = "bare_toolbar";
+     public static final String PREF_BASICS_SECTION = "basics_section";
+     public static final String PREF_SEARCH_ENGINE = "search_engine";
+@@ -191,7 +183,6 @@ public class MainSettings extends ChromeBaseSettingsFragment
+     private static final float BARE_BEHIND_SHIFT = 0.24f;
+     private static final float BARE_BEHIND_ALPHA = 0.7f;
+     private boolean mBareLayout;
+-    private boolean mBareShowToolbarShortcut;
+     private @Nullable String mBareCategory;
+     private final List<Preference> mBareHomePrefs = new ArrayList<>();
+     private @Nullable Preference mBareDeveloperRow;
+@@ -523,12 +514,8 @@ public class MainSettings extends ChromeBaseSettingsFragment
+ 
+         setUpUpdateRow();
+         setUpOpenLinksInAppsRow();
+-        setUpAppIconRow();
+-        setUpGlassRow();
+-        setUpSnackbarsRow();
+-        setUpMenuCardRow();
+-        setUpNtpLogoRow();
+         setUpSmoothScrollingRow();
++        setUpCanMakePaymentRow();
+ 
+         cachePreferences();
+         updateAutofillPreferences();
+@@ -591,7 +578,6 @@ public class MainSettings extends ChromeBaseSettingsFragment
+         if (!mBareLayout) {
+             // Only the grouped Appearance screen shows these; elsewhere the Appearance page does.
+             removePreferenceIfPresent(PREF_BARE_THEME);
+-            removePreferenceIfPresent(PREF_BARE_SHORTCUT);
+             removePreferenceIfPresent(PREF_BARE_TOOLBAR);
+             return;
+         }
+@@ -710,7 +696,6 @@ public class MainSettings extends ChromeBaseSettingsFragment
+         for (Map.Entry<String, Preference> entry : mAllPreferences.entrySet()) {
+             String key = entry.getKey();
+             boolean visible = shown.contains(key) && isBareSettingAvailable(key);
+-            if (PREF_BARE_SHORTCUT.equals(key) && !mBareShowToolbarShortcut) visible = false;
+             entry.getValue().setVisible(visible);
+         }
+         for (Preference preference : mBareHomePrefs) preference.setVisible(home);
+@@ -1104,14 +1089,31 @@ public class MainSettings extends ChromeBaseSettingsFragment
+                 });
+     }
+ 
+-    /** The switch for smooth scrolling. On unless the user turned it off. */
++    /**
++     * Whether sites may check for saved payment methods. Chromium's switch from its Privacy and
++     * security page, moved to Autofill & payments; the same pref.
++     */
++    private void setUpCanMakePaymentRow() {
++        ChromeSwitchPreference row =
++                (ChromeSwitchPreference) findPreference(PREF_BARE_CAN_MAKE_PAYMENT);
++        if (row == null) return;
++        row.setChecked(UserPrefs.get(getProfile()).getBoolean(Pref.CAN_MAKE_PAYMENT_ENABLED));
++        row.setOnPreferenceChangeListener(
++                (pref, newValue) -> {
++                    UserPrefs.get(getProfile())
++                            .setBoolean(Pref.CAN_MAKE_PAYMENT_ENABLED, (boolean) newValue);
++                    return true;
++                });
++    }
++
++    /** The switch for smooth scrolling. Off unless the user turned it on. */
+     private void setUpSmoothScrollingRow() {
+         ChromeSwitchPreference row =
+                 (ChromeSwitchPreference) findPreference(PREF_BARE_SMOOTH_SCROLLING);
+         if (row == null) return;
+         boolean saved =
+                 ChromeSharedPreferences.getInstance()
+-                        .readBoolean(ChromePreferenceKeys.BARE_SMOOTH_SCROLLING, true);
++                        .readBoolean(ChromePreferenceKeys.BARE_SMOOTH_SCROLLING, false);
+         // What the running browser uses is what the setting said when Bare started, which is what
+         // it says the first time this page opens, before it can be changed here.
+         if (sRunningSmoothScrolling == null) sRunningSmoothScrolling = saved;
+@@ -1136,85 +1138,6 @@ public class MainSettings extends ChromeBaseSettingsFragment
+                 });
+     }
+ 
+-    /**
+-     * The switch between the Bare menu, a card that rises from the toolbar, and the classic
+-     * drop-down menu. On unless the user turned it off; the next menu opened follows it.
+-     */
+-    private void setUpMenuCardRow() {
+-        ChromeSwitchPreference row = (ChromeSwitchPreference) findPreference(PREF_BARE_MENU_CARD);
+-        if (row == null) return;
+-        row.setChecked(
+-                ChromeSharedPreferences.getInstance()
+-                        .readBoolean(ChromePreferenceKeys.BARE_MENU_CARD, true));
+-        row.setOnPreferenceChangeListener(
+-                (pref, newValue) -> {
+-                    ChromeSharedPreferences.getInstance()
+-                            .writeBoolean(ChromePreferenceKeys.BARE_MENU_CARD, (boolean) newValue);
+-                    return true;
+-                });
+-    }
+-
+-    /** The switch for the Bare icon on the New tab page. On unless the user turned it off. */
+-    private void setUpNtpLogoRow() {
+-        ChromeSwitchPreference row = (ChromeSwitchPreference) findPreference(PREF_BARE_NTP_LOGO);
+-        if (row == null) return;
+-        row.setChecked(
+-                ChromeSharedPreferences.getInstance()
+-                        .readBoolean(ChromePreferenceKeys.BARE_NTP_LOGO, true));
+-        row.setOnPreferenceChangeListener(
+-                (pref, newValue) -> {
+-                    ChromeSharedPreferences.getInstance()
+-                            .writeBoolean(ChromePreferenceKeys.BARE_NTP_LOGO, (boolean) newValue);
+-                    return true;
+-                });
+-    }
+-
+-    /**
+-     * The switch for snackbars, the short messages at the bottom of the screen. Off unless the
+-     * user turned it on; while off they are listed under Notifications in the menu.
+-     */
+-    private void setUpSnackbarsRow() {
+-        ChromeSwitchPreference row = (ChromeSwitchPreference) findPreference(PREF_BARE_SNACKBARS);
+-        if (row == null) return;
+-        row.setChecked(BareNotices.areSnackbarsShown());
+-        row.setOnPreferenceChangeListener(
+-                (pref, newValue) -> {
+-                    BareNotices.setSnackbarsShown((boolean) newValue);
+-                    return true;
+-                });
+-    }
+-
+-    /** The switch for frosted glass. On unless the user turned it off. */
+-    private void setUpGlassRow() {
+-        ChromeSwitchPreference row = (ChromeSwitchPreference) findPreference(PREF_BARE_GLASS);
+-        if (row == null) return;
+-        row.setChecked(
+-                ChromeSharedPreferences.getInstance()
+-                        .readBoolean(ChromePreferenceKeys.BARE_GLASS, true));
+-        row.setOnPreferenceChangeListener(
+-                (pref, newValue) -> {
+-                    ChromeSharedPreferences.getInstance()
+-                            .writeBoolean(ChromePreferenceKeys.BARE_GLASS, (boolean) newValue);
+-                    return true;
+-                });
+-    }
+-
+-    /** The row for the app icon: it says which one is in use and opens the three to choose from. */
+-    private void setUpAppIconRow() {
+-        Preference row = findPreference(PREF_BARE_APP_ICON);
+-        if (row == null) return;
+-        row.setSummary(BareIconChooser.labelFor(BareLauncherIcon.getChoice()));
+-        row.setOnPreferenceClickListener(
+-                pref -> {
+-                    Activity activity = getActivity();
+-                    if (activity == null) return true;
+-                    BareIconChooser.show(
+-                            activity,
+-                            choice -> pref.setSummary(BareIconChooser.labelFor(choice)));
+-                    return true;
+-                });
+-    }
+-
+     private static int openLinksInAppsLabel(String value) {
+         switch (BareOpenInAppsMode.fromValue(value)) {
+             case BareOpenInAppsMode.Mode.ALWAYS:
+@@ -1474,7 +1397,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
+                         || !DeviceFormFactor.isNonMultiDisplayContextOnTablet(context));
+     }
+ 
+-    /** The theme's summary, and whether the address bar shortcut can be shown at all. */
++    /** The theme's summary. */
+     private void updateBareAppearanceRows() {
+         if (!mBareLayout) return;
+         Preference theme = findPreference(PREF_BARE_THEME);
+@@ -1483,14 +1406,6 @@ public class MainSettings extends ChromeBaseSettingsFragment
+                     NightModeUtils.getThemeSettingTitle(
+                             getContext(), NightModeUtils.getThemeSetting()));
+         }
+-        AppearanceSettingsFragment.shouldShowToolbarShortcutPrefAsync(
+-                getContext(),
+-                getProfile(),
+-                shown -> {
+-                    if (mBareShowToolbarShortcut == shown) return;
+-                    mBareShowToolbarShortcut = shown;
+-                    applyBareVisibility();
+-                });
+     }
+ 
+     private void updateAppearancePreference() {
+@@ -1654,7 +1569,9 @@ public class MainSettings extends ChromeBaseSettingsFragment
+                     // by key through onPreferenceSelected below, which does not care whether
+                     // the row is visible.
+                     indexData.removeEntry(getUniqueId(PREF_PASSWORDS));
+-                    if (!shouldShowAddressBarPref(context)) {
++                    // Bare: on a phone, top or bottom is found on the Address bar & toolbar page.
++                    if (!shouldShowAddressBarPref(context)
++                            || !DeviceFormFactor.isNonMultiDisplayContextOnTablet(context)) {
+                         indexData.removeEntry(getUniqueId(PREF_ADDRESS_BAR));
+                     }
+                     if (!shouldShowNotificationPref(context, new Intent())) {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsNavigationImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsNavigationImpl.java
+index 4fdc50a8f16..0a781aa64a9 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsNavigationImpl.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsNavigationImpl.java
+@@ -21,6 +21,7 @@ import org.chromium.chrome.browser.about_settings.AboutChromeSettings;
+ import org.chromium.chrome.browser.about_settings.LegalInformationSettings;
+ import org.chromium.chrome.browser.appearance.settings.AppearanceSettingsFragment;
+ import org.chromium.chrome.browser.autofill.settings.AndroidPaymentAppsFragment;
++import org.chromium.chrome.browser.bare.settings.BareToolbarSettingsFragment;
+ import org.chromium.chrome.browser.autofill.settings.AutofillAndPasswordsFragment;
+ import org.chromium.chrome.browser.autofill.settings.AutofillBuyNowPayLaterFragment;
+ import org.chromium.chrome.browser.autofill.settings.AutofillCardBenefitsFragment;
+@@ -75,6 +76,7 @@ import org.chromium.components.browser_ui.site_settings.SingleWebsiteSettings;
+ import org.chromium.components.browser_ui.site_settings.SiteSettings;
+ import org.chromium.components.browser_ui.site_settings.StorageAccessSubpageSettings;
+ import org.chromium.components.page_info.PageInfoCookiesSettings;
++import org.chromium.ui.base.DeviceFormFactor;
+ 
+ /** Implementation class for launching a {@link SettingsActivity}. */
+ @NullMarked
+@@ -194,6 +196,20 @@ public class SettingsNavigationImpl implements SettingsNavigation {
+         startSettings(context, fragment, fragmentArgs, addToBackStack, /* tag= */ null);
+     }
+ 
++    /**
++     * Bare: on a phone the Address bar and Address bar shortcut pages are part of Address bar &
++     * toolbar, so whatever asks for one of them, such as holding the shortcut, gets that page.
++     */
++    private static @Nullable Class<? extends Fragment> bareFoldedPage(
++            Context context, @Nullable Class<? extends Fragment> fragment) {
++        if ((fragment == AdaptiveToolbarSettingsFragment.class
++                        || fragment == AddressBarSettingsFragment.class)
++                && !DeviceFormFactor.isNonMultiDisplayContextOnTablet(context)) {
++            return BareToolbarSettingsFragment.class;
++        }
++        return fragment;
++    }
++
+     @Override
+     public void startSettings(
+             Context context,
+@@ -201,6 +217,7 @@ public class SettingsNavigationImpl implements SettingsNavigation {
+             @Nullable Bundle fragmentArgs,
+             boolean addToBackStack,
+             @Nullable String tag) {
++        fragment = bareFoldedPage(context, fragment);
+         if (useSettingsInTab(context)) {
+             Activity activity = ContextUtils.activityFromContext(context);
+             // Some components pass a non-Activity context (e.g. AccessibilitySettings).
+@@ -267,6 +284,7 @@ public class SettingsNavigationImpl implements SettingsNavigation {
+             @Nullable Bundle fragmentArgs,
+             boolean addToBackStack,
+             @Nullable String tag) {
++        fragment = bareFoldedPage(context, fragment);
+         String fragmentName = fragment == null ? null : fragment.getName();
+         return SettingsIntentUtil.createIntent(
+                 context,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
+index e827d5c6711..85ffb9916f0 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
+@@ -25,6 +25,7 @@ import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsFrag
+ import org.chromium.chrome.browser.autofill.settings.personal_context.AutofillPersonalContextFragment;
+ import org.chromium.chrome.browser.bare.settings.BareClearOnExitSettings;
+ import org.chromium.chrome.browser.bare.settings.BareExtensionsSettingsFragment;
++import org.chromium.chrome.browser.bare.settings.BareLookAndFeelSettingsFragment;
+ import org.chromium.chrome.browser.bare.settings.BarePushSettingsFragment;
+ import org.chromium.chrome.browser.bare.settings.BareSecuritySettingsFragment;
+ import org.chromium.chrome.browser.bare.settings.BareToolbarSettingsFragment;
+@@ -41,6 +42,7 @@ import org.chromium.chrome.browser.language.settings.LanguageSettings;
+ import org.chromium.chrome.browser.night_mode.settings.ThemeSettingsFragment;
+ import org.chromium.chrome.browser.prefetch.settings.PreloadPagesSettingsFragment;
+ import org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings;
++import org.chromium.chrome.browser.privacy.settings.BareIncognitoSettings;
+ import org.chromium.chrome.browser.privacy.settings.DoNotTrackSettings;
+ import org.chromium.chrome.browser.privacy.settings.PrivacySettings;
+ import org.chromium.chrome.browser.privacy.settings.UniversalOptOutSettings;
+@@ -138,10 +140,12 @@ public final class SearchIndexProviderRegistry {
+                     TracingSettings.SEARCH_INDEX_DATA_PROVIDER,
+                     TracingCategoriesSettings.SEARCH_INDEX_DATA_PROVIDER,
+                     BareClearOnExitSettings.SEARCH_INDEX_DATA_PROVIDER,
++                    BareIncognitoSettings.SEARCH_INDEX_DATA_PROVIDER,
+                     BareExtensionsSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
+                     BarePushSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
+                     BareSecuritySettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
+                     BareToolbarSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
++                    BareLookAndFeelSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
+                     BareBackupSettingsFragment.SEARCH_INDEX_DATA_PROVIDER,
+                     BareTranslateSettingsFragment.SEARCH_INDEX_DATA_PROVIDER);
+ }
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayoutUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayoutUnitTest.java
+index 7194a478452..44dd7b33e6f 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayoutUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/settings/BareSettingsLayoutUnitTest.java
+@@ -111,23 +111,29 @@ public class BareSettingsLayoutUnitTest {
+         assertTrue(BareSettingsLayout.findCategory("appearance").keys.containsAll(
+                 java.util.Arrays.asList(
+                         "bare_ui_theme",
+-                        "address_bar",
+-                        "homepage",
+-                        "bare_toolbar_shortcut",
+                         "bare_toolbar",
+-                        "bare_app_icon")));
+-        assertTrue(BareSettingsLayout.findCategory("privacy").keys.containsAll(
++                        "homepage",
++                        "bare_look_and_feel")));
++        assertEquals(
+                 java.util.Arrays.asList(
++                        "bare_security",
+                         "privacy",
++                        "bare_incognito",
+                         "safety_hub",
+-                        "bare_security",
+-                        "content_settings",
+-                        "bare_open_links_in_apps",
+-                        "default_browser")));
++                        "content_settings"),
++                BareSettingsLayout.findCategory("privacy").keys);
+         assertDirect("extensions", "bare_extensions");
+         assertEquals(
+-                java.util.Arrays.asList("search_engine", "tabs", "media", "downloads"),
++                java.util.Arrays.asList(
++                        "search_engine",
++                        "default_browser",
++                        "tabs",
++                        "bare_open_links_in_apps",
++                        "media",
++                        "downloads",
++                        "bare_smooth_scrolling"),
+                 BareSettingsLayout.findCategory("browsing").keys);
++        assertTrue(BareSettingsLayout.findCategory("autofill").keys.contains("bare_can_make_payment"));
+         assertEquals(
+                 java.util.Arrays.asList("languages", "bare_translate"),
+                 BareSettingsLayout.findCategory("languages").keys);
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 405363a137f..bfbac3e374b 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -464,9 +464,15 @@ public final class ChromePreferenceKeys {
+     /** Whether uBlock Origin is subscribed to BareFilter, the list Bare hosts. On unless turned off. */
+     public static final String BARE_FILTER_ENABLED = "Chrome.Bare.BareFilterEnabled";
+ 
+-    /** Whether flicks follow the finger like a native list: capped speed, no boosting. On unless off. */
++    /** Whether flicks follow the finger like a native list: capped speed, no boosting. Off unless on. */
+     public static final String BARE_SMOOTH_SCROLLING = "Chrome.Bare.SmoothScrolling";
+ 
++    /**
++     * Set once native has cleared the old smooth scrolling choice, so everyone starts with it off.
++     * Written and read only by native, at startup.
++     */
++    public static final String BARE_SMOOTH_SCROLLING_RESET = "Chrome.Bare.SmoothScrollingReset";
++
+     /** The order the user gave the menu items, as their names joined by commas. */
+     public static final String BARE_APP_MENU_ORDER = "Chrome.Bare.AppMenuOrder";
+ 
+@@ -640,6 +646,12 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_KEYBOARD_ON_NEW_TAB = "Chrome.Bare.KeyboardOnNewTab";
+ 
++    /**
++     * Whether Bare starts on a new tab when it is opened from the launcher after it was closed.
++     * Absent means off, so Bare reopens on the tab the user left.
++     */
++    public static final String BARE_OPEN_ON_NEW_TAB = "Chrome.Bare.OpenOnNewTab";
++
+     public static final String DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER =
+             "Chrome.Download.UseExternalDownloadManager";
+ 
+@@ -1464,6 +1476,7 @@ public final class ChromePreferenceKeys {
+                 BARE_OPEN_LINKS_IN_APPS,
+                 BARE_TAB_VIEW,
+                 BARE_KEYBOARD_ON_NEW_TAB,
++                BARE_OPEN_ON_NEW_TAB,
+                 BARE_UPDATE_LAST_CHECK_MS,
+                 BARE_UPDATE_LATEST_TAG,
+                 BARE_UPDATE_ACKED_TAG,
+@@ -1515,6 +1528,7 @@ public final class ChromePreferenceKeys {
+                 BARE_MENU_ON_LEFT,
+                 BARE_FILTER_ENABLED,
+                 BARE_SMOOTH_SCROLLING,
++                BARE_SMOOTH_SCROLLING_RESET,
+                 BARE_APP_MENU_ORDER,
+                 BARE_APP_MENU_ORDER_ALL,
+                 BARE_AMOLED_WHEN_SYSTEM_DARK,
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 4f2930dcef6..ba5c00e8f24 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4387,6 +4387,21 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_KEYBOARD_ON_NEW_TAB_TITLE" desc="Title of the setting for whether a new tab opens with the address bar focused and the keyboard showing.">
+         Open the keyboard on a new tab
+       </message>
++      <message name="IDS_BARE_OPEN_ON_NEW_TAB_TITLE" desc="Title of the setting for whether Bare starts on a new tab after it was closed.">
++        Open Bare on a new tab
++      </message>
++      <message name="IDS_BARE_OPEN_ON_NEW_TAB_SUMMARY" desc="Summary of the setting for whether Bare starts on a new tab after it was closed.">
++        After Bare was closed, start on a new tab. Your tabs stay in the tab switcher.
++      </message>
++      <message name="IDS_BARE_PRELOAD_PAGES_SWITCH_SUMMARY" desc="Summary of the Preload pages switch. Preloading fetches pages straight from the site, never through a Google server.">
++        Load pages you're likely to open next, from the site itself. Never through Google.
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_LOCATION_PHONE" desc="Name of the default download location: the phone's own Download folder.">
++        Download
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_LOCATION_PHONE_SUMMARY" desc="Shown after the name of the download location in Settings, when downloads go to the phone's Download folder. Reads as: Download on this phone.">
++        on this phone
++      </message>
+       <message name="IDS_BARE_TAB_VIEW_GRID" desc="Setting value: the tab switcher shows tabs as a grid of cards.">
+         Grid
+       </message>
+@@ -4621,11 +4636,8 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_MENU_HIDDEN_HEADING" desc="Heading in edit mode above the menu items that are currently hidden. [CHAR_LIMIT=24]">
+         Hidden
+       </message>
+-      <message name="IDS_BARE_SECURITY_TITLE" desc="Title of the settings screen for security choices. [CHAR_LIMIT=32]">
+-        Security options
+-      </message>
+-      <message name="IDS_BARE_SECURITY_ABOUT" desc="Explains the security options screen: each is a setting the browser already has, with a plain name.">
+-        Each switch here changes a setting the browser already has, so the same choice is also in the settings it came from. Websites can still use the information they receive, and characteristics of your browser, to recognize or track a visitor.
++      <message name="IDS_BARE_SECURITY_TITLE" desc="Title of Bare Guard, the settings screen for the browser's protections. Bare Guard is a name. [CHAR_LIMIT=32]">
++        Bare Guard
+       </message>
+       <message name="IDS_BARE_SECURITY_HTTPS_TITLE" desc="Security option: use https for every site. [CHAR_LIMIT=48]">
+         Secure connections only
+@@ -4652,7 +4664,7 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+         Turns off the JavaScript optimizer for every site. A whole class of browser exploits depends on it, at the cost of slower pages and heavier sites. You can allow it for a site in Site settings.
+       </message>
+       <message name="IDS_BARE_SECURITY_PHISHING_NOTE" desc="Note on the security options screen about the malware and phishing lists uBlock Origin uses in place of Safe Browsing.">
+-        Bare checks addresses against uBlock Origin's lists of malware and phishing sites. These lists are smaller than Google Safe Browsing, so some dangerous sites will still get through.
++        Malware and phishing sites are blocked with uBlock Origin's lists. They are smaller than Google Safe Browsing, so some get through.
+       </message>
+       <message name="IDS_BARE_CRX_OFFER_TITLE" desc="Title of the dialog offered when an extension file has finished downloading. [CHAR_LIMIT=40]">
+         Install this extension?
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java
+index ae9be370be6..4c225b2d076 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuSheetContent.java
+@@ -5,23 +5,14 @@
+ package org.chromium.chrome.browser.toolbar.extensions;
+ 
+ import android.content.Context;
+-import android.graphics.Typeface;
+-import android.util.TypedValue;
+-import android.view.Gravity;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.LinearLayout;
+-import android.widget.TextView;
+-
+-import com.google.android.material.materialswitch.MaterialSwitch;
+ 
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+-import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+-import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
+ import org.chromium.components.browser_ui.bottomsheet.BottomSheetType;
+-import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ 
+ /** The extensions menu shown as a card from the bottom of the screen, like the share card. */
+ @NullMarked
+@@ -43,10 +34,6 @@ class ExtensionsMenuSheetContent implements BottomSheetContent {
+                 menuView,
+                 new LinearLayout.LayoutParams(
+                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+-        mContainer.addView(
+-                createBareFilterRow(context),
+-                new LinearLayout.LayoutParams(
+-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+         // The card has its own background, corners and handle; the pop-up's panel would draw a
+         // second card inside it.
+         if (menuView instanceof ViewGroup group && group.getChildCount() > 0) {
+@@ -59,69 +46,6 @@ class ExtensionsMenuSheetContent implements BottomSheetContent {
+         mContainer.setPadding(0, 0, 0, Math.round(BOTTOM_PADDING_DP * density));
+     }
+ 
+-    /**
+-     * The BareFilter switch. The list is read by uBlock Origin when it starts, so a change is picked
+-     * up the next time Bare starts.
+-     */
+-    private static View createBareFilterRow(Context context) {
+-        float density = context.getResources().getDisplayMetrics().density;
+-        int sidePadding = Math.round(20 * density);
+-        int verticalPadding = Math.round(12 * density);
+-
+-        LinearLayout row = new LinearLayout(context);
+-        row.setOrientation(LinearLayout.HORIZONTAL);
+-        row.setGravity(Gravity.CENTER_VERTICAL);
+-        row.setPadding(sidePadding, verticalPadding, sidePadding, verticalPadding);
+-
+-        LinearLayout text = new LinearLayout(context);
+-        text.setOrientation(LinearLayout.VERTICAL);
+-
+-        LinearLayout titleLine = new LinearLayout(context);
+-        titleLine.setOrientation(LinearLayout.HORIZONTAL);
+-        titleLine.setGravity(Gravity.CENTER_VERTICAL);
+-        TextView title = new TextView(context);
+-        title.setText("BareFilter");
+-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+-        title.setTypeface(Typeface.DEFAULT_BOLD);
+-        title.setTextColor(SemanticColorUtils.getDefaultTextColor(context));
+-        titleLine.addView(title);
+-        TextView beta = new TextView(context);
+-        beta.setText("beta");
+-        beta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+-        beta.setTextColor(SemanticColorUtils.getDefaultIconColorAccent1(context));
+-        beta.setPadding(Math.round(8 * density), 0, 0, 0);
+-        titleLine.addView(beta);
+-        text.addView(titleLine);
+-
+-        TextView description = new TextView(context);
+-        description.setText(
+-                "Hides app banners and pop-ups on a few sites, and updates itself from GitHub. "
+-                        + "A change applies the next time Bare starts.");
+-        description.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+-        description.setTextColor(SemanticColorUtils.getDefaultTextColorSecondary(context));
+-        text.addView(description);
+-        row.addView(
+-                text,
+-                new LinearLayout.LayoutParams(
+-                        0, ViewGroup.LayoutParams.WRAP_CONTENT, /* weight= */ 1f));
+-
+-        MaterialSwitch toggle = new MaterialSwitch(context);
+-        toggle.setChecked(
+-                ChromeSharedPreferences.getInstance()
+-                        .readBoolean(ChromePreferenceKeys.BARE_FILTER_ENABLED, true));
+-        toggle.setOnCheckedChangeListener(
+-                (button, checked) ->
+-                        ChromeSharedPreferences.getInstance()
+-                                .writeBoolean(ChromePreferenceKeys.BARE_FILTER_ENABLED, checked));
+-        toggle.setContentDescription("BareFilter");
+-        LinearLayout.LayoutParams toggleParams =
+-                new LinearLayout.LayoutParams(
+-                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+-        toggleParams.setMarginStart(Math.round(12 * density));
+-        row.addView(toggle, toggleParams);
+-        return row;
+-    }
+-
+     /** Hands the menu's view back once the card has gone. */
+     void release() {
+         mContainer.removeAllViews();

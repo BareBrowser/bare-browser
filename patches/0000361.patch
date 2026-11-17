@@ -1,0 +1,3376 @@
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index e68f2feb283..ccebb4320ff 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -742,6 +742,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/download/DownloadManagerService.java",
+   "java/src/org/chromium/chrome/browser/download/DownloadMessageBridge.java",
+   "java/src/org/chromium/chrome/browser/download/DownloadMetrics.java",
++  "java/src/org/chromium/chrome/browser/download/BareDownloadProgress.java",
+   "java/src/org/chromium/chrome/browser/download/DownloadNotificationFactory.java",
+   "java/src/org/chromium/chrome/browser/download/DownloadNotificationService.java",
+   "java/src/org/chromium/chrome/browser/download/DownloadNotificationServiceObserver.java",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/download/BareDownloadProgress.java b/chrome/android/java/src/org/chromium/chrome/browser/download/BareDownloadProgress.java
+new file mode 100644
+index 00000000000..5bbb51f2a01
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/download/BareDownloadProgress.java
+@@ -0,0 +1,176 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.download;
++
++import android.Manifest;
++import android.app.Activity;
++import android.app.Notification;
++import android.app.NotificationChannel;
++import android.app.NotificationManager;
++import android.content.Context;
++import android.os.Build;
++import android.service.notification.StatusBarNotification;
++import android.text.TextUtils;
++
++import androidx.annotation.RequiresApi;
++import androidx.core.app.NotificationManagerCompat;
++
++import org.chromium.base.ActivityState;
++import org.chromium.base.ApplicationStatus;
++import org.chromium.base.ContextUtils;
++import org.chromium.base.Log;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.app.ChromeActivity;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.components.offline_items_collection.OfflineItem.Progress;
++import org.chromium.ui.base.WindowAndroid;
++
++import java.text.NumberFormat;
++import java.util.Locale;
++
++/**
++ * Bare: download progress in the status bar and on the lock screen.
++ *
++ * <p>Builds on Chromium's own download notification. On Android 16 and later a running download's
++ * notification asks to be promoted to a Live Update, which gives it the chip in the status bar and
++ * the progress card on the lock screen. Older Android keeps the normal ongoing notification. The
++ * switch in Settings > Downloads turns the progress notification off.
++ */
++@NullMarked
++public final class BareDownloadProgress {
++    private static final String TAG = "BareDlProgress";
++
++    /** Whether the one-time notification question was already settled in this process. */
++    private static boolean sAskSettled;
++
++    private BareDownloadProgress() {}
++
++    /** Whether the "Show download progress" switch is on. On unless the user turned it off. */
++    public static boolean isEnabled() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_DOWNLOAD_PROGRESS_NOTIFICATION, true);
++    }
++
++    /**
++     * Asks Android for the notification permission the first time a download runs without it. At
++     * most once per install, only while Bare is in front, and only if Android can still show its
++     * dialog. Uses the same request as the notifications row on the welcome page.
++     */
++    public static void maybeAskForNotificationsOnce() {
++        if (sAskSettled) return;
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
++            sAskSettled = true;
++            return;
++        }
++        if (NotificationManagerCompat.from(ContextUtils.getApplicationContext())
++                .areNotificationsEnabled()) {
++            sAskSettled = true;
++            return;
++        }
++        if (ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_DOWNLOAD_NOTIFICATION_ASKED, false)) {
++            sAskSettled = true;
++            return;
++        }
++        Activity activity = ApplicationStatus.getLastTrackedFocusedActivity();
++        // Not in front right now. Try again on a later update of this or another download.
++        if (!(activity instanceof ChromeActivity chromeActivity)) return;
++        if (ApplicationStatus.getStateForActivity(activity) != ActivityState.RESUMED) return;
++        WindowAndroid window = chromeActivity.getWindowAndroid();
++        if (window == null) return;
++
++        sAskSettled = true;
++        // Android no longer shows the dialog after two refusals. Then leave it to Android's
++        // settings, as the welcome page does.
++        if (!window.canRequestPermission(Manifest.permission.POST_NOTIFICATIONS)) return;
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_DOWNLOAD_NOTIFICATION_ASKED, true);
++        window.requestPermissions(
++                new String[] {Manifest.permission.POST_NOTIFICATIONS}, (permissions, results) -> {});
++    }
++
++    /** Whether Android currently shows a notification of Bare's with this id and no tag. */
++    public static boolean isShowing(Context context, int notificationId) {
++        NotificationManager manager = context.getSystemService(NotificationManager.class);
++        if (manager == null) return false;
++        try {
++            for (StatusBarNotification shown : manager.getActiveNotifications()) {
++                if (shown.getId() == notificationId && shown.getTag() == null) return true;
++            }
++        } catch (RuntimeException e) {
++            // Treat as showing, so the caller replaces it rather than leaving a stale one.
++            return true;
++        }
++        return false;
++    }
++
++    /**
++     * Turns a running download's notification into a Live Update on Android 16 and later. Returns
++     * the notification unchanged on older Android, when the user turned Live Updates off for Bare,
++     * when the downloads channel is set to minimum, and for incognito downloads, whose progress
++     * stays off the lock screen.
++     *
++     * @param notification Chromium's in-progress notification: ongoing, titled, not a group
++     *     summary, no custom views, not colorized.
++     * @param progress The download's progress, or null when it has none yet.
++     * @param isOffTheRecord Whether the download belongs to an incognito profile.
++     */
++    public static Notification maybePromote(
++            Context context,
++            Notification notification,
++            @Nullable Progress progress,
++            boolean isOffTheRecord) {
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA) return notification;
++        if (isOffTheRecord) return notification;
++        try {
++            return promote(context, notification, progress);
++        } catch (RuntimeException e) {
++            Log.w(TAG, "Live Update not built", e);
++            return notification;
++        }
++    }
++
++    @RequiresApi(Build.VERSION_CODES.BAKLAVA)
++    private static Notification promote(
++            Context context, Notification notification, @Nullable Progress progress) {
++        if ((notification.flags & Notification.FLAG_ONGOING_EVENT) == 0) return notification;
++        if ((notification.flags & Notification.FLAG_GROUP_SUMMARY) != 0) return notification;
++        if (TextUtils.isEmpty(notification.extras.getCharSequence(Notification.EXTRA_TITLE))) {
++            return notification;
++        }
++        NotificationManager manager = context.getSystemService(NotificationManager.class);
++        if (manager == null || !manager.canPostPromotedNotifications()) return notification;
++        String channelId = notification.getChannelId();
++        NotificationChannel channel =
++                channelId == null ? null : manager.getNotificationChannel(channelId);
++        if (channel == null || channel.getImportance() <= NotificationManager.IMPORTANCE_MIN) {
++            return notification;
++        }
++
++        boolean determinate = progress != null && !progress.isIndeterminate();
++        Notification.ProgressStyle style =
++                new Notification.ProgressStyle().setProgressIndeterminate(!determinate);
++        Notification.Builder builder = Notification.Builder.recoverBuilder(context, notification);
++        if (determinate && progress != null) {
++            int percent = Math.max(0, Math.min(100, progress.getPercentage()));
++            style.addProgressSegment(new Notification.ProgressStyle.Segment(100))
++                    .setProgress(percent);
++            builder.setShortCriticalText(
++                    NumberFormat.getPercentInstance(Locale.getDefault()).format(percent / 100.0));
++        }
++        Notification promoted =
++                builder.setStyle(style)
++                        .setOngoing(true)
++                        .setOnlyAlertOnce(true)
++                        .setRequestPromotedOngoing(true)
++                        .build();
++        if (!promoted.hasPromotableCharacteristics()) {
++            Log.w(TAG, "Download notification is not promotable");
++        }
++        return promoted;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadManagerService.java b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadManagerService.java
+index 16f7f15c89a..7d30b60cb29 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadManagerService.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadManagerService.java
+@@ -214,6 +214,7 @@ public class DownloadManagerService implements DownloadServiceDelegate, ProfileM
+         mHandler = handler;
+         mDownloadSnackbarController = new DownloadSnackbarController();
+         DownloadCollectionBridge.setDownloadDelegate(new DownloadDelegateImpl());
++        BareDownloadEngine.registerPartsProvider();
+     }
+ 
+     /** Initializes download related systems for background task. */
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadNotificationFactory.java b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadNotificationFactory.java
+index bbe6aad4eb8..657a478e65e 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadNotificationFactory.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadNotificationFactory.java
+@@ -43,6 +43,7 @@ import org.chromium.components.browser_ui.util.DownloadUtils;
+ import org.chromium.components.offline_items_collection.ContentId;
+ import org.chromium.components.offline_items_collection.LegacyHelpers;
+ import org.chromium.components.offline_items_collection.OfflineItem;
++import org.chromium.components.offline_items_collection.OfflineItemProgressUnit;
+ 
+ /** Creates and updates notifications related to downloads. */
+ @NullMarked
+@@ -130,7 +131,11 @@ public final class DownloadNotificationFactory {
+                 assertNonNull(downloadUpdate.getContentId());
+                 checkArgument(downloadUpdate.getNotificationId() != -1);
+ 
+-                if (downloadUpdate.getIsDownloadPending()) {
++                // Bare: "1.4 GB of 2.3 GB · 5 mins left" on one line.
++                @Nullable String bareText = bareProgressText(context, downloadUpdate);
++                if (bareText != null) {
++                    contentText = bareText;
++                } else if (downloadUpdate.getIsDownloadPending()) {
+                     contentText =
+                             StringUtils.getPendingStatusForUi(downloadUpdate.getPendingState());
+                 } else {
+@@ -189,7 +194,8 @@ public final class DownloadNotificationFactory {
+                             indeterminate);
+                 }
+ 
+-                if (!indeterminate
++                if (bareText == null
++                        && !indeterminate
+                         && !downloadUpdate.getIsOffTheRecord()
+                         && downloadUpdate.getTimeRemainingInMillis() >= 0
+                         && !LegacyHelpers.isLegacyOfflinePage(downloadUpdate.getContentId())) {
+@@ -391,6 +397,110 @@ public final class DownloadNotificationFactory {
+             if (formattedUrl != null) builder.setSubText(formattedUrl);
+         }
+ 
++        Notification notification = builder.build();
++        // Bare: a running download asks to be a Live Update on Android 16 and later.
++        if (downloadStatus == DownloadNotificationService.DownloadStatus.IN_PROGRESS
++                && notification != null) {
++            notification =
++                    BareDownloadProgress.maybePromote(
++                            context,
++                            notification,
++                            downloadUpdate.getProgress(),
++                            downloadUpdate.getIsOffTheRecord());
++        }
++        return notification;
++    }
++
++    /**
++     * Bare: the progress line of a running download, "1.4 GB of 2.3 GB · 5 mins left". Null when
++     * the size is not known, while the download waits, and in incognito, which hides sizes.
++     */
++    private static @Nullable String bareProgressText(
++            Context context, DownloadUpdate downloadUpdate) {
++        OfflineItem.@Nullable Progress progress = downloadUpdate.getProgress();
++        if (progress == null
++                || downloadUpdate.getIsDownloadPending()
++                || downloadUpdate.getIsOffTheRecord()
++                || progress.isIndeterminate()
++                || progress.max == null
++                || progress.unit != OfflineItemProgressUnit.BYTES) {
++            return null;
++        }
++        String text =
++                context.getString(
++                        R.string.bare_downloads_size_of,
++                        DownloadUtils.getStringForBytes(context, progress.value),
++                        DownloadUtils.getStringForBytes(context, progress.max));
++        if (downloadUpdate.getTimeRemainingInMillis() >= 0
++                && !LegacyHelpers.isLegacyOfflinePage(downloadUpdate.getContentId())) {
++            text +=
++                    " · "
++                            + StringUtils.timeLeftForUi(
++                                    context, downloadUpdate.getTimeRemainingInMillis());
++        }
++        return text;
++    }
++
++    /**
++     * Bare: the notification for a running download while "Show download progress" is off.
++     *
++     * <p>Android needs a notification while a download keeps running with Bare in the background:
++     * Chromium's foreground service before Android 14, the user-initiated job from Android 14 on.
++     * Without them Android stops the download. So this is the least it can show: no file name, no
++     * progress, no Live Update, and Cancel.
++     */
++    public static Notification buildQuietNotification(
++            Context context, DownloadUpdate downloadUpdate, int notificationId) {
++        var metadata =
++                new NotificationMetadata(
++                        NotificationUmaTracker.SystemNotificationType.DOWNLOAD_FILES,
++                        /* notificationTag= */ null,
++                        notificationId);
++        NotificationWrapperBuilder builder =
++                NotificationWrapperBuilderFactory.createNotificationWrapperBuilder(
++                                ChromeChannelDefinitions.ChannelId.DOWNLOADS, metadata)
++                        .setLocalOnly(true)
++                        .setGroup(NotificationConstants.GROUP_DOWNLOADS)
++                        .setOngoing(true)
++                        .setAutoCancel(false)
++                        .setSilent(true)
++                        .setOnlyAlertOnce(true)
++                        .setShowWhen(false)
++                        .setSmallIcon(android.R.drawable.stat_sys_download)
++                        .setContentTitle(context.getString(R.string.download_started));
++        Bundle extras = new Bundle();
++        extras.putInt(EXTRA_NOTIFICATION_BUNDLE_ICON_ID, android.R.drawable.stat_sys_download);
++        builder.addExtras(extras);
++
++        ContentId id = downloadUpdate.getContentId();
++        if (id != null) {
++            Intent cancelIntent =
++                    buildActionIntent(
++                            context, ACTION_DOWNLOAD_CANCEL, id, downloadUpdate.getOtrProfileId());
++            cancelIntent.putExtra(NotificationConstants.EXTRA_NOTIFICATION_ID, notificationId);
++            builder.addAction(
++                    R.drawable.btn_close_white,
++                    context.getString(R.string.download_notification_cancel_button),
++                    buildPendingIntentProvider(context, cancelIntent, notificationId),
++                    LegacyHelpers.isLegacyDownload(id)
++                            ? NotificationUmaTracker.ActionType.DOWNLOAD_CANCEL
++                            : NotificationUmaTracker.ActionType.DOWNLOAD_PAGE_CANCEL);
++        }
++        if (!downloadUpdate.getIsTransient()) {
++            Intent downloadHomeIntent =
++                    buildActionIntent(
++                            context,
++                            ACTION_NOTIFICATION_CLICKED,
++                            null,
++                            downloadUpdate.getOtrProfileId());
++            downloadHomeIntent.putExtra(EXTRA_DOWNLOAD_DANGER_TYPE, downloadUpdate.getDangerType());
++            builder.setContentIntent(
++                    PendingIntentProvider.getService(
++                            context,
++                            notificationId,
++                            downloadHomeIntent,
++                            PendingIntent.FLAG_UPDATE_CURRENT));
++        }
+         return builder.build();
+     }
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadNotificationService.java b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadNotificationService.java
+index 089c6933e02..db073f3e43f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadNotificationService.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadNotificationService.java
+@@ -51,7 +51,9 @@ import org.chromium.url.GURL;
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+ import java.util.ArrayList;
++import java.util.HashSet;
+ import java.util.List;
++import java.util.Set;
+ 
+ /**
+  * Central director for updates related to downloads and notifications.
+@@ -116,6 +118,9 @@ public class DownloadNotificationService {
+     private DownloadForegroundServiceManager mDownloadForegroundServiceManager;
+     private final DownloadUserInitiatedTaskManager mDownloadUserInitiatedTaskManager;
+ 
++    /** Bare: downloads whose shown notification was already swapped for the quiet one. */
++    private final Set<Integer> mBareQuietShown = new HashSet<>();
++
+     private static class LazyHolder {
+         private static final DownloadNotificationService INSTANCE =
+                 new DownloadNotificationService();
+@@ -293,13 +298,7 @@ public class DownloadNotificationService {
+                         .setNotificationId(notificationId)
+                         .setPendingState(pendingState)
+                         .build();
+-        Notification notification =
+-                DownloadNotificationFactory.buildNotification(
+-                        context, DownloadStatus.IN_PROGRESS, downloadUpdate, notificationId);
+-        updateNotification(
+-                notificationId,
+-                notification,
+-                id,
++        DownloadSharedPreferenceEntry entry =
+                 new DownloadSharedPreferenceEntry(
+                         id,
+                         notificationId,
+@@ -307,7 +306,29 @@ public class DownloadNotificationService {
+                         canDownloadWhileMetered,
+                         fileName,
+                         true,
+-                        isTransient));
++                        isTransient);
++        Notification notification;
++        if (BareDownloadProgress.isEnabled()) {
++            BareDownloadProgress.maybeAskForNotificationsOnce();
++            notification =
++                    DownloadNotificationFactory.buildNotification(
++                            context, DownloadStatus.IN_PROGRESS, downloadUpdate, notificationId);
++            updateNotification(notificationId, notification, id, entry);
++        } else {
++            // Bare: "Show download progress" is off, so nothing is posted from here. The quiet
++            // notification still goes to the foreground service and the user-initiated job below,
++            // which need one to keep the download running, and Android shows it while they hold
++            // it. It also replaces a progress notification left from before the switch went off.
++            notification =
++                    DownloadNotificationFactory.buildQuietNotification(
++                            context, downloadUpdate, notificationId);
++            if (!mBareQuietShown.contains(notificationId)
++                    && BareDownloadProgress.isShowing(context, notificationId)) {
++                updateNotification(notificationId, notification);
++                mBareQuietShown.add(notificationId);
++            }
++            mDownloadSharedPreferenceHelper.addOrReplaceSharedPreferenceEntry(entry);
++        }
+         mDownloadForegroundServiceManager.updateDownloadStatus(
+                 context, DownloadStatus.IN_PROGRESS, notificationId, notification);
+         mDownloadUserInitiatedTaskManager.updateDownloadStatus(
+@@ -447,10 +468,7 @@ public class DownloadNotificationService {
+         Notification notification =
+                 DownloadNotificationFactory.buildNotification(
+                         context, DownloadStatus.PAUSED, downloadUpdate, notificationId);
+-        updateNotification(
+-                notificationId,
+-                notification,
+-                id,
++        DownloadSharedPreferenceEntry pausedEntry =
+                 new DownloadSharedPreferenceEntry(
+                         id,
+                         notificationId,
+@@ -458,7 +476,17 @@ public class DownloadNotificationService {
+                         canDownloadWhileMetered,
+                         fileName,
+                         isAutoResumable,
+-                        isTransient));
++                        isTransient);
++        // Bare: with "Show download progress" off, a paused download only replaces a notification
++        // Android already shows for it, so a quiet "Downloading…" does not stay up while paused.
++        if (BareDownloadProgress.isEnabled()
++                || BareDownloadProgress.isShowing(context, notificationId)) {
++            updateNotification(notificationId, notification, id, pausedEntry);
++            // On resume the quiet one has to replace this paused one again.
++            mBareQuietShown.remove(notificationId);
++        } else {
++            mDownloadSharedPreferenceHelper.addOrReplaceSharedPreferenceEntry(pausedEntry);
++        }
+ 
+         mDownloadForegroundServiceManager.updateDownloadStatus(
+                 context, DownloadStatus.PAUSED, notificationId, notification);
+diff --git a/chrome/browser/download/BUILD.gn b/chrome/browser/download/BUILD.gn
+index 652d11ea15e..2d714435fa8 100644
+--- a/chrome/browser/download/BUILD.gn
++++ b/chrome/browser/download/BUILD.gn
+@@ -266,6 +266,7 @@ source_set("impl") {
+ 
+   if (is_android) {
+     sources += [
++      "android/bare_download_engine.cc",
+       "android/dangerous_download_dialog_bridge.cc",
+       "android/download_callback_validator.cc",
+       "android/download_controller.cc",
+diff --git a/chrome/browser/download/android/BUILD.gn b/chrome/browser/download/android/BUILD.gn
+index a80c9660080..1a7d3d91a31 100644
+--- a/chrome/browser/download/android/BUILD.gn
++++ b/chrome/browser/download/android/BUILD.gn
+@@ -50,6 +50,9 @@ android_library("toolbar_button_state_java") {
+ 
+ android_library("java") {
+   sources = [
++    "java/src/org/chromium/chrome/browser/download/BareDownloadEngine.java",
++    "java/src/org/chromium/chrome/browser/download/BareDownloadLocation.java",
++    "java/src/org/chromium/chrome/browser/download/BareDownloadParts.java",
+     "java/src/org/chromium/chrome/browser/download/DangerousDownloadDialogBridge.java",
+     "java/src/org/chromium/chrome/browser/download/DownloadConstants.java",
+     "java/src/org/chromium/chrome/browser/download/DownloadDelegateImpl.java",
+@@ -171,6 +174,7 @@ android_library_factory("factory_java") {
+ 
+ generate_jni("jni_headers") {
+   sources = [
++    "java/src/org/chromium/chrome/browser/download/BareDownloadEngine.java",
+     "java/src/org/chromium/chrome/browser/download/DangerousDownloadDialogBridge.java",
+     "java/src/org/chromium/chrome/browser/download/DownloadDialogBridge.java",
+     "java/src/org/chromium/chrome/browser/download/DownloadInfo.java",
+diff --git a/chrome/browser/download/android/bare_download_engine.cc b/chrome/browser/download/android/bare_download_engine.cc
+new file mode 100644
+index 00000000000..3cbe247d321
+--- /dev/null
++++ b/chrome/browser/download/android/bare_download_engine.cc
+@@ -0,0 +1,183 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Bare: per-part progress and resume state for the downloads page.
++
++#include <algorithm>
++#include <string>
++#include <vector>
++
++#include "base/android/jni_array.h"
++#include "base/android/jni_string.h"
++#include "base/feature_list.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_manager.h"
++#include "components/download/public/common/download_features.h"
++#include "components/download/public/common/download_item.h"
++#include "components/download/public/common/download_utils.h"
++#include "content/public/browser/download_manager.h"
++#include "net/http/http_response_headers.h"
++
++// Must come after all headers that specialize FromJniType() / ToJniType().
++#include "chrome/browser/download/android/jni_headers/BareDownloadEngine_jni.h"
++
++namespace download {
++
++namespace {
++
++constexpr size_t kMaxLanes = 4;
++
++// Resume states, kept in sync with BareDownloadEngine.java.
++constexpr int kResumeNone = 0;
++constexpr int kResumeContinue = 1;
++constexpr int kResumeRestart = 2;
++constexpr int kResumeImpossible = 3;
++
++DownloadItem* FindDownload(const std::string& guid) {
++  if (!g_browser_process) {
++    return nullptr;
++  }
++  ProfileManager* profile_manager = g_browser_process->profile_manager();
++  if (!profile_manager) {
++    return nullptr;
++  }
++  for (Profile* profile : profile_manager->GetLoadedProfiles()) {
++    std::vector<Profile*> profiles = profile->GetAllOffTheRecordProfiles();
++    profiles.push_back(profile);
++    for (Profile* p : profiles) {
++      content::DownloadManager* manager = p->GetDownloadManager();
++      if (!manager) {
++        continue;
++      }
++      if (DownloadItem* item = manager->GetDownloadByGuid(guid)) {
++        return item;
++      }
++    }
++  }
++  return nullptr;
++}
++
++bool HasStrongValidators(const DownloadItem& item) {
++  return !item.GetETag().empty() || !item.GetLastModifiedTime().empty();
++}
++
++}  // namespace
++
++static std::vector<int64_t> JNI_BareDownloadEngine_GetPartsSnapshot(
++    JNIEnv* env,
++    const std::string& guid) {
++  DownloadItem* item = FindDownload(guid);
++  if (!item) {
++    return {};
++  }
++
++  const int64_t total = item->GetTotalBytes();
++  std::vector<int64_t> received;
++  std::vector<int64_t> length;
++  const std::vector<DownloadItem::ReceivedSlice>& slices =
++      item->GetReceivedSlices();
++  if (slices.empty()) {
++    received.push_back(item->GetReceivedBytes());
++    length.push_back(total > 0 ? total : -1);
++  } else {
++    if (slices.front().offset > 0) {
++      // Nothing received yet for the start of the file.
++      received.push_back(0);
++      length.push_back(slices.front().offset);
++    }
++    for (size_t i = 0; i < slices.size(); ++i) {
++      const bool last = i + 1 == slices.size();
++      int64_t end = last ? total : slices[i + 1].offset;
++      received.push_back(slices[i].received_bytes);
++      length.push_back(end > slices[i].offset ? end - slices[i].offset : -1);
++    }
++  }
++
++  // After a resume there can be more slices than lanes; fold neighbours.
++  if (received.size() > kMaxLanes) {
++    const size_t group = (received.size() + kMaxLanes - 1) / kMaxLanes;
++    std::vector<int64_t> folded_received;
++    std::vector<int64_t> folded_length;
++    for (size_t i = 0; i < received.size(); i += group) {
++      int64_t r = 0;
++      int64_t l = 0;
++      for (size_t j = i; j < std::min(received.size(), i + group); ++j) {
++        r += received[j];
++        l = (l < 0 || length[j] <= 0) ? -1 : l + length[j];
++      }
++      folded_received.push_back(r);
++      folded_length.push_back(l);
++    }
++    received.swap(folded_received);
++    length.swap(folded_length);
++  }
++
++  const bool running =
++      item->GetState() == DownloadItem::IN_PROGRESS && !item->IsPaused();
++  const bool kept = !item->IsDone() && !item->GetFullPath().empty();
++
++  std::vector<int64_t> result;
++  result.reserve(3 + received.size() * 2);
++  result.push_back(running ? item->CurrentSpeed() : -1);
++  result.push_back(kept ? 1 : 0);
++  result.push_back(static_cast<int64_t>(received.size()));
++  result.insert(result.end(), received.begin(), received.end());
++  result.insert(result.end(), length.begin(), length.end());
++  return result;
++}
++
++static jint JNI_BareDownloadEngine_GetResumeState(JNIEnv* env,
++                                                  const std::string& guid) {
++  DownloadItem* item = FindDownload(guid);
++  if (!item) {
++    return kResumeNone;
++  }
++
++  const bool paused_in_progress =
++      item->GetState() == DownloadItem::IN_PROGRESS && item->IsPaused();
++  if (item->GetState() != DownloadItem::INTERRUPTED && !paused_in_progress) {
++    return kResumeNone;
++  }
++
++  // The server said it can't serve ranges, or gave nothing to check the file
++  // against: a resume will start from zero.
++  const net::HttpResponseHeaders* headers = item->GetResponseHeaders().get();
++  if (headers) {
++    if (headers->HasHeaderValue("Accept-Ranges", "none")) {
++      return kResumeRestart;
++    }
++    if (!HasStrongValidators(*item) &&
++        !headers->HasHeaderValue("Accept-Ranges", "bytes")) {
++      return kResumeRestart;
++    }
++  }
++
++  if (paused_in_progress) {
++    return kResumeContinue;
++  }
++
++  const bool restart_required =
++      item->GetFullPath().empty() ||
++      (!HasStrongValidators(*item) &&
++       !base::FeatureList::IsEnabled(
++           features::kAllowDownloadResumptionWithoutStrongValidators));
++  switch (GetDownloadResumeMode(item->GetURL(), item->GetLastReason(),
++                                restart_required,
++                                /*user_action_required=*/true)) {
++    case ResumeMode::IMMEDIATE_CONTINUE:
++    case ResumeMode::USER_CONTINUE:
++      return kResumeContinue;
++    case ResumeMode::IMMEDIATE_RESTART:
++    case ResumeMode::USER_RESTART:
++      return kResumeRestart;
++    case ResumeMode::INVALID:
++      return kResumeImpossible;
++  }
++  return kResumeNone;
++}
++
++}  // namespace download
++
++DEFINE_JNI(BareDownloadEngine)
+diff --git a/chrome/browser/download/android/java/res/xml/download_preferences.xml b/chrome/browser/download/android/java/res/xml/download_preferences.xml
+index 57c30f5d7df..85d033f7edd 100644
+--- a/chrome/browser/download/android/java/res/xml/download_preferences.xml
++++ b/chrome/browser/download/android/java/res/xml/download_preferences.xml
+@@ -14,10 +14,16 @@ found in the LICENSE file.
+ 
+     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+         android:key="location_prompt_enabled"
+-        android:title="@string/download_location_prompt_enabled_title"
++        android:title="@string/bare_download_ask_each_time"
+         android:summaryOn="@string/text_on"
+         android:summaryOff="@string/text_off" />
+ 
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_download_progress_notification"
++        android:persistent="false"
++        android:title="@string/bare_download_progress_notification"
++        android:summary="@string/bare_download_progress_notification_summary" />
++
+     <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
+         android:key="external_download_manager_enabled"
+         android:title="@string/external_download_manager_title"
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadEngine.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadEngine.java
+new file mode 100644
+index 00000000000..74cb5fc13a7
+--- /dev/null
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadEngine.java
+@@ -0,0 +1,102 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.download;
++
++import android.text.TextUtils;
++
++import org.jni_zero.JNINamespace;
++import org.jni_zero.JniType;
++import org.jni_zero.NativeMethods;
++
++import org.chromium.base.ThreadUtils;
++import org.chromium.base.library_loader.LibraryLoader;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++
++/**
++ * Bare: per-part progress and resume state of a download, read from the native download item.
++ * Methods run on the UI thread, are cheap, and never throw.
++ */
++@JNINamespace("download")
++@NullMarked
++public final class BareDownloadEngine {
++    /** Not paused or interrupted, or unknown. */
++    public static final int RESUME_NONE = 0;
++
++    /** Resume continues where the download stopped. */
++    public static final int RESUME_CONTINUE = 1;
++
++    /** Resume works but starts again from zero. */
++    public static final int RESUME_RESTART = 2;
++
++    /** Resume does nothing; the download can only be removed or started again from the page. */
++    public static final int RESUME_IMPOSSIBLE = 3;
++
++    private BareDownloadEngine() {}
++
++    /** Hands the parts of each download to the downloads page. */
++    public static void registerPartsProvider() {
++        BareDownloadParts.setProvider(BareDownloadEngine::getParts);
++    }
++
++    private static BareDownloadParts.@Nullable Info getParts(String guid) {
++        long[] snapshot = getPartsSnapshot(guid);
++        if (snapshot == null) return null;
++        int n = (int) snapshot[2];
++        if (n < 1 || snapshot.length != 3 + 2 * n) return null;
++        long[] received = new long[n];
++        long[] length = new long[n];
++        System.arraycopy(snapshot, 3, received, 0, n);
++        System.arraycopy(snapshot, 3 + n, length, 0, n);
++        return new BareDownloadParts.Info(received, length, snapshot[0], snapshot[1] == 1);
++    }
++
++    /**
++     * Returns the parts of a download, or null when it is not known.
++     *
++     * <p>Layout: [0] bytes per second (-1 unknown), [1] 1 if a .baredownload file is kept for it,
++     * [2] number of parts n (1 to 4), then n received byte counts, then n part lengths (0 or less
++     * when unknown).
++     *
++     * @param guid The download GUID, OfflineItem.id.id.
++     */
++    public static long @Nullable [] getPartsSnapshot(String guid) {
++        if (!isReady(guid)) return null;
++        try {
++            long[] parts = BareDownloadEngineJni.get().getPartsSnapshot(guid);
++            return parts == null || parts.length < 3 ? null : parts;
++        } catch (Throwable t) {
++            return null;
++        }
++    }
++
++    /**
++     * Returns one of the RESUME_ values for a download.
++     *
++     * @param guid The download GUID, OfflineItem.id.id.
++     */
++    public static int getResumeState(String guid) {
++        if (!isReady(guid)) return RESUME_NONE;
++        try {
++            return BareDownloadEngineJni.get().getResumeState(guid);
++        } catch (Throwable t) {
++            return RESUME_NONE;
++        }
++    }
++
++    private static boolean isReady(String guid) {
++        return !TextUtils.isEmpty(guid)
++                && ThreadUtils.runningOnUiThread()
++                && LibraryLoader.getInstance().isInitialized();
++    }
++
++    @NativeMethods
++    interface Natives {
++        @JniType("std::vector<int64_t>")
++        long[] getPartsSnapshot(@JniType("std::string") String guid);
++
++        int getResumeState(@JniType("std::string") String guid);
++    }
++}
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadLocation.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadLocation.java
+new file mode 100644
+index 00000000000..e63bc892f07
+--- /dev/null
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadLocation.java
+@@ -0,0 +1,48 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.download;
++
++import android.net.Uri;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.components.download.BareDownloadTree;
++
++/**
++ * Bare: where finished downloads are saved. Null means the phone's Download folder; otherwise a
++ * folder the user picked with ACTION_OPEN_DOCUMENT_TREE. All methods are safe on the UI thread.
++ */
++@NullMarked
++public final class BareDownloadLocation {
++    private BareDownloadLocation() {}
++
++    /** The chosen folder (a tree URI), or null for the phone's Download folder. */
++    public static @Nullable Uri get() {
++        return BareDownloadTree.get();
++    }
++
++    /** Saves the folder. The caller has already taken the persistable read and write grant. */
++    public static void set(Uri treeUri) {
++        BareDownloadTree.set(treeUri);
++    }
++
++    /** Back to the phone's Download folder. The caller releases the grant. */
++    public static void clear() {
++        BareDownloadTree.set(null);
++    }
++
++    /** True when no folder is set, or when Bare can still write to it. */
++    public static boolean isUsable() {
++        return BareDownloadTree.isUsable();
++    }
++
++    /**
++     * Returns true once after a finished download could not be saved to the folder and went to
++     * the Download folder instead.
++     */
++    public static boolean consumeFallback() {
++        return BareDownloadTree.consumeFallback();
++    }
++}
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadParts.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadParts.java
+new file mode 100644
+index 00000000000..3922f369c9d
+--- /dev/null
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadParts.java
+@@ -0,0 +1,81 @@
++// Copyright 2026 The Bare Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.download;
++
++import org.chromium.base.Log;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++
++/**
++ * Per-part progress of a running download, for the lanes bar on the downloads page.
++ *
++ * <p>The download engine registers a {@link Provider}. Without one, or when it has nothing for a
++ * download, the page draws a single lane from the overall progress.
++ */
++@NullMarked
++public final class BareDownloadParts {
++    private static final String TAG = "BareDownloadParts";
++
++    /** The most lanes the page draws. */
++    public static final int MAX_PARTS = 4;
++
++    /** A snapshot of one download's parts. */
++    public static final class Info {
++        /** Bytes received by each part. */
++        public final long[] received;
++
++        /** Bytes each part covers. Zero or less when not known (an open-ended last part). */
++        public final long[] length;
++
++        /** Overall speed in bytes per second, or -1 when not known. */
++        public final long bytesPerSecond;
++
++        /** Whether the data received so far is kept in a .baredownload file. */
++        public final boolean savedAsBareDownload;
++
++        public Info(
++                long[] received, long[] length, long bytesPerSecond, boolean savedAsBareDownload) {
++            this.received = received;
++            this.length = length;
++            this.bytesPerSecond = bytesPerSecond;
++            this.savedAsBareDownload = savedAsBareDownload;
++        }
++
++        /** Number of parts, 0 when the arrays do not line up. */
++        public int count() {
++            if (received == null || length == null || received.length != length.length) return 0;
++            return Math.min(received.length, MAX_PARTS);
++        }
++    }
++
++    /** Implemented by the download engine. Called on the UI thread; must be cheap. */
++    public interface Provider {
++        @Nullable Info get(String guid);
++    }
++
++    private static @Nullable Provider sProvider;
++
++    private BareDownloadParts() {}
++
++    /** Called by the download engine once it can answer. */
++    public static void setProvider(@Nullable Provider provider) {
++        sProvider = provider;
++    }
++
++    /** Returns the parts of the download with {@code guid}, or null when not known. */
++    public static @Nullable Info get(@Nullable String guid) {
++        Provider provider = sProvider;
++        if (provider == null || guid == null) return null;
++        try {
++            Info info = provider.get(guid);
++            if (info == null || info.count() == 0) return null;
++            return info;
++        } catch (RuntimeException e) {
++            // The page must never crash over a progress bar.
++            Log.w(TAG, "Parts provider failed", e);
++            return null;
++        }
++    }
++}
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/home/DownloadManagerUiConfigHelper.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/home/DownloadManagerUiConfigHelper.java
+index a6f05e6d772..8d542de1fa2 100644
+--- a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/home/DownloadManagerUiConfigHelper.java
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/home/DownloadManagerUiConfigHelper.java
+@@ -27,6 +27,8 @@ public class DownloadManagerUiConfigHelper {
+         return new DownloadManagerUiConfig.Builder(context)
+                 .setShowDangerousItems(showDangerousItems)
+                 .setSupportsGrouping(true)
++                // Bare: every download is a row card (in progress or finished), no image grid.
++                .setUseGenericViewTypes(true)
+                 .setInlineSearchBar(isLff)
+                 .setAutoFocusSearchBox(isLff && DeviceInput.supportsKeyboard(context))
+                 .setShowBlockedSensitiveItems(showBlockedSensitiveItems);
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/home/JustNowProvider.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/home/JustNowProvider.java
+index 1d997138005..4da2ee4cbb3 100644
+--- a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/home/JustNowProvider.java
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/home/JustNowProvider.java
+@@ -7,45 +7,32 @@ package org.chromium.chrome.browser.download.home;
+ import androidx.annotation.VisibleForTesting;
+ 
+ import org.chromium.build.annotations.NullMarked;
+-import org.chromium.components.offline_items_collection.ContentId;
+ import org.chromium.components.offline_items_collection.OfflineItem;
+ import org.chromium.components.offline_items_collection.OfflineItemState;
+ 
+ import java.util.Date;
+-import java.util.HashSet;
+-import java.util.Set;
+ 
+ /** Helper class to expose whether an item should be shown in the Just Now section. */
+ @NullMarked
+ public class JustNowProvider {
+-    // Threshold timestamp after which a download is considered recent.
+-    private final Date mThresholdDate;
+-
+-    // Tracks the items that are being shown in the Just Now section. Note, these items are only
+-    // added, and never removed. This is because this class will go away after closing download
+-    // home.
+-    private final Set<ContentId> mItems = new HashSet<>();
+-
+     /** Constructor. */
+-    public JustNowProvider(DownloadManagerUiConfig config) {
+-        mThresholdDate = new Date(now().getTime() - config.justNowThresholdSeconds * 1000);
+-    }
++    public JustNowProvider(DownloadManagerUiConfig config) {}
+ 
+     /**
+      * @return Whether the given {@code item} should be shown in the Just Now section.
+      */
+     public boolean isJustNowItem(OfflineItem item) {
+-        if (mItems.contains(item.id)) return true;
+-        boolean shouldBeJustNowItem = isRecentOrInProgressDownload(item);
+-        if (shouldBeJustNowItem) mItems.add(item.id);
+-        return shouldBeJustNowItem;
++        // Bare: this section is "In progress". It holds only downloads that are not finished, and
++        // an item leaves it as soon as it completes, so finished files sit under their date.
++        return isUnfinished(item);
+     }
+ 
+-    private boolean isRecentOrInProgressDownload(OfflineItem item) {
++    private static boolean isUnfinished(OfflineItem item) {
+         return item.state == OfflineItemState.IN_PROGRESS
+                 || item.state == OfflineItemState.PAUSED
+-                || (item.state == OfflineItemState.INTERRUPTED && item.isResumable)
+-                || new Date(item.completionTimeMs).after(mThresholdDate);
++                || item.state == OfflineItemState.PENDING
++                || item.state == OfflineItemState.INTERRUPTED
++                || item.state == OfflineItemState.FAILED;
+     }
+ 
+     @VisibleForTesting
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadDirectoryAdapter.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadDirectoryAdapter.java
+index e5072da896d..8e1e9f85e30 100644
+--- a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadDirectoryAdapter.java
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadDirectoryAdapter.java
+@@ -5,6 +5,7 @@
+ package org.chromium.chrome.browser.download.settings;
+ 
+ import android.content.Context;
++import android.net.Uri;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewGroup;
+@@ -15,6 +16,7 @@ import android.widget.TextView;
+ 
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.download.BareDownloadLocation;
+ import org.chromium.chrome.browser.download.DirectoryOption;
+ import org.chromium.chrome.browser.download.DownloadDirectoryProvider;
+ import org.chromium.chrome.browser.download.R;
+@@ -276,7 +278,14 @@ public class DownloadDirectoryAdapter extends ArrayAdapter<Object> {
+             DirectoryOption directory = (DirectoryOption) dir.clone();
+             switch (directory.type) {
+                 case DirectoryOption.DownloadLocationDirectoryType.DEFAULT:
+-                    directory.name = mContext.getString(R.string.menu_downloads);
++                    // Bare: the default directory is only where a download is staged. Finished
++                    // downloads are published to the phone's Download folder, so name that.
++                    directory.name = mContext.getString(R.string.bare_download_location_phone);
++                    // Bare: with a chosen folder, the phone entry saves there, so name it.
++                    Uri tree = BareDownloadLocation.get();
++                    if (tree != null && BareDownloadLocation.isUsable()) {
++                        directory.name = DownloadLocationPreference.folderName(mContext, tree);
++                    }
+                     mCanonicalOptions.add(directory);
+                     break;
+                 case DirectoryOption.DownloadLocationDirectoryType.ADDITIONAL:
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadLocationPreference.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadLocationPreference.java
+index 53b09d4691e..f3b7fed57c8 100644
+--- a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadLocationPreference.java
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadLocationPreference.java
+@@ -7,7 +7,11 @@ package org.chromium.chrome.browser.download.settings;
+ import static org.chromium.build.NullUtil.assertNonNull;
+ 
+ import android.content.Context;
++import android.database.Cursor;
+ import android.graphics.Typeface;
++import android.net.Uri;
++import android.provider.DocumentsContract;
++import android.text.TextUtils;
+ import android.text.SpannableStringBuilder;
+ import android.text.Spanned;
+ import android.text.style.StyleSpan;
+@@ -18,6 +22,7 @@ import androidx.preference.DialogPreference;
+ import org.chromium.build.annotations.Initializer;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.download.BareDownloadLocation;
+ import org.chromium.chrome.browser.download.DirectoryOption;
+ import org.chromium.chrome.browser.download.R;
+ import org.chromium.chrome.browser.download.settings.DownloadDirectoryAdapter.DownloadLocationHelper;
+@@ -52,6 +57,25 @@ public class DownloadLocationPreference extends DialogPreference
+ 
+     /** Updates the summary that shows the download location directory. */
+     public void updateSummary() {
++        // Bare: a folder picked with the system picker wins over the directory list.
++        Uri tree = BareDownloadLocation.get();
++        if (tree != null) {
++            String name = folderName(getContext(), tree);
++            if (BareDownloadLocation.isUsable()) {
++                SpannableStringBuilder folder = new SpannableStringBuilder(name);
++                folder.setSpan(
++                        new StyleSpan(Typeface.BOLD),
++                        0,
++                        name.length(),
++                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
++                setSummary(folder);
++            } else {
++                setSummary(
++                        getContext().getString(R.string.bare_download_location_unusable, name));
++            }
++            return;
++        }
++
+         if (mAdapter.getSelectedItemId() < 0) return;
+ 
+         DirectoryOption directoryOption =
+@@ -60,7 +84,14 @@ public class DownloadLocationPreference extends DialogPreference
+         final SpannableStringBuilder summaryBuilder = new SpannableStringBuilder();
+         summaryBuilder.append(directoryOption.name);
+         summaryBuilder.append(" ");
+-        summaryBuilder.append(directoryOption.location);
++        // Bare: the default directory is Bare's private staging folder, not where downloads end
++        // up, so its path would mislead. An SD card keeps its path: files stay there.
++        if (directoryOption.type == DirectoryOption.DownloadLocationDirectoryType.DEFAULT) {
++            summaryBuilder.append(
++                    getContext().getString(R.string.bare_download_location_phone_summary));
++        } else {
++            summaryBuilder.append(directoryOption.location);
++        }
+         if (directoryOption.name != null) {
+             summaryBuilder.setSpan(
+                     new StyleSpan(Typeface.BOLD),
+@@ -95,4 +126,38 @@ public class DownloadLocationPreference extends DialogPreference
+     DownloadLocationPreferenceAdapter getAdapter() {
+         return mAdapter;
+     }
++
++    /**
++     * Bare: the display name of a folder picked with ACTION_OPEN_DOCUMENT_TREE. Falls back to the
++     * last part of its document id ("primary:Movies" gives "Movies").
++     */
++    public static String folderName(Context context, Uri tree) {
++        String docId = null;
++        try {
++            docId = DocumentsContract.getTreeDocumentId(tree);
++            Uri doc = DocumentsContract.buildDocumentUriUsingTree(tree, docId);
++            try (Cursor cursor =
++                    context.getContentResolver()
++                            .query(
++                                    doc,
++                                    new String[] {DocumentsContract.Document.COLUMN_DISPLAY_NAME},
++                                    null,
++                                    null,
++                                    null)) {
++                if (cursor != null && cursor.moveToFirst()) {
++                    String name = cursor.getString(0);
++                    if (!TextUtils.isEmpty(name)) return name;
++                }
++            }
++        } catch (RuntimeException e) {
++            // The folder may be gone or no longer shared with Bare. Use the id below.
++        }
++        if (docId != null) {
++            String rel = docId.substring(docId.indexOf(':') + 1);
++            String name = rel.substring(rel.lastIndexOf('/') + 1);
++            if (!TextUtils.isEmpty(name)) return name;
++        }
++        String last = tree.getLastPathSegment();
++        return last != null ? last : tree.toString();
++    }
+ }
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadLocationPreferenceAdapter.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadLocationPreferenceAdapter.java
+index c819e4542cf..a4d89d53bde 100644
+--- a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadLocationPreferenceAdapter.java
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadLocationPreferenceAdapter.java
+@@ -89,7 +89,11 @@ public class DownloadLocationPreferenceAdapter extends DownloadDirectoryAdapter
+ 
+     @Override
+     public void onClick(View v) {
+-        int selectedId = (int) v.getTag();
++        selectItem((int) v.getTag());
++    }
++
++    /** Bare: makes the directory at {@code selectedId} the download directory. */
++    public void selectItem(int selectedId) {
+         DirectoryOption option = (DirectoryOption) getItem(selectedId);
+         if (option == null) return;
+ 
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java
+index f31563e320d..480057d4cc4 100644
+--- a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/settings/DownloadSettings.java
+@@ -4,7 +4,16 @@
+ 
+ package org.chromium.chrome.browser.download.settings;
+ 
++import android.app.Activity;
++import android.content.ActivityNotFoundException;
+ import android.content.ComponentName;
++import android.provider.DocumentsContract;
++import android.widget.Toast;
++
++import androidx.activity.result.ActivityResult;
++import androidx.activity.result.ActivityResultLauncher;
++import androidx.activity.result.contract.ActivityResultContracts;
++import androidx.appcompat.app.AlertDialog;
+ import android.content.Context;
+ import android.os.Bundle;
+ 
+@@ -15,8 +24,9 @@ import org.chromium.base.supplier.ObservableSuppliers;
+ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.download.BareDownloadLocation;
++import org.chromium.chrome.browser.download.DirectoryOption;
+ import org.chromium.chrome.browser.download.DownloadDialogBridge;
+-import org.chromium.chrome.browser.download.DownloadDirectoryProvider;
+ import org.chromium.chrome.browser.download.DownloadPromptStatus;
+ import org.chromium.chrome.browser.download.MimeUtils;
+ import org.chromium.chrome.browser.download.R;
+@@ -56,7 +66,16 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+     public static final String PREF_EXTERNAL_DOWNLOAD_MANAGER_APP = "external_download_manager_app";
+     public static final String PREF_EXTERNAL_DOWNLOAD_SIGN_IN = "external_download_manager_sign_in";
+ 
++    /** Bare: show a running download's progress in a notification, a Live Update on Android 16+. */
++    public static final String PREF_BARE_DOWNLOAD_PROGRESS =
++            "bare_download_progress_notification";
++
+     private DownloadLocationPreference mLocationChangePref;
++
++    /** Bare: the system folder picker for "Choose a folder…". */
++    private final ActivityResultLauncher<Intent> mFolderPicker =
++            registerForActivityResult(
++                    new ActivityResultContracts.StartActivityForResult(), this::onFolderPicked);
+     private ChromeSwitchPreference mLocationPromptEnabledPref;
+     private ManagedPreferenceDelegate mLocationPromptEnabledPrefDelegate;
+     private ChromeSwitchPreference mAutoOpenPdfEnabledPref;
+@@ -96,6 +115,17 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+ 
+         populateDownloadManagerAppList();
+ 
++        ChromeSwitchPreference progressPref =
++                (ChromeSwitchPreference) findPreference(PREF_BARE_DOWNLOAD_PROGRESS);
++        if (progressPref != null) {
++            progressPref.setChecked(
++                    ChromeSharedPreferences.getInstance()
++                            .readBoolean(
++                                    ChromePreferenceKeys.BARE_DOWNLOAD_PROGRESS_NOTIFICATION,
++                                    true));
++            progressPref.setOnPreferenceChangeListener(this);
++        }
++
+         mLocationPromptEnabledPref =
+                 (ChromeSwitchPreference) findPreference(PREF_LOCATION_PROMPT_ENABLED);
+         mLocationPromptEnabledPrefDelegate =
+@@ -132,9 +162,11 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+         }
+     }
+ 
++    /** Returns true when the "ask where to save" switch is hidden. */
+     private static boolean shouldEnableLocationPromptPref(Profile profile) {
+-        return PdfUtils.shouldOpenPdfInline(profile.isOffTheRecord())
+-                && DownloadDirectoryProvider.getSecondaryStorageDownloadDirectories().isEmpty();
++        // Bare: "Ask where to save each time" always shows. The dialog also lets you rename the
++        // file, so it is useful without an SD card.
++        return false;
+     }
+ 
+     private static boolean shouldEnableAutoOpenPdf(Profile profile) {
+@@ -149,6 +181,8 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+     @Override
+     public void onDisplayPreferenceDialog(Preference preference) {
+         if (preference instanceof DownloadLocationPreference) {
++            // Bare: our own list, with the system folder picker.
++            if (showBareLocationDialog((DownloadLocationPreference) preference)) return;
+             DownloadLocationPreferenceDialog dialogFragment =
+                     DownloadLocationPreferenceDialog.newInstance(
+                             (DownloadLocationPreference) preference);
+@@ -199,6 +233,14 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+             return true;
+         }
+ 
++        if (PREF_BARE_DOWNLOAD_PROGRESS.equals(preference.getKey())) {
++            ChromeSharedPreferences.getInstance()
++                    .writeBoolean(
++                            ChromePreferenceKeys.BARE_DOWNLOAD_PROGRESS_NOTIFICATION,
++                            (boolean) newValue);
++            return true;
++        }
++
+         if (PREF_EXTERNAL_DOWNLOAD_SIGN_IN.equals(preference.getKey())) {
+             ChromeSharedPreferences.getInstance()
+                     .writeBoolean(
+@@ -237,6 +279,136 @@ public class DownloadSettings extends ChromeBaseSettingsFragment
+         return true;
+     }
+ 
++    /**
++     * Bare: the download location choices. The phone's Download folder, any SD card, and a folder
++     * picked with the system picker.
++     *
++     * @return false when the list cannot be shown, so the caller falls back to Chromium's dialog.
++     */
++    private boolean showBareLocationDialog(DownloadLocationPreference preference) {
++        Context context = getContext();
++        if (context == null) return false;
++        DownloadLocationPreferenceAdapter adapter = preference.getAdapter();
++
++        List<CharSequence> labels = new ArrayList<>();
++        List<Integer> positions = new ArrayList<>();
++        for (int i = 0; i < adapter.getCount(); i++) {
++            Object item = adapter.getItem(i);
++            if (!(item instanceof DirectoryOption option) || !adapter.isEnabled(i)) continue;
++            labels.add(
++                    option.type == DirectoryOption.DownloadLocationDirectoryType.DEFAULT
++                            ? context.getString(R.string.bare_download_location_phone_folder)
++                            : option.name);
++            positions.add(i);
++        }
++
++        Uri tree = BareDownloadLocation.get();
++        int checked = -1;
++        if (tree != null) {
++            checked = labels.size();
++            labels.add(DownloadLocationPreference.folderName(context, tree));
++            positions.add(POSITION_TREE);
++            labels.add(context.getString(R.string.bare_download_location_choose_other));
++        } else {
++            checked = positions.indexOf(adapter.getSelectedItemId());
++            labels.add(context.getString(R.string.bare_download_location_choose));
++        }
++        positions.add(POSITION_PICK);
++
++        new AlertDialog.Builder(context, R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                .setTitle(R.string.downloads_location_selector_title)
++                .setSingleChoiceItems(
++                        labels.toArray(new CharSequence[0]),
++                        checked,
++                        (dialog, which) -> {
++                            dialog.dismiss();
++                            int position = positions.get(which);
++                            if (position == POSITION_TREE) return;
++                            if (position == POSITION_PICK) {
++                                pickFolder();
++                                return;
++                            }
++                            useDirectory(preference, position);
++                        })
++                .setNegativeButton(R.string.cancel, null)
++                .show();
++        return true;
++    }
++
++    private static final int POSITION_TREE = -10;
++    private static final int POSITION_PICK = -11;
++
++    /** Bare: back to the phone's Download folder or an SD card. */
++    private void useDirectory(DownloadLocationPreference preference, int position) {
++        releaseFolder(BareDownloadLocation.get());
++        BareDownloadLocation.clear();
++        preference.getAdapter().selectItem(position);
++        preference.updateSummary();
++    }
++
++    private void pickFolder() {
++        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
++        intent.addFlags(
++                Intent.FLAG_GRANT_READ_URI_PERMISSION
++                        | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
++                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
++                        | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
++        Uri current = BareDownloadLocation.get();
++        if (current != null) intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, current);
++        try {
++            mFolderPicker.launch(intent);
++        } catch (ActivityNotFoundException e) {
++            Context context = getContext();
++            if (context != null) {
++                Toast.makeText(
++                                context,
++                                R.string.bare_download_location_no_picker,
++                                Toast.LENGTH_SHORT)
++                        .show();
++            }
++        }
++    }
++
++    private void onFolderPicked(ActivityResult result) {
++        Context context = getContext();
++        Intent data = result.getData();
++        if (context == null || result.getResultCode() != Activity.RESULT_OK || data == null) {
++            return;
++        }
++        Uri tree = data.getData();
++        if (tree == null) return;
++        try {
++            context.getContentResolver()
++                    .takePersistableUriPermission(
++                            tree,
++                            Intent.FLAG_GRANT_READ_URI_PERMISSION
++                                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
++        } catch (SecurityException e) {
++            // Without a lasting grant the folder would stop working after a restart.
++            Toast.makeText(context, R.string.bare_download_location_no_picker, Toast.LENGTH_SHORT)
++                    .show();
++            return;
++        }
++        Uri previous = BareDownloadLocation.get();
++        if (previous != null && !previous.equals(tree)) releaseFolder(previous);
++        BareDownloadLocation.set(tree);
++        if (mLocationChangePref != null) mLocationChangePref.updateSummary();
++    }
++
++    private void releaseFolder(@Nullable Uri tree) {
++        Context context = getContext();
++        if (tree == null || context == null) return;
++        try {
++            context.getContentResolver()
++                    .releasePersistableUriPermission(
++                            tree,
++                            Intent.FLAG_GRANT_READ_URI_PERMISSION
++                                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
++        } catch (SecurityException e) {
++            // Already gone.
++        }
++    }
++
+     public ManagedPreferenceDelegate getLocationPromptEnabledPrefDelegateForTesting() {
+         return mLocationPromptEnabledPrefDelegate;
+     }
+diff --git a/chrome/browser/download/download_target_determiner.cc b/chrome/browser/download/download_target_determiner.cc
+index 095e44480b3..e5264d04055 100644
+--- a/chrome/browser/download/download_target_determiner.cc
++++ b/chrome/browser/download/download_target_determiner.cc
+@@ -97,8 +97,9 @@ using safe_browsing::DownloadFileType;
+ 
+ namespace {
+ 
++// Bare: unfinished downloads are named <name>.baredownload.
+ const base::FilePath::CharType kCrdownloadSuffix[] =
+-    FILE_PATH_LITERAL(".crdownload");
++    FILE_PATH_LITERAL(".baredownload");
+ 
+ // Condenses the results from HistoryService::GetVisibleVisitCountToHost() to a
+ // single bool. A host is considered visited before if prior visible visits were
+@@ -1113,7 +1114,7 @@ DownloadTargetDeterminer::Result
+ 
+   // Dangerous downloads receive a random intermediate name that looks like:
+   // 'Unconfirmed <random>.crdownload'.
+-  static constexpr char kUnconfirmedFormatSuffix[] = " %d.crdownload";
++  static constexpr char kUnconfirmedFormatSuffix[] = " %d.baredownload";
+   // Range of the <random> uniquifier.
+   constexpr int kUnconfirmedUniquifierRange = 1000000;
+ 
+diff --git a/chrome/browser/download/download_target_determiner_unittest.cc b/chrome/browser/download/download_target_determiner_unittest.cc
+index 0e5f9ed5d6f..d0f7d36dee9 100644
+--- a/chrome/browser/download/download_target_determiner_unittest.cc
++++ b/chrome/browser/download/download_target_determiner_unittest.cc
+@@ -157,8 +157,8 @@ enum TestCaseType {
+ 
+ // Used with DownloadTestCase. Type of intermediate filename to expect.
+ enum TestCaseExpectIntermediate {
+-  EXPECT_CRDOWNLOAD,   // Expect path/to/target.crdownload.
+-  EXPECT_UNCONFIRMED,  // Expect path/to/Unconfirmed xxx.crdownload.
++  EXPECT_CRDOWNLOAD,   // Expect path/to/target.baredownload.
++  EXPECT_UNCONFIRMED,  // Expect path/to/Unconfirmed xxx.baredownload.
+   EXPECT_LOCAL_PATH,   // Expect target path.
+   EXPECT_EMPTY,        // Expect empty path. Only for downloads which will be
+                        // marked interrupted or cancelled.
+@@ -591,11 +591,11 @@ void DownloadTargetDeterminerTest::VerifyDownloadTarget(
+       break;
+ 
+     case EXPECT_UNCONFIRMED:
+-      // The paths (in English) look like: /path/Unconfirmed xxx.crdownload.
++      // The paths (in English) look like: /path/Unconfirmed xxx.baredownload.
+       // Of this, we only check that the path is:
+-      // 1. Not "/path/target.crdownload",
++      // 1. Not "/path/target.baredownload",
+       // 2. Points to the same directory as the target.
+-      // 3. Has extension ".crdownload".
++      // 3. Has extension ".baredownload".
+       // 4. Basename starts with "Unconfirmed ".
+       EXPECT_NE(DownloadTargetDeterminer::GetCrDownloadPath(expected_local_path)
+                     .value(),
+@@ -603,7 +603,7 @@ void DownloadTargetDeterminerTest::VerifyDownloadTarget(
+       EXPECT_EQ(expected_local_path.DirName().value(),
+                 info.target_info.intermediate_path.DirName().value());
+       EXPECT_TRUE(info.target_info.intermediate_path.MatchesExtension(
+-          FILE_PATH_LITERAL(".crdownload")));
++          FILE_PATH_LITERAL(".baredownload")));
+       EXPECT_EQ(0u, info.target_info.intermediate_path.BaseName().value().find(
+                         FILE_PATH_LITERAL("Unconfirmed ")));
+       break;
+@@ -2560,8 +2560,8 @@ TEST_F(DownloadTargetDeterminerTest, IntermediateNameForResumed) {
+         DownloadItem::TARGET_DISPOSITION_OVERWRITE,
+ 
+         EXPECT_CRDOWNLOAD},
+-       FILE_PATH_LITERAL("bar.txt.crdownload"),
+-       FILE_PATH_LITERAL("foo.txt.crdownload")},
++       FILE_PATH_LITERAL("bar.txt.baredownload"),
++       FILE_PATH_LITERAL("foo.txt.baredownload")},
+ 
+       {{// 1: Save_As Safe
+         SAVE_AS, download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+@@ -2571,8 +2571,8 @@ TEST_F(DownloadTargetDeterminerTest, IntermediateNameForResumed) {
+         kInitialPath, DownloadItem::TARGET_DISPOSITION_PROMPT,
+ 
+         EXPECT_CRDOWNLOAD},
+-       FILE_PATH_LITERAL("foo.txt.crdownload"),
+-       FILE_PATH_LITERAL("some_path/bar.txt.crdownload")},
++       FILE_PATH_LITERAL("foo.txt.baredownload"),
++       FILE_PATH_LITERAL("some_path/bar.txt.baredownload")},
+ 
+       {{// 2: Automatic Dangerous
+         AUTOMATIC, download::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE,
+@@ -2583,8 +2583,8 @@ TEST_F(DownloadTargetDeterminerTest, IntermediateNameForResumed) {
+         DownloadItem::TARGET_DISPOSITION_OVERWRITE,
+ 
+         EXPECT_UNCONFIRMED},
+-       FILE_PATH_LITERAL("Unconfirmed abcd.crdownload"),
+-       FILE_PATH_LITERAL("Unconfirmed abcd.crdownload")},
++       FILE_PATH_LITERAL("Unconfirmed abcd.baredownload"),
++       FILE_PATH_LITERAL("Unconfirmed abcd.baredownload")},
+ 
+       {{// 3: Automatic Dangerous
+         AUTOMATIC, download::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE,
+@@ -2595,9 +2595,9 @@ TEST_F(DownloadTargetDeterminerTest, IntermediateNameForResumed) {
+         DownloadItem::TARGET_DISPOSITION_OVERWRITE,
+ 
+         EXPECT_UNCONFIRMED},
+-       FILE_PATH_LITERAL("other_path/Unconfirmed abcd.crdownload"),
++       FILE_PATH_LITERAL("other_path/Unconfirmed abcd.baredownload"),
+        // Rely on the EXPECT_UNCONFIRMED check in the general test settings. A
+-       // new intermediate path of the form "Unconfirmed <number>.crdownload"
++       // new intermediate path of the form "Unconfirmed <number>.baredownload"
+        // should be generated for this case since the initial intermediate path
+        // is in the wrong directory.
+        FILE_PATH_LITERAL("")},
+@@ -2839,7 +2839,7 @@ TEST_F(DownloadTargetDeterminerTest, ResumedWithUserValidatedDownload) {
+   const base::FilePath::CharType kInitialPath[] =
+       FILE_PATH_LITERAL("some_path/bar.txt");
+   const base::FilePath::CharType* kIntermediatePath =
+-      FILE_PATH_LITERAL("foo.crx.crdownload");
++      FILE_PATH_LITERAL("foo.crx.baredownload");
+ 
+   const DownloadTestCase kUserValidatedTestCase = {
+       AUTOMATIC,
+diff --git a/chrome/browser/download/internal/android/BUILD.gn b/chrome/browser/download/internal/android/BUILD.gn
+index e122e97dafb..c3c54a4551e 100644
+--- a/chrome/browser/download/internal/android/BUILD.gn
++++ b/chrome/browser/download/internal/android/BUILD.gn
+@@ -50,6 +50,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/download/home/list/ShareUtils.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/UiUtils.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/holder/AudioViewHolder.java",
++    "java/src/org/chromium/chrome/browser/download/home/list/holder/BareDownloadCards.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/holder/CardDividerBottomViewHolder.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/holder/CardDividerMiddleViewHolder.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/holder/CardDividerTopViewHolder.java",
+@@ -85,6 +86,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/download/home/list/mutator/PrefetchListPaginator.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/mutator/ScoreComparator.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/view/AspectRatioFrameLayout.java",
++    "java/src/org/chromium/chrome/browser/download/home/list/view/BareLanesView.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/view/CircularProgressView.java",
+     "java/src/org/chromium/chrome/browser/download/home/metrics/FileExtensions.java",
+     "java/src/org/chromium/chrome/browser/download/home/metrics/UmaUtils.java",
+diff --git a/chrome/browser/download/internal/android/java/res/layout/download_manager_generic_item.xml b/chrome/browser/download/internal/android/java/res/layout/download_manager_generic_item.xml
+index 041c751d834..241c508f806 100644
+--- a/chrome/browser/download/internal/android/java/res/layout/download_manager_generic_item.xml
++++ b/chrome/browser/download/internal/android/java/res/layout/download_manager_generic_item.xml
+@@ -5,64 +5,77 @@ Use of this source code is governed by a BSD-style license that can be
+ found in the LICENSE file.
+ -->
+ 
+- <androidx.gridlayout.widget.GridLayout
++<!-- Bare: a finished download is a compact rounded card. The card background is set in code. -->
++<FrameLayout
+     xmlns:android="http://schemas.android.com/apk/res/android"
+     xmlns:app="http://schemas.android.com/apk/res-auto"
+-    xmlns:tools="http://schemas.android.com/tools"
+     android:layout_width="match_parent"
+     android:layout_height="wrap_content"
+-    android:minHeight="64dp"
++    android:paddingStart="16dp"
++    android:paddingEnd="16dp"
++    android:paddingTop="3dp"
++    android:paddingBottom="3dp"
+     android:clickable="true"
+-    android:focusable="true"
+-    android:background="@drawable/download_manager_item_background"
+-    app:columnCount="3"
+-    app:rowCount="2">
++    android:focusable="true">
+ 
+-    <org.chromium.components.browser_ui.widget.async_image.AsyncImageView
+-        android:id="@+id/thumbnail"
+-        android:layout_width="36dp"
+-        android:layout_height="36dp"
+-        android:layout_marginStart="16dp"
+-        android:layout_marginEnd="16dp"
+-        android:scaleType="center"
+-        app:layout_column="0"
+-        app:layout_row="0"
+-        app:layout_rowSpan="2"
+-        app:layout_gravity="center_vertical" />
++    <androidx.gridlayout.widget.GridLayout
++        android:id="@+id/card"
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:minHeight="64dp"
++        android:paddingStart="12dp"
++        android:paddingEnd="4dp"
++        android:paddingTop="10dp"
++        android:paddingBottom="10dp"
++        android:duplicateParentState="true"
++        app:columnCount="3"
++        app:rowCount="2">
+ 
+-    <org.chromium.chrome.browser.download.home.view.SelectionView
+-        android:id="@+id/selection"
+-        android:layout_width="36dp"
+-        android:layout_height="36dp"
+-        android:layout_marginStart="16dp"
+-        android:layout_marginEnd="16dp"
+-        app:layout_column="0"
+-        app:layout_row="0"
+-        app:layout_rowSpan="2"
+-        app:layout_gravity="center_vertical" />
++        <org.chromium.components.browser_ui.widget.async_image.AsyncImageView
++            android:id="@+id/thumbnail"
++            android:layout_width="40dp"
++            android:layout_height="40dp"
++            android:layout_marginEnd="12dp"
++            android:scaleType="center"
++            app:layout_column="0"
++            app:layout_row="0"
++            app:layout_rowSpan="2"
++            app:layout_gravity="center_vertical" />
+ 
+-    <TextView
+-        android:id="@+id/title"
+-        style="@style/DownloadItemText"
+-        android:layout_marginTop="11dp"
+-        android:textAppearance="@style/TextAppearance.TextLarge.Primary"
+-        app:layout_column="1"
+-        app:layout_row="0"
+-        app:layout_gravity="fill_horizontal" />
++        <org.chromium.chrome.browser.download.home.view.SelectionView
++            android:id="@+id/selection"
++            android:layout_width="40dp"
++            android:layout_height="40dp"
++            android:layout_marginEnd="12dp"
++            app:layout_column="0"
++            app:layout_row="0"
++            app:layout_rowSpan="2"
++            app:layout_gravity="center_vertical" />
+ 
+-    <TextView
+-        android:id="@+id/caption"
+-        style="@style/DownloadItemText"
+-        android:textAppearance="@style/TextAppearance.TextMedium.Secondary"
+-        app:layout_column="1"
+-        app:layout_row="1"
+-        app:layout_gravity="fill_horizontal" />
++        <TextView
++            android:id="@+id/title"
++            style="@style/DownloadItemText"
++            android:ellipsize="middle"
++            android:textAppearance="@style/TextAppearance.TextLarge.Primary"
++            app:layout_column="1"
++            app:layout_row="0"
++            app:layout_gravity="fill_horizontal" />
+ 
+-    <include layout="@layout/list_menu_button"
+-        android:layout_width="48dp"
+-        android:layout_height="48dp"
+-        app:layout_column="2"
+-        app:layout_row="0"
+-        app:layout_rowSpan="2"
+-        app:layout_gravity="center_vertical" />
+-</androidx.gridlayout.widget.GridLayout>
++        <TextView
++            android:id="@+id/caption"
++            style="@style/DownloadItemText"
++            android:layout_marginTop="2dp"
++            android:textAppearance="@style/TextAppearance.TextMedium.Secondary"
++            app:layout_column="1"
++            app:layout_row="1"
++            app:layout_gravity="fill_horizontal" />
++
++        <include layout="@layout/list_menu_button"
++            android:layout_width="48dp"
++            android:layout_height="48dp"
++            app:layout_column="2"
++            app:layout_row="0"
++            app:layout_rowSpan="2"
++            app:layout_gravity="center_vertical" />
++    </androidx.gridlayout.widget.GridLayout>
++</FrameLayout>
+diff --git a/chrome/browser/download/internal/android/java/res/layout/download_manager_in_progress_item.xml b/chrome/browser/download/internal/android/java/res/layout/download_manager_in_progress_item.xml
+index 1517bf1358f..a266c9470c2 100644
+--- a/chrome/browser/download/internal/android/java/res/layout/download_manager_in_progress_item.xml
++++ b/chrome/browser/download/internal/android/java/res/layout/download_manager_in_progress_item.xml
+@@ -5,58 +5,105 @@ Use of this source code is governed by a BSD-style license that can be
+ found in the LICENSE file.
+ -->
+ 
+-<androidx.gridlayout.widget.GridLayout
++<!-- Bare: an in-progress download is a rounded card: icon, name, size, pause/resume button,
++     the lanes bar (one lane per part) and a meta line. The card background is set in code. -->
++<FrameLayout
+     xmlns:android="http://schemas.android.com/apk/res/android"
+     xmlns:app="http://schemas.android.com/apk/res-auto"
+     android:layout_width="match_parent"
+     android:layout_height="wrap_content"
+-    android:minHeight="64dp"
++    android:paddingStart="16dp"
++    android:paddingEnd="16dp"
++    android:paddingTop="4dp"
++    android:paddingBottom="4dp"
+     android:clickable="true"
+-    android:focusable="true"
+-    android:background="@drawable/download_manager_item_background"
+-    app:columnCount="3"
+-    app:rowCount="2">
+-
+-    <org.chromium.chrome.browser.download.home.list.view.CircularProgressView
+-        android:id="@+id/action_button"
+-        android:layout_marginStart="16dp"
+-        android:layout_marginEnd="16dp"
+-        app:layout_column="0"
+-        app:layout_row="0"
+-        app:layout_rowSpan="2"
+-        app:layout_gravity="center_vertical"
+-        style="@style/SmallCircularProgress" />
+-
+-    <TextView
+-        android:id="@+id/title"
+-        style="@style/DownloadItemText"
+-        android:layout_marginTop="11dp"
+-        android:textAppearance="@style/TextAppearance.TextLarge.Primary"
+-        app:layout_column="1"
+-        app:layout_row="0"
+-        app:layout_gravity="fill_horizontal" />
+-
+-    <TextView
+-        android:id="@+id/caption"
+-        style="@style/DownloadItemText"
+-        android:textAppearance="@style/TextAppearance.TextMedium.Secondary"
+-        android:maxLines = "2"
+-        android:singleLine = "false"
+-        app:layout_column="1"
+-        app:layout_row="1"
+-        app:layout_gravity="fill_horizontal" />
+-
+-    <org.chromium.ui.widget.ChromeImageButton
+-        android:id="@+id/cancel_button"
+-        android:layout_width="48dp"
+-        android:layout_height="48dp"
+-        app:layout_column="2"
+-        app:layout_row="0"
+-        app:layout_rowSpan="2"
+-        app:layout_gravity="center_vertical"
+-        android:background="@drawable/default_icon_background"
+-        android:contentDescription="@string/download_notification_cancel_button"
+-        android:src="@drawable/btn_close"
+-        app:tint="@macro/default_icon_color" />
+-
+-</androidx.gridlayout.widget.GridLayout>
++    android:focusable="true">
++
++    <LinearLayout
++        android:id="@+id/card"
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:orientation="vertical"
++        android:duplicateParentState="true"
++        android:padding="14dp">
++
++        <LinearLayout
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:orientation="horizontal"
++            android:gravity="center_vertical">
++
++            <ImageView
++                android:id="@+id/icon"
++                android:layout_width="40dp"
++                android:layout_height="40dp"
++                android:scaleType="center"
++                android:importantForAccessibility="no" />
++
++            <LinearLayout
++                android:layout_width="0dp"
++                android:layout_height="wrap_content"
++                android:layout_weight="1"
++                android:layout_marginStart="12dp"
++                android:layout_marginEnd="8dp"
++                android:orientation="vertical">
++
++                <TextView
++                    android:id="@+id/title"
++                    android:layout_width="match_parent"
++                    android:layout_height="wrap_content"
++                    android:singleLine="true"
++                    android:ellipsize="middle"
++                    android:textAlignment="viewStart"
++                    android:textAppearance="@style/TextAppearance.TextLarge.Primary" />
++
++                <TextView
++                    android:id="@+id/caption"
++                    android:layout_width="match_parent"
++                    android:layout_height="wrap_content"
++                    android:layout_marginTop="2dp"
++                    android:singleLine="true"
++                    android:ellipsize="end"
++                    android:textAlignment="viewStart"
++                    android:textAppearance="@style/TextAppearance.TextMedium.Secondary" />
++            </LinearLayout>
++
++            <org.chromium.ui.widget.ChromeImageButton
++                android:id="@+id/action_button"
++                android:layout_width="36dp"
++                android:layout_height="36dp"
++                android:scaleType="center" />
++        </LinearLayout>
++
++        <org.chromium.chrome.browser.download.home.list.view.BareLanesView
++            android:id="@+id/lanes"
++            android:layout_width="match_parent"
++            android:layout_height="8dp"
++            android:layout_marginTop="12dp" />
++
++        <LinearLayout
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="8dp"
++            android:orientation="horizontal">
++
++            <TextView
++                android:id="@+id/meta_start"
++                android:layout_width="0dp"
++                android:layout_height="wrap_content"
++                android:layout_weight="1"
++                android:singleLine="true"
++                android:ellipsize="end"
++                android:textAlignment="viewStart"
++                android:textAppearance="@style/TextAppearance.TextSmall.Secondary" />
++
++            <TextView
++                android:id="@+id/meta_end"
++                android:layout_width="wrap_content"
++                android:layout_height="wrap_content"
++                android:layout_marginStart="8dp"
++                android:singleLine="true"
++                android:textAppearance="@style/TextAppearance.TextSmall.Secondary" />
++        </LinearLayout>
++    </LinearLayout>
++</FrameLayout>
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/filter/FilterChipsProvider.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/filter/FilterChipsProvider.java
+index 995bd573a3d..5d1f781f4dd 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/filter/FilterChipsProvider.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/filter/FilterChipsProvider.java
+@@ -89,22 +89,22 @@ public class FilterChipsProvider implements OfflineItemFilterObserver {
+                         chipSelectedCallback,
+                         R.drawable.ic_globe_24dp);
+ 
++        // Bare: "Files" holds everything that is not a video or an image.
+         ListItem otherChip =
+                 ChipsCoordinator.buildChipListItem(
+                         Filters.FilterType.OTHER,
+-                        context.getString(R.string.download_manager_ui_other),
++                        context.getString(R.string.bare_downloads_files),
+                         chipSelectedCallback,
+                         R.drawable.ic_drive_file_24dp);
+ 
+         // By default select the none chip.
+         noneChip.model.set(ChipProperties.SELECTED, true);
+ 
++        // Bare: All, Videos, Files, Images. Music and pages are in Files.
+         mSortedChips.add(noneChip);
+         mSortedChips.add(videosChip);
+-        mSortedChips.add(musicChip);
+-        mSortedChips.add(imagesChip);
+-        mSortedChips.add(sitesChip);
+         mSortedChips.add(otherChip);
++        mSortedChips.add(imagesChip);
+ 
+         mSource.addObserver(this);
+         generateFilterStates();
+@@ -143,11 +143,7 @@ public class FilterChipsProvider implements OfflineItemFilterObserver {
+             if (chip.model.get(ChipProperties.ENABLED)) mVisibleChips.add(chip);
+         }
+ 
+-        // If there is only one chip type or only NONE chips, remove the entire row of chips.
+-        if (mVisibleChips.size() <= 2) {
+-            assert mVisibleChips.get(0).model.get(ChipProperties.ID) == FilterType.NONE;
+-            mVisibleChips.clear();
+-        }
++        // Bare: the chip row always shows.
+     }
+ 
+     // OfflineItemFilterObserver implementation.
+@@ -184,10 +180,24 @@ public class FilterChipsProvider implements OfflineItemFilterObserver {
+ 
+         filters.put(Filters.FilterType.NONE, noneChipItemCount);
+ 
++        // Bare: Files counts music, pages and documents too.
++        int filesCount = 0;
++        for (Map.Entry<Integer, Integer> entry : filters.entrySet()) {
++            int key = entry.getKey();
++            if (key == FilterType.MUSIC || key == FilterType.SITES || key == FilterType.OTHER
++                    || key == FilterType.DOCUMENT) {
++                filesCount += entry.getValue();
++            }
++        }
++        filters.put(FilterType.OTHER, filesCount);
++
+         // Set the enabled states correctly for all chips.
+         for (ListItem chip : mSortedChips) {
+             int chipId = chip.model.get(ChipProperties.ID);
+-            boolean shouldEnable = filters.containsKey(chipId);
++            // Bare: the four chips always show, so the row does not jump as downloads come and
++            // go. An empty filter shows the empty state.
++            boolean shouldEnable = true;
++            if (!filters.containsKey(chipId)) filters.put(chipId, 0);
+             chip.model.set(ChipProperties.ENABLED, shouldEnable);
+             if (chip.model.get(ChipProperties.ENABLED)) {
+                 assertNonNull(filters.get(chipId));
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/filter/TypeOfflineItemFilter.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/filter/TypeOfflineItemFilter.java
+index b73dfde3d7e..23316acb624 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/filter/TypeOfflineItemFilter.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/filter/TypeOfflineItemFilter.java
+@@ -38,6 +38,11 @@ public class TypeOfflineItemFilter extends OfflineItemFilter {
+             return type != mFilter;
+         }
+ 
++        // Bare: the Files chip (OTHER) holds everything that is not a video or an image.
++        if (mFilter == Filters.FilterType.OTHER) {
++            return type == Filters.FilterType.VIDEOS || type == Filters.FilterType.IMAGES;
++        }
++
+         return mFilter != Filters.FilterType.NONE && mFilter != type;
+     }
+ }
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/BareDownloadCards.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/BareDownloadCards.java
+new file mode 100644
+index 00000000000..46cbbd50c59
+--- /dev/null
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/BareDownloadCards.java
+@@ -0,0 +1,194 @@
++// Copyright 2026 The Bare Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.download.home.list.holder;
++
++import android.content.Context;
++import android.content.res.ColorStateList;
++import android.graphics.Color;
++import android.graphics.drawable.Drawable;
++import android.graphics.drawable.GradientDrawable;
++import android.graphics.drawable.RippleDrawable;
++import android.net.Uri;
++import android.provider.DocumentsContract;
++import android.text.TextUtils;
++import android.view.View;
++
++import androidx.annotation.ColorInt;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.download.home.list.UiUtils;
++import org.chromium.chrome.browser.download.internal.R;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.components.browser_ui.util.DownloadUtils;
++import org.chromium.components.offline_items_collection.OfflineItem;
++import org.chromium.components.offline_items_collection.OfflineItemFilter;
++import org.chromium.ui.util.ColorUtils;
++
++import java.util.Locale;
++
++/** Bare: shared look of the download cards: card background, file-type icon, folder label. */
++@NullMarked
++final class BareDownloadCards {
++    /** File kinds that get their own icon tint. */
++    private static final int KIND_OTHER = 0;
++    private static final int KIND_VIDEO = 1;
++    private static final int KIND_ARCHIVE = 2;
++    private static final int KIND_IMAGE = 3;
++    private static final int KIND_DOCUMENT = 4;
++
++    private static final String[] ARCHIVE_EXTENSIONS = {
++        ".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".zst", ".apk", ".apks",
++        ".xapk", ".iso"
++    };
++    private static final String[] DOCUMENT_EXTENSIONS = {
++        ".pdf", ".doc", ".docx", ".odt", ".rtf", ".txt", ".md", ".epub", ".xls", ".xlsx", ".ods",
++        ".csv", ".ppt", ".pptx", ".odp"
++    };
++
++    private BareDownloadCards() {}
++
++    static float dp(Context context, float dp) {
++        return dp * context.getResources().getDisplayMetrics().density;
++    }
++
++    /** Gives {@code card} a rounded surface-container background with a press ripple. */
++    static void styleCard(View card, float radiusDp) {
++        Context context = card.getContext();
++        GradientDrawable shape = new GradientDrawable();
++        shape.setCornerRadius(dp(context, radiusDp));
++        shape.setColor(SemanticColorUtils.getColorSurfaceContainer(context));
++        GradientDrawable mask = new GradientDrawable();
++        mask.setCornerRadius(dp(context, radiusDp));
++        mask.setColor(Color.WHITE);
++        @ColorInt
++        int ripple = ColorUtils.inNightMode(context) ? 0x33FFFFFF : 0x1F000000;
++        card.setBackground(new RippleDrawable(ColorStateList.valueOf(ripple), shape, mask));
++    }
++
++    private static int kindOf(OfflineItem item) {
++        String name = item.title == null ? "" : item.title.toLowerCase(Locale.ROOT);
++        String mime = item.mimeType == null ? "" : item.mimeType.toLowerCase(Locale.ROOT);
++        if (item.filter == OfflineItemFilter.VIDEO || mime.startsWith("video/")) return KIND_VIDEO;
++        if (item.filter == OfflineItemFilter.IMAGE || mime.startsWith("image/")) return KIND_IMAGE;
++        if (mime.contains("zip") || mime.contains("compressed") || mime.contains("x-tar")
++                || mime.contains("x-7z") || mime.contains("rar")
++                || mime.equals("application/vnd.android.package-archive")
++                || endsWithAny(name, ARCHIVE_EXTENSIONS)) {
++            return KIND_ARCHIVE;
++        }
++        if (item.filter == OfflineItemFilter.DOCUMENT || mime.startsWith("text/")
++                || mime.equals("application/pdf") || mime.contains("document")
++                || mime.contains("msword") || mime.contains("spreadsheet")
++                || mime.contains("presentation") || endsWithAny(name, DOCUMENT_EXTENSIONS)) {
++            return KIND_DOCUMENT;
++        }
++        return KIND_OTHER;
++    }
++
++    private static boolean endsWithAny(String name, String[] suffixes) {
++        for (String suffix : suffixes) {
++            if (name.endsWith(suffix)) return true;
++        }
++        return false;
++    }
++
++    /** Returns {background, foreground} colours for the icon of {@code item}. */
++    static int[] iconColors(Context context, OfflineItem item) {
++        boolean night = ColorUtils.inNightMode(context);
++        if (DownloadUtils.shouldDisplayDownloadAsDangerous(item.dangerType, item.state)
++                || DownloadUtils.isBlockedSensitiveDownload(item)) {
++            return new int[] {
++                SemanticColorUtils.getColorSurfaceContainerHighest(context),
++                context.getColorStateList(R.color.error_icon_color_tint_list).getDefaultColor()
++            };
++        }
++        switch (kindOf(item)) {
++            case KIND_VIDEO:
++            case KIND_DOCUMENT:
++                return night ? new int[] {0xFF4A3A6B, 0xFFD0BCFF} : new int[] {0xFFEADDFF, 0xFF4F378B};
++            case KIND_ARCHIVE:
++                return night ? new int[] {0xFF5A4012, 0xFFFFCC80} : new int[] {0xFFFFE0B2, 0xFF8A5000};
++            case KIND_IMAGE:
++                return night ? new int[] {0xFF1E4D47, 0xFF80CBC4} : new int[] {0xFFC8F0EA, 0xFF00695C};
++            default:
++                return new int[] {
++                    SemanticColorUtils.getColorSurfaceContainerHighest(context),
++                    SemanticColorUtils.getDefaultIconColor(context)
++                };
++        }
++    }
++
++    /** The rounded-square tinted background behind a file-type icon. */
++    static Drawable iconBackground(Context context, OfflineItem item) {
++        GradientDrawable bg = new GradientDrawable();
++        bg.setCornerRadius(dp(context, 12));
++        bg.setColor(iconColors(context, item)[0]);
++        return bg;
++    }
++
++    /** The tinted file-type icon. */
++    static Drawable icon(Context context, OfflineItem item) {
++        Drawable icon = context.getDrawable(UiUtils.getIconForItem(item)).mutate();
++        icon.setTint(iconColors(context, item)[1]);
++        return icon;
++    }
++
++    /**
++     * The name of the folder a finished download sits in, from its file path. Never does I/O.
++     */
++    static String folderLabel(Context context, OfflineItem item) {
++        String phone = context.getString(R.string.bare_download_location_phone);
++        String path = item.filePath;
++        if (TextUtils.isEmpty(path)) return phone;
++        try {
++            if (path.startsWith("content://")) {
++                Uri uri = Uri.parse(path);
++                // MediaStore: finished downloads are published to the phone's Download folder.
++                if ("media".equals(uri.getAuthority())) return phone;
++                if (DocumentsContract.isDocumentUri(context, uri)) {
++                    String label = parentOfDocId(DocumentsContract.getDocumentId(uri));
++                    if (label != null) return label;
++                    // A file right at the top of a chosen folder: name the folder itself.
++                    if (DocumentsContract.isTreeUri(uri)) {
++                        String tree = lastSegment(DocumentsContract.getTreeDocumentId(uri));
++                        if (tree != null) return tree;
++                    }
++                }
++                return phone;
++            }
++            // Bare stages downloads in its own app folder and publishes them to Download.
++            if (path.contains("/Android/data/")) return phone;
++            int slash = path.lastIndexOf('/');
++            if (slash <= 0) return phone;
++            String parent = path.substring(0, slash);
++            String name = parent.substring(parent.lastIndexOf('/') + 1);
++            return TextUtils.isEmpty(name) ? phone : name;
++        } catch (RuntimeException e) {
++            return phone;
++        }
++    }
++
++    /** "primary:Movies" gives "Movies". */
++    private static @Nullable String lastSegment(@Nullable String docId) {
++        if (docId == null) return null;
++        int colon = docId.indexOf(':');
++        String rel = colon >= 0 ? docId.substring(colon + 1) : docId;
++        String name = rel.substring(rel.lastIndexOf('/') + 1);
++        return TextUtils.isEmpty(name) ? null : name;
++    }
++
++    /** "primary:Movies/clip.mp4" gives "Movies". */
++    private static @Nullable String parentOfDocId(@Nullable String docId) {
++        if (docId == null) return null;
++        int colon = docId.indexOf(':');
++        String rel = colon >= 0 ? docId.substring(colon + 1) : docId;
++        int slash = rel.lastIndexOf('/');
++        if (slash <= 0) return null;
++        String parent = rel.substring(0, slash);
++        String name = parent.substring(parent.lastIndexOf('/') + 1);
++        return TextUtils.isEmpty(name) ? null : name;
++    }
++}
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/GenericViewHolder.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/GenericViewHolder.java
+index 189669a1369..923753c64f6 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/GenericViewHolder.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/GenericViewHolder.java
+@@ -6,7 +6,8 @@ package org.chromium.chrome.browser.download.home.list.holder;
+ 
+ import static org.chromium.build.NullUtil.assumeNonNull;
+ 
+-import android.content.res.Resources;
++import android.content.Context;
++import android.text.format.Formatter;
+ import android.graphics.drawable.Drawable;
+ import android.view.LayoutInflater;
+ import android.view.View;
+@@ -15,7 +16,6 @@ import android.widget.ImageView;
+ import android.widget.TextView;
+ 
+ import androidx.annotation.DrawableRes;
+-import androidx.appcompat.content.res.AppCompatResources;
+ import androidx.core.graphics.drawable.RoundedBitmapDrawable;
+ import androidx.core.graphics.drawable.RoundedBitmapDrawableFactory;
+ 
+@@ -24,6 +24,9 @@ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.download.home.list.ListItem;
+ import org.chromium.chrome.browser.download.home.list.UiUtils;
+ import org.chromium.chrome.browser.download.internal.R;
++import org.chromium.components.browser_ui.util.DownloadUtils;
++import org.chromium.components.offline_items_collection.OfflineItem;
++import org.chromium.components.offline_items_collection.OfflineItemState;
+ import org.chromium.components.offline_items_collection.OfflineItemVisuals;
+ import org.chromium.ui.modelutil.PropertyModel;
+ 
+@@ -36,6 +39,8 @@ public class GenericViewHolder extends OfflineItemViewHolder {
+     private final TextView mCaption;
+ 
+     private @DrawableRes int mGenericIconId;
++    private int mGenericIconColor;
++    private @Nullable OfflineItem mItem;
+ 
+     /** Creates a new {@link GenericViewHolder} instance. */
+     public static GenericViewHolder create(ViewGroup parent) {
+@@ -52,6 +57,8 @@ public class GenericViewHolder extends OfflineItemViewHolder {
+         mCaption = itemView.findViewById(R.id.caption);
+ 
+         mThumbnail.setForegroundScaleTypeCompat(ImageView.ScaleType.CENTER);
++        // Bare: a compact rounded card.
++        BareDownloadCards.styleCard(itemView.findViewById(R.id.card), 16);
+     }
+ 
+     // OfflineItemViewHolder implementation.
+@@ -60,22 +67,26 @@ public class GenericViewHolder extends OfflineItemViewHolder {
+         super.bind(properties, item);
+         ListItem.OfflineItemListItem offlineItem = (ListItem.OfflineItemListItem) item;
+ 
+-        mTitle.setText(UiUtils.formatGenericItemTitle(offlineItem.item));
+-        mCaption.setText(UiUtils.generateGenericCaption(offlineItem.item));
++        mItem = offlineItem.item;
++        // Bare: the full name (ellipsized in the middle by the view), and "391 KB · Download".
++        mTitle.setText(
++                UiUtils.shouldShowScanningStateOnUI(offlineItem.item)
++                        ? UiUtils.formatGenericItemTitle(offlineItem.item)
++                        : offlineItem.item.title);
++        mCaption.setText(bareCaption(offlineItem.item));
+ 
+-        // Build invalid icon.
++        // Build invalid icon: Bare tints it by file type.
+         @DrawableRes int iconId = UiUtils.getIconForItem(offlineItem.item);
+-        if (iconId != mGenericIconId) {
++        int iconColor = BareDownloadCards.iconColors(itemView.getContext(), offlineItem.item)[1];
++        if (iconId != mGenericIconId || iconColor != mGenericIconColor) {
+             mGenericIconId = iconId;
++            mGenericIconColor = iconColor;
+ 
+-            Drawable drawable =
+-                    org.chromium.ui.UiUtils.getTintedDrawable(
+-                            itemView.getContext(),
+-                            iconId,
+-                            UiUtils.getIconColorForItem(offlineItem.item));
++            Drawable drawable = BareDownloadCards.icon(itemView.getContext(), offlineItem.item);
+ 
+             mThumbnail.setUnavailableDrawable(drawable);
+             mThumbnail.setWaitingDrawable(drawable);
++            mThumbnail.setBackground(null);
+         }
+ 
+         mSelectionView.setVisibility(mSelectionView.isSelected() ? View.VISIBLE : View.INVISIBLE);
+@@ -93,7 +104,8 @@ public class GenericViewHolder extends OfflineItemViewHolder {
+             drawable =
+                     RoundedBitmapDrawableFactory.create(
+                             itemView.getResources(), assumeNonNull(visuals).icon);
+-            drawable.setCircular(true);
++            // Bare: rounded square, like the file-type icon.
++            drawable.setCornerRadius(BareDownloadCards.dp(itemView.getContext(), 12));
+         }
+         return drawable;
+     }
+@@ -101,13 +113,24 @@ public class GenericViewHolder extends OfflineItemViewHolder {
+     private void updateThumbnailBackground(boolean hasThumbnail) {
+         if (hasThumbnail) {
+             mThumbnail.setBackground(null);
+-        } else if (mThumbnail.getBackground() == null) {
+-            Resources resources = itemView.getResources();
+-            Drawable background =
+-                    AppCompatResources.getDrawable(
+-                            itemView.getContext(), R.drawable.list_item_icon_modern_bg);
+-            background.setLevel(resources.getInteger(R.integer.list_item_level_default));
+-            mThumbnail.setBackground(background);
++        } else if (mItem != null) {
++            mThumbnail.setBackground(
++                    BareDownloadCards.iconBackground(itemView.getContext(), mItem));
++        }
++    }
++
++    /** Bare: "391 KB · Download" for a finished download; Chromium's caption otherwise. */
++    private CharSequence bareCaption(OfflineItem item) {
++        if (item.state != OfflineItemState.COMPLETE
++                || DownloadUtils.shouldDisplayDownloadAsDangerous(item.dangerType, item.state)
++                || DownloadUtils.isBlockedSensitiveDownload(item)) {
++            return UiUtils.generateGenericCaption(item);
+         }
++        Context context = itemView.getContext();
++        String folder = BareDownloadCards.folderLabel(context, item);
++        long size = item.totalSizeBytes > 0 ? item.totalSizeBytes : item.receivedBytes;
++        if (size <= 0) return folder;
++        return context.getString(
++                R.string.bare_downloads_caption, Formatter.formatFileSize(context, size), folder);
+     }
+ }
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/InProgressGenericViewHolder.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/InProgressGenericViewHolder.java
+index 4ef658e9c23..a81b446c659 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/InProgressGenericViewHolder.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/InProgressGenericViewHolder.java
+@@ -4,26 +4,67 @@
+ 
+ package org.chromium.chrome.browser.download.home.list.holder;
+ 
++import android.content.Context;
++import android.graphics.drawable.GradientDrawable;
++import android.os.SystemClock;
++import android.text.TextUtils;
++import android.text.format.Formatter;
+ import android.view.LayoutInflater;
++import android.view.Menu;
+ import android.view.View;
+ import android.view.ViewGroup;
++import android.widget.ImageView;
++import android.widget.PopupMenu;
+ import android.widget.TextView;
+ 
++import androidx.core.view.ViewCompat;
++import androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat;
++
+ import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.download.BareDownloadEngine;
++import org.chromium.chrome.browser.download.BareDownloadParts;
++import org.chromium.chrome.browser.download.StringUtils;
+ import org.chromium.chrome.browser.download.home.list.ListItem;
++import org.chromium.chrome.browser.download.home.list.ListProperties;
+ import org.chromium.chrome.browser.download.home.list.UiUtils;
++import org.chromium.chrome.browser.download.home.list.view.BareLanesView;
+ import org.chromium.chrome.browser.download.internal.R;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.components.offline_items_collection.OfflineItem;
++import org.chromium.components.offline_items_collection.OfflineItemProgressUnit;
++import org.chromium.components.offline_items_collection.OfflineItemState;
+ import org.chromium.ui.modelutil.PropertyModel;
+ 
++import java.util.HashMap;
++import java.util.Map;
++
+ /**
+  * A {@link RecyclerView.ViewHolder} specifically meant to display an in-progress generic {@code
+  * OfflineItem}.
++ *
++ * <p>Bare: drawn as a card with a lanes bar, one lane per part of the download.
+  */
+ @NullMarked
+-public class InProgressGenericViewHolder extends InProgressViewHolder {
++public class InProgressGenericViewHolder extends ListItemViewHolder {
++    /** Speed samples per download, so the speed survives rebinding and view recycling. */
++    private static final Map<String, long[]> sSpeedSamples = new HashMap<>();
++
++    private static final int MAX_SPEED_SAMPLES = 64;
++    private static final long MIN_SAMPLE_INTERVAL_MS = 700;
++
++    private final View mCard;
++    private final ImageView mIcon;
+     private final TextView mTitle;
++    private final TextView mCaption;
++    private final ImageView mActionButton;
++    private final BareLanesView mLanes;
++    private final TextView mMetaStart;
++    private final TextView mMetaEnd;
++
++    private int mCancelActionId = View.NO_ID;
+ 
+-    /** Creates a new {@link InProgressViewHolder} instance. */
++    /** Creates a new {@link InProgressGenericViewHolder} instance. */
+     public static InProgressGenericViewHolder create(ViewGroup parent) {
+         View view =
+                 LayoutInflater.from(parent.getContext())
+@@ -33,14 +74,339 @@ public class InProgressGenericViewHolder extends InProgressViewHolder {
+ 
+     /** Constructor. */
+     public InProgressGenericViewHolder(View view) {
+-        super(view, /* constrainCaption= */ false);
++        super(view);
++        mCard = view.findViewById(R.id.card);
++        mIcon = view.findViewById(R.id.icon);
+         mTitle = view.findViewById(R.id.title);
++        mCaption = view.findViewById(R.id.caption);
++        mActionButton = view.findViewById(R.id.action_button);
++        mLanes = view.findViewById(R.id.lanes);
++        mMetaStart = view.findViewById(R.id.meta_start);
++        mMetaEnd = view.findViewById(R.id.meta_end);
++        BareDownloadCards.styleCard(mCard, 18);
+     }
+ 
+-    // InProgressViewHolder implementation.
+     @Override
+     public void bind(PropertyModel properties, ListItem item) {
+-        super.bind(properties, item);
+-        mTitle.setText(UiUtils.formatGenericItemTitle(((ListItem.OfflineItemListItem) item).item));
++        OfflineItem offlineItem = ((ListItem.OfflineItemListItem) item).item;
++        Context context = itemView.getContext();
++
++        mIcon.setBackground(BareDownloadCards.iconBackground(context, offlineItem));
++        mIcon.setImageDrawable(BareDownloadCards.icon(context, offlineItem));
++        mTitle.setText(
++                UiUtils.shouldShowScanningStateOnUI(offlineItem)
++                        ? UiUtils.formatGenericItemTitle(offlineItem)
++                        : offlineItem.title);
++
++        long received = receivedBytes(offlineItem);
++        long total = totalBytes(offlineItem);
++        @Nullable String guid = offlineItem.id == null ? null : offlineItem.id.id;
++        BareDownloadParts.Info parts = BareDownloadParts.get(guid);
++
++        boolean running =
++                offlineItem.state == OfflineItemState.IN_PROGRESS
++                        || offlineItem.state == OfflineItemState.PENDING;
++        boolean scanning = UiUtils.shouldShowScanningStateOnUI(offlineItem);
++        // The engine knows whether Resume continues, starts again from zero, or cannot work.
++        int resume =
++                guid == null || running
++                        ? BareDownloadEngine.RESUME_NONE
++                        : BareDownloadEngine.getResumeState(guid);
++        boolean impossible =
++                !running
++                        && (resume == BareDownloadEngine.RESUME_IMPOSSIBLE
++                                || (resume == BareDownloadEngine.RESUME_NONE
++                                        && offlineItem.state == OfflineItemState.INTERRUPTED
++                                        && !offlineItem.isResumable));
++        boolean restart =
++                !running
++                        && !impossible
++                        && (resume == BareDownloadEngine.RESUME_RESTART
++                                || offlineItem.state == OfflineItemState.FAILED
++                                || offlineItem.state == OfflineItemState.CANCELLED);
++        boolean paused = !running && !impossible && !restart;
++
++        // Caption under the name.
++        if (scanning) {
++            mCaption.setText(R.string.download_manager_async_scanning_description);
++        } else if (offlineItem.state == OfflineItemState.PENDING) {
++            mCaption.setText(R.string.download_manager_pending);
++        } else if (running) {
++            mCaption.setText(sizeOf(context, received, total));
++        } else if (paused) {
++            mCaption.setText(
++                    total > 0
++                            ? context.getString(
++                                    R.string.bare_downloads_paused_size,
++                                    Formatter.formatFileSize(context, received),
++                                    Formatter.formatFileSize(context, total))
++                            : context.getString(R.string.download_manager_paused));
++        } else {
++            mCaption.setText(R.string.download_manager_failed);
++        }
++
++        // Lanes.
++        int track = SemanticColorUtils.getColorSurfaceContainerHighest(context);
++        if (running && !scanning) {
++            mLanes.setColors(track, SemanticColorUtils.getColorPrimary(context));
++            if (parts != null) {
++                setLanesFromParts(parts, total);
++            } else {
++                mLanes.setLanes(new float[] {fraction(offlineItem, received, total)}, new float[] {1f});
++            }
++        } else {
++            // Paused or stopped: one grey lane with the overall progress.
++            mLanes.setColors(track, SemanticColorUtils.getColorOutline(context));
++            mLanes.setLanes(
++                    new float[] {restart ? 0f : fraction(offlineItem, received, total)},
++                    new float[] {1f});
++        }
++
++        // Meta line.
++        CharSequence metaStart = "";
++        CharSequence metaEnd = "";
++        if (running && !scanning) {
++            long speed = parts != null && parts.bytesPerSecond >= 0
++                    ? parts.bytesPerSecond
++                    : sampleSpeed(guid, received);
++            int count = parts != null ? parts.count() : 1;
++            if (speed > 0) {
++                String speedText = Formatter.formatFileSize(context, speed);
++                metaStart =
++                        count > 1
++                                ? context.getString(
++                                        R.string.bare_downloads_parts_speed, count, speedText)
++                                : context.getString(R.string.bare_downloads_speed, speedText);
++            }
++            if (offlineItem.timeRemainingMs > 0) {
++                metaEnd = StringUtils.timeLeftForUi(context, offlineItem.timeRemainingMs);
++            }
++        } else if (paused) {
++            forgetSpeed(guid);
++            metaStart =
++                    context.getString(
++                            parts != null && parts.savedAsBareDownload
++                                    ? R.string.bare_downloads_saved_resume
++                                    : R.string.bare_downloads_resume_any_time);
++        } else {
++            forgetSpeed(guid);
++            metaStart =
++                    context.getString(
++                            impossible
++                                    ? R.string.bare_downloads_cant_continue
++                                    : R.string.bare_downloads_cant_resume);
++        }
++        mMetaStart.setText(metaStart);
++        mMetaStart.setVisibility(TextUtils.isEmpty(metaStart) ? View.INVISIBLE : View.VISIBLE);
++        mMetaEnd.setText(metaEnd);
++
++        // The round button: pause while running, play (or start again) on a tinted background.
++        bindActionButton(properties, offlineItem, running, scanning, restart, impossible);
++
++        // Cancel lives in a long-press menu and in the accessibility actions.
++        bindCancel(properties, offlineItem, restart);
++    }
++
++    private void bindActionButton(
++            PropertyModel properties,
++            OfflineItem offlineItem,
++            boolean running,
++            boolean scanning,
++            boolean restart,
++            boolean impossible) {
++        Context context = itemView.getContext();
++        if (scanning) {
++            mActionButton.setVisibility(View.INVISIBLE);
++            mActionButton.setOnClickListener(null);
++            return;
++        }
++        mActionButton.setVisibility(View.VISIBLE);
++
++        GradientDrawable circle = new GradientDrawable();
++        circle.setShape(GradientDrawable.OVAL);
++        int iconColor;
++        int iconRes;
++        int description;
++        if (running) {
++            circle.setColor(SemanticColorUtils.getColorSurfaceContainerHighest(context));
++            iconColor = SemanticColorUtils.getDefaultIconColor(context);
++            iconRes = R.drawable.ic_pause_white_24dp;
++            description = R.string.download_notification_pause_button;
++        } else if (impossible) {
++            // Resume would do nothing: the button cancels, which takes it off the list.
++            circle.setColor(SemanticColorUtils.getColorSurfaceContainerHighest(context));
++            iconColor = SemanticColorUtils.getDefaultIconColor(context);
++            iconRes = R.drawable.btn_close;
++            description = R.string.download_notification_cancel_button;
++        } else {
++            circle.setColor(SemanticColorUtils.getColorPrimaryContainer(context));
++            iconColor = SemanticColorUtils.getDefaultIconColorOnAccent1Container(context);
++            iconRes = restart ? R.drawable.ic_refresh_24dp : R.drawable.ic_play_arrow_white_24dp;
++            description =
++                    restart
++                            ? R.string.bare_downloads_start_again
++                            : R.string.download_notification_resume_button;
++        }
++        mActionButton.setBackground(circle);
++        android.graphics.drawable.Drawable icon = context.getDrawable(iconRes);
++        if (icon != null) {
++            icon = icon.mutate();
++            icon.setTint(iconColor);
++        }
++        mActionButton.setImageDrawable(icon);
++        mActionButton.setContentDescription(
++                context.getString(description) + ", " + offlineItem.title);
++        mActionButton.setOnClickListener(
++                v -> {
++                    if (running) {
++                        properties.get(ListProperties.CALLBACK_PAUSE).onResult(offlineItem);
++                    } else if (impossible) {
++                        properties.get(ListProperties.CALLBACK_CANCEL).onResult(offlineItem);
++                    } else {
++                        // For a download that cannot resume, this starts it again from zero.
++                        properties.get(ListProperties.CALLBACK_RESUME).onResult(offlineItem);
++                    }
++                });
++    }
++
++    private void bindCancel(PropertyModel properties, OfflineItem offlineItem, boolean restart) {
++        Context context = itemView.getContext();
++        boolean canCancel = offlineItem.state != OfflineItemState.CANCELLED;
++        String cancel = context.getString(R.string.download_notification_cancel_button);
++
++        if (mCancelActionId != View.NO_ID) {
++            ViewCompat.removeAccessibilityAction(itemView, mCancelActionId);
++            mCancelActionId = View.NO_ID;
++        }
++        if (!canCancel) {
++            itemView.setOnLongClickListener(null);
++            itemView.setLongClickable(false);
++            return;
++        }
++        mCancelActionId =
++                ViewCompat.addAccessibilityAction(
++                        itemView,
++                        cancel,
++                        (view, args) -> {
++                            properties.get(ListProperties.CALLBACK_CANCEL).onResult(offlineItem);
++                            return true;
++                        });
++        itemView.setOnLongClickListener(
++                v -> {
++                    PopupMenu menu = new PopupMenu(context, mCard);
++                    menu.getMenu().add(Menu.NONE, 1, Menu.NONE, cancel);
++                    if (restart) {
++                        menu.getMenu()
++                                .add(
++                                        Menu.NONE,
++                                        2,
++                                        Menu.NONE,
++                                        context.getString(R.string.bare_downloads_start_again));
++                    }
++                    menu.setOnMenuItemClickListener(
++                            menuItem -> {
++                                if (menuItem.getItemId() == 1) {
++                                    properties
++                                            .get(ListProperties.CALLBACK_CANCEL)
++                                            .onResult(offlineItem);
++                                } else {
++                                    properties
++                                            .get(ListProperties.CALLBACK_RESUME)
++                                            .onResult(offlineItem);
++                                }
++                                return true;
++                            });
++                    menu.show();
++                    return true;
++                });
++    }
++
++    private void setLanesFromParts(BareDownloadParts.Info parts, long total) {
++        int n = parts.count();
++        long known = 0;
++        int unknown = 0;
++        for (int i = 0; i < n; i++) {
++            if (parts.length[i] > 0) {
++                known += parts.length[i];
++            } else {
++                unknown++;
++            }
++        }
++        // A part with no known length covers whatever the others leave of the file.
++        long rest = total > known && unknown > 0 ? (total - known) / unknown : 0;
++        float[] fractions = new float[n];
++        float[] weights = new float[n];
++        for (int i = 0; i < n; i++) {
++            long length = parts.length[i] > 0 ? parts.length[i] : rest;
++            if (length > 0) {
++                fractions[i] = (float) parts.received[i] / length;
++                weights[i] = length;
++            } else {
++                // Nothing to measure against: show it as running, half way.
++                fractions[i] = parts.received[i] > 0 ? 0.5f : 0f;
++                weights[i] = known > 0 ? (float) known / Math.max(1, n - unknown) : 1f;
++            }
++        }
++        mLanes.setLanes(fractions, weights);
++    }
++
++    private static long receivedBytes(OfflineItem item) {
++        OfflineItem.Progress progress = item.progress;
++        if (progress != null && progress.unit == OfflineItemProgressUnit.BYTES) {
++            return progress.value;
++        }
++        return item.receivedBytes;
++    }
++
++    private static long totalBytes(OfflineItem item) {
++        OfflineItem.Progress progress = item.progress;
++        if (progress != null && progress.unit == OfflineItemProgressUnit.BYTES) {
++            Long max = progress.max;
++            if (max != null && max > 0) return max;
++        }
++        return item.totalSizeBytes;
++    }
++
++    private static float fraction(OfflineItem item, long received, long total) {
++        if (total > 0) return (float) received / total;
++        OfflineItem.Progress progress = item.progress;
++        if (progress != null && !progress.isIndeterminate()) {
++            return progress.getPercentage() / 100f;
++        }
++        return 0f;
++    }
++
++    private static CharSequence sizeOf(Context context, long received, long total) {
++        String got = Formatter.formatFileSize(context, received);
++        if (total <= 0) return got;
++        return context.getString(
++                R.string.bare_downloads_size_of, got, Formatter.formatFileSize(context, total));
++    }
++
++    /** Works out the speed from how the received bytes change between binds. */
++    private static long sampleSpeed(@Nullable String guid, long received) {
++        if (guid == null) return -1;
++        long now = SystemClock.elapsedRealtime();
++        long[] sample = sSpeedSamples.get(guid);
++        if (sample == null) {
++            if (sSpeedSamples.size() >= MAX_SPEED_SAMPLES) sSpeedSamples.clear();
++            sSpeedSamples.put(guid, new long[] {received, now, -1});
++            return -1;
++        }
++        long elapsed = now - sample[1];
++        if (elapsed >= MIN_SAMPLE_INTERVAL_MS && received >= sample[0]) {
++            long instant = (received - sample[0]) * 1000 / elapsed;
++            sample[2] = sample[2] < 0 ? instant : (sample[2] * 6 + instant * 4) / 10;
++            sample[0] = received;
++            sample[1] = now;
++        } else if (received < sample[0]) {
++            sample[0] = received;
++            sample[1] = now;
++        }
++        return sample[2];
++    }
++
++    private static void forgetSpeed(@Nullable String guid) {
++        if (guid != null) sSpeedSamples.remove(guid);
+     }
+ }
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/SectionTitleViewHolder.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/SectionTitleViewHolder.java
+index aadb921efd0..17d3ecbea28 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/SectionTitleViewHolder.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/SectionTitleViewHolder.java
+@@ -50,7 +50,8 @@ public class SectionTitleViewHolder extends ListItemViewHolder {
+             case SectionHeaderType.DATE:
+                 return StringUtils.dateToHeaderString(sectionItem.date);
+             case SectionHeaderType.JUST_NOW:
+-                return context.getString(R.string.download_manager_just_now);
++                // Bare: this section holds unfinished downloads only.
++                return context.getString(R.string.bare_downloads_in_progress);
+         }
+         assert false : "Unknown section header type.";
+         return null;
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/view/BareLanesView.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/view/BareLanesView.java
+new file mode 100644
+index 00000000000..d655f9a8737
+--- /dev/null
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/view/BareLanesView.java
+@@ -0,0 +1,105 @@
++// Copyright 2026 The Bare Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.download.home.list.view;
++
++import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Paint;
++import android.graphics.RectF;
++import android.util.AttributeSet;
++import android.view.View;
++
++import androidx.annotation.ColorInt;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++
++/**
++ * Bare: the lanes progress bar on a download card. One rounded lane per part of the download,
++ * side by side with small gaps, each filling with its own progress. A lane's width follows the
++ * share of the file its part covers.
++ */
++@NullMarked
++public class BareLanesView extends View {
++    private static final float GAP_DP = 3f;
++
++    private final Paint mTrackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint mFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final RectF mRect = new RectF();
++    private final float mGapPx;
++
++    private float[] mFractions = new float[] {0f};
++    private float[] mWeights = new float[] {1f};
++
++    public BareLanesView(Context context, @Nullable AttributeSet attrs) {
++        super(context, attrs);
++        mGapPx = GAP_DP * context.getResources().getDisplayMetrics().density;
++        setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
++    }
++
++    /** Sets the colours of the empty track and of the filled part. */
++    public void setColors(@ColorInt int track, @ColorInt int fill) {
++        if (mTrackPaint.getColor() == track && mFillPaint.getColor() == fill) return;
++        mTrackPaint.setColor(track);
++        mFillPaint.setColor(fill);
++        invalidate();
++    }
++
++    /**
++     * Sets the lanes.
++     *
++     * @param fractions How full each lane is, 0 to 1.
++     * @param weights How wide each lane is relative to the others. Same length as fractions.
++     */
++    public void setLanes(float[] fractions, float[] weights) {
++        if (fractions.length == 0 || fractions.length != weights.length) {
++            fractions = new float[] {0f};
++            weights = new float[] {1f};
++        }
++        mFractions = fractions;
++        mWeights = weights;
++        invalidate();
++    }
++
++    @Override
++    protected void onDraw(Canvas canvas) {
++        super.onDraw(canvas);
++        int n = mFractions.length;
++        float left = getPaddingLeft();
++        float top = getPaddingTop();
++        float width = getWidth() - getPaddingLeft() - getPaddingRight();
++        float height = getHeight() - getPaddingTop() - getPaddingBottom();
++        if (width <= 0 || height <= 0) return;
++
++        float totalWeight = 0;
++        for (float w : mWeights) totalWeight += Math.max(w, 0f);
++        float usable = width - mGapPx * (n - 1);
++        if (usable <= 0) return;
++
++        float radius = height / 2f;
++        boolean rtl = getLayoutDirection() == LAYOUT_DIRECTION_RTL;
++        float x = rtl ? left + width : left;
++        for (int i = 0; i < n; i++) {
++            float share = totalWeight > 0 ? Math.max(mWeights[i], 0f) / totalWeight : 1f / n;
++            float laneWidth = usable * share;
++            float start = rtl ? x - laneWidth : x;
++            mRect.set(start, top, start + laneWidth, top + height);
++            canvas.drawRoundRect(mRect, radius, radius, mTrackPaint);
++
++            float f = Math.max(0f, Math.min(1f, mFractions[i]));
++            if (f > 0f) {
++                // Keep a filled lane at least as wide as it is tall so its ends stay round.
++                float fillWidth = Math.max(laneWidth * f, Math.min(height, laneWidth));
++                if (rtl) {
++                    mRect.set(start + laneWidth - fillWidth, top, start + laneWidth, top + height);
++                } else {
++                    mRect.set(start, top, start + fillWidth, top + height);
++                }
++                canvas.drawRoundRect(mRect, radius, radius, mFillPaint);
++            }
++            x = rtl ? start - mGapPx : start + laneWidth + mGapPx;
++        }
++    }
++}
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/toolbar/DownloadHomeToolbar.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/toolbar/DownloadHomeToolbar.java
+index 3d4607682b9..4fefd84b72b 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/toolbar/DownloadHomeToolbar.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/toolbar/DownloadHomeToolbar.java
+@@ -26,6 +26,7 @@ import java.util.List;
+ public class DownloadHomeToolbar extends SelectableListToolbar<ListItem> {
+     private @Nullable UiConfig mUiConfig;
+     private View mListContentView;
++    private @Nullable Runnable mOnNavigationBack;
+ 
+     public DownloadHomeToolbar(Context context, AttributeSet attrs) {
+         super(context, attrs);
+@@ -54,6 +55,16 @@ public class DownloadHomeToolbar extends SelectableListToolbar<ListItem> {
+         if (mUiConfig != null) mUiConfig.updateDisplayStyle();
+     }
+ 
++    /** Bare: what the back arrow in the normal view does (closes the downloads page). */
++    public void setOnNavigationBack(@Nullable Runnable onNavigationBack) {
++        mOnNavigationBack = onNavigationBack;
++    }
++
++    @Override
++    protected void onNavigationBack() {
++        if (mOnNavigationBack != null) mOnNavigationBack.run();
++    }
++
+     /**
+      * Removes a menu item from the toolbar.
+      *
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/toolbar/ToolbarCoordinator.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/toolbar/ToolbarCoordinator.java
+index 7d4778f76c1..602cd439825 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/toolbar/ToolbarCoordinator.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/toolbar/ToolbarCoordinator.java
+@@ -129,7 +129,9 @@ public class ToolbarCoordinator implements SelectionObserver<ListItem>, BackPres
+ 
+         mShadow.init(context.getColor(R.color.toolbar_shadow_color), FadingShadow.POSITION_TOP);
+ 
+-        if (!config.isSeparateActivity) mToolbar.removeMenuItem(R.id.close_menu_id);
++        // Bare: the separate activity has a back arrow at the start, so no close button.
++        mToolbar.removeMenuItem(R.id.close_menu_id);
++        if (config.isSeparateActivity) mToolbar.setOnNavigationBack(mDelegate::close);
+         mBackPressStateSupplier.set(mToolbar.isSearching());
+         mToolbar.isSearchingSupplier()
+                 .addSyncObserverAndPostIfNonNull(mBackPressStateSupplier::set);
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index bfbac3e374b..ff570aa468d 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -652,6 +652,20 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_OPEN_ON_NEW_TAB = "Chrome.Bare.OpenOnNewTab";
+ 
++    /**
++     * Whether a running download shows its progress in a notification, a Live Update on Android 16
++     * and later. Absent means on.
++     */
++    public static final String BARE_DOWNLOAD_PROGRESS_NOTIFICATION =
++            "Chrome.Bare.DownloadProgressNotification";
++
++    /**
++     * Whether a download already asked Android for the notification permission. It asks once, the
++     * first time a download runs without it.
++     */
++    public static final String BARE_DOWNLOAD_NOTIFICATION_ASKED =
++            "Chrome.Bare.DownloadNotificationAsked";
++
+     public static final String DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER =
+             "Chrome.Download.UseExternalDownloadManager";
+ 
+@@ -1477,6 +1491,8 @@ public final class ChromePreferenceKeys {
+                 BARE_TAB_VIEW,
+                 BARE_KEYBOARD_ON_NEW_TAB,
+                 BARE_OPEN_ON_NEW_TAB,
++                BARE_DOWNLOAD_PROGRESS_NOTIFICATION,
++                BARE_DOWNLOAD_NOTIFICATION_ASKED,
+                 BARE_UPDATE_LAST_CHECK_MS,
+                 BARE_UPDATE_LATEST_TAG,
+                 BARE_UPDATE_ACKED_TAG,
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index ba5c00e8f24..7af78ac3efa 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4402,6 +4402,66 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_DOWNLOAD_LOCATION_PHONE_SUMMARY" desc="Shown after the name of the download location in Settings, when downloads go to the phone's Download folder. Reads as: Download on this phone.">
+         on this phone
+       </message>
++      <message name="IDS_BARE_DOWNLOADS_IN_PROGRESS" desc="Header of the downloads list section that holds downloads still running or paused.">
++        In progress
++      </message>
++      <message name="IDS_BARE_DOWNLOADS_FILES" desc="Filter chip on the downloads page: shows downloads that are not videos or images.">
++        Files
++      </message>
++      <message name="IDS_BARE_DOWNLOADS_SIZE_OF" desc="Progress of a running download. Reads as: 1.42 GB of 2.30 GB.">
++        <ph name="RECEIVED">%1$s<ex>1.42 GB</ex></ph> of <ph name="TOTAL">%2$s<ex>2.30 GB</ex></ph>
++      </message>
++      <message name="IDS_BARE_DOWNLOADS_PAUSED_SIZE" desc="Progress of a paused download. Reads as: Paused · 312 MB of 870 MB.">
++        Paused · <ph name="RECEIVED">%1$s<ex>312 MB</ex></ph> of <ph name="TOTAL">%2$s<ex>870 MB</ex></ph>
++      </message>
++      <message name="IDS_BARE_DOWNLOADS_PARTS_SPEED" desc="Under a running download: how many parts download at once, and the speed. Reads as: 4 parts · 18.6 MB/s.">
++        <ph name="PARTS">%1$d<ex>4</ex></ph> parts · <ph name="SPEED">%2$s<ex>18.6 MB</ex></ph>/s
++      </message>
++      <message name="IDS_BARE_DOWNLOADS_SPEED" desc="Under a running download that uses one connection: the speed. Reads as: 18.6 MB/s.">
++        <ph name="SPEED">%1$s<ex>18.6 MB</ex></ph>/s
++      </message>
++      <message name="IDS_BARE_DOWNLOADS_SAVED_RESUME" desc="Under a paused download whose data is kept in a .baredownload file.">
++        Saved as .baredownload · resume any time
++      </message>
++      <message name="IDS_BARE_DOWNLOADS_RESUME_ANY_TIME" desc="Under a paused download.">
++        Resume any time
++      </message>
++      <message name="IDS_BARE_DOWNLOADS_CANT_RESUME" desc="Under a stopped download that the site does not let Bare continue.">
++        Can't resume. Start again
++      </message>
++      <message name="IDS_BARE_DOWNLOADS_CANT_CONTINUE" desc="Under a stopped download that cannot be resumed or started again, for example the link expired.">
++        Can't continue this download
++      </message>
++      <message name="IDS_BARE_DOWNLOADS_START_AGAIN" desc="Button and menu item: start a download again from the beginning.">
++        Start again
++      </message>
++      <message name="IDS_BARE_DOWNLOADS_CAPTION" desc="Under a finished download: its size and the folder it was saved to. Reads as: 391 KB · Download.">
++        <ph name="SIZE">%1$s<ex>391 KB</ex></ph> · <ph name="FOLDER">%2$s<ex>Download</ex></ph>
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_LOCATION_PHONE_FOLDER" desc="Choice in the download location list: the phone's own Download folder.">
++        Download folder (on this phone)
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_LOCATION_CHOOSE" desc="Choice in the download location list: opens the system folder picker.">
++        Choose a folder…
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_LOCATION_CHOOSE_OTHER" desc="Choice in the download location list when a folder is already chosen: opens the system folder picker.">
++        Choose another folder…
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_LOCATION_UNUSABLE" desc="Download location summary when the chosen folder can no longer be written, for example it was deleted or the permission was removed.">
++        Can't save to <ph name="FOLDER">%1$s<ex>Movies</ex></ph>. Tap to pick again
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_LOCATION_NO_PICKER" desc="Shown when the phone has no app to pick a folder.">
++        No folder picker on this phone
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_ASK_EACH_TIME" desc="Title of the setting: before each download, ask where to save it and under what name.">
++        Ask where to save each time
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_PROGRESS_NOTIFICATION" desc="Title of the switch in Settings > Downloads: show a notification with the progress of a running download.">
++        Show download progress
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_PROGRESS_NOTIFICATION_SUMMARY" desc="Under the switch Show download progress in Settings > Downloads.">
++        Live progress in the status bar and lock screen while a file downloads
++      </message>
+       <message name="IDS_BARE_TAB_VIEW_GRID" desc="Setting value: the tab switcher shows tabs as a grid of cards.">
+         Grid
+       </message>
+diff --git a/components/download/internal/common/BUILD.gn b/components/download/internal/common/BUILD.gn
+index 2c1b695e79e..1c2e8ee15d1 100644
+--- a/components/download/internal/common/BUILD.gn
++++ b/components/download/internal/common/BUILD.gn
+@@ -128,6 +128,7 @@ if (is_android) {
+   android_library("internal_java") {
+     srcjar_deps = [ ":jni_headers" ]
+     sources = [
++      "android/java/src/org/chromium/components/download/BareDownloadTree.java",
+       "android/java/src/org/chromium/components/download/DownloadCollectionBridge.java",
+       "android/java/src/org/chromium/components/download/DownloadDelegate.java",
+       "android/java/src/org/chromium/components/download/DownloadDocumentUriBridge.java",
+diff --git a/components/download/internal/common/android/download_collection_bridge.cc b/components/download/internal/common/android/download_collection_bridge.cc
+index 70ed4feb9b4..593e6cafaba 100644
+--- a/components/download/internal/common/android/download_collection_bridge.cc
++++ b/components/download/internal/common/android/download_collection_bridge.cc
+@@ -21,7 +21,8 @@ namespace download {
+ 
+ namespace {
+ // Default value for expiration duration.
+-const int kDefaultExpirationDurationInDays = 3;
++// Bare: a paused download keeps its partial file for 30 days, not 3.
++const int kDefaultExpirationDurationInDays = 30;
+ 
+ // Used by tests to simulate that a list of file names exists in the system.
+ // Must be used on main thread.
+diff --git a/components/download/internal/common/android/java/src/org/chromium/components/download/BareDownloadTree.java b/components/download/internal/common/android/java/src/org/chromium/components/download/BareDownloadTree.java
+new file mode 100644
+index 00000000000..f275b7ea0ba
+--- /dev/null
++++ b/components/download/internal/common/android/java/src/org/chromium/components/download/BareDownloadTree.java
+@@ -0,0 +1,153 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.components.download;
++
++import android.content.ContentResolver;
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.content.UriPermission;
++import android.net.Uri;
++import android.os.FileUtils;
++import android.provider.DocumentsContract;
++import android.text.TextUtils;
++
++import org.chromium.base.ContextUtils;
++import org.chromium.base.Log;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++
++import java.io.InputStream;
++import java.io.OutputStream;
++
++/**
++ * Bare: the folder the user picked for finished downloads (a Storage Access Framework tree).
++ *
++ * <p>Downloads are still written to a MediaStore pending item while they run. When one
++ * finishes, {@link DownloadCollectionBridge} asks this class to copy it into the tree. If the
++ * tree can't be written, the download is published to the phone's Download folder as usual and
++ * a fallback flag is set for the UI.
++ */
++@NullMarked
++public final class BareDownloadTree {
++    private static final String TAG = "BareDownloadTree";
++
++    /** Pref with the tree URI string. Empty or missing means the phone's Download folder. */
++    public static final String PREF_TREE_URI = "bare_download_tree_uri";
++
++    /** Pref set when a finished download had to go to the Download folder instead. */
++    public static final String PREF_TREE_FALLBACK = "bare_download_tree_fallback";
++
++    /** Name suffix of a download that is not finished yet. */
++    public static final String SUFFIX = ".baredownload";
++
++    private static final String MIME_UNKNOWN = "application/octet-stream";
++
++    private BareDownloadTree() {}
++
++    private static SharedPreferences prefs() {
++        return ContextUtils.getAppSharedPreferences();
++    }
++
++    public static @Nullable Uri get() {
++        String value = prefs().getString(PREF_TREE_URI, null);
++        return TextUtils.isEmpty(value) ? null : Uri.parse(value);
++    }
++
++    public static void set(@Nullable Uri treeUri) {
++        SharedPreferences.Editor editor = prefs().edit();
++        if (treeUri == null) {
++            editor.remove(PREF_TREE_URI);
++        } else {
++            editor.putString(PREF_TREE_URI, treeUri.toString());
++        }
++        editor.remove(PREF_TREE_FALLBACK).apply();
++    }
++
++    /** True when no tree is set, or when we still hold a write grant on it. */
++    public static boolean isUsable() {
++        Uri tree = get();
++        return tree == null || hasWriteGrant(tree);
++    }
++
++    /** Returns true once after a download could not be saved to the tree. */
++    public static boolean consumeFallback() {
++        if (!prefs().getBoolean(PREF_TREE_FALLBACK, false)) return false;
++        prefs().edit().remove(PREF_TREE_FALLBACK).apply();
++        return true;
++    }
++
++    private static boolean hasWriteGrant(Uri tree) {
++        try {
++            Context context = ContextUtils.getApplicationContext();
++            for (UriPermission p : context.getContentResolver().getPersistedUriPermissions()) {
++                if (tree.equals(p.getUri()) && p.isWritePermission()) return true;
++            }
++        } catch (Exception e) {
++            Log.w(TAG, "Can't read folder grants.");
++        }
++        return false;
++    }
++
++    /** Removes {@link #SUFFIX} from a name if it is there. */
++    public static String stripSuffix(String name) {
++        if (name.endsWith(SUFFIX) && name.length() > SUFFIX.length()) {
++            return name.substring(0, name.length() - SUFFIX.length());
++        }
++        return name;
++    }
++
++    /**
++     * Copies a finished download into the tree. Runs on the download sequence, never on the UI
++     * thread. The copy is named {@code <name>.baredownload} until it is complete.
++     *
++     * @param source Content URI of the finished MediaStore pending item.
++     * @param finalName Name the file should get in the tree.
++     * @return Document URI of the file in the tree, or null when nothing was saved there (no tree
++     *     set). On a failure the fallback flag is set and null is returned.
++     */
++    static @Nullable Uri copyIntoTree(Uri source, String finalName) {
++        Uri tree = get();
++        if (tree == null) return null;
++        if (!hasWriteGrant(tree)) {
++            markFallback();
++            return null;
++        }
++        ContentResolver resolver = ContextUtils.getApplicationContext().getContentResolver();
++        Uri created = null;
++        try {
++            Uri parent =
++                    DocumentsContract.buildDocumentUriUsingTree(
++                            tree, DocumentsContract.getTreeDocumentId(tree));
++            created =
++                    DocumentsContract.createDocument(
++                            resolver, parent, MIME_UNKNOWN, finalName + SUFFIX);
++            if (created == null) throw new IllegalStateException("createDocument");
++            try (InputStream in = resolver.openInputStream(source);
++                    OutputStream out = resolver.openOutputStream(created, "w")) {
++                if (in == null || out == null) throw new IllegalStateException("open");
++                FileUtils.copy(in, out);
++            }
++            Uri renamed = DocumentsContract.renameDocument(resolver, created, finalName);
++            Uri result = renamed != null ? renamed : created;
++            created = null;
++            return result;
++        } catch (Exception e) {
++            Log.w(TAG, "Saving to the chosen folder failed, using Download.");
++            if (created != null) {
++                try {
++                    DocumentsContract.deleteDocument(resolver, created);
++                } catch (Exception ignored) {
++                    // Nothing more to do; the leftover keeps its .baredownload name.
++                }
++            }
++            markFallback();
++            return null;
++        }
++    }
++
++    private static void markFallback() {
++        prefs().edit().putBoolean(PREF_TREE_FALLBACK, true).apply();
++    }
++}
+diff --git a/components/download/internal/common/android/java/src/org/chromium/components/download/DownloadCollectionBridge.java b/components/download/internal/common/android/java/src/org/chromium/components/download/DownloadCollectionBridge.java
+index 71f80fe7339..348b198e86e 100644
+--- a/components/download/internal/common/android/java/src/org/chromium/components/download/DownloadCollectionBridge.java
++++ b/components/download/internal/common/android/java/src/org/chromium/components/download/DownloadCollectionBridge.java
+@@ -19,6 +19,7 @@ import android.provider.MediaStore.Downloads;
+ import android.provider.MediaStore.MediaColumns;
+ import android.text.TextUtils;
+ import android.text.format.DateUtils;
++import android.webkit.MimeTypeMap;
+ 
+ import org.jni_zero.CalledByNative;
+ import org.jni_zero.JNINamespace;
+@@ -54,6 +55,8 @@ public class DownloadCollectionBridge {
+     // that of download_path_reservation_tracker.cc.
+     private static final String FILE_NAME_PATTERN = "yyyy-MM-dd'T'HHmmss.SSS";
+ 
++    private static final String MIME_UNKNOWN = "application/octet-stream";
++
+     private static final List<String> COMMON_DOUBLE_EXTENSIONS =
+             new ArrayList<String>(Arrays.asList("tar.gz", "tar.z", "tar.bz2", "tar.bz", "user.js"));
+ 
+@@ -89,7 +92,10 @@ public class DownloadCollectionBridge {
+             @JniType("std::string") String mimeType,
+             @JniType("std::string") String originalUrl,
+             @JniType("std::string") String referrer) {
+-        Uri uri = createPendingSessionInternal(fileName, mimeType, originalUrl, referrer);
++        // Bare: an unfinished download never shows up under its real name.
++        Uri uri =
++                createPendingSessionInternal(
++                        fileName + BareDownloadTree.SUFFIX, mimeType, originalUrl, referrer);
+         if (uri != null) return uri.toString();
+ 
+         // If there are too many duplicates on the same file name, createPendingSessionInternal()
+@@ -102,6 +108,7 @@ public class DownloadCollectionBridge {
+         sb.append(" - ");
+         sb.append(sdf.format(new Date()));
+         sb.append(extension);
++        sb.append(BareDownloadTree.SUFFIX);
+         uri = createPendingSessionInternal(sb.toString(), mimeType, originalUrl, referrer);
+         return uri == null ? null : uri.toString();
+     }
+@@ -170,6 +177,25 @@ public class DownloadCollectionBridge {
+         // To deal with this issue we set the mime type again after publishing.
+         // See crbug.com/1010829 for more details.
+         ContentResolver resolver = ContextUtils.getApplicationContext().getContentResolver();
++        String pendingName = getUnfinishedName(resolver, Uri.parse(intermediateUri));
++        if (pendingName != null) {
++            String finalName = BareDownloadTree.stripSuffix(pendingName);
++            Uri inTree = BareDownloadTree.copyIntoTree(Uri.parse(intermediateUri), finalName);
++            if (inTree != null) {
++                openPendingUri(intermediateUri).abandon();
++                return inTree.toString();
++            }
++            if (!renameUnfinished(resolver, intermediateUri, finalName)) {
++                SimpleDateFormat sdf = new SimpleDateFormat(FILE_NAME_PATTERN, Locale.getDefault());
++                String baseName = getBaseName(finalName);
++                String stamped =
++                        baseName
++                                + " - "
++                                + sdf.format(new Date())
++                                + finalName.substring(baseName.length());
++                renameUnfinished(resolver, intermediateUri, stamped);
++            }
++        }
+         String mimeType = null;
+         Cursor cursor = null;
+         try {
+@@ -236,7 +262,8 @@ public class DownloadCollectionBridge {
+      */
+     @CalledByNative
+     private static boolean fileNameExists(@JniType("std::string") String fileName) {
+-        return getDownloadUriForFileName(fileName) != null;
++        return getDownloadUriForFileName(fileName) != null
++                || getDownloadUriForFileName(fileName + BareDownloadTree.SUFFIX) != null;
+     }
+ 
+     /**
+@@ -338,6 +365,7 @@ public class DownloadCollectionBridge {
+         Uri downloadsUri = Downloads.EXTERNAL_CONTENT_URI;
+         String newMimeType =
+                 sDownloadDelegate.remapGenericMimeType(mimeType, originalUrl, fileName);
++        if (fileName.endsWith(BareDownloadTree.SUFFIX)) newMimeType = MIME_UNKNOWN;
+         PendingParams pendingParams = new PendingParams(downloadsUri, fileName, newMimeType);
+         Uri originalUri = sDownloadDelegate.parseOriginalUrl(originalUrl);
+         Uri referrerUri = TextUtils.isEmpty(referrer) ? null : Uri.parse(referrer);
+@@ -346,6 +374,53 @@ public class DownloadCollectionBridge {
+         return pendingParams;
+     }
+ 
++    /**
++     * Returns the display name of a pending item that still has the .baredownload suffix, or null
++     * when the item is already published or has no suffix.
++     */
++    private static @Nullable String getUnfinishedName(ContentResolver resolver, Uri uri) {
++        if (!MediaStore.AUTHORITY.equals(uri.getAuthority())) return null;
++        try (Cursor cursor =
++                resolver.query(
++                        MediaStore.setIncludePending(uri),
++                        new String[] {MediaColumns.DISPLAY_NAME, MediaColumns.IS_PENDING},
++                        null,
++                        null,
++                        null)) {
++            if (cursor == null || !cursor.moveToNext()) return null;
++            String name = cursor.getString(0);
++            if (cursor.getInt(1) != 1 || name == null) return null;
++            return name.endsWith(BareDownloadTree.SUFFIX) ? name : null;
++        } catch (Exception e) {
++            Log.e(TAG, "Unable to read pending download.", e);
++        }
++        return null;
++    }
++
++    /**
++     * Gives a finished pending item its real name and type while it is still pending, so the
++     * real name only appears once the data is complete.
++     */
++    private static boolean renameUnfinished(
++            ContentResolver resolver, String intermediateUri, String finalName) {
++        int dot = finalName.lastIndexOf('.');
++        String mimeType =
++                dot < 0
++                        ? null
++                        : MimeTypeMap.getSingleton()
++                                .getMimeTypeFromExtension(
++                                        finalName.substring(dot + 1).toLowerCase(Locale.ROOT));
++        ContentValues values = new ContentValues();
++        values.put(MediaColumns.DISPLAY_NAME, finalName);
++        values.put(MediaColumns.MIME_TYPE, mimeType == null ? MIME_UNKNOWN : mimeType);
++        try {
++            return resolver.update(Uri.parse(intermediateUri), values, null, null) == 1;
++        } catch (Exception e) {
++            Log.e(TAG, "Unable to rename finished download.", e);
++        }
++        return false;
++    }
++
+     /**
+      *  Gets the base name, without extension, from a file name.
+      *  TODO(qinmin): move this into a common utility class.
+@@ -407,7 +482,8 @@ public class DownloadCollectionBridge {
+             if (cursor != null && cursor.moveToNext()) {
+                 int index = cursor.getColumnIndex(MediaColumns.DISPLAY_NAME);
+                 if (index != -1) {
+-                    return cursor.getString(index);
++                    String name = cursor.getString(index);
++                    return name == null ? null : BareDownloadTree.stripSuffix(name);
+                 }
+             }
+         } catch (Exception e) {
+diff --git a/components/download/internal/common/download_path_reservation_tracker.cc b/components/download/internal/common/download_path_reservation_tracker.cc
+index 9eb41509233..f9fe4edd74d 100644
+--- a/components/download/internal/common/download_path_reservation_tracker.cc
++++ b/components/download/internal/common/download_path_reservation_tracker.cc
+@@ -49,7 +49,8 @@ typedef std::map<ReservationKey, base::FilePath> ReservationMap;
+ // In the file name truncation, we keep the margin to append the suffix.
+ // TODO(kinaba): remove the margin. The user should be able to set maximum
+ // possible filename.
+-const size_t kIntermediateNameSuffixLength = sizeof(".crdownload") - 1;
++// Bare: the intermediate suffix is .baredownload.
++const size_t kIntermediateNameSuffixLength = sizeof(".baredownload") - 1;
+ 
+ #if BUILDFLAG(IS_WIN)
+ // On windows, zone identifier is appended to the downloaded file name during
+diff --git a/components/download/internal/common/download_path_reservation_tracker_unittest.cc b/components/download/internal/common/download_path_reservation_tracker_unittest.cc
+index b4aa382a491..6e1bb1be078 100644
+--- a/components/download/internal/common/download_path_reservation_tracker_unittest.cc
++++ b/components/download/internal/common/download_path_reservation_tracker_unittest.cc
+@@ -296,10 +296,10 @@ TEST_F(DownloadPathReservationTrackerTest, ConflictingFiles) {
+   }
+ #endif  // BUILDFLAG(IS_ANDROID)
+   if (!use_download_collection) {
+-    // Create a file at |path|, and a .crdownload file at |path1|.
++    // Create a file at |path|, and a .baredownload file at |path1|.
+     ASSERT_TRUE(base::WriteFile(path, ""));
+     ASSERT_TRUE(base::WriteFile(
+-        base::FilePath(path1.value() + FILE_PATH_LITERAL(".crdownload")), ""));
++        base::FilePath(path1.value() + FILE_PATH_LITERAL(".baredownload")), ""));
+   }
+ 
+   ASSERT_TRUE(IsPathInUse(path));
+@@ -332,10 +332,10 @@ TEST_F(DownloadPathReservationTrackerTest, CaseConflictingFiles) {
+   }
+ #endif  // BUILDFLAG(IS_ANDROID)
+   if (!use_download_collection) {
+-    // Create a file at |path|, and a .crdownload file at |path1|.
++    // Create a file at |path|, and a .baredownload file at |path1|.
+     ASSERT_TRUE(base::WriteFile(path, ""));
+     ASSERT_TRUE(base::WriteFile(
+-        base::FilePath(path1.value() + FILE_PATH_LITERAL(".crdownload")), ""));
++        base::FilePath(path1.value() + FILE_PATH_LITERAL(".baredownload")), ""));
+   }
+ 
+   ASSERT_TRUE(IsPathInUse(path));
+@@ -748,8 +748,8 @@ TEST_F(DownloadPathReservationTrackerTest, BasicTruncation) {
+   const size_t max_length = real_max_length - strlen(":Zone.Identifier");
+ #else
+   // TODO(kinaba): the current implementation leaves spaces for appending
+-  // ".crdownload". So take it into account. Should be removed in the future.
+-  const size_t max_length = real_max_length - 11;
++  // ".baredownload". So take it into account. Should be removed in the future.
++  const size_t max_length = real_max_length - 13;
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+   std::unique_ptr<MockDownloadItem> item = CreateDownloadItem(1);
+@@ -780,7 +780,7 @@ TEST_F(DownloadPathReservationTrackerTest, TruncationConflict) {
+ #if BUILDFLAG(IS_WIN)
+   const size_t max_length = real_max_length - strlen(":Zone.Identifier");
+ #else
+-  const size_t max_length = real_max_length - 11;
++  const size_t max_length = real_max_length - 13;
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+   std::unique_ptr<MockDownloadItem> item = CreateDownloadItem(1);
+@@ -819,7 +819,7 @@ TEST_F(DownloadPathReservationTrackerTest, TruncationFail) {
+ #if BUILDFLAG(IS_WIN)
+   const size_t max_length = real_max_length - strlen(":Zone.Identifier");
+ #else
+-  const size_t max_length = real_max_length - 11;
++  const size_t max_length = real_max_length - 13;
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+   std::unique_ptr<MockDownloadItem> item = CreateDownloadItem(1);
+diff --git a/components/download/internal/common/parallel_download_utils.cc b/components/download/internal/common/parallel_download_utils.cc
+index 28173ff8308..f764cad5ef0 100644
+--- a/components/download/internal/common/parallel_download_utils.cc
++++ b/components/download/internal/common/parallel_download_utils.cc
+@@ -19,8 +19,8 @@ namespace {
+ const int64_t kMinSliceSizeParallelDownload = 1365333;
+ 
+ // Default value for |kParallelRequestCountFinchKey|, when no parameter is
+-// specified.
+-const int kParallelRequestCount = 3;
++// specified. Bare: up to 4 parts for large files.
++const int kParallelRequestCount = 4;
+ 
+ // The default remaining download time in seconds required for parallel request
+ // creation.

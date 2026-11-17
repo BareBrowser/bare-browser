@@ -1,0 +1,273 @@
+diff --git a/chrome/browser/ui/android/bars_common/java/res/values/dimens.xml b/chrome/browser/ui/android/bars_common/java/res/values/dimens.xml
+index b730f55aa40..6719f48391a 100644
+--- a/chrome/browser/ui/android/bars_common/java/res/values/dimens.xml
++++ b/chrome/browser/ui/android/bars_common/java/res/values/dimens.xml
+@@ -13,6 +13,8 @@ found in the LICENSE file.
+ 
+     <!-- Button dimensions -->
+     <dimen name="toolbar_button_width">48dp</dimen>
++    <!-- Bare: extension buttons sit closer together than the other toolbar buttons. -->
++    <dimen name="bare_extension_button_width">40dp</dimen>
+ 
+     <!-- Tab switcher icon dimensions  -->
+     <dimen name="toolbar_tab_count_text_size_1_digit">11dp</dimen>
+diff --git a/chrome/browser/ui/android/extensions/java/res/layout/extension_action_button.xml b/chrome/browser/ui/android/extensions/java/res/layout/extension_action_button.xml
+index f14a702a9ff..b27d5bda318 100644
+--- a/chrome/browser/ui/android/extensions/java/res/layout/extension_action_button.xml
++++ b/chrome/browser/ui/android/extensions/java/res/layout/extension_action_button.xml
+@@ -10,5 +10,6 @@ found in the LICENSE file.
+     xmlns:app="http://schemas.android.com/apk/res-auto"
+     style="@style/ToolbarHoverableButton"
+     android:layout_height="match_parent"
++    android:layout_width="@dimen/bare_extension_button_width"
+     app:menuVerticalOverlapAnchor="false"
+     app:menuMaxWidth="@dimen/extension_action_button_list_menu_width" />
+diff --git a/chrome/browser/ui/android/extensions/java/res/layout/extensions_toolbar_container.xml b/chrome/browser/ui/android/extensions/java/res/layout/extensions_toolbar_container.xml
+index 8ddbb30f72d..06eaeefaad4 100644
+--- a/chrome/browser/ui/android/extensions/java/res/layout/extensions_toolbar_container.xml
++++ b/chrome/browser/ui/android/extensions/java/res/layout/extensions_toolbar_container.xml
+@@ -37,7 +37,7 @@ found in the LICENSE file.
+     <org.chromium.ui.listmenu.ListMenuButton
+         android:id="@+id/extensions_menu_button"
+         android:layout_height="match_parent"
+-        android:layout_width="@dimen/toolbar_button_width"
++        android:layout_width="@dimen/bare_extension_button_width"
+         android:src="@drawable/chrome_extension"
+         android:tooltipText="@string/acc_name_extensions_button"
+         app:menuVerticalOverlapAnchor="false"
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediator.java
+index a11e0d7b3f9..7cd8d859399 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediator.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediator.java
+@@ -164,6 +164,8 @@ class ExtensionActionListMediator implements Destroyable {
+     // The action whose popup closed itself, and when, let that click count as the close.
+     private @Nullable String mDismissedActionId;
+     private long mDismissedAtUptime;
++    /** Bare: whether closing that popup already gave the tick for the touch. */
++    private boolean mDismissTicked;
+ 
+     @Nullable private final LifetimeAssert mLifetimeAssert = LifetimeAssert.create(this);
+ 
+@@ -250,7 +252,7 @@ class ExtensionActionListMediator implements Destroyable {
+      * @return The actual width that we will use up for the popped out action.
+      */
+     public int setCanShowPoppedOutAction(int availableWidth) {
+-        int itemWidth = mContext.getResources().getDimensionPixelSize(R.dimen.toolbar_button_width);
++        int itemWidth = mContext.getResources().getDimensionPixelSize(R.dimen.bare_extension_button_width);
+         if (hasPoppedOutAction() && itemWidth <= availableWidth) {
+             mCanShowPoppedOutAction = true;
+             return itemWidth;
+@@ -302,7 +304,7 @@ class ExtensionActionListMediator implements Destroyable {
+             mModels.removeAt(i);
+         }
+ 
+-        int itemWidth = mContext.getResources().getDimensionPixelSize(R.dimen.toolbar_button_width);
++        int itemWidth = mContext.getResources().getDimensionPixelSize(R.dimen.bare_extension_button_width);
+ 
+         int maxNumberOfItems = Integer.MAX_VALUE;
+         if (mAvailableWidthForPinnedActions != null) {
+@@ -630,11 +632,14 @@ class ExtensionActionListMediator implements Destroyable {
+     }
+ 
+     private void onPrimaryClick(@Nullable View view, String actionId) {
+-        if (view != null) ActionHaptics.tick(view);
++        boolean closedByThisTouch =
++                actionId.equals(mDismissedActionId)
++                        && SystemClock.uptimeMillis() - mDismissedAtUptime
++                                <= ViewConfiguration.getLongPressTimeout() + 100;
++        // One tick per tap: closing the popup may have given it already.
++        if (view != null && !(closedByThisTouch && mDismissTicked)) ActionHaptics.tick(view);
+         mClearOmniboxFocus.run();
+-        if (actionId.equals(mDismissedActionId)
+-                && SystemClock.uptimeMillis() - mDismissedAtUptime
+-                        <= ViewConfiguration.getLongPressTimeout() + 100) {
++        if (closedByThisTouch) {
+             // The touch that started this click already closed this action's popup.
+             mDismissedActionId = null;
+             return;
+@@ -786,6 +791,16 @@ class ExtensionActionListMediator implements Destroyable {
+                 && activeState.getActionId().equals(actionId)) {
+             mDismissedActionId = actionId;
+             mDismissedAtUptime = SystemClock.uptimeMillis();
++            // Bare: a tap on the action's own button closes its popup before the button sees the
++            // tap, so the tick is given here. Back or a tab change closes it with no tick.
++            mDismissTicked = false;
++            if (activeState.getPopup().wasClosedByTouchOnAnchor()) {
++                View button = mRecyclerViewDelegate.getButtonViewForId(actionId);
++                if (button != null) {
++                    ActionHaptics.tick(button);
++                    mDismissTicked = true;
++                }
++            }
+         }
+         closePopup();
+     }
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListRecyclerView.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListRecyclerView.java
+index 0ba912c43c9..f332da798dc 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListRecyclerView.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListRecyclerView.java
+@@ -150,7 +150,7 @@ public class ExtensionActionListRecyclerView extends RecyclerView {
+ 
+     private void updateRecyclerViewWidth() {
+         int itemWidth =
+-                getContext().getResources().getDimensionPixelSize(R.dimen.toolbar_button_width);
++                getContext().getResources().getDimensionPixelSize(R.dimen.bare_extension_button_width);
+         assert getAdapter() != null;
+         int newWidth = itemWidth * getAdapter().getItemCount();
+ 
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionPopup.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionPopup.java
+index 9129c53d933..6ea9681b976 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionPopup.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionPopup.java
+@@ -14,6 +14,7 @@ import android.os.Build;
+ import android.text.TextUtils;
+ import android.view.Gravity;
+ import android.view.KeyEvent;
++import android.view.MotionEvent;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.view.ViewOutlineProvider;
+@@ -78,6 +79,11 @@ class ExtensionActionPopup implements Destroyable {
+     /** The ID of the extension action this popup is associated with. */
+     private final String mActionId;
+ 
++    /** Bare: the button the popup hangs from, and whether a touch on it closed the popup. */
++    private final View mAnchorView;
++
++    private boolean mClosedByTouchOnAnchor;
++
+     /** The content manager for the popup, bridging to native. */
+     private final ExtensionActionPopupContents mContents;
+ 
+@@ -143,6 +149,7 @@ class ExtensionActionPopup implements Destroyable {
+             boolean inspectWithDevTools) {
+         mActivity = activity;
+         mActionId = actionId;
++        mAnchorView = anchorView;
+         mContents = contents;
+ 
+         WebContents webContents = contents.getWebContents();
+@@ -254,6 +261,7 @@ class ExtensionActionPopup implements Destroyable {
+                                 resources.getDimensionPixelSize(
+                                         R.dimen.extension_action_popup_min_height))
+                         .setFocusable(!inspectWithDevTools)
++                        .setTouchInterceptor(this::noteTouchOnAnchor)
+                         .build();
+     }
+ 
+@@ -407,6 +415,32 @@ class ExtensionActionPopup implements Destroyable {
+         mFullScreenWindow.showAtLocation(decor, Gravity.TOP | Gravity.START, 0, top);
+     }
+ 
++    /**
++     * Bare: a touch outside the popup closes it before the button under it sees the touch. Notes
++     * whether that touch landed on the popup's own button, so tapping the button to close the
++     * popup can tick like tapping it to open.
++     */
++    private boolean noteTouchOnAnchor(View view, MotionEvent event) {
++        if (event.getActionMasked() != MotionEvent.ACTION_OUTSIDE) return false;
++        int[] at = new int[2];
++        view.getLocationOnScreen(at);
++        float x = at[0] + event.getX();
++        float y = at[1] + event.getY();
++        mAnchorView.getLocationOnScreen(at);
++        mClosedByTouchOnAnchor =
++                mAnchorView.isShown()
++                        && x >= at[0]
++                        && x < at[0] + mAnchorView.getWidth()
++                        && y >= at[1]
++                        && y < at[1] + mAnchorView.getHeight();
++        return false;
++    }
++
++    /** Whether the popup was closed by a touch on its own button. */
++    public boolean wasClosedByTouchOnAnchor() {
++        return mClosedByTouchOnAnchor;
++    }
++
+     private void dismissWindow() {
+         if (mCardMode) {
+             RiseSheet card = mCard;
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
+index aa93cd346d6..58194015a3a 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsMenuCoordinator.java
+@@ -34,6 +34,7 @@ import org.chromium.chrome.browser.theme.ThemeColorProvider;
+ import org.chromium.chrome.browser.theme.ThemeUtils;
+ import org.chromium.chrome.browser.toolbar.MenuBuilderHelper;
+ import org.chromium.chrome.browser.toolbar.extensions.ExtensionsToolbarCoordinatorImpl.MenuButtonPinningDelegate;
++import org.chromium.chrome.browser.ui.actions.ActionHaptics;
+ import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+ import org.chromium.chrome.browser.ui.extensions.ExtensionsMenuButtonState;
+ import org.chromium.chrome.browser.ui.extensions.ExtensionsToolbarBridge;
+@@ -216,6 +217,8 @@ public class ExtensionsMenuCoordinator
+         // Menu mediator is created when menu is triggered.
+         mExtensionsMenuButton.setOnClickListener(
+                 (view) -> {
++                    // Bare: the same tick under the finger as the other toolbar buttons.
++                    ActionHaptics.tick(view);
+                     // Ignore clicks triggered by the touch-up of the gesture that just dismissed
+                     // the menu.
+                     if (mLastDismissalTimeMs != 0
+@@ -568,13 +571,9 @@ public class ExtensionsMenuCoordinator
+                 mExtensionsToolbarBridge.getMenuButtonState(
+                         webContents, iconSizeDp, iconSizeDp, density, color);
+ 
+-        if (state.getIcon() != null) {
+-            mExtensionsMenuButton.setImageBitmap(state.getIcon());
+-        } else {
+-            // Fallback just in case.
+-            int iconResId = R.drawable.chrome_extension;
+-            mExtensionsMenuButton.setImageResource(iconResId);
+-        }
++        // Bare: always the plain puzzle piece. The state icon adds a check mark when an
++        // extension can read the site, which reads like a status badge on every page.
++        mExtensionsMenuButton.setImageResource(R.drawable.chrome_extension);
+ 
+         mExtensionsMenuButton.setTooltipText(state.getTooltip());
+         mExtensionsMenuButton.setContentDescription(state.getAccessibleText());
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsToolbarCoordinatorImpl.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsToolbarCoordinatorImpl.java
+index b4dbfe53123..99d0b082895 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsToolbarCoordinatorImpl.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionsToolbarCoordinatorImpl.java
+@@ -42,7 +42,6 @@ import org.chromium.chrome.browser.ui.extensions.ExtensionsToolbarBridge;
+ import org.chromium.chrome.browser.user_education.IphCommandBuilder;
+ import org.chromium.chrome.browser.user_education.UserEducationHelper;
+ import org.chromium.components.embedder_support.contextmenu.ContextMenuPopulatorFactory;
+-import org.chromium.components.embedder_support.util.UrlUtilities;
+ import org.chromium.components.feature_engagement.FeatureConstants;
+ import org.chromium.components.prefs.PrefChangeRegistrar;
+ import org.chromium.components.prefs.PrefService;
+@@ -107,7 +106,7 @@ public class ExtensionsToolbarCoordinatorImpl
+             };
+     private boolean mIsDestroyed;
+ 
+-    // Bare: the button stays off the New tab page, which has nothing for an extension to act on.
++    // Bare: re-checks the button when the tab or its page changes.
+     private @Nullable Tab mObservedTab;
+     private final TabObserver mNewTabPageObserver =
+             new TabObserver() {
+@@ -549,12 +548,8 @@ public class ExtensionsToolbarCoordinatorImpl
+     private boolean shouldShowMenuIcon() {
+         return mExtensionsMenuCoordinator.isExtensionsMenuOpen()
+                 || mShowExtensionsMenuPending
+-                || (mCanShowMenuIcon && isMenuButtonPinned() && !isOnNewTabPage());
+-    }
+-
+-    private boolean isOnNewTabPage() {
+-        Tab tab = mObservedTab;
+-        return tab != null && UrlUtilities.isNtpUrl(tab.getUrl());
++                // Bare: a pinned button stays pinned on the new tab page too.
++                || (mCanShowMenuIcon && isMenuButtonPinned());
+     }
+ 
+     public class MenuButtonPinningDelegate {
+@@ -707,7 +702,7 @@ public class ExtensionsToolbarCoordinatorImpl
+         @Override
+         public int updateVisibility(int availableWidth) {
+             int puzzleButtonWidth =
+-                    mContainer.getResources().getDimensionPixelSize(R.dimen.toolbar_button_width);
++                    mContainer.getResources().getDimensionPixelSize(R.dimen.bare_extension_button_width);
+             mCanShowMenuIcon = puzzleButtonWidth <= availableWidth;
+ 
+             updateMenuIconVisibility();

@@ -1,0 +1,245 @@
+diff --git a/chrome/android/features/tab_ui/java/res/xml/tabs_settings.xml b/chrome/android/features/tab_ui/java/res/xml/tabs_settings.xml
+index c818bccb30e..a37995c3b6a 100644
+--- a/chrome/android/features/tab_ui/java/res/xml/tabs_settings.xml
++++ b/chrome/android/features/tab_ui/java/res/xml/tabs_settings.xml
+@@ -12,6 +12,15 @@ found in the LICENSE file.
+     <ListPreference
+         android:key="bare_tab_view"
+         android:title="@string/bare_tab_view_title" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_keyboard_on_new_tab"
++        android:title="@string/bare_keyboard_on_new_tab_title"
++        android:defaultValue="false" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_open_on_new_tab"
++        android:title="@string/bare_open_on_new_tab_title"
++        android:summary="@string/bare_open_on_new_tab_summary"
++        android:defaultValue="false" />
+     <org.chromium.components.browser_ui.settings.ChromeBasePreference
+         android:key="archive_settings_entrypoint"
+         android:title="@string/archive_settings_section_title"
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabsSettings.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabsSettings.java
+index 053ea149937..bfea82249a0 100644
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabsSettings.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabsSettings.java
+@@ -60,6 +60,13 @@ public class TabsSettings extends ChromeBaseSettingsFragment {
+     // Must match key in tabs_settings.xml
+     @VisibleForTesting static final String PREF_BARE_TAB_VIEW = "bare_tab_view";
+ 
++    // Must match key in tabs_settings.xml
++    @VisibleForTesting
++    static final String PREF_BARE_KEYBOARD_ON_NEW_TAB = "bare_keyboard_on_new_tab";
++
++    // Must match key in tabs_settings.xml
++    @VisibleForTesting static final String PREF_BARE_OPEN_ON_NEW_TAB = "bare_open_on_new_tab";
++
+     @VisibleForTesting
+     static final String PREF_SHARE_TITLES_AND_URLS_WITH_OS_SWITCH =
+             "share_titles_and_urls_with_os_switch";
+@@ -87,6 +94,8 @@ public class TabsSettings extends ChromeBaseSettingsFragment {
+         mPageTitle.set(getString(R.string.tabs_settings_title));
+ 
+         configureTabViewRow();
++        configureKeyboardOnNewTabSwitch();
++        configureOpenOnNewTabSwitch();
+         configureAutoOpenSyncedTabGroupsSwitch();
+         configureShareTitlesAndUrlsWithOsSwitch();
+         configureChromeSuggestionsInOtherAppsSwitch();
+@@ -138,6 +147,43 @@ public class TabsSettings extends ChromeBaseSettingsFragment {
+                 });
+     }
+ 
++    /** Whether a new tab opens with the keyboard up. Off unless the user turns it on. */
++    private void configureKeyboardOnNewTabSwitch() {
++        ChromeSwitchPreference row =
++                (ChromeSwitchPreference) findPreference(PREF_BARE_KEYBOARD_ON_NEW_TAB);
++        if (row == null) return;
++
++        row.setChecked(
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_KEYBOARD_ON_NEW_TAB, false));
++        row.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    ChromeSharedPreferences.getInstance()
++                            .writeBoolean(
++                                    ChromePreferenceKeys.BARE_KEYBOARD_ON_NEW_TAB,
++                                    (boolean) newValue);
++                    return true;
++                });
++    }
++
++    /** Whether Bare starts on a new tab after it was closed. Off unless the user turns it on. */
++    private void configureOpenOnNewTabSwitch() {
++        ChromeSwitchPreference row =
++                (ChromeSwitchPreference) findPreference(PREF_BARE_OPEN_ON_NEW_TAB);
++        if (row == null) return;
++
++        row.setChecked(
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_OPEN_ON_NEW_TAB, false));
++        row.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    ChromeSharedPreferences.getInstance()
++                            .writeBoolean(
++                                    ChromePreferenceKeys.BARE_OPEN_ON_NEW_TAB, (boolean) newValue);
++                    return true;
++                });
++    }
++
+     private static int tabViewLabel(String value) {
+         return BareTabViewMode.fromValue(value) == BareTabViewMode.Mode.LIST
+                 ? R.string.bare_tab_view_list
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index 07bdc3c16b5..435c46e4f95 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -2661,6 +2661,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+             boolean noRestoreState =
+                     CommandLine.getInstance().hasSwitch(ChromeSwitches.NO_RESTORE_STATE);
+             boolean shouldShowNtpAsHomeSurfaceAtStartup = false;
++            boolean bareOpenOnNewTab = false;
+             final AtomicBoolean isActiveUrlNtp = new AtomicBoolean(false);
+             if (noRestoreState) {
+                 // Clear the state files because they are inconsistent and useless from now on.
+@@ -2678,7 +2679,9 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                 Callback<String> onStandardActiveIndexRead = null;
+                 shouldShowNtpAsHomeSurfaceAtStartup = shouldShowNtpHomeSurfaceOnStartup();
+                 mHomeSurfaceTracker = new HomeSurfaceTracker();
+-                if (shouldShowNtpAsHomeSurfaceAtStartup) {
++                bareOpenOnNewTab =
++                        !shouldShowNtpAsHomeSurfaceAtStartup && shouldBareOpenOnNewTab(intent);
++                if (shouldShowNtpAsHomeSurfaceAtStartup || bareOpenOnNewTab) {
+                     onStandardActiveIndexRead =
+                             url -> {
+                                 mLastActiveTabUrl = url;
+@@ -2819,6 +2822,30 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                 ReturnToChromeUtil.recordHomeSurfaceShown();
+             }
+ 
++            // Bare: "Open Bare on a new tab". Start on a new tab in front of the restored ones,
++            // unless the tab the user left was already a new tab. Like the home surface above,
++            // the new tab is created before the restore, so the old active tab is not loaded.
++            if (bareOpenOnNewTab) {
++                if (!isIntentWithEffect
++                        && !hasTabWaitingForReparenting
++                        && mLastActiveTabUrl != null
++                        && !isActiveUrlNtp.get()) {
++                    getTabCreator(false)
++                            .createNewTab(
++                                    new LoadUrlParams(
++                                            UrlConstantResolverFactory.getForProfile(
++                                                            mTabModelSelector
++                                                                    .getModel(false)
++                                                                    .getProfile())
++                                                    .getNtpUrl()),
++                                    TabLaunchType.FROM_STARTUP,
++                                    null);
++                    activeTabBeingRestored = false;
++                    mCreatedTabOnStartup = true;
++                }
++                mLastActiveTabUrl = null;
++            }
++
+             mTabModelOrchestrator.restoreTabs(activeTabBeingRestored);
+ 
+             // Only create an initial tab if no tabs were restored, no startup URLs were loaded, and
+@@ -4540,12 +4567,36 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                 .closeTabs(TabClosureParams.closeAllTabs().build(), /* allowDialog= */ false);
+     }
+ 
++    /**
++     * Bare: whether this launch should start on a new tab ("Open Bare on a new tab" in Tabs
++     * settings). Only when Bare was closed, so this window starts with no saved state, and only
++     * for a plain launch from the launcher. A link, a share or a search opens what it carries, and
++     * coming back to a window that is still alive never gets here.
++     */
++    private boolean shouldBareOpenOnNewTab(@Nullable Intent intent) {
++        if (!ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_OPEN_ON_NEW_TAB, false)) {
++            return false;
++        }
++        if (getSavedInstanceState() != null) return false;
++        if (mSupportedProfileType == SupportedProfileType.OFF_THE_RECORD
++                || isIncognitoModeForced()) {
++            return false;
++        }
++        return intent != null && IntentUtils.isMainIntentFromLauncher(intent);
++    }
++
+     /**
+      * Bare: a new tab opened from the button, the menu or the keyboard starts with the address bar
+      * focused and the keyboard up. Posted, so it runs once the new tab is the current one, and held
+      * until the new tab has risen, so the bar stays still while the page rises.
+      */
+     private void focusAddressBarOnNewTab() {
++        // Off by default: a new tab opens without the keyboard.
++        if (!ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_KEYBOARD_ON_NEW_TAB, false)) {
++            return;
++        }
+         getWindow()
+                 .getDecorView()
+                 .post(
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index 5235cff3ec8..d234d85e6df 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -156,6 +156,7 @@ import org.chromium.chrome.browser.omnibox.suggestions.action.OmniboxActionDeleg
+ import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler;
+ import org.chromium.chrome.browser.page_info.ChromePageInfo;
+ import org.chromium.chrome.browser.partnercustomizations.PartnerBrowserCustomizations;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.readaloud.ReadAloudController;
+@@ -2542,6 +2543,11 @@ public class ToolbarManager
+      * tab has risen, so the bar stays still while the page rises.
+      */
+     public void focusAddressBarOnNewTab() {
++        // Off by default: a new tab opens without the keyboard.
++        if (!ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_KEYBOARD_ON_NEW_TAB, false)) {
++            return;
++        }
+         mActivity
+                 .getWindow()
+                 .getDecorView()
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 1660f503379..97e8b84ebe3 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -621,6 +621,12 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_TAB_VIEW = "Chrome.Bare.TabView";
+ 
++    /**
++     * Whether a new tab opens with the address bar focused and the keyboard up. Absent means off,
++     * so a new tab opens clean.
++     */
++    public static final String BARE_KEYBOARD_ON_NEW_TAB = "Chrome.Bare.KeyboardOnNewTab";
++
+     public static final String DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER =
+             "Chrome.Download.UseExternalDownloadManager";
+ 
+@@ -1444,6 +1450,7 @@ public final class ChromePreferenceKeys {
+                 BARE_UPDATE_BADGE,
+                 BARE_OPEN_LINKS_IN_APPS,
+                 BARE_TAB_VIEW,
++                BARE_KEYBOARD_ON_NEW_TAB,
+                 BARE_UPDATE_LAST_CHECK_MS,
+                 BARE_UPDATE_LATEST_TAG,
+                 BARE_UPDATE_ACKED_TAG,
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 1bcfccab055..65a9ffdda5b 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4384,6 +4384,9 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_TAB_VIEW_TITLE" desc="Title of the setting for whether the tab switcher shows tabs as a grid of cards or as a list of rows.">
+         Tab view
+       </message>
++      <message name="IDS_BARE_KEYBOARD_ON_NEW_TAB_TITLE" desc="Title of the setting for whether a new tab opens with the address bar focused and the keyboard showing.">
++        Open the keyboard on a new tab
++      </message>
+       <message name="IDS_BARE_TAB_VIEW_GRID" desc="Setting value: the tab switcher shows tabs as a grid of cards.">
+         Grid
+       </message>
