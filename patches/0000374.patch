@@ -1,0 +1,25 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/download/BareDownloadProgress.java b/chrome/android/java/src/org/chromium/chrome/browser/download/BareDownloadProgress.java
+index 5bbb51f2a01..02d97aa8446 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/download/BareDownloadProgress.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/download/BareDownloadProgress.java
+@@ -124,11 +124,18 @@ public final class BareDownloadProgress {
+             Notification notification,
+             @Nullable Progress progress,
+             boolean isOffTheRecord) {
+-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA) return notification;
++        // Bare: setRequestPromotedOngoing() arrived with Android 16 QPR2 (API 36.1). Plain Android
++        // 16 has the rest but not that call, so the gate is the minor version too.
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA
++                || Build.VERSION.SDK_INT_FULL < Build.VERSION_CODES_FULL.BAKLAVA_1) {
++            return notification;
++        }
+         if (isOffTheRecord) return notification;
+         try {
+             return promote(context, notification, progress);
+-        } catch (RuntimeException e) {
++        } catch (RuntimeException | LinkageError e) {
++            // LinkageError covers NoSuchMethodError: a missing platform call must never stop a
++            // download.
+             Log.w(TAG, "Live Update not built", e);
+             return notification;
+         }

@@ -1,0 +1,45 @@
+diff --git a/components/download/internal/common/android/java/src/org/chromium/components/download/DownloadCollectionBridge.java b/components/download/internal/common/android/java/src/org/chromium/components/download/DownloadCollectionBridge.java
+index 348b198e86e..9380c876209 100644
+--- a/components/download/internal/common/android/java/src/org/chromium/components/download/DownloadCollectionBridge.java
++++ b/components/download/internal/common/android/java/src/org/chromium/components/download/DownloadCollectionBridge.java
+@@ -92,10 +92,16 @@ public class DownloadCollectionBridge {
+             @JniType("std::string") String mimeType,
+             @JniType("std::string") String originalUrl,
+             @JniType("std::string") String referrer) {
+-        // Bare: an unfinished download never shows up under its real name.
++        // Bare: an unfinished download never shows up under its real name. An extension (.crx)
++        // keeps Chromium's own handling: its real name and the type the server gave, because the
++        // install checks that type once the download is done.
++        boolean crx = isExtensionDownload(fileName, mimeType);
+         Uri uri =
+                 createPendingSessionInternal(
+-                        fileName + BareDownloadTree.SUFFIX, mimeType, originalUrl, referrer);
++                        crx ? fileName : fileName + BareDownloadTree.SUFFIX,
++                        mimeType,
++                        originalUrl,
++                        referrer);
+         if (uri != null) return uri.toString();
+ 
+         // If there are too many duplicates on the same file name, createPendingSessionInternal()
+@@ -108,7 +114,7 @@ public class DownloadCollectionBridge {
+         sb.append(" - ");
+         sb.append(sdf.format(new Date()));
+         sb.append(extension);
+-        sb.append(BareDownloadTree.SUFFIX);
++        if (!crx) sb.append(BareDownloadTree.SUFFIX);
+         uri = createPendingSessionInternal(sb.toString(), mimeType, originalUrl, referrer);
+         return uri == null ? null : uri.toString();
+     }
+@@ -421,6 +427,12 @@ public class DownloadCollectionBridge {
+         return false;
+     }
+ 
++    /** Whether this is an extension download, by the type the server gave or by a .crx name. */
++    private static boolean isExtensionDownload(String fileName, String mimeType) {
++        return "application/x-chrome-extension".equals(mimeType)
++                || fileName.toLowerCase(Locale.ROOT).endsWith(".crx");
++    }
++
+     /**
+      *  Gets the base name, without extension, from a file name.
+      *  TODO(qinmin): move this into a common utility class.

@@ -1,0 +1,55 @@
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 4369119d9c4..6a4074730ce 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -31,6 +31,7 @@ found in the LICENSE file.
+     <string name="bare_look_and_feel_title" translatable="false">Look &amp; feel</string>
+     <string name="bare_toolbar_menu_left_title" translatable="false">Menu on the left</string>
+     <string name="bare_toolbar_menu_left_summary" translatable="false">Swaps the menu and the first button: menu on the left, sidebar on the right</string>
++    <string name="bare_toolbar_menu_left_summary_minimal" translatable="false">Only for the full bar. The minimal bar keeps the menu on the right</string>
+     <string name="bare_toolbar_always_visible_title" translatable="false">Keep toolbar visible</string>
+     <string name="bare_toolbar_always_visible_summary" translatable="false">The toolbar stays on screen while you scroll, in both layouts</string>
+     <string name="bare_toolbar_preview_hint" translatable="false">Tap a button to choose what it does</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+index 8397aec2ced..e01b0491785 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+@@ -102,6 +102,7 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+                     mPreview.refresh();
+                     return true;
+                 });
++        updateMenuLeftAvailability();
+ 
+         ChromeSwitchPreference addressBarSwipe = findPreference(PREF_ADDRESS_BAR_SWIPE);
+         assert addressBarSwipe != null;
+@@ -138,6 +139,22 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+         ListPreference position = findPreference(PREF_ADDRESS_BAR_POSITION);
+         if (position != null && position.isVisible()) updateAddressBarPositionPref(position);
+         updateShortcutInPreview();
++        updateMenuLeftAvailability();
++    }
++
++    /**
++     * Menu on the left moves the menu in the full bar only. While the minimal bar is chosen the
++     * switch is off and says so.
++     */
++    private void updateMenuLeftAvailability() {
++        ChromeSwitchPreference menuLeft = findPreference(PREF_MENU_LEFT);
++        if (menuLeft == null) return;
++        boolean minimal = BottomBarConfigUtils.isMinimalLayoutChosen();
++        menuLeft.setEnabled(!minimal);
++        menuLeft.setSummary(
++                minimal
++                        ? R.string.bare_toolbar_menu_left_summary_minimal
++                        : R.string.bare_toolbar_menu_left_summary);
+     }
+ 
+     private static final String POSITION_TOP = "top";
+@@ -316,6 +333,7 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+                         // The shortcuts on offer, and where the shortcut is drawn, follow the
+                         // layout.
+                         updateShortcutInPreview();
++                        updateMenuLeftAvailability();
+                         return true;
+                     });
+         } else {
