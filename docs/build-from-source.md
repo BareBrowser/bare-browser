@@ -11,9 +11,9 @@ emulation, and a full build takes hours.
 
 ## Build it yourself
 
-Everything runs in the container. The Chromium checkout stays in its volume, because building
-from a macOS bind mount is slow and unreliable; only small files cross to the host, through
-`exchange/`, which is the one directory shared with the container.
+The build runs in the container. The Chromium checkout stays in its volume, because building
+from a macOS bind mount is slow and unreliable; files cross through `exchange/`, the one
+directory the host shares with the container.
 
 **1. Start the container.**
 
@@ -41,7 +41,7 @@ git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git ~/dep
 mkdir -p /work/chromium && cd /work/chromium
 fetch --nohooks android
 cd src
-git checkout 800628ad1ca1fd0c51e3b43b5b2bca081e81c3f6
+git checkout 4b3d0dabb8250b6f152d2d85d79e7706e309d087
 gclient sync -D --force --reset
 ./build/install-build-deps.sh --android
 ```
@@ -119,10 +119,17 @@ autoninja -C out/Bare chrome_public_apk
 ```
 
 **6. Compare.** Your APK will not be byte-identical to the published one, because that one
-carries a signature only its key can produce. Everything else should match:
+carries a signature only its key can produce. Everything else should match. The comparison
+script runs on the host, from this repository, so first copy your APK out through `exchange/`:
 
 ```bash
-tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-2.0.7-arm64-v8a.apk
+cp out/Bare/apks/ChromePublic.apk /exchange/
+```
+
+Then, on the host, with the published APK downloaded into the repository:
+
+```bash
+tools/apk-content-hash.py exchange/ChromePublic.apk Bare-2.0.7-arm64-v8a.apk
 ```
 
 See [BUILDING.md](../BUILDING.md) for the rest of the workflow, including versioning and how
@@ -155,10 +162,10 @@ release cannot replace it in place anyway, because the signing identity delibera
 **Can you rebuild it yourself?** Yes, and that is the only one of the three that proves where a
 binary came from. The signature is deliberately not reproducible, since nobody but the key holder
 can produce it, but everything else is. Follow [Build it yourself](#build-it-yourself) exactly,
-including the version arguments, then compare:
+including the version arguments, then compare on the host:
 
 ```bash
-tools/apk-content-hash.py out/Bare/apks/ChromePublic.apk Bare-2.0.7-arm64-v8a.apk
+tools/apk-content-hash.py exchange/ChromePublic.apk Bare-2.0.7-arm64-v8a.apk
 ```
 
 It hashes every entry except the signature, so two builds of the same source agree whoever signed
