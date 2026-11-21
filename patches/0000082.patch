@@ -1,26 +1,25 @@
-From fe2cdeb0ea256724bb80df20544601a33828fb6b Mon Sep 17 00:00:00 2001
+From 667d420eee7b6559b8ea4b617f8d80a72a2d7e64 Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
-Date: Sun, 23 Aug 2026 17:30:36 +0000
+Date: Sat, 21 Nov 2026 03:45:13 +0000
 Subject: [PATCH] Patch 0000082
 
 ---
- .../browser/component_updater/registration.cc | 58 +++++++++++--------
- 1 file changed, 34 insertions(+), 24 deletions(-)
+ .../browser/component_updater/registration.cc | 61 +++++++++++--------
+ 1 file changed, 36 insertions(+), 25 deletions(-)
 
 diff --git a/chrome/browser/component_updater/registration.cc b/chrome/browser/component_updater/registration.cc
-index 9cf5a226c7f..985b66baa6d 100644
+index 6a083ad6961..87b36c34e14 100644
 --- a/chrome/browser/component_updater/registration.cc
 +++ b/chrome/browser/component_updater/registration.cc
-@@ -18,20 +18,15 @@
+@@ -18,7 +18,6 @@
  #include "chrome/browser/component_updater/ai_embeddings_component_installer.h"
  #include "chrome/browser/component_updater/captcha_provider_component_installer.h"
  #include "chrome/browser/component_updater/chrome_origin_trials_component_installer.h"
 -#include "chrome/browser/component_updater/commerce_heuristics_component_installer.h"
  #include "chrome/browser/component_updater/crl_set_component_installer.h"
  #include "chrome/browser/component_updater/crowd_deny_component_installer.h"
--#include "chrome/browser/component_updater/first_party_sets_component_installer.h"
  #include "chrome/browser/component_updater/hyphenation_component_installer.h"
- #include "chrome/browser/component_updater/indigo_component_installer.h"
+@@ -26,11 +25,8 @@
  #include "chrome/browser/component_updater/mei_preload_component_installer.h"
  #include "chrome/browser/component_updater/pki_metadata_component_installer.h"
  #include "chrome/browser/component_updater/platform_runtime_component_installer.h"
@@ -32,7 +31,7 @@ index 9cf5a226c7f..985b66baa6d 100644
  #include "chrome/browser/history_embeddings/history_embeddings_utils.h"
  #include "chrome/common/buildflags.h"
  #include "chrome/common/chrome_features.h"
-@@ -41,8 +36,6 @@
+@@ -40,8 +36,6 @@
  #include "components/component_updater/component_updater_service.h"
  #include "components/component_updater/installer_policies/actor_safety_lists_component_installer.h"
  #include "components/component_updater/installer_policies/history_search_strings_component_installer.h"
@@ -40,16 +39,16 @@ index 9cf5a226c7f..985b66baa6d 100644
 -#include "components/component_updater/installer_policies/optimization_hints_component_installer.h"
  #include "components/component_updater/installer_policies/safety_tips_component_installer.h"
  #include "components/on_device_translation/buildflags/buildflags.h"
- #include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
-@@ -63,7 +56,6 @@
- #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+ #include "components/prefs/pref_service.h"
+@@ -64,7 +58,6 @@
+ #endif  // BUILDFLAG(IS_WIN)
  
  #if BUILDFLAG(IS_ANDROID)
 -#include "chrome/browser/component_updater/real_time_url_checks_allowlist_component_installer.h"
  #else
  #include "chrome/browser/component_updater/screen_ai_component_installer.h"
  #endif  // BUILDFLAG(IS_ANDROID)
-@@ -93,7 +85,6 @@
+@@ -94,7 +87,6 @@
  
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
      BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
@@ -57,7 +56,7 @@ index 9cf5a226c7f..985b66baa6d 100644
  #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
          // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
  
-@@ -152,18 +143,31 @@ void RegisterComponentsForUpdate() {
+@@ -153,17 +145,31 @@ void RegisterComponentsForUpdate() {
    RegisterWidevineCdmComponent(cus);
  #endif  // BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)
  
@@ -67,7 +66,6 @@ index 9cf5a226c7f..985b66baa6d 100644
 -  RegisterOptimizationHintsComponent(cus);
 -  RegisterTrustTokenKeyCommitmentsComponentIfTrustTokensEnabled(cus);
 -  RegisterPrivateVerificationTokensComponentIfEnabled(cus);
--  RegisterFirstPartySetsComponent(cus);
 -  RegisterPrivacySandboxAttestationsComponent(cus);
 +  // De-Googled build: several components below are not registered.
 +  //
@@ -87,8 +85,8 @@ index 9cf5a226c7f..985b66baa6d 100644
 +  // OptimizationHints is a per-page hint feed from Google, and the chattiest of
 +  // the set.
 +  //
-+  // Trust tokens, private verification tokens, First-Party Sets and the Privacy
-+  // Sandbox attestations are all Privacy Sandbox plumbing. Without attestations
++  // Trust tokens, private verification tokens and the Privacy Sandbox
++  // attestations are all Privacy Sandbox plumbing. Without attestations
 +  // the Sandbox APIs stay off, which is the wanted answer here.
 +  //
 +  // HistorySearchStrings feeds HistoryEmbeddingsService, the on-device AI history
@@ -100,7 +98,7 @@ index 9cf5a226c7f..985b66baa6d 100644
    RegisterSSLErrorAssistantComponent(cus);
  
    RegisterIndigoComponent(cus);
-@@ -180,7 +184,9 @@ void RegisterComponentsForUpdate() {
+@@ -180,7 +186,9 @@ void RegisterComponentsForUpdate() {
  #endif  // !BUILDFLAG(IS_CHROMEOS)
  
    RegisterOriginTrialsComponent(cus);
@@ -111,7 +109,7 @@ index 9cf5a226c7f..985b66baa6d 100644
  
    MaybeRegisterPKIMetadataComponent(cus);
  
-@@ -203,14 +209,17 @@ void RegisterComponentsForUpdate() {
+@@ -203,14 +211,17 @@ void RegisterComponentsForUpdate() {
  #endif  // !BUILDFLAG(IS_ANDROID)
  
  #if BUILDFLAG(IS_ANDROID)
@@ -131,7 +129,7 @@ index 9cf5a226c7f..985b66baa6d 100644
  
  #if BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
    // TODO(crbug.com/364795294): Support other platforms.
-@@ -226,7 +235,8 @@ void RegisterComponentsForUpdate() {
+@@ -226,7 +237,8 @@ void RegisterComponentsForUpdate() {
  
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
      BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
@@ -141,3 +139,15 @@ index 9cf5a226c7f..985b66baa6d 100644
  #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
          // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
  
+@@ -250,9 +262,8 @@ void RegisterComponentsForUpdate() {
+     if (!history_embeddings::IsHistoryEmbeddingsFeatureEnabled()) {
+       DeleteHistorySearchStringsComponent(path);
+     }
+-#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+-    ManageComponentExtensionRegistrations(cus);
+-#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
++    // Bare: the AIM and New Tab Page component extensions are never registered
++    // with the updater, even if their chrome://flags entries are turned on.
+     base::ThreadPool::PostTask(
+         FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
+         base::BindOnce(&DeleteOldComponents, path));

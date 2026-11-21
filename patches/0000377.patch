@@ -1,0 +1,236 @@
+diff --git a/chrome/browser/task_manager/internal/android/BUILD.gn b/chrome/browser/task_manager/internal/android/BUILD.gn
+index a12666f2df3..e492753a7e4 100644
+--- a/chrome/browser/task_manager/internal/android/BUILD.gn
++++ b/chrome/browser/task_manager/internal/android/BUILD.gn
+@@ -66,6 +66,7 @@ android_resources("java_resources") {
+     "java/res/layout/task_manager_activity.xml",
+     "java/res/layout/task_manager_search_box.xml",
+     "java/res/layout/task_manager_toolbar.xml",
++    "java/res/values/bare_task_strings.xml",
+     "java/res/values/dimens.xml",
+     "java/res/values/styles.xml",
+   ]
+diff --git a/chrome/browser/task_manager/internal/android/java/res/values/bare_task_strings.xml b/chrome/browser/task_manager/internal/android/java/res/values/bare_task_strings.xml
+new file mode 100644
+index 00000000000..b756f65c579
+--- /dev/null
++++ b/chrome/browser/task_manager/internal/android/java/res/values/bare_task_strings.xml
+@@ -0,0 +1,50 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<resources>
++    <!-- Title of the task manager card. -->
++    <string name="bare_tasks_title">Task manager</string>
++    <!-- Button that sorts the task list by memory use. -->
++    <string name="bare_tasks_memory">Memory</string>
++    <!-- Button that sorts the task list by processor use. CPU is short for central processing unit. -->
++    <string name="bare_tasks_cpu">CPU</string>
++    <!-- Line under the title. %1$s is the total memory in use, for example 1.2 GB; %2$d is the number of tasks. -->
++    <plurals name="bare_tasks_summary">
++        <item quantity="one">%1$s in use, %2$d task</item>
++        <item quantity="other">%1$s in use, %2$d tasks</item>
++    </plurals>
++    <!-- Processor use of one task. %1$.1f is a percentage such as 2.5. -->
++    <string name="bare_tasks_cpu_value">%1$.1f%% CPU</string>
++    <!-- Details of an opened task, on two lines. %1$d is the process number; %2$s is the network use, for example 3 MB. -->
++    <string name="bare_tasks_process_network">Process %1$d\nNetwork %2$s</string>
++    <!-- Button that ends a task. -->
++    <string name="bare_tasks_end">End</string>
++    <!-- Shown in place of the End button for a task that cannot be ended. %1$s is the browser name. -->
++    <string name="bare_tasks_needed_by">Needed by %1$s</string>
++    <!-- Toast after a task was ended. %1$s is the task name. -->
++    <string name="bare_tasks_ended">Ended %1$s</string>
++    <!-- Name of the graphics process. -->
++    <string name="bare_tasks_type_graphics">Graphics</string>
++    <!-- Name of a page process that is waiting for the next tab. -->
++    <string name="bare_tasks_type_spare">Spare renderer</string>
++    <!-- Kind label of the main browser process. -->
++    <string name="bare_tasks_type_browser">Browser</string>
++    <!-- Kind label of the graphics process. -->
++    <string name="bare_tasks_type_graphics_process">Graphics process</string>
++    <!-- Kind label of a helper (utility) process. -->
++    <string name="bare_tasks_type_utility">Utility process</string>
++    <!-- Kind label of an extension. -->
++    <string name="bare_tasks_type_extension">Extension</string>
++    <!-- Kind label of a page process that is ready for the next tab. -->
++    <string name="bare_tasks_type_ready">Ready for the next tab</string>
++    <!-- Kind label of a tab. -->
++    <string name="bare_tasks_type_tab">Tab</string>
++    <!-- Kind label of a page process that is not a tab. -->
++    <string name="bare_tasks_type_page">Page process</string>
++    <!-- Kind label of any other process. -->
++    <string name="bare_tasks_type_process">Process</string>
++</resources>
+diff --git a/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java b/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java
+index b25058f46c7..aa8adf39d8c 100644
+--- a/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java
++++ b/chrome/browser/task_manager/internal/android/java/src/org/chromium/chrome/browser/task_manager/ui/BareTaskManagerCard.java
+@@ -97,7 +97,11 @@ public final class BareTaskManagerCard implements TaskManagerObserver {
+         chipParams.setMarginEnd(dp(10));
+         heading.addView(chip, chipParams);
+         heading.addView(
+-                text("Task manager", 17, true, SemanticColorUtils.getDefaultTextColor(context)));
++                text(
++                        context.getString(R.string.bare_tasks_title),
++                        17,
++                        true,
++                        SemanticColorUtils.getDefaultTextColor(context)));
+         mRoot.addView(heading);
+         mSummary = text("", 12, false, SemanticColorUtils.getDefaultTextColorSecondary(context));
+         mSummary.setPadding(dp(20), dp(2), dp(20), dp(8));
+@@ -106,8 +110,8 @@ public final class BareTaskManagerCard implements TaskManagerObserver {
+         LinearLayout chips = new LinearLayout(context);
+         chips.setOrientation(LinearLayout.HORIZONTAL);
+         chips.setPadding(dp(20), 0, dp(20), dp(6));
+-        mMemoryChip = chip("Memory");
+-        mCpuChip = chip("CPU");
++        mMemoryChip = chip(context.getString(R.string.bare_tasks_memory));
++        mCpuChip = chip(context.getString(R.string.bare_tasks_cpu));
+         mMemoryChip.setOnClickListener(v -> setSort(true));
+         mCpuChip.setOnClickListener(v -> setSort(false));
+         chips.addView(mMemoryChip);
+@@ -217,10 +221,12 @@ public final class BareTaskManagerCard implements TaskManagerObserver {
+                                 ? Long.compare(b.mMemory, a.mMemory)
+                                 : Double.compare(b.mCpu, a.mCpu));
+         mSummary.setText(
+-                Formatter.formatShortFileSize(mContext, total)
+-                        + " in use, "
+-                        + list.size()
+-                        + (list.size() == 1 ? " task" : " tasks"));
++                mContext.getResources()
++                        .getQuantityString(
++                                R.plurals.bare_tasks_summary,
++                                list.size(),
++                                Formatter.formatShortFileSize(mContext, total),
++                                list.size()));
+         mRows.removeAllViews();
+         for (Task task : list) mRows.addView(row(task));
+     }
+@@ -256,7 +262,7 @@ public final class BareTaskManagerCard implements TaskManagerObserver {
+         numbers.setOrientation(LinearLayout.VERTICAL);
+         numbers.setGravity(Gravity.END);
+         String memory = Formatter.formatShortFileSize(mContext, task.mMemory);
+-        String cpu = String.format(Locale.US, "%.1f%% CPU", task.mCpu);
++        String cpu = mContext.getString(R.string.bare_tasks_cpu_value, task.mCpu);
+         numbers.addView(
+                 text(
+                         mSortByMemory ? memory : cpu,
+@@ -279,15 +285,17 @@ public final class BareTaskManagerCard implements TaskManagerObserver {
+             more.setPadding(0, dp(8), 0, 0);
+             TextView facts =
+                     text(
+-                            "Process " + task.mProcessId
+-                                    + "\nNetwork "
+-                                    + Formatter.formatShortFileSize(mContext, task.mNetwork),
++                            mContext.getString(
++                                    R.string.bare_tasks_process_network,
++                                    task.mProcessId,
++                                    Formatter.formatShortFileSize(mContext, task.mNetwork)),
+                             12,
+                             false,
+                             SemanticColorUtils.getDefaultTextColorSecondary(mContext));
+             more.addView(facts, new LinearLayout.LayoutParams(0, -2, 1f));
+             if (task.mKillable) {
+-                TextView end = text("End", 13, true, 0xFFFFFFFF);
++                TextView end =
++                        text(mContext.getString(R.string.bare_tasks_end), 13, true, 0xFFFFFFFF);
+                 end.setGravity(Gravity.CENTER);
+                 end.setPadding(dp(20), dp(8), dp(20), dp(8));
+                 GradientDrawable pill = new GradientDrawable();
+@@ -299,8 +307,7 @@ public final class BareTaskManagerCard implements TaskManagerObserver {
+             } else {
+                 more.addView(
+                         text(
+-                                "Needed by "
+-                                        + appName(),
++                                mContext.getString(R.string.bare_tasks_needed_by, appName()),
+                                 12,
+                                 false,
+                                 SemanticColorUtils.getDefaultTextColorSecondary(mContext)));
+@@ -322,16 +329,26 @@ public final class BareTaskManagerCard implements TaskManagerObserver {
+         String name = displayName(task);
+         mBridge.killTask(task.mId);
+         mExpandedId = -1;
+-        Toast.makeText(mContext, "Ended " + name, Toast.LENGTH_SHORT).show();
++        Toast.makeText(
++                        mContext,
++                        mContext.getString(R.string.bare_tasks_ended, name),
++                        Toast.LENGTH_SHORT)
++                .show();
+     }
+ 
+     private String displayName(Task task) {
+         String title = task.mTitle;
+         if (task.mType == TaskType.BROWSER) return appName();
+-        if (task.mType == TaskType.GPU) return "Graphics";
+-        if (title.toLowerCase(Locale.US).contains("spare")) return "Spare renderer";
+-        for (String prefix : new String[] {"Tab: ", "Extension: ", "Background Page: "}) {
+-            if (title.startsWith(prefix)) return title.substring(prefix.length());
++        if (task.mType == TaskType.GPU) {
++            return mContext.getString(R.string.bare_tasks_type_graphics);
++        }
++        if (title.toLowerCase(Locale.US).contains("spare")) {
++            return mContext.getString(R.string.bare_tasks_type_spare);
++        }
++        // The browser's own task manager puts a translated prefix such as "Tab: " in front of
++        // the title, so the prefix is cut by its colon and not by English words.
++        if (task.mType == TaskType.RENDERER || task.mType == TaskType.EXTENSION) {
++            return title.substring(prefixLength(title));
+         }
+         return title;
+     }
+@@ -340,19 +357,42 @@ public final class BareTaskManagerCard implements TaskManagerObserver {
+         String title = task.mTitle.toLowerCase(Locale.US);
+         switch (task.mType) {
+             case TaskType.BROWSER:
+-                return "Browser";
++                return mContext.getString(R.string.bare_tasks_type_browser);
+             case TaskType.GPU:
+-                return "Graphics process";
++                return mContext.getString(R.string.bare_tasks_type_graphics_process);
+             case TaskType.UTILITY:
+-                return "Utility process";
++                return mContext.getString(R.string.bare_tasks_type_utility);
+             case TaskType.EXTENSION:
+-                return "Extension";
++                return mContext.getString(R.string.bare_tasks_type_extension);
+             case TaskType.RENDERER:
+-                if (title.contains("spare")) return "Ready for the next tab";
+-                return title.startsWith("tab:") ? "Tab" : "Page process";
++                if (title.contains("spare")) {
++                    return mContext.getString(R.string.bare_tasks_type_ready);
++                }
++                return mContext.getString(
++                        prefixLength(task.mTitle) > 0
++                                ? R.string.bare_tasks_type_tab
++                                : R.string.bare_tasks_type_page);
+             default:
+-                return "Process";
++                return mContext.getString(R.string.bare_tasks_type_process);
++        }
++    }
++
++    /**
++     * How many characters at the start of a title are the browser's translated prefix, for example
++     * "Tab: ". It is the text up to and including the first colon (also the full-width one) and the
++     * space after it, when that colon is near the start. Zero when there is no such prefix.
++     */
++    private static int prefixLength(String title) {
++        int limit = Math.min(title.length(), 40);
++        for (int i = 1; i < limit; i++) {
++            char c = title.charAt(i);
++            if (c == ':' || c == '\uFF1A') {
++                int end = i + 1;
++                if (end < title.length() && title.charAt(end) == ' ') end++;
++                return end;
++            }
+         }
++        return 0;
+     }
+ 
+     private TextView chip(String label) {
