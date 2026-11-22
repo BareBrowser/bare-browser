@@ -1,0 +1,242 @@
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 91a7f7ca9da..01c02511836 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -456,6 +456,7 @@ chrome_java_resources = [
+   "java/res/values-night/bare_welcome_colors.xml",
+   "java/res/values/bare_menu_strings.xml",
+   "java/res/values/bare_backup_strings.xml",
++  "java/res/values/bare_l10n_strings.xml",
+   "java/res/values/bare_backup_styles.xml",
+   "java/res/values/bare_welcome_colors.xml",
+   "java/res/drawable/bare_settings_ic_palette.xml",
+diff --git a/chrome/android/java/res/values/bare_l10n_strings.xml b/chrome/android/java/res/values/bare_l10n_strings.xml
+new file mode 100644
+index 00000000000..1a396db5385
+--- /dev/null
++++ b/chrome/android/java/res/values/bare_l10n_strings.xml
+@@ -0,0 +1,39 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<resources>
++    <!-- Title of the storage page. %1$s is the browser name. -->
++    <string name="bare_storage_title">%1$s storage</string>
++    <!-- Heading of the card that lists the sites using the most space. -->
++    <string name="bare_storage_site_storage">Site storage</string>
++    <!-- Link that opens the full list of sites. -->
++    <string name="bare_storage_manage">Manage</string>
++    <!-- Label above the amount of data kept by sites that are rarely used. -->
++    <string name="bare_storage_sites_data">Sites data</string>
++    <!-- Button that clears the data of rarely used sites. -->
++    <string name="bare_storage_free_up">Free up space</string>
++    <!-- Button, and button of the confirmation, that clears all browser data. -->
++    <string name="bare_storage_clear_all">Clear all data</string>
++    <!-- Note under the Clear all data button. -->
++    <string name="bare_storage_clear_all_note">Clear all data also removes bookmarks, history, saved logins and settings, and signs you out of every site.</string>
++    <!-- Shown in the site card when no site stores anything. -->
++    <string name="bare_storage_nothing">Nothing stored.</string>
++    <!-- Row that adds up the sites not listed. %1$d is how many sites. -->
++    <string name="bare_storage_other">Other (%1$d)</string>
++    <!-- Toast when Free up space is tapped and there is nothing to clear. -->
++    <string name="bare_storage_nothing_to_free">Nothing to free up</string>
++    <!-- Toast after Free up space finished. %1$s is the amount, for example 12 MB. -->
++    <string name="bare_storage_freed">Freed %1$s</string>
++    <!-- Title of the confirmation before all data is cleared. -->
++    <string name="bare_storage_confirm_title">Clear all data?</string>
++    <!-- Body of the confirmation before all data is cleared. -->
++    <string name="bare_storage_confirm_body">This removes bookmarks, history, saved logins and settings, and signs you out of every site. It can\'t be undone.</string>
++    <!-- Site list name for the data of the uBlock Origin extension. uBlock is a product name. -->
++    <string name="bare_storage_ubo_data">uBlock Data</string>
++    <!-- Site list name for the data of an extension that is not uBlock Origin. -->
++    <string name="bare_storage_extension_data">Extension data</string>
++</resources>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ManageSpaceActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ManageSpaceActivity.java
+index 92512e3c039..a10f113dd60 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ManageSpaceActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ManageSpaceActivity.java
+@@ -121,7 +121,7 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity {
+         ensureActivityNotExported();
+ 
+         Resources r = getResources();
+-        setTitle(r.getString(R.string.app_name) + " storage");
++        setTitle(r.getString(R.string.bare_storage_title, r.getString(R.string.app_name)));
+         setContentView(buildContent());
+         assumeNonNull(getSupportActionBar()).setDisplayHomeAsUpEnabled(true);
+ 
+@@ -262,12 +262,22 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity {
+         LinearLayout header = new LinearLayout(this);
+         header.setOrientation(LinearLayout.HORIZONTAL);
+         header.setGravity(Gravity.CENTER_VERTICAL);
+-        TextView title = text("Site storage", 14, true, SemanticColorUtils.getDefaultTextColor(this));
++        TextView title =
++                text(
++                        getString(R.string.bare_storage_site_storage),
++                        14,
++                        true,
++                        SemanticColorUtils.getDefaultTextColor(this));
+         header.addView(title);
+         mSummaryText = text("", 13, false, SemanticColorUtils.getDefaultTextColorSecondary(this));
+         mSummaryText.setPadding(dp(10), 0, 0, 0);
+         header.addView(mSummaryText, new LinearLayout.LayoutParams(0, -2, 1f));
+-        mManageLink = text("Manage", 13, false, SemanticColorUtils.getDefaultTextColorLink(this));
++        mManageLink =
++                text(
++                        getString(R.string.bare_storage_manage),
++                        13,
++                        false,
++                        SemanticColorUtils.getDefaultTextColorLink(this));
+         mManageLink.setPadding(dp(8), dp(4), 0, dp(4));
+         header.addView(mManageLink);
+         siteCard.addView(header);
+@@ -284,12 +294,20 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity {
+         LinearLayout rareText = new LinearLayout(this);
+         rareText.setOrientation(LinearLayout.VERTICAL);
+         rareText.addView(
+-                text("Sites data", 13, false, SemanticColorUtils.getDefaultTextColorSecondary(this)));
++                text(
++                        getString(R.string.bare_storage_sites_data),
++                        13,
++                        false,
++                        SemanticColorUtils.getDefaultTextColorSecondary(this)));
+         mRareSizeText = text("", 22, true, SemanticColorUtils.getDefaultTextColor(this));
+         rareText.addView(mRareSizeText);
+         rareRow.addView(rareText, new LinearLayout.LayoutParams(0, -2, 1f));
+         mFreeUpButton =
+-                text("Free up space", 13, true, SemanticColorUtils.getDefaultIconColorOnAccent1(this));
++                text(
++                        getString(R.string.bare_storage_free_up),
++                        13,
++                        true,
++                        SemanticColorUtils.getDefaultIconColorOnAccent1(this));
+         mFreeUpButton.setGravity(Gravity.CENTER);
+         mFreeUpButton.setPadding(dp(18), dp(10), dp(18), dp(10));
+         mFreeUpButton.setBackground(pill(SemanticColorUtils.getFilledButtonBgColor(this)));
+@@ -297,7 +315,7 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity {
+         rareCard.addView(rareRow);
+         page.addView(rareCard);
+ 
+-        mClearAllButton = text("Clear all data", 15, true, 0xFFFFFFFF);
++        mClearAllButton = text(getString(R.string.bare_storage_clear_all), 15, true, 0xFFFFFFFF);
+         mClearAllButton.setGravity(Gravity.CENTER);
+         mClearAllButton.setPadding(dp(14), dp(14), dp(14), dp(14));
+         mClearAllButton.setBackground(pill(0xFFC62828));
+@@ -306,8 +324,7 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity {
+         page.addView(mClearAllButton, clearParams);
+         TextView warning =
+                 text(
+-                        "Clear all data also removes bookmarks, history, saved logins and settings,"
+-                                + " and signs you out of every site.",
++                        getString(R.string.bare_storage_clear_all_note),
+                         13,
+                         false,
+                         SemanticColorUtils.getDefaultTextColorSecondary(this));
+@@ -399,7 +416,7 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity {
+         if (sites.isEmpty()) {
+             mSiteList.addView(
+                     text(
+-                            "Nothing stored.",
++                            getString(R.string.bare_storage_nothing),
+                             13,
+                             false,
+                             SemanticColorUtils.getDefaultTextColorSecondary(this)));
+@@ -414,7 +431,8 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity {
+         if (sites.size() > shown) {
+             long other = 0;
+             for (int i = shown; i < sites.size(); i++) other += sites.get(i).mBytes;
+-            mSiteList.addView(row("Other (" + (sites.size() - shown) + ")", other, max));
++            mSiteList.addView(
++                    row(getString(R.string.bare_storage_other, sites.size() - shown), other, max));
+         }
+     }
+ 
+@@ -484,7 +502,7 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity {
+     private void freeUpSpace() {
+         if (mFreeingUp) return;
+         if (mRareBytes <= 0) {
+-            Toast.makeText(this, "Nothing to free up", Toast.LENGTH_SHORT).show();
++            Toast.makeText(this, R.string.bare_storage_nothing_to_free, Toast.LENGTH_SHORT).show();
+             return;
+         }
+         mFreeingUp = true;
+@@ -500,7 +518,9 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity {
+         mFreeUpButton.setAlpha(1f);
+         Toast.makeText(
+                         this,
+-                        "Freed " + Formatter.formatFileSize(this, freedBytes),
++                        getString(
++                                R.string.bare_storage_freed,
++                                Formatter.formatFileSize(this, freedBytes)),
+                         Toast.LENGTH_SHORT)
+                 .show();
+         refreshStorageNumbers();
+@@ -534,11 +554,15 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity {
+         float corner = dp(28);
+         sheet.setCornerRadii(new float[] {corner, corner, corner, corner, 0, 0, 0, 0});
+         content.setBackground(sheet);
+-        content.addView(text("Clear all data?", 18, true, SemanticColorUtils.getDefaultTextColor(this)));
++        content.addView(
++                text(
++                        getString(R.string.bare_storage_confirm_title),
++                        18,
++                        true,
++                        SemanticColorUtils.getDefaultTextColor(this)));
+         TextView message =
+                 text(
+-                        "This removes bookmarks, history, saved logins and settings, and signs you"
+-                                + " out of every site. It can't be undone.",
++                        getString(R.string.bare_storage_confirm_body),
+                         13,
+                         false,
+                         SemanticColorUtils.getDefaultTextColorSecondary(this));
+@@ -549,11 +573,15 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity {
+         buttons.setOrientation(LinearLayout.HORIZONTAL);
+         buttons.setGravity(Gravity.END);
+         TextView cancel =
+-                text("Cancel", 14, false, SemanticColorUtils.getDefaultTextColor(this));
++                text(
++                        getString(R.string.cancel),
++                        14,
++                        false,
++                        SemanticColorUtils.getDefaultTextColor(this));
+         cancel.setPadding(dp(18), dp(10), dp(18), dp(10));
+         cancel.setOnClickListener(v -> dialog.dismiss());
+         buttons.addView(cancel);
+-        TextView confirm = text("Clear all data", 14, true, 0xFFFFFFFF);
++        TextView confirm = text(getString(R.string.bare_storage_clear_all), 14, true, 0xFFFFFFFF);
+         confirm.setPadding(dp(18), dp(10), dp(18), dp(10));
+         confirm.setBackground(pill(0xFFD85A30));
+         confirm.setOnClickListener(
+@@ -621,13 +649,15 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity {
+     }
+ 
+     /** The name of a site as people say it: no scheme and no leading www. */
+-    private static String plainName(String origin) {
++    private String plainName(String origin) {
+         String extension = "chrome-extension://";
+         if (origin.startsWith(extension)) {
+             String id = origin.substring(extension.length());
+             int slash = id.indexOf('/');
+             if (slash >= 0) id = id.substring(0, slash);
+-            return id.equals("fkgkibajhfbepljeaefdnfnegdcjomkh") ? "uBlock Data" : "Extension data";
++            return id.equals("fkgkibajhfbepljeaefdnfnegdcjomkh")
++                    ? getString(R.string.bare_storage_ubo_data)
++                    : getString(R.string.bare_storage_extension_data);
+         }
+         String name = origin;
+         int scheme = name.indexOf("://");
+@@ -635,7 +665,9 @@ public class ManageSpaceActivity extends ChromeBaseAppCompatActivity {
+         if (name.startsWith("www.")) name = name.substring(4);
+         // An extension id on its own, without the scheme in front.
+         if (name.matches("[a-p]{32}")) {
+-            return name.equals("fkgkibajhfbepljeaefdnfnegdcjomkh") ? "uBlock Data" : "Extension data";
++            return name.equals("fkgkibajhfbepljeaefdnfnegdcjomkh")
++                    ? getString(R.string.bare_storage_ubo_data)
++                    : getString(R.string.bare_storage_extension_data);
+         }
+         return name;
+     }

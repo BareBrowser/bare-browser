@@ -1,5 +1,5 @@
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
-index 43932a810d2..5235cff3ec8 100644
+index c5ba7cfeba0..3edfedfc90a 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
 @@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assertNonNull;
@@ -10,7 +10,7 @@ index 43932a810d2..5235cff3ec8 100644
  import android.app.Activity;
  import android.content.ComponentCallbacks;
  import android.content.Context;
-@@ -283,10 +284,12 @@ import org.chromium.content_public.browser.LoadUrlParams;
+@@ -289,10 +290,12 @@ import org.chromium.content_public.browser.LoadUrlParams;
  import org.chromium.content_public.browser.NavigationController;
  import org.chromium.content_public.browser.NavigationEntry;
  import org.chromium.content_public.browser.NavigationHandle;
@@ -23,7 +23,7 @@ index 43932a810d2..5235cff3ec8 100644
  import org.chromium.ui.UiUtils;
  import org.chromium.ui.animation.transition.ShrinkTransition;
  import org.chromium.ui.base.ActivityResultTracker;
-@@ -386,6 +389,8 @@ public class ToolbarManager
+@@ -392,6 +395,8 @@ public class ToolbarManager
      private MonotonicObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
      private ActivityTabProvider.ActivityTabTabObserver mActivityTabTabObserver;
      private final ActivityTabProvider mActivityTabProvider;
@@ -32,7 +32,7 @@ index 43932a810d2..5235cff3ec8 100644
      private final ActivityResultTracker mActivityResultTracker;
      private final SnackbarManager mSnackbarManager;
      private final LocationBarModel mLocationBarModel;
-@@ -1233,6 +1238,8 @@ public class ToolbarManager
+@@ -1244,6 +1249,8 @@ public class ToolbarManager
                          () -> getUrlBarViewRectProvider(),
                          this::isSendTabToSelfAvailable,
                          this::onSendTabToSelfClicked);
@@ -41,7 +41,7 @@ index 43932a810d2..5235cff3ec8 100644
          OnLongClickListener onLongClickListener =
                  mToolbarLongPressMenuHandler.getOnLongClickListener();
  
-@@ -2579,6 +2586,48 @@ public class ToolbarManager
+@@ -2603,6 +2610,48 @@ public class ToolbarManager
          return ((LocationBarCoordinator) mLocationBar).getUrlBarTextWithoutAutocomplete();
      }
  
@@ -91,10 +91,10 @@ index 43932a810d2..5235cff3ec8 100644
      public ViewRectProvider getUrlBarViewRectProvider() {
          assert mLocationBar instanceof LocationBarCoordinator
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index 966ef0cdb66..7406ab5e775 100644
+index aa2e9b71f6e..00e9fbe49b0 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -4678,6 +4678,9 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4711,6 +4711,9 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
        <message name="IDS_BARE_MINIMAL_LAYOUT_USE_MINIMAL" desc="Address bar long press menu item that switches to the minimal toolbar. [CHAR_LIMIT=40]">
          Use minimal toolbar
        </message>
@@ -105,10 +105,10 @@ index 966ef0cdb66..7406ab5e775 100644
          Use full toolbar
        </message>
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java
-index 665812c85fa..c51f8084dac 100644
+index 217db48f0bc..d57bbab9147 100644
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarLongPressMenuHandler.java
-@@ -61,13 +61,15 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+@@ -63,13 +63,15 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
          MenuItemType.MOVE_ADDRESS_BAR_TO,
          MenuItemType.COPY_LINK,
          MenuItemType.SEND_TAB_TO_SELF,
@@ -125,16 +125,16 @@ index 665812c85fa..c51f8084dac 100644
      }
  
      private @Nullable PopupWindow mPopupMenu;
-@@ -89,6 +91,8 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
-     private final ActivityLifecycleDispatcher mLifecycleDispatcher;
+@@ -92,6 +94,8 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
      private final Predicate<GURL> mIsSendTabToSelfAvailable;
      private final Runnable mOnSendTabToSelfClicked;
+     private boolean mWasBottomBarAddressBarIphShown;
 +    // Bare: scrolls the page in the current tab to its top, set by the toolbar.
 +    private @Nullable Runnable mScrollToTop;
  
      /**
       * Creates a new {@link ToolbarLongPressMenuHandler}.
-@@ -195,6 +199,11 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+@@ -193,6 +197,11 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
          return mOnLongClickListener;
      }
  
@@ -146,7 +146,7 @@ index 665812c85fa..c51f8084dac 100644
      private void displayMenu(View view) {
          boolean onTop = AddressBarPreference.isToolbarConfiguredToShowOnTop();
  
-@@ -247,6 +256,18 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+@@ -245,6 +254,18 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
      @VisibleForTesting
      ModelList buildMenuItems(boolean onTop) {
          ModelList itemList = new ModelList();
@@ -165,7 +165,7 @@ index 665812c85fa..c51f8084dac 100644
          if (mIsBottomToolbarEnabled) {
              itemList.add(
                      new ListItemBuilder()
-@@ -315,6 +336,9 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
+@@ -310,6 +331,9 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
          } else if (id == MenuItemType.TOGGLE_MINIMAL_LAYOUT) {
              BareMinimalLayoutToggle.toggle(mContext);
              return;

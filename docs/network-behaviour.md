@@ -34,6 +34,8 @@ can consult. Actor Safety Lists, the site lists of the Gemini agent this build k
 dropped in 0000149. There is no Widevine component on Android; protected video goes through the
 system's own DRM, below.
 
+Chromium 158 adds a prediction-model component. Patch 0000388 keeps it unregistered, so the component list above is the same as in 2.0.7.
+
 **Widevine provisioning contacts `www.googleapis.com`.** About a minute after startup on a fresh
 profile, Chromium has Android's MediaDrm provision two spare Widevine origin identifiers in
 advance, so that protected video can start without waiting, and the provisioning request goes to

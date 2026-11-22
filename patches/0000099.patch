@@ -1,6 +1,6 @@
-From 77797a17b5bb533da8cf645b53fd19ae4843461c Mon Sep 17 00:00:00 2001
+From d777eb4115af27c409e2281f872a37e9b9575a9a Mon Sep 17 00:00:00 2001
 From: Bare <git@barebrowser.org>
-Date: Sun, 8 Nov 2026 06:42:06 +0000
+Date: Sat, 21 Nov 2026 03:45:31 +0000
 Subject: [PATCH] Patch 0000099
 
 ---
@@ -19,11 +19,11 @@ Subject: [PATCH] Patch 0000099
  .../bottombar/BareToolbarPrefsUnitTest.java   | 165 ++++++++++++++++++
  .../bottombar/BottomBarButtonContainer.java   |  36 ++++
  .../ui/bottombar/BottomBarButtonManager.java  |  40 ++++-
- .../ui/bottombar/BottomBarCoordinator.java    |  51 +++++-
+ .../ui/bottombar/BottomBarCoordinator.java    |  50 +++++-
  .../ui/bottombar/BottomBarMediator.java       |  35 ++--
  .../bottombar/BottomBarMediatorUnitTest.java  |   4 +
  .../strings/android_chrome_strings.grd        |  39 +++++
- 19 files changed, 998 insertions(+), 22 deletions(-)
+ 19 files changed, 997 insertions(+), 22 deletions(-)
  create mode 100644 chrome/android/java/res/layout/bare_toolbar_preview.xml
  create mode 100644 chrome/android/java/res/xml/bare_toolbar_preferences.xml
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarActionUi.java
@@ -33,10 +33,10 @@ Subject: [PATCH] Patch 0000099
  create mode 100644 chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarPrefsUnitTest.java
 
 diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
-index 953d13e3348..0a86792dc2b 100644
+index 34213a4fc6e..26c1d22ae0c 100644
 --- a/chrome/android/chrome_java_resources.gni
 +++ b/chrome/android/chrome_java_resources.gni
-@@ -411,6 +411,7 @@ chrome_java_resources = [
+@@ -413,6 +413,7 @@ chrome_java_resources = [
    "java/res/drawable/xr_toolbar_rounded_rect.xml",
    "java/res/font/reader_mode_lexend.xml",
    "java/res/layout-sw600dp/find_toolbar.xml",
@@ -44,7 +44,7 @@ index 953d13e3348..0a86792dc2b 100644
    "java/res/layout/account_chooser_dialog_item.xml",
    "java/res/layout/account_chooser_dialog_title.xml",
    "java/res/layout/account_management_account_row.xml",
-@@ -650,6 +651,7 @@ chrome_java_resources = [
+@@ -653,6 +654,7 @@ chrome_java_resources = [
    "java/res/xml/account_management_preferences.xml",
    "java/res/xml/ad_services_config.xml",
    "java/res/xml/appearance_preferences.xml",
@@ -53,10 +53,10 @@ index 953d13e3348..0a86792dc2b 100644
    "java/res/xml/bookmark_widget_info.xml",
    "java/res/xml/clear_browsing_data_preferences.xml",
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
-index 7ccfd29623d..3e80068034f 100644
+index 4c110a20000..88e11ced450 100644
 --- a/chrome/android/chrome_java_sources.gni
 +++ b/chrome/android/chrome_java_sources.gni
-@@ -239,6 +239,9 @@ chrome_java_sources = [
+@@ -236,6 +236,9 @@ chrome_java_sources = [
    "java/src/org/chromium/chrome/browser/autofill/vcn/AutofillVcnEnrollBottomSheetViewBinder.java",
    "java/src/org/chromium/chrome/browser/bare/BareMediaRegistryBridge.java",
    "java/src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapter.java",
@@ -149,11 +149,11 @@ index 00000000000..c3208c12328
 +
 +</LinearLayout>
 diff --git a/chrome/android/java/res/xml/appearance_preferences.xml b/chrome/android/java/res/xml/appearance_preferences.xml
-index 50632d42d73..746444ff1b6 100644
+index c5449e8c461..509a562a0f1 100644
 --- a/chrome/android/java/res/xml/appearance_preferences.xml
 +++ b/chrome/android/java/res/xml/appearance_preferences.xml
-@@ -24,6 +24,11 @@ found in the LICENSE file.
-         android:order="2"
+@@ -30,6 +30,11 @@ found in the LICENSE file.
+         android:order="3"
          android:title="@string/bottom_bar_setting_title"
          android:summary="@string/bottom_bar_setting_summary" />
 +    <Preference
@@ -546,10 +546,10 @@ index 00000000000..3b4ef3689c9
 +    }
 +}
 diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
-index 283c5bb7c4d..07cbd599feb 100644
+index 966903240c5..ad667b2401a 100644
 --- a/chrome/android/junit/BUILD.gn
 +++ b/chrome/android/junit/BUILD.gn
-@@ -435,6 +435,7 @@ if (is_android) {
+@@ -437,6 +437,7 @@ if (is_android) {
        "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinatorUnitTest.java",
        "//chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarEnabledChangeObserverUnitTest.java",
        "src/org/chromium/chrome/browser/bare/BareButtonDataActionAdapterUnitTest.java",
@@ -724,10 +724,10 @@ index 00000000000..5776e0202b2
 +    }
 +}
 diff --git a/chrome/browser/ui/android/bottombar/BUILD.gn b/chrome/browser/ui/android/bottombar/BUILD.gn
-index 126053bed3a..3b370be1857 100644
+index 9de55c64221..88ff567d13b 100644
 --- a/chrome/browser/ui/android/bottombar/BUILD.gn
 +++ b/chrome/browser/ui/android/bottombar/BUILD.gn
-@@ -120,6 +120,7 @@ robolectric_library("junit") {
+@@ -142,6 +142,7 @@ robolectric_library("junit") {
      "java/src/org/chromium/chrome/browser/ui/bottombar/AppMenuActionButtonBinderUnitTest.java",
      "java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarActionRenderingUnitTest.java",
      "java/src/org/chromium/chrome/browser/ui/bottombar/BareToolbarLayoutUnitTest.java",
@@ -973,7 +973,7 @@ index 00000000000..42539be9123
 +    }
 +}
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonContainer.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonContainer.java
-index 42270f1e742..85692a848f3 100644
+index 9c26371eb3d..7eb3d59331f 100644
 --- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonContainer.java
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarButtonContainer.java
 @@ -8,6 +8,7 @@ import android.content.Context;
@@ -992,7 +992,7 @@ index 42270f1e742..85692a848f3 100644
      private @Nullable Drawable mTargetBackground;
      private @Nullable @BrandedColorScheme Integer mColorScheme;
      private @Px int mTargetPaddingHorizontal = -1;
-@@ -69,12 +71,18 @@ public class BottomBarButtonContainer extends FrameLayout
+@@ -70,12 +72,18 @@ public class BottomBarButtonContainer extends FrameLayout
       */
      /*package*/ void setStubLayoutResource(int layoutResource) {
          assert mTargetView == null : "Stub already inflated.";
@@ -1011,7 +1011,7 @@ index 42270f1e742..85692a848f3 100644
      /** Inflates the child ViewStub. */
      /*package*/ void inflateStub() {
          View child = getChildAt(0);
-@@ -91,6 +99,34 @@ public class BottomBarButtonContainer extends FrameLayout
+@@ -92,6 +100,34 @@ public class BottomBarButtonContainer extends FrameLayout
          assert mTargetView != null : "Stub inflation failed.";
      }
  
@@ -1121,10 +1121,10 @@ index 33a65e85fec..3c2acdbedc7 100644
       * Sets the listener for button property changes.
       *
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
-index e2de9e6cb5e..a0f086982f5 100644
+index cb07f0137c8..0ddeabdbf89 100644
 --- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarCoordinator.java
-@@ -5,17 +5,22 @@
+@@ -5,12 +5,15 @@
  package org.chromium.chrome.browser.ui.bottombar;
  
  import android.content.Context;
@@ -1140,14 +1140,15 @@ index e2de9e6cb5e..a0f086982f5 100644
  import org.chromium.base.lifetime.Destroyable;
  import org.chromium.base.supplier.NonNullObservableSupplier;
  import org.chromium.base.supplier.NullableObservableSupplier;
- import org.chromium.build.annotations.NullMarked;
-+import org.chromium.build.annotations.Nullable;
+@@ -19,6 +22,7 @@ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsVisibilityManager;
  import org.chromium.chrome.browser.layouts.LayoutStateProvider;
 +import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
  import org.chromium.chrome.browser.profiles.Profile;
  import org.chromium.chrome.browser.tab.Tab;
  import org.chromium.chrome.browser.theme.ThemeColorProvider;
-@@ -33,7 +38,8 @@ import java.util.List;
+@@ -37,7 +41,8 @@ import java.util.List;
  
  /** Coordinator for the bottom bar. */
  @NullMarked
@@ -1157,7 +1158,7 @@ index e2de9e6cb5e..a0f086982f5 100644
      private final PropertyModel mModel;
      private final BottomBarMediator mMediator;
      private final BottomBarView mView;
-@@ -103,6 +109,12 @@ public class BottomBarCoordinator implements BottomBar, Destroyable {
+@@ -140,6 +145,12 @@ public class BottomBarCoordinator implements BottomBar, Destroyable {
  
          mTabSupplier = tabSupplier;
          mMcp = PropertyModelChangeProcessor.create(mModel, mView, BottomBarViewBinder::bind);
@@ -1170,7 +1171,7 @@ index e2de9e6cb5e..a0f086982f5 100644
      }
  
      /**
-@@ -134,13 +146,17 @@ public class BottomBarCoordinator implements BottomBar, Destroyable {
+@@ -171,13 +182,17 @@ public class BottomBarCoordinator implements BottomBar, Destroyable {
                  // Inflated here rather than on first use, because the view an action needs depends
                  // on the action and the container would otherwise inflate the layout the position
                  // was written with.
@@ -1192,7 +1193,7 @@ index e2de9e6cb5e..a0f086982f5 100644
                  if (!managed) container.setVisibility(View.VISIBLE);
              }
  
-@@ -194,7 +210,32 @@ public class BottomBarCoordinator implements BottomBar, Destroyable {
+@@ -236,7 +251,32 @@ public class BottomBarCoordinator implements BottomBar, Destroyable {
      }
  
      @Override
@@ -1226,10 +1227,10 @@ index e2de9e6cb5e..a0f086982f5 100644
          mMediator.destroy();
          mMcp.destroy();
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
-index ab0d936aa95..a390868023f 100644
+index b1a77337b6f..0a0f7e21e39 100644
 --- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediator.java
-@@ -74,11 +74,6 @@ public class BottomBarMediator
+@@ -84,11 +84,6 @@ public class BottomBarMediator
      private final VisibilityDelegate mVisibilityDelegate;
      private final BottomBarPromoDialogCoordinator mPromoDialogCoordinator;
      private final NonNullObservableSupplier<Boolean> mHomepageEnabledSupplier;
@@ -1239,9 +1240,9 @@ index ab0d936aa95..a390868023f 100644
 -    // instead.
 -    private final boolean mShouldIncludeHomeButton;
      private final NonNullObservableSupplier<Boolean> mOmniboxFocusStateSupplier;
+     private final NonNullObservableSupplier<@ControlsPosition Integer> mToolbarPositionSupplier;
      private final NullableObservableSupplier<Profile> mProfileSupplier;
-     private final NullableObservableSupplier<PropertyModel> mGlicActionSupplier;
-@@ -141,7 +136,6 @@ public class BottomBarMediator
+@@ -165,7 +160,6 @@ public class BottomBarMediator
          mButtonManager = buttonManager;
          mThemeColorProvider = themeColorProvider;
          mHomepageEnabledSupplier = homepageEnabledSupplier;
@@ -1249,10 +1250,10 @@ index ab0d936aa95..a390868023f 100644
          mVisibilityDelegate = visibilityDelegate;
          mProfileSupplier = profileSupplier;
          mOmniboxFocusStateSupplier = omniboxFocusStateSupplier;
-@@ -162,9 +156,7 @@ public class BottomBarMediator
-         updateExtraActionVisibility();
+@@ -190,9 +184,7 @@ public class BottomBarMediator
          mOmniboxFocusStateSupplier.addSyncObserver(mOmniboxFocusObserver);
          updateVisibility();
+         mToolbarPositionSupplier.addSyncObserverAndCallIfNonNull(mToolbarPositionObserver);
 -        if (mShouldIncludeHomeButton) {
 -            mHomepageEnabledSupplier.addSyncObserverAndCallIfNonNull(mHomepageEnabledObserver);
 -        }
@@ -1260,7 +1261,7 @@ index ab0d936aa95..a390868023f 100644
  
          // Safe to set the listener after all observers are initialized to trigger the immediate
          // callback with the correct state.
-@@ -427,10 +419,31 @@ public class BottomBarMediator
+@@ -502,10 +494,31 @@ public class BottomBarMediator
          setButtonVisibility(ActionId.HOME_BUTTON, isEnabled);
      }
  
@@ -1292,7 +1293,7 @@ index ab0d936aa95..a390868023f 100644
      @Override
      public void onButtonVisibilityChanged(int actionId, boolean visible) {
          if (actionId == ActionId.GLIC && visible) {
-@@ -569,9 +582,7 @@ public class BottomBarMediator
+@@ -635,9 +648,7 @@ public class BottomBarMediator
      public void destroy() {
          mDestroyed = true;
          mThemeColorProvider.removeTintObserver(this);
@@ -1304,7 +1305,7 @@ index ab0d936aa95..a390868023f 100644
              ContextUtils.getAppSharedPreferences().unregisterOnSharedPreferenceChangeListener(this);
              mObservingSharedPrefs = false;
 diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediatorUnitTest.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediatorUnitTest.java
-index 98c61dfe9df..e9601c18dd0 100644
+index acb0ff237af..961106a9eb3 100644
 --- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediatorUnitTest.java
 +++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMediatorUnitTest.java
 @@ -10,6 +10,7 @@ import static org.junit.Assert.assertNotNull;
@@ -1315,7 +1316,7 @@ index 98c61dfe9df..e9601c18dd0 100644
  import static org.mockito.Mockito.clearInvocations;
  import static org.mockito.Mockito.mock;
  import static org.mockito.Mockito.never;
-@@ -103,6 +104,9 @@ public class BottomBarMediatorUnitTest {
+@@ -110,6 +111,9 @@ public class BottomBarMediatorUnitTest {
  
      @Before
      public void setUp() {
@@ -1323,15 +1324,15 @@ index 98c61dfe9df..e9601c18dd0 100644
 +        // stand-in bar has to claim it has them.
 +        when(mButtonManager.isRegistered(anyInt())).thenReturn(true);
          mHomepageEnabledSupplier = ObservableSuppliers.createNonNull(false);
-         mOmniboxFocusStateSupplier = ObservableSuppliers.createNonNull(false);
-         mProfileSupplier = ObservableSuppliers.createNullable();
+         mTabSupplier = ObservableSuppliers.createNullable();
+         mTabSupplier.set(mTab);
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-index 4eb6b70fd7b..5a7e3e11797 100644
+index 214d2a40374..843e2ad506d 100644
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -4264,6 +4264,45 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
-       <message name="IDS_TOOLBAR_SHORTCUT" desc="Title for toolbar shortcut toggle button in adaptive toolbar button preference page.">
-         Toolbar shortcut
+@@ -4294,6 +4294,45 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_ADDRESS_BAR_SHORTCUT" desc="Title for the address bar shortcut setting and toggle button in the adaptive toolbar button preference page." translateable="false">
+         Address bar shortcut
        </message>
 +      <message name="IDS_BARE_TOOLBAR_SETTINGS_TITLE" desc="Title of the settings screen for choosing which buttons appear on the browser toolbar.">
 +        Toolbar

@@ -1,0 +1,137 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+index aac7978b655..a647908f3ca 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+@@ -611,8 +611,11 @@ public final class BareVerticalTabsDrawer {
+         if (panel == null) return;
+         panel.setSide(mSide);
+         // Opening from the right, the panel is drawn the other way round: its header, its rows and
+-        // the sidebar button that closes it all sit mirrored.
+-        panel.setLayoutDirection(onRight ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
++        // the sidebar button that closes it all sit mirrored. A right-to-left language is always
++        // drawn that way, whichever edge the panel comes from.
++        boolean mirrored = onRight || BottomBarConfigUtils.isRtl(mActivity);
++        panel.setLayoutDirection(
++                mirrored ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
+         if (mToggle != null) {
+             mToggle.setImageResource(
+                     onRight
+@@ -620,7 +623,7 @@ public final class BareVerticalTabsDrawer {
+                             : R.drawable.ic_bare_vertical_tabs);
+         }
+         FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) panel.getLayoutParams();
+-        int gravity = onRight ? Gravity.RIGHT : Gravity.LEFT;
++        int gravity = BottomBarConfigUtils.isSidebarAtEnd() ? Gravity.END : Gravity.START;
+         if (params.gravity != gravity) {
+             params.gravity = gravity;
+             panel.setLayoutParams(params);
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+index b6f8fbf5504..ecb785854ad 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+@@ -1409,8 +1409,13 @@ class AppMenu implements OnKeyListener {
+                 if (event.getY() < origin[1] || event.getY() > origin[1] + child.getHeight()) {
+                     continue;
+                 }
+-                float right = origin[0] + child.getWidth();
+-                if (event.getX() < right - dp(116) || event.getX() > right - dp(52)) continue;
++                // The handle sits at the end of the row: the right in left-to-right, the left in
++                // right-to-left.
++                float fromEnd =
++                        child.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL
++                                ? event.getX() - origin[0]
++                                : origin[0] + child.getWidth() - event.getX();
++                if (fromEnd < dp(52) || fromEnd > dp(116)) continue;
+                 mRowChild = child;
+                 mRowPosition = position;
+                 mRowId = itemIdAt(position);
+@@ -1747,7 +1752,10 @@ class AppMenu implements OnKeyListener {
+                     int position = mList.getFirstVisiblePosition() + i;
+                     if (!movable(position) || position == mRowPosition) continue;
+                     View child = mList.getChildAt(i);
+-                    float centerX = child.getLeft() + child.getWidth() - dp(84);
++                    float centerX =
++                            child.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL
++                                    ? child.getLeft() + dp(84)
++                                    : child.getLeft() + child.getWidth() - dp(84);
+                     float centerY =
+                             child.getTop() + child.getTranslationY() + child.getHeight() / 2f;
+                     for (int line = -1; line <= 1; line++) {
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+index 9fbb953c6ef..62553b640df 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+@@ -442,8 +442,13 @@ final class BareMenuSheet {
+                 if (event.getY() < origin[1] || event.getY() > origin[1] + child.getHeight()) {
+                     continue;
+                 }
+-                float right = origin[0] + child.getWidth();
+-                if (event.getX() < right - dp(116) || event.getX() > right - dp(52)) continue;
++                // The handle sits at the end of the row: the right in left-to-right, the left in
++                // right-to-left.
++                float fromEnd =
++                        child.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL
++                                ? event.getX() - origin[0]
++                                : origin[0] + child.getWidth() - event.getX();
++                if (fromEnd < dp(52) || fromEnd > dp(116)) continue;
+                 mRowChild = child;
+                 mRowPosition = position;
+                 mRowId = itemIdAt(position);
+@@ -788,7 +793,10 @@ final class BareMenuSheet {
+                     int position = mList.getFirstVisiblePosition() + i;
+                     if (!movable(position) || position == mRowPosition) continue;
+                     View child = mList.getChildAt(i);
+-                    float centerX = child.getLeft() + child.getWidth() - dp(84);
++                    float centerX =
++                            child.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL
++                                    ? child.getLeft() + dp(84)
++                                    : child.getLeft() + child.getWidth() - dp(84);
+                     float centerY = child.getTop() + child.getTranslationY() + child.getHeight() / 2f;
+                     for (int line = -1; line <= 1; line++) {
+                         float y = centerY + line * dp(5);
+diff --git a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
+index ecb97a0aa6e..8d4b6dd2f14 100644
+--- a/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
++++ b/chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarConfigUtils.java
+@@ -67,13 +67,36 @@ public class BottomBarConfigUtils {
+     /**
+      * Whether the sidebar button is at the right end of the bottom bar, and so the sidebar opens
+      * from the right: the menu is on the left of the full bar. The minimal bar keeps the sidebar
+-     * on the left, and a right-to-left layout is left as the system draws it.
++     * on the left. In a right-to-left layout everything mirrors: the start is the right.
+      */
+     public static boolean isSidebarOnRight(Context context) {
+-        boolean rtl =
+-                context.getResources().getConfiguration().getLayoutDirection()
+-                        == View.LAYOUT_DIRECTION_RTL;
+-        return isMenuOnLeft() && !isMinimalLayout() && !rtl;
++        // The side is chosen once, as start or end, and only then turned into a screen edge: the
++        // end edge is the right one in a left-to-right layout and the left one in right-to-left.
++        return isSidebarAtEnd() != isRtl(context);
++    }
++
++    /**
++     * Whether the sidebar sits at the end of the bar and opens from the end edge. "Menu on the
++     * left" means the start side, so this is the same in both layout directions: the menu takes
++     * the start, the sidebar the end. The minimal bar keeps the sidebar at the start.
++     */
++    public static boolean isSidebarAtEnd() {
++        return isMenuOnLeft() && !isMinimalLayout();
++    }
++
++    /** Whether the layout runs right to left. */
++    public static boolean isRtl(Context context) {
++        return context.getResources().getConfiguration().getLayoutDirection()
++                == View.LAYOUT_DIRECTION_RTL;
++    }
++
++    /**
++     * The sign that turns an offset toward the end edge into a screen offset: 1 when the end is
++     * the right edge, -1 when it is the left. A page that comes in from the end starts at
++     * {@code endSign * width} and moves to zero.
++     */
++    public static int endSign(Context context) {
++        return isRtl(context) ? -1 : 1;
+     }
+ 
+     public static boolean isMenuOnLeft() {

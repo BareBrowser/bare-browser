@@ -1,0 +1,102 @@
+diff --git a/chrome/android/java/res/values/bare_l10n_strings.xml b/chrome/android/java/res/values/bare_l10n_strings.xml
+index 1a396db5385..e4459b64e46 100644
+--- a/chrome/android/java/res/values/bare_l10n_strings.xml
++++ b/chrome/android/java/res/values/bare_l10n_strings.xml
+@@ -36,4 +36,10 @@ found in the LICENSE file.
+     <string name="bare_storage_ubo_data">uBlock Data</string>
+     <!-- Site list name for the data of an extension that is not uBlock Origin. -->
+     <string name="bare_storage_extension_data">Extension data</string>
++    <!-- Size of a video file in the list of files a page has fetched. %1$.1f is the size in megabytes, for example 14.6. MB is megabytes. -->
++    <string name="bare_media_size_mb">%1$.1f MB</string>
++    <!-- How long ago a video file was fetched, for under a minute and a half. %1$d is the number of seconds. s is seconds. -->
++    <string name="bare_media_age_seconds">%1$d s ago</string>
++    <!-- How long ago a video file was fetched, for longer. %1$d is the number of minutes. min is minutes. -->
++    <string name="bare_media_age_minutes">%1$d min ago</string>
+ </resources>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaCandidates.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaCandidates.java
+index b3a4678d885..82fcaaf995f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaCandidates.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaCandidates.java
+@@ -4,6 +4,8 @@
+ 
+ package org.chromium.chrome.browser.bare;
+ 
++import android.content.Context;
++
+ import org.json.JSONArray;
+ import org.json.JSONException;
+ import org.json.JSONObject;
+@@ -18,7 +20,6 @@ import org.chromium.content_public.browser.WebContents;
+ 
+ import java.util.ArrayList;
+ import java.util.List;
+-import java.util.Locale;
+ 
+ /**
+  * The video files a page has fetched, for a video that has no file address of its own.
+@@ -105,15 +106,15 @@ public final class BareMediaCandidates {
+     }
+ 
+     /** A line for the list: picture size, file size, and how long ago it was last fetched. */
+-    static String label(Candidate c) {
++    static String label(Context context, Candidate c) {
+         StringBuilder out = new StringBuilder();
+         if (c.width > 0 && c.height > 0) out.append(c.width).append('x').append(c.height).append("  ");
+-        out.append(String.format(Locale.US, "%.1f MB", c.kb / 1024.0));
++        out.append(context.getString(R.string.bare_media_size_mb, c.kb / 1024.0));
+         out.append("  ");
+         if (c.ageSeconds < 90) {
+-            out.append(c.ageSeconds).append(" s ago");
++            out.append(context.getString(R.string.bare_media_age_seconds, c.ageSeconds));
+         } else {
+-            out.append(c.ageSeconds / 60).append(" min ago");
++            out.append(context.getString(R.string.bare_media_age_minutes, c.ageSeconds / 60));
+         }
+         return out.toString();
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaChooser.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaChooser.java
+index 0df1be3901a..b3126322ebf 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaChooser.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaChooser.java
+@@ -23,7 +23,9 @@ public final class BareMediaChooser {
+             List<BareMediaCandidates.Candidate> choices,
+             Callback<BareMediaCandidates.Candidate> chosen) {
+         String[] labels = new String[choices.size()];
+-        for (int i = 0; i < labels.length; i++) labels[i] = BareMediaCandidates.label(choices.get(i));
++        for (int i = 0; i < labels.length; i++) {
++            labels[i] = BareMediaCandidates.label(activity, choices.get(i));
++        }
+         new AlertDialog.Builder(activity)
+                 .setTitle(R.string.bare_video_choose_title)
+                 .setItems(labels, (dialog, which) -> chosen.onResult(choices.get(which)))
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareMediaCandidatesUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareMediaCandidatesUnitTest.java
+index 3d2fc6b5026..c91459adcdb 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareMediaCandidatesUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/bare/BareMediaCandidatesUnitTest.java
+@@ -13,6 +13,7 @@ import org.json.JSONObject;
+ import org.junit.Test;
+ import org.junit.runner.RunWith;
+ 
++import org.chromium.base.ContextUtils;
+ import org.chromium.base.test.BaseRobolectricTestRunner;
+ import org.chromium.chrome.browser.bare.BareMediaCandidates.Candidate;
+ 
+@@ -107,8 +108,16 @@ public class BareMediaCandidatesUnitTest {
+ 
+     @Test
+     public void testALineSaysSizeFileAndAge() {
+-        assertEquals("720x1280  14.6 MB  22 s ago", BareMediaCandidates.label(file("a", 14953, 22, "vide", 720, 1280)));
+-        assertEquals("1.0 MB  3 min ago", BareMediaCandidates.label(file("a", 1024, 200, "vide", 0, 0)));
++        assertEquals(
++                "720x1280  14.6 MB  22 s ago",
++                BareMediaCandidates.label(
++                        ContextUtils.getApplicationContext(),
++                        file("a", 14953, 22, "vide", 720, 1280)));
++        assertEquals(
++                "1.0 MB  3 min ago",
++                BareMediaCandidates.label(
++                        ContextUtils.getApplicationContext(),
++                        file("a", 1024, 200, "vide", 0, 0)));
+     }
+ 
+     @Test

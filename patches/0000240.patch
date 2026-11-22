@@ -48,18 +48,18 @@ index 1045b792e76..d2654cf3729 100644
              android:id="@+id/location_bar_verbose_status"
              android:layout_width="wrap_content"
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
-index 5ab9a88d5a5..33ddd5fc5c3 100644
+index b3c15b9392d..4683b065643 100644
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
-@@ -22,6 +22,7 @@ import org.chromium.build.annotations.NullMarked;
- import org.chromium.build.annotations.Nullable;
- import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxState;
+@@ -23,6 +23,7 @@ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.omnibox.fusebox.Fusebox.FuseboxState;
  import org.chromium.chrome.browser.omnibox.status.StatusCoordinator;
+ import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 +import org.chromium.chrome.browser.omnibox.status.StatusView;
  import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteCoordinator;
  import org.chromium.chrome.browser.toolbar.ToolbarVariationUtils;
  import org.chromium.components.metrics.OmniboxEventProtosIntDef.PageClassification;
-@@ -73,6 +74,10 @@ class LocationBarPhone extends LocationBarLayout {
+@@ -74,6 +75,10 @@ class LocationBarPhone extends LocationBarLayout {
      protected void onFinishInflate() {
          super.onFinishInflate();
  
@@ -70,9 +70,9 @@ index 5ab9a88d5a5..33ddd5fc5c3 100644
          if (isToolbarUiRefactorEnabled()) {
              setClickable(true);
              setLongClickable(true);
-@@ -94,18 +99,17 @@ class LocationBarPhone extends LocationBarLayout {
-                 locationBarDataProvider,
-                 windowAndroid);
+@@ -97,18 +102,17 @@ class LocationBarPhone extends LocationBarLayout {
+                 windowAndroid,
+                 resourceProvider);
  
 -        if (isToolbarUiRefactorEnabled()) {
 -            mUrlObserver =
@@ -100,7 +100,7 @@ index 5ab9a88d5a5..33ddd5fc5c3 100644
      }
  
      @Override
-@@ -133,13 +137,16 @@ class LocationBarPhone extends LocationBarLayout {
+@@ -136,13 +140,16 @@ class LocationBarPhone extends LocationBarLayout {
      protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
          try (TraceEvent e = TraceEvent.scoped("LocationBarPhone.onMeasure")) {
              boolean wasCentering = mIsCenteringApplied;
@@ -119,7 +119,7 @@ index 5ab9a88d5a5..33ddd5fc5c3 100644
                  updateUrlBarWidth(widthMeasureSpec, heightMeasureSpec);
              }
  
-@@ -181,7 +188,13 @@ class LocationBarPhone extends LocationBarLayout {
+@@ -184,7 +191,13 @@ class LocationBarPhone extends LocationBarLayout {
  
      @Override
      protected void updateCenteringUrlAndStatusState() {
@@ -134,7 +134,7 @@ index 5ab9a88d5a5..33ddd5fc5c3 100644
          if (shouldCenter != mIsCenteringApplied) {
              mIsCenteringApplied = shouldCenter;
              setCenteringUrlAndStatusConstraints(mIsCenteringApplied);
-@@ -199,12 +212,13 @@ class LocationBarPhone extends LocationBarLayout {
+@@ -202,12 +215,13 @@ class LocationBarPhone extends LocationBarLayout {
                  (ConstraintLayout.LayoutParams) mBackButton.getLayoutParams();
  
          if (shouldCenter) {
@@ -152,7 +152,7 @@ index 5ab9a88d5a5..33ddd5fc5c3 100644
              urlBarParams.endToEnd = ConstraintLayout.LayoutParams.PARENT_ID;
              urlBarParams.endToStart = ConstraintLayout.LayoutParams.UNSET;
              urlBarParams.horizontalWeight = 0;
-@@ -225,6 +239,8 @@ class LocationBarPhone extends LocationBarLayout {
+@@ -228,6 +242,8 @@ class LocationBarPhone extends LocationBarLayout {
              statusParams.startToEnd = R.id.back_button_barrier;
              statusParams.horizontalChainStyle = ConstraintLayout.LayoutParams.CHAIN_SPREAD_INSIDE;
  
@@ -161,7 +161,7 @@ index 5ab9a88d5a5..33ddd5fc5c3 100644
              urlBarParams.endToEnd = ConstraintLayout.LayoutParams.UNSET;
              urlBarParams.endToStart =
                      mFuseboxState == FuseboxState.EXPANDED
-@@ -260,13 +276,24 @@ class LocationBarPhone extends LocationBarLayout {
+@@ -263,13 +279,24 @@ class LocationBarPhone extends LocationBarLayout {
                              ? getMeasuredWidthWithMargins(mOptionalButton, heightMeasureSpec)
                              : 0;
  
@@ -188,7 +188,7 @@ index 5ab9a88d5a5..33ddd5fc5c3 100644
              maxUrlWidth = Math.max(mMinUrlWidthPx, maxUrlWidth);
  
              int desiredUrlWidth =
-@@ -413,10 +440,8 @@ class LocationBarPhone extends LocationBarLayout {
+@@ -416,10 +443,8 @@ class LocationBarPhone extends LocationBarLayout {
  
      /** Returns whether the URL and status should be centered. */
      private boolean shouldCenterUrlAndStatus() {
@@ -201,7 +201,7 @@ index 5ab9a88d5a5..33ddd5fc5c3 100644
  
          // Do not center when the URL bar is focused.
          if (mUrlBar == null || mUrlBar.hasFocus()) {
-@@ -436,6 +461,43 @@ class LocationBarPhone extends LocationBarLayout {
+@@ -439,6 +464,43 @@ class LocationBarPhone extends LocationBarLayout {
          return !OmniboxUrlUtils.isNtpUrl(mLocationBarDataProvider.getCurrentGurl());
      }
  
@@ -265,7 +265,7 @@ index 812724898c5..63c5bbeb97c 100644
      int getIconVisibility() {
          return mIconView.getVisibility();
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
-index e5290fa9d47..c114660f441 100644
+index 4be84a40543..bfc11332a31 100644
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
 @@ -9,6 +9,9 @@ import static org.chromium.build.NullUtil.assumeNonNull;
@@ -286,7 +286,7 @@ index e5290fa9d47..c114660f441 100644
  import org.chromium.chrome.browser.theme.ThemeUtils;
  import org.chromium.chrome.browser.ui.extensions.ExtensionUi;
  import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
-@@ -143,6 +147,32 @@ public class StatusMediator
+@@ -146,6 +150,32 @@ public class StatusMediator
              this::onAutocompleteStateChanged;
  
      private boolean mUrlHasFocus;
@@ -319,7 +319,7 @@ index e5290fa9d47..c114660f441 100644
      private boolean mVerboseStatusSpaceAvailable;
      private boolean mPageIsPaintPreview;
      private boolean mPageIsOffline;
-@@ -258,6 +288,10 @@ public class StatusMediator
+@@ -261,6 +291,10 @@ public class StatusMediator
      }
  
      public void destroy() {
@@ -330,7 +330,7 @@ index e5290fa9d47..c114660f441 100644
          if (mSearchEngineService != null) {
              mSearchEngineService.removeIconObserver(this);
              mSearchEngineService = null;
-@@ -395,6 +429,7 @@ public class StatusMediator
+@@ -398,6 +432,7 @@ public class StatusMediator
          if (mUrlHasFocus) return;
  
          mUrlHasFocus = true;
@@ -338,7 +338,7 @@ index e5290fa9d47..c114660f441 100644
          setFuseboxSessionState(sessionState);
          updateVerboseStatusTextVisibility();
          updateLocationBarIcon(IconTransitionType.CROSSFADE);
-@@ -410,6 +445,7 @@ public class StatusMediator
+@@ -413,6 +448,7 @@ public class StatusMediator
          if (!mUrlHasFocus) return;
  
          mUrlHasFocus = false;
@@ -346,7 +346,7 @@ index e5290fa9d47..c114660f441 100644
          setFuseboxSessionState(null);
          updateVerboseStatusTextVisibility();
          updateLocationBarIcon(IconTransitionType.CROSSFADE);
-@@ -828,7 +864,7 @@ public class StatusMediator
+@@ -831,7 +867,7 @@ public class StatusMediator
       */
      boolean shouldDisplaySearchEngineIcon() {
          if (PageClassificationUtils.isHubOrTabSearch(
@@ -355,7 +355,7 @@ index e5290fa9d47..c114660f441 100644
              return false;
          }
  
-@@ -958,6 +994,75 @@ public class StatusMediator
+@@ -961,6 +997,75 @@ public class StatusMediator
          }
      }
  
@@ -431,7 +431,7 @@ index e5290fa9d47..c114660f441 100644
      @VisibleForTesting
      /* package */ void onFaviconFetched(GURL url, @Nullable Drawable favicon) {
          // If we're not the most recent fetch request, give up.
-@@ -1061,6 +1166,7 @@ public class StatusMediator
+@@ -1064,6 +1169,7 @@ public class StatusMediator
      }
  
      public void onUrlChanged() {
@@ -590,7 +590,7 @@ index 096deb8c709..2f22234078c 100644
                  == StatusProperties.STATUS_ACCESSIBILITY_DOUBLE_TAP_DESCRIPTION_RES) {
              view.setStatusAccessibilityDoubleTapDescription(
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
-index 04287a5d02d..d172cb29687 100644
+index d617ab37083..0a4d8591b70 100644
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java
 @@ -45,6 +45,7 @@ import android.view.ViewGroup;
@@ -620,7 +620,7 @@ index 04287a5d02d..d172cb29687 100644
  import org.chromium.chrome.browser.toolbar.home_button.HomeButtonCoordinator;
  import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonCoordinator;
  import org.chromium.chrome.browser.toolbar.optional_button.ButtonData;
-@@ -731,9 +732,10 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -736,9 +737,10 @@ public class ToolbarPhone extends ToolbarLayout
      private int mBareUrlBarEndPadding = -1;
  
      /**
@@ -634,7 +634,7 @@ index 04287a5d02d..d172cb29687 100644
       */
      private void applyExtensionsInsideLocationBar() {
          View locationBar = findViewById(R.id.location_bar);
-@@ -746,8 +748,14 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -751,8 +753,14 @@ public class ToolbarPhone extends ToolbarLayout
          float density = getResources().getDisplayMetrics().density;
          int extensions = getExtensionsWidthInsideLocationBar();
          boolean minimal = BottomBarConfigUtils.isMinimalLayout();
@@ -651,7 +651,7 @@ index 04287a5d02d..d172cb29687 100644
          int margin = extensions > 0 && !minimal ? mToolbarSidePadding + share : 0;
          ViewGroup.MarginLayoutParams params =
                  (ViewGroup.MarginLayoutParams) mToolbarButtonsContainer.getLayoutParams();
-@@ -775,33 +783,68 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -780,33 +788,68 @@ public class ToolbarPhone extends ToolbarLayout
      }
  
      /**
@@ -737,7 +737,7 @@ index 04287a5d02d..d172cb29687 100644
          if (urlBar.getPaddingEnd() != want) {
              urlBar.setPaddingRelative(
                      urlBar.getPaddingStart(),
-@@ -1018,7 +1061,8 @@ public class ToolbarPhone extends ToolbarLayout
+@@ -1023,7 +1066,8 @@ public class ToolbarPhone extends ToolbarLayout
       * Bare: on the full toolbar the extensions icon sits inside the address bar, next to the share
       * icon, instead of past its right edge.
       *

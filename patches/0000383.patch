@@ -1,0 +1,136 @@
+diff --git a/chrome/android/java/res/xml/bare_toolbar_preferences.xml b/chrome/android/java/res/xml/bare_toolbar_preferences.xml
+index 59b70672186..90a4dab722c 100644
+--- a/chrome/android/java/res/xml/bare_toolbar_preferences.xml
++++ b/chrome/android/java/res/xml/bare_toolbar_preferences.xml
+@@ -31,6 +31,13 @@ found in the LICENSE file.
+             android:persistent="false"
+             android:title="@string/bare_toolbar_always_visible_title"
+             android:summary="@string/bare_toolbar_always_visible_summary" />
++
++        <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++            android:key="bare_address_bar_back_button"
++            android:order="3"
++            android:persistent="false"
++            android:title="@string/bare_pref_addressbar_back_title"
++            android:summary="@string/bare_pref_addressbar_back_summary" />
+     </PreferenceCategory>
+ 
+     <PreferenceCategory
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index ad2ac2efcdb..4f3e17e39fa 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -34,6 +34,8 @@ found in the LICENSE file.
+     <string name="bare_toolbar_menu_left_summary_minimal">Only for the full bar. The minimal bar keeps the menu on the right</string>
+     <string name="bare_toolbar_always_visible_title">Keep toolbar visible</string>
+     <string name="bare_toolbar_always_visible_summary">The toolbar stays on screen while you scroll, in both layouts</string>
++    <string name="bare_pref_addressbar_back_title">Back button on the address bar</string>
++    <string name="bare_pref_addressbar_back_summary">Show a back arrow inside the address bar. Back still works from the system back button or gesture</string>
+     <string name="bare_toolbar_preview_hint">Tap a button to choose what it does</string>
+     <string name="bare_toolbar_preview_legend">Tap to change</string>
+     <string name="bare_welcome_toolbar_title">Your toolbar</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+index e01b0491785..7d4024746c2 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+@@ -24,6 +24,7 @@ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
+ import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
+ import org.chromium.chrome.browser.toolbar.BareMinimalLayoutToggle;
+ import org.chromium.chrome.browser.toolbar.ToolbarPositionController.ToolbarPositionAndSource;
++import org.chromium.chrome.browser.toolbar.ToolbarVariationUtils;
+ import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
+ import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarFeatures;
+ import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarPrefs;
+@@ -72,6 +73,7 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+     static final String PREF_RESET = "bare_toolbar_reset";
+     static final String PREF_SWIPE = "bare_toolbar_swipe_action";
+     static final String PREF_ADDRESS_BAR_SWIPE = "bare_address_bar_swipe_tabs";
++    static final String PREF_ADDRESS_BAR_BACK = "bare_address_bar_back_button";
+ 
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+             ObservableSuppliers.createMonotonic();
+@@ -353,6 +355,18 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+                                     (boolean) newValue);
+                     return true;
+                 });
++
++        ChromeSwitchPreference addressBarBack = findPreference(PREF_ADDRESS_BAR_BACK);
++        assert addressBarBack != null;
++        addressBarBack.setChecked(ToolbarVariationUtils.isAddressBarBackButtonOn());
++        addressBarBack.setOnPreferenceChangeListener(
++                (pref, newValue) -> {
++                    ChromeSharedPreferences.getInstance()
++                            .writeBoolean(
++                                    ChromePreferenceKeys.BARE_ADDRESS_BAR_BACK_BUTTON,
++                                    (boolean) newValue);
++                    return true;
++                });
+     }
+ 
+     /**
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 62da5d5e2e6..9b98b0438ab 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -427,6 +427,12 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_ADDRESS_BAR_SWIPE_TABS = "Bare.Toolbar.AddressBarSwipeTabs";
+ 
++    /**
++     * De-Googled build: whether the address bar carries its own back arrow. Off unless the user
++     * turns it on; back stays available from the system back button and gesture.
++     */
++    public static final String BARE_ADDRESS_BAR_BACK_BUTTON = "Bare.Toolbar.AddressBarBackButton";
++
+     /**
+      * De-Googled build: how an extension's own interface opens. 0 or absent is the popup under its
+      * toolbar button, 1 is a full-screen view with a close button, 2 is a card that rises from
+@@ -1526,6 +1532,7 @@ public final class ChromePreferenceKeys {
+                 BARE_NTP_LOGO,
+                 BARE_USER_AGENT_PRESET,
+                 BARE_ADDRESS_BAR_SWIPE_TABS,
++                BARE_ADDRESS_BAR_BACK_BUTTON,
+                 BARE_EXTENSION_PRESENTATION,
+                 BARE_QUICK_CRX,
+                 BARE_PUSH_DISTRIBUTOR,
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
+index 92049c86170..e4ab5831844 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
+@@ -2390,6 +2390,7 @@ public class LocationBarMediator
+         boolean showBackButton =
+                 ToolbarVariationUtils.isToolbarUiRefactorEnabled(mContext)
+                         && ToolbarVariationUtils.shouldBackButtonBeInOmnibox()
++                        && ToolbarVariationUtils.isAddressBarBackButtonOn()
+                         && !mMiniOriginMode
+                         && !mUrlHasFocus
+                         && !isNtp;
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarVariationUtils.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarVariationUtils.java
+index 9a3b3295be1..305174d209f 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarVariationUtils.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarVariationUtils.java
+@@ -8,6 +8,8 @@ import android.content.Context;
+ 
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+ 
+ /** Utility class for determining the configuration of the toolbar variations. */
+@@ -16,6 +18,15 @@ public final class ToolbarVariationUtils {
+ 
+     private ToolbarVariationUtils() {}
+ 
++    /**
++     * Bare: whether the address bar shows its own back arrow. Off until the user turns it on in
++     * Settings; the system back button and gesture always work.
++     */
++    public static boolean isAddressBarBackButtonOn() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_ADDRESS_BAR_BACK_BUTTON, false);
++    }
++
+     /** Whether the back button should be in the omnibox. */
+     public static boolean shouldBackButtonBeInOmnibox() {
+         // Returns true if app menu is not kept in toolbar (Arm 1A).
