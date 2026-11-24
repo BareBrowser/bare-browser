@@ -1,0 +1,1982 @@
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+index 9e72a40d4fc62..ff4362ceda5ae 100644
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -2896,6 +2896,8 @@ if (_is_default_toolchain) {
+       "java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java",
+       "java/src/org/chromium/chrome/browser/bare/canvas/BareCanvasBlockBridge.java",
+       "java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java",
++      "java/src/org/chromium/chrome/browser/bare/BarePageColorSampler.java",
++      "java/src/org/chromium/chrome/browser/bare/BareStatusFadeSceneLayer.java",
+       "java/src/org/chromium/chrome/browser/browserservices/digitalgoods/SiteIsolator.java",
+       "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappBridge.java",
+       "java/src/org/chromium/chrome/browser/browserservices/permissiondelegation/InstalledWebappGeolocationBridge.java",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index c358a5371ec8d..213e85adc7a09 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -301,6 +301,10 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BareMinimalRightButton.java",
+   "java/src/org/chromium/chrome/browser/bare/BareNewTabRise.java",
+   "java/src/org/chromium/chrome/browser/bare/BarePullOffset.java",
++  "java/src/org/chromium/chrome/browser/bare/BarePinnedOffset.java",
++  "java/src/org/chromium/chrome/browser/bare/BareStatusBarLayer.java",
++  "java/src/org/chromium/chrome/browser/bare/BarePageColorSampler.java",
++  "java/src/org/chromium/chrome/browser/bare/BareStatusFadeSceneLayer.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareMadeWithLovePreference.java",
+   "java/src/org/chromium/chrome/browser/bare/settings/BareUpdatePreference.java",
+   "java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java",
+diff --git a/chrome/android/java/res/layout/bare_toolbar_preview.xml b/chrome/android/java/res/layout/bare_toolbar_preview.xml
+index ce72d16f71e1b..c08ade97e46d0 100644
+--- a/chrome/android/java/res/layout/bare_toolbar_preview.xml
++++ b/chrome/android/java/res/layout/bare_toolbar_preview.xml
+@@ -186,8 +186,9 @@ fixed.
+ 
+         <TextView
+             android:id="@+id/bare_preview_legend"
+-            android:layout_width="match_parent"
++            android:layout_width="wrap_content"
+             android:layout_height="wrap_content"
++            android:layout_gravity="center_horizontal"
+             android:gravity="center"
+             android:drawableStart="@drawable/bare_preview_ring"
+             android:drawablePadding="8dp"
+diff --git a/chrome/android/java/res/xml/bare_toolbar_preferences.xml b/chrome/android/java/res/xml/bare_toolbar_preferences.xml
+index 90a4dab722c19..c597a3a02cbc8 100644
+--- a/chrome/android/java/res/xml/bare_toolbar_preferences.xml
++++ b/chrome/android/java/res/xml/bare_toolbar_preferences.xml
+@@ -38,6 +38,13 @@ found in the LICENSE file.
+             android:persistent="false"
+             android:title="@string/bare_pref_addressbar_back_title"
+             android:summary="@string/bare_pref_addressbar_back_summary" />
++
++        <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++            android:key="bare_keep_status_bar_shown"
++            android:order="4"
++            android:persistent="false"
++            android:title="@string/bare_keep_status_bar_shown_title"
++            android:summary="@string/bare_keep_status_bar_shown_summary" />
+     </PreferenceCategory>
+ 
+     <PreferenceCategory
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 4f3e17e39fa71..8edb33b2a4833 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -34,6 +34,8 @@ found in the LICENSE file.
+     <string name="bare_toolbar_menu_left_summary_minimal">Only for the full bar. The minimal bar keeps the menu on the right</string>
+     <string name="bare_toolbar_always_visible_title">Keep toolbar visible</string>
+     <string name="bare_toolbar_always_visible_summary">The toolbar stays on screen while you scroll, in both layouts</string>
++    <string name="bare_keep_status_bar_shown_title" translatable="false">Keep status bar shown</string>
++    <string name="bare_keep_status_bar_shown_summary" translatable="false">Time and notifications stay visible while you scroll</string>
+     <string name="bare_pref_addressbar_back_title">Back button on the address bar</string>
+     <string name="bare_pref_addressbar_back_summary">Show a back arrow inside the address bar. Back still works from the system back button or gesture</string>
+     <string name="bare_toolbar_preview_hint">Tap a button to choose what it does</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePageColorSampler.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePageColorSampler.java
+new file mode 100644
+index 0000000000000..03436d2090bb5
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePageColorSampler.java
+@@ -0,0 +1,104 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.graphics.Color;
++import android.os.Handler;
++import android.os.Looper;
++
++import androidx.annotation.ColorInt;
++
++import org.jni_zero.JNINamespace;
++import org.jni_zero.NativeMethods;
++
++import org.chromium.base.Callback;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.content_public.browser.WebContents;
++
++/**
++ * Reads a 5-wide strip of the page surface under the status-bar fade. At most one readback is in
++ * flight. The browser window is not the source, so the fade cannot feed itself.
++ */
++@JNINamespace("android")
++@NullMarked
++public class BarePageColorSampler {
++    /** Euclidean RGB distance. Solid sections agree; a photograph does not. */
++    private static final int MAX_DISTANCE_SQ = 30 * 30;
++
++    private static final Handler HANDLER = new Handler(Looper.getMainLooper());
++    private static boolean sInFlight;
++
++    /**
++     * Starts a readback of the row at {@code sampleScreenY} in window pixels.
++     *
++     * @return false when a readback is already in flight or the tab has no page surface. The
++     *     callback receives five opaque colors, or an empty array when the readback fails.
++     */
++    public static boolean request(Tab tab, int sampleScreenY, Callback<int[]> callback) {
++        if (sInFlight) return false;
++        WebContents webContents = tab.getWebContents();
++        if (webContents == null || webContents.isDestroyed()) return false;
++        sInFlight = true;
++        BarePageColorSamplerJni.get()
++                .sample(
++                        tab,
++                        sampleScreenY,
++                        (int[] colors) ->
++                                HANDLER.post(
++                                        () -> {
++                                            sInFlight = false;
++                                            callback.onResult(colors);
++                                        }));
++        return true;
++    }
++
++    /**
++     * Average of the largest cluster when at least four of the five samples are within {@link
++     * #MAX_DISTANCE_SQ}. Returns null when they disagree, so the caller keeps the previous color.
++     */
++    public static @Nullable @ColorInt Integer agreedColor(@ColorInt int[] samples) {
++        if (samples.length != 5) return null;
++        int bestCount = 0;
++        int bestRed = 0;
++        int bestGreen = 0;
++        int bestBlue = 0;
++        for (int i = 0; i < 5; i++) {
++            int count = 0;
++            int red = 0;
++            int green = 0;
++            int blue = 0;
++            for (int j = 0; j < 5; j++) {
++                if (distanceSq(samples[i], samples[j]) <= MAX_DISTANCE_SQ) {
++                    count++;
++                    red += Color.red(samples[j]);
++                    green += Color.green(samples[j]);
++                    blue += Color.blue(samples[j]);
++                }
++            }
++            if (count > bestCount) {
++                bestCount = count;
++                bestRed = red;
++                bestGreen = green;
++                bestBlue = blue;
++            }
++        }
++        if (bestCount < 4) return null;
++        return Color.rgb(bestRed / bestCount, bestGreen / bestCount, bestBlue / bestCount);
++    }
++
++    private static int distanceSq(@ColorInt int a, @ColorInt int b) {
++        int dr = Color.red(a) - Color.red(b);
++        int dg = Color.green(a) - Color.green(b);
++        int db = Color.blue(a) - Color.blue(b);
++        return dr * dr + dg * dg + db * db;
++    }
++
++    @NativeMethods
++    interface Natives {
++        void sample(Tab tab, int sampleScreenY, Callback<int[]> callback);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePinnedOffset.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePinnedOffset.java
+new file mode 100644
+index 0000000000000..b1620b2c93eb4
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BarePinnedOffset.java
+@@ -0,0 +1,85 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.app.Activity;
++import android.view.DisplayCutout;
++import android.view.WindowInsets;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.content_public.browser.WebContents;
++
++/**
++ * While the status bar is hidden, moves top-pinned, near-full-width fixed and sticky page elements
++ * down by the status-bar inset so they clear the camera cutout. Other page content stays full
++ * screen. The adjustment is removed when the status bar returns.
++ */
++@NullMarked
++public final class BarePinnedOffset {
++    private BarePinnedOffset() {}
++
++    /** Applies or clears the offset on the tab's main frame. Native pages have no site menus. */
++    public static void sync(Activity activity, @Nullable Tab tab, boolean hidden) {
++        if (tab == null || tab.isNativePage()) return;
++        WebContents webContents = tab.getWebContents();
++        if (webContents == null || webContents.isDestroyed()) return;
++        int insetCss = 0;
++        // No camera hole: leave pinned menus at the top edge. A hole uses the status-bar inset,
++        // which is the band that contains it.
++        if (hidden && cutoutTop(activity) > 0) {
++            float density = activity.getResources().getDisplayMetrics().density;
++            int physical = BareStatusBarLayer.statusBarHeight(activity);
++            insetCss = density > 0f ? Math.round(physical / density) : physical;
++        }
++        BareScriptBridge.evaluate(webContents, script(hidden, insetCss), null);
++    }
++
++
++    private static int cutoutTop(Activity activity) {
++        WindowInsets insets = activity.getWindow().getDecorView().getRootWindowInsets();
++        if (insets == null) return 0;
++        DisplayCutout cutout = insets.getDisplayCutout();
++        return cutout == null ? 0 : cutout.getSafeInsetTop();
++    }
++
++    // Runs in an isolated world. It records the inline top it replaces and puts that back.
++    private static String script(boolean hidden, int insetCss) {
++        return "(function(){try{"
++                + "var s=window.__barePin||(window.__barePin={list:[],map:new WeakMap(),listening:false,scheduled:false});"
++                + "s.hidden=" + (hidden ? "true" : "false") + ";s.inset=" + insetCss + ";"
++                + "function restore(el){var saved=s.map.get(el);if(!saved)return;"
++                + "if(saved.prev==='')el.style.removeProperty('top');"
++                + "else el.style.setProperty('top',saved.prev,saved.prevPri);s.map.delete(el);}"
++                + "function clearAll(){for(var i=0;i<s.list.length;i++)restore(s.list[i]);s.list=[];}"
++                + "function consider(el){if(!el||el===document.body||el===document.documentElement)return;"
++                + "var cs=getComputedStyle(el);var pos=cs.position;if(pos!=='fixed'&&pos!=='sticky')return;"
++                + "var r=el.getBoundingClientRect();if(r.width<innerWidth*0.65)return;"
++                + "if(r.height<8||r.height>innerHeight*0.4)return;"
++                + "var already=s.map.has(el);var band=already?s.inset+180:180;"
++                + "if(r.top<-8||r.top>band)return;if(cs.top==='auto')return;"
++                + "var topPx=parseFloat(cs.top);if(isNaN(topPx))return;"
++                + "if(!already&&topPx>180)return;if(already)return;if(topPx>=s.inset-1)return;"
++                + "s.map.set(el,{prev:el.style.getPropertyValue('top'),prevPri:el.style.getPropertyPriority('top')});"
++                + "s.list.push(el);el.style.setProperty('top',(topPx+s.inset)+'px','important');}"
++                + "function climb(node){var el=node;var guard=0;while(el&&guard++<16){consider(el);"
++                + "var root=el.getRootNode?el.getRootNode():null;"
++                + "el=el.parentElement||(root&&root.host)||null;}}"
++                + "function scan(){if(!s.hidden||s.inset<=0){clearAll();return;}"
++                + "var ys=[1,32,64,96,128];for(var i=0;i<ys.length;i++){var y=ys[i];"
++                + "var xs=[0.2,0.4,0.5,0.6,0.8];for(var j=0;j<xs.length;j++){"
++                + "var node=document.elementFromPoint(innerWidth*xs[j],y);if(node)climb(node);}}}"
++                + "if(!s.listening){s.listening=true;"
++                + "addEventListener('scroll',function(){if(!s.hidden||s.scheduled)return;"
++                + "s.scheduled=true;requestAnimationFrame(function(){s.scheduled=false;if(s.hidden)scan();});},"
++                + "{capture:true,passive:true});"
++                + "addEventListener('resize',function(){if(!s.hidden||s.scheduled)return;"
++                + "s.scheduled=true;requestAnimationFrame(function(){s.scheduled=false;if(s.hidden)scan();});},"
++                + "{passive:true});}"
++                + "scan();requestAnimationFrame(function(){requestAnimationFrame(scan);});"
++                + "}catch(e){}})();";
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareStatusBarLayer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareStatusBarLayer.java
+new file mode 100644
+index 0000000000000..fa57bf1786498
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareStatusBarLayer.java
+@@ -0,0 +1,240 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.app.Activity;
++import android.content.SharedPreferences;
++import android.graphics.Color;
++import android.os.Build;
++import android.view.Gravity;
++import android.view.View;
++import android.view.ViewGroup;
++import android.view.WindowInsets;
++import android.widget.FrameLayout;
++
++import androidx.annotation.ColorInt;
++
++import org.chromium.base.ContextUtils;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.ui.util.ColorUtils;
++import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
++import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
++import org.chromium.chrome.browser.browser_controls.TopControlLayer;
++import org.chromium.chrome.browser.browser_controls.TopControlsStacker;
++import org.chromium.chrome.browser.browser_controls.TopControlsStacker.TopControlType;
++import org.chromium.chrome.browser.browser_controls.TopControlsStacker.TopControlVisibility;
++import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.chrome.browser.theme.ThemeColorProvider.ThemeColorObserver;
++import org.chromium.chrome.browser.theme.ThemeUtils;
++import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
++
++import java.util.function.Supplier;
++
++/**
++ * A top control as tall as the status bar. The page lays out below it and scrolls it away with the
++ * other browser controls. The strip stays clear so the page-colored fade shows
++ * through the inset, with the address bar on the top or the bottom and Keep
++ * status bar shown on or off. A sheet scrim still paints the toolbar color.
++ */
++@NullMarked
++public final class BareStatusBarLayer implements TopControlLayer, ThemeColorObserver {
++    private final Activity mActivity;
++    private final TopUiThemeColorProvider mThemeColorProvider;
++    private final BrowserControlsStateProvider mControls;
++    private final Supplier<@Nullable Tab> mTabSupplier;
++    private final View mStrip;
++    private int mHeight;
++    // The toolbar theme color. A scrim is only overlaid on top of it.
++    private @ColorInt int mBaseColor;
++    private @ColorInt int mScrimColor = Color.TRANSPARENT;
++    // 0 to 1. How much the strip paints the toolbar color while the top address bar is shown.
++    private float mToolbarCover;
++    private @ColorInt int mCoverColor;
++
++    // Held strongly: shared preferences keep only a weak reference to a listener.
++    private final SharedPreferences.OnSharedPreferenceChangeListener mKeepShownListener =
++            (prefs, key) -> {
++                if (ChromePreferenceKeys.BARE_KEEP_STATUS_BAR_SHOWN.equals(key)) {
++                    syncStrip();
++                }
++            };
++
++    public BareStatusBarLayer(
++            Activity activity,
++            TopControlsStacker stacker,
++            TopUiThemeColorProvider themeColorProvider,
++            BrowserControlsStateProvider controls,
++            Supplier<@Nullable Tab> tabSupplier) {
++        mActivity = activity;
++        mThemeColorProvider = themeColorProvider;
++        mControls = controls;
++        mTabSupplier = tabSupplier;
++        mHeight = statusBarHeight(activity);
++        mStrip = new View(activity);
++        mStrip.setClickable(false);
++        mStrip.setFocusable(false);
++        mStrip.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
++        // Drawn after the content child, which holds the compositor, without a shadow.
++        mStrip.setElevation(24f);
++        mStrip.setOutlineProvider(null);
++        // The decor is not padded once the window draws edge to edge, so a top-gravity child of
++        // this height sits in the status-bar inset. It is outside the padded content layout, so
++        // that layout's dispatchDraw clip cannot hide it.
++        View decor = activity.getWindow().getDecorView();
++        ((ViewGroup) decor)
++                .addView(
++                        mStrip,
++                        new FrameLayout.LayoutParams(
++                                ViewGroup.LayoutParams.MATCH_PARENT,
++                                Math.max(mHeight, 0),
++                                Gravity.TOP));
++        applyThemeColor();
++        mThemeColorProvider.addThemeColorObserver(this);
++        mControls.addObserver(
++                new BrowserControlsStateProvider.Observer() {
++                    @Override
++                    public void onControlsOffsetChanged(
++                            int topOffset,
++                            int topControlsMinHeightOffset,
++                            boolean topControlsMinHeightChanged,
++                            int bottomOffset,
++                            int bottomControlsMinHeightOffset,
++                            boolean bottomControlsMinHeightChanged,
++                            boolean requestNewFrame,
++                            boolean isVisibilityForced) {
++                        // Same offset BrowserControlsManager applies to the toolbar view.
++                        if (mStrip.getVisibility() == View.VISIBLE) {
++                            mStrip.setTranslationY(topOffset);
++                        }
++                    }
++
++                    @Override
++                    public void onControlsPositionChanged(
++                            @ControlsPosition int controlsPosition) {
++                        syncStrip();
++                    }
++                });
++        decor.addOnLayoutChangeListener(
++                (v, l, t, r, b, ol, ot, or, ob) -> {
++                    int height = statusBarHeight(mActivity);
++                    if (height != mHeight) {
++                        mHeight = height;
++                        FrameLayout.LayoutParams lp =
++                                (FrameLayout.LayoutParams) mStrip.getLayoutParams();
++                        lp.height = Math.max(mHeight, 0);
++                        mStrip.setLayoutParams(lp);
++                        stacker.requestLayerUpdatePost(false);
++                    }
++                    syncStrip();
++                });
++        org.chromium.chrome.browser.browser_controls.BareMenuScrim.setListener(
++                this::setScrimColor);
++        ContextUtils.getAppSharedPreferences()
++                .registerOnSharedPreferenceChangeListener(mKeepShownListener);
++        syncStrip();
++    }
++
++    /** Returns the status bar height, also while the status bar is hidden. */
++    public static int statusBarHeight(Activity activity) {
++        View decor = activity.getWindow().getDecorView();
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
++            WindowInsets insets = decor.getRootWindowInsets();
++            if (insets != null) {
++                int top = insets.getInsetsIgnoringVisibility(WindowInsets.Type.statusBars()).top;
++                if (top > 0) return top;
++            }
++        }
++        int id = activity.getResources().getIdentifier("status_bar_height", "dimen", "android");
++        return id > 0 ? activity.getResources().getDimensionPixelSize(id) : 0;
++    }
++
++    @Override
++    public @TopControlType int getTopControlType() {
++        return TopControlType.BARE_STATUS_BAR;
++    }
++
++    @Override
++    public int getTopControlHeight() {
++        return mHeight;
++    }
++
++    @Override
++    public @TopControlVisibility int getTopControlVisibility() {
++        return mHeight > 0 ? TopControlVisibility.VISIBLE : TopControlVisibility.HIDDEN;
++    }
++
++    @Override
++    public void onThemeColorChanged(int color, boolean shouldAnimate) {
++        // This is the color TopUiThemeColorProvider just fed to the toolbar background.
++        mBaseColor = color;
++        paint();
++    }
++
++    /**
++     * Blends the page scrim over the theme color while a bottom sheet's scrim is showing, and
++     * clears it when that scrim is gone. The theme color itself is unchanged.
++     */
++    public void setScrimColor(@ColorInt int scrimColor) {
++        if (mScrimColor == scrimColor) return;
++        mScrimColor = scrimColor;
++        paint();
++        syncStrip();
++    }
++
++    /**
++     * Paints {@code toolbarColor} at {@code cover} alpha while the top address bar is fully shown,
++     * crossfading with the page-colored fade. 0 leaves the strip clear. The color is the toolbar
++     * background, which on the new tab page differs from the theme color.
++     */
++    public void setToolbarCover(float cover, @ColorInt int toolbarColor) {
++        if (cover == mToolbarCover && toolbarColor == mCoverColor) return;
++        mToolbarCover = cover;
++        mCoverColor = toolbarColor;
++        paint();
++        syncStrip();
++    }
++
++    private void applyThemeColor() {
++        @Nullable Tab tab = mTabSupplier.get();
++        mBaseColor =
++                tab != null
++                        ? mThemeColorProvider.getToolbarBackgroundColor(tab)
++                        : mThemeColorProvider.getThemeColor();
++        paint();
++    }
++
++    private void paint() {
++        if (mToolbarCover > 0f && Color.alpha(mScrimColor) == 0) {
++            mStrip.setBackgroundColor(mCoverColor);
++            return;
++        }
++        int base = mBaseColor;
++        if (mControls.getControlsPosition() == ControlsPosition.BOTTOM) {
++            @Nullable Tab tab = mTabSupplier.get();
++            if (tab != null) {
++                int page = ThemeUtils.getBackgroundColor(tab);
++                if (Color.alpha(page) == 255) base = page;
++            }
++        }
++        mStrip.setBackgroundColor(ColorUtils.overlayColor(base, mScrimColor));
++    }
++
++    /**
++     * Leaves the strip clear so the page-colored fade shows. A sheet scrim still
++     * paints here, in both Keep status bar shown values and at either
++     * address-bar position. While the top address bar is fully shown the strip
++     * paints the toolbar color at the cover alpha.
++     */
++    private void syncStrip() {
++        boolean scrimShowing = Color.alpha(mScrimColor) > 0;
++        boolean show = mHeight > 0 && (scrimShowing || mToolbarCover > 0f);
++        mStrip.setVisibility(show ? View.VISIBLE : View.GONE);
++        if (!show) return;
++        mStrip.setAlpha(scrimShowing ? 1f : mToolbarCover);
++        mStrip.setTranslationY(mControls.getTopControlOffset());
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareStatusFadeSceneLayer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareStatusFadeSceneLayer.java
+new file mode 100644
+index 0000000000000..2b8572bc70aec
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareStatusFadeSceneLayer.java
+@@ -0,0 +1,94 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.app.Activity;
++import android.graphics.Color;
++import android.graphics.RectF;
++
++import androidx.annotation.ColorInt;
++
++import org.jni_zero.JNINamespace;
++import org.jni_zero.NativeMethods;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.layouts.SceneOverlay;
++import org.chromium.chrome.browser.layouts.scene_layer.SceneLayer;
++import org.chromium.chrome.browser.layouts.scene_layer.SceneOverlayLayer;
++import org.chromium.ui.resources.ResourceManager;
++
++/**
++ * Page-colored fade over the status-bar inset. The top two pixels are opaque
++ * and the alpha eases to 0 at the bottom of the status icons. Height is the status-bar inset from
++ * {@link BareStatusBarLayer#statusBarHeight}, including while the system bar is hidden.
++ */
++@JNINamespace("android")
++@NullMarked
++public class BareStatusFadeSceneLayer extends SceneOverlayLayer implements SceneOverlay {
++    private long mNativePtr;
++    private final Activity mActivity;
++    private boolean mShown;
++    private @ColorInt int mColor = Color.WHITE;
++
++    public BareStatusFadeSceneLayer(Activity activity) {
++        mActivity = activity;
++    }
++
++    /** When false the layout manager drops this overlay and the page is unchanged. */
++    public void setShown(boolean shown) {
++        mShown = shown;
++    }
++
++    /**
++     * Color of the page behind the status bar. Its alpha is the fade opacity and multiplies the
++     * mask.
++     */
++    public void setColor(@ColorInt int color) {
++        mColor = color;
++    }
++
++    @Override
++    protected void initializeNative() {
++        if (mNativePtr == 0) {
++            mNativePtr = BareStatusFadeSceneLayerJni.get().init(this);
++        }
++        assert mNativePtr != 0;
++    }
++
++    @Override
++    public void setContentTree(SceneLayer contentTree) {
++        BareStatusFadeSceneLayerJni.get().setContentTree(mNativePtr, contentTree);
++    }
++
++    @Override
++    public SceneOverlayLayer getUpdatedSceneOverlayTree(
++            RectF viewport, RectF visibleViewport, ResourceManager resourceManager) {
++        BareStatusFadeSceneLayerJni.get()
++                .updateFade(
++                        mNativePtr,
++                        Math.round(viewport.width()),
++                        BareStatusBarLayer.statusBarHeight(mActivity),
++                        mColor);
++        return this;
++    }
++
++    @Override
++    public boolean isSceneOverlayTreeShowing() {
++        return mShown && BareStatusBarLayer.statusBarHeight(mActivity) > 1;
++    }
++
++    @Override
++    public void onSizeChanged(
++            float width, float height, float visibleViewportOffsetY, int orientation) {}
++
++    @NativeMethods
++    interface Natives {
++        long init(BareStatusFadeSceneLayer self);
++
++        void setContentTree(long nativeBareStatusFadeSceneLayer, SceneLayer contentTree);
++
++        void updateFade(long nativeBareStatusFadeSceneLayer, int width, int height, int color);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+index 7d4024746c251..4b48266e274ed 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/settings/BareToolbarSettingsFragment.java
+@@ -69,6 +69,7 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+     static final String PREF_PREVIEW = "bare_toolbar_preview";
+     static final String PREF_MINIMAL = "bare_toolbar_minimal";
+     static final String PREF_ALWAYS_VISIBLE = "bare_toolbar_always_visible";
++    static final String PREF_KEEP_STATUS_BAR_SHOWN = "bare_keep_status_bar_shown";
+     static final String PREF_MENU_LEFT = "bare_toolbar_menu_left";
+     static final String PREF_RESET = "bare_toolbar_reset";
+     static final String PREF_SWIPE = "bare_toolbar_swipe_action";
+@@ -367,6 +368,20 @@ public class BareToolbarSettingsFragment extends ChromeBaseSettingsFragment {
+                                     (boolean) newValue);
+                     return true;
+                 });
++
++        ChromeSwitchPreference keepStatusBar = findPreference(PREF_KEEP_STATUS_BAR_SHOWN);
++        assert keepStatusBar != null;
++        keepStatusBar.setChecked(
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_KEEP_STATUS_BAR_SHOWN, false));
++        keepStatusBar.setOnPreferenceChangeListener(
++                (pref, newValue) -> {
++                    ChromeSharedPreferences.getInstance()
++                            .writeBoolean(
++                                    ChromePreferenceKeys.BARE_KEEP_STATUS_BAR_SHOWN,
++                                    (boolean) newValue);
++                    return true;
++                });
+     }
+ 
+     /**
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerImpl.java
+index f181be75bf621..08a133f5cd18f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerImpl.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerImpl.java
+@@ -32,6 +32,7 @@ import org.chromium.build.annotations.Initializer;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.back_press.BackPressManager;
++import org.chromium.chrome.browser.bare.BareStatusFadeSceneLayer;
+ import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarSceneLayer;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsUtils;
+@@ -350,6 +351,8 @@ public class LayoutManagerImpl
+ 
+         overlayOrder =
+                 new Class[] {
++                    // Above the page, under the toolbar and the status-indicator strip.
++                    BareStatusFadeSceneLayer.class,
+                     OverscrollGlowCoordinator.getSceneOverlayClass(),
+                     // Place the tab strip behind the toolbar scene layer as during tab strip
+                     // transition, the toolbar will move up and cover the tab strip.
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
+index 4be1a0050d52b..f9df1618097a4 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
+@@ -428,6 +428,7 @@ public class RootUiCoordinator
+     protected final FullscreenManager mFullscreenManager;
+     protected final MonotonicObservableSupplier<CompositorViewHolder> mCompositorViewHolderSupplier;
+     protected StatusBarColorController mStatusBarColorController;
++    private org.chromium.chrome.browser.bare.@Nullable BareStatusBarLayer mBareStatusBarLayer;
+     protected final MonotonicObservableSupplier<SnackbarManager> mSnackbarManagerSupplier;
+     protected final SettableMonotonicObservableSupplier<EdgeToEdgeController>
+             mEdgeToEdgeControllerSupplier;
+@@ -725,6 +726,7 @@ public class RootUiCoordinator
+                         mDesktopWindowStateManager,
+                         mOverviewColorSupplier,
+                         mBrowserControlsManager);
++        mStatusBarColorController.setFullscreenManager(mFullscreenManager);
+         mPageZoomManager =
+                 new PageZoomManager(
+                         new PageZoomManagerDelegate() {
+@@ -871,6 +873,16 @@ public class RootUiCoordinator
+                         getAppBrowserControlsVisibilityDelegate(),
+                         mActivity,
+                         mWindowAndroid);
++        mBareStatusBarLayer =
++                new org.chromium.chrome.browser.bare.BareStatusBarLayer(
++                        mActivity,
++                        mTopControlsStacker,
++                        mTopUiThemeColorProvider,
++                        mBrowserControlsManager,
++                        mActivityTabProvider);
++        mTopControlsStacker.addControl(mBareStatusBarLayer);
++        mStatusBarColorController.setBareStatusBarLayer(mBareStatusBarLayer);
++        mTopControlsStacker.requestLayerUpdateSync(false);
+         mIncognitoStateProvider = new IncognitoStateProvider();
+         mBottomUiThemeColorProvider =
+                 new BottomUiThemeColorProvider(
+@@ -2350,6 +2362,7 @@ public class RootUiCoordinator
+ 
+     protected void onScrimColorChanged(@ColorInt int scrimColor) {
+         mStatusBarColorController.onScrimColorChanged(scrimColor);
++        if (mBareStatusBarLayer != null) mBareStatusBarLayer.setScrimColor(scrimColor);
+         if (mDesktopWindowStateManager != null) {
+             mDesktopWindowStateManager.onScrimColorChanged(scrimColor);
+         }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java b/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
+index c60aebf08d0a6..ee70cc033ed42 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
+@@ -7,11 +7,18 @@ package org.chromium.chrome.browser.ui.system;
+ import android.app.Activity;
+ import android.app.ActivityManager;
+ import android.content.Context;
++import android.content.SharedPreferences;
++import android.content.res.Configuration;
+ import android.graphics.Bitmap;
+ import android.graphics.Color;
+ import android.os.Build;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.SystemClock;
+ import android.view.View;
+ import android.view.Window;
++import android.view.WindowInsets;
++import android.view.WindowInsetsController;
+ 
+ import androidx.annotation.ColorInt;
+ import androidx.annotation.VisibleForTesting;
+@@ -19,15 +26,21 @@ import androidx.core.content.ContextCompat;
+ 
+ import org.chromium.base.Callback;
+ import org.chromium.base.CallbackController;
++import org.chromium.base.ContextUtils;
+ import org.chromium.base.supplier.MonotonicObservableSupplier;
+ import org.chromium.base.supplier.NonNullObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.ActivityTabProvider;
++import org.chromium.chrome.browser.bare.BarePageColorSampler;
+ import org.chromium.chrome.browser.bare.BarePullOffset;
++import org.chromium.chrome.browser.bare.BareStatusBarLayer;
++import org.chromium.chrome.browser.bare.BareStatusFadeSceneLayer;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
++import org.chromium.chrome.browser.fullscreen.FullscreenManager;
++import org.chromium.chrome.browser.fullscreen.FullscreenOptions;
+ import org.chromium.chrome.browser.layouts.LayoutManager;
+ import org.chromium.chrome.browser.layouts.LayoutStateProvider;
+ import org.chromium.chrome.browser.layouts.LayoutStateProvider.LayoutStateObserver;
+@@ -43,6 +56,8 @@ import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThem
+ import org.chromium.chrome.browser.ntp_customization.theme.upload_image.BackgroundImageInfo;
+ import org.chromium.chrome.browser.omnibox.UrlFocusChangeListener;
+ import org.chromium.chrome.browser.omnibox.suggestions.OmniboxSuggestionsDropdownScrollListener;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.status_indicator.StatusIndicatorCoordinator;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tab.TabSelectionType;
+@@ -57,6 +72,9 @@ import org.chromium.chrome.browser.ui.theme.ChromeSemanticColorUtils;
+ import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager;
+ import org.chromium.components.browser_ui.styles.ChromeColors;
+ import org.chromium.components.browser_ui.widget.scrim.ScrimProperties;
++import org.chromium.content_public.browser.GestureListenerManager;
++import org.chromium.content_public.browser.GestureStateListener;
++import org.chromium.content_public.browser.WebContents;
+ import org.chromium.ui.UiUtils;
+ import org.chromium.ui.base.WindowAndroid;
+ import org.chromium.ui.edge_to_edge.EdgeToEdgeSystemBarColorHelper;
+@@ -163,6 +181,75 @@ public class StatusBarColorController
+ 
+     private @ColorInt int mScrimColor = Color.TRANSPARENT;
+ 
++    private @Nullable BareStatusFadeSceneLayer mStatusFade;
++    private @Nullable LayoutManager mLayoutManager;
++    private boolean mStatusFadeShown;
++    private @ColorInt int mStatusFadeColor = Color.WHITE;
++    private final Handler mSampleHandler = new Handler(Looper.getMainLooper());
++    private @Nullable GestureListenerManager mGestureManager;
++    private boolean mScrollActive;
++    private boolean mFlingActive;
++    private boolean mLoadActive;
++    private int mSettleSamples;
++    private boolean mSampleScheduled;
++    private long mLastSampleMs;
++    private int mSampleGeneration;
++    private boolean mSamplerDestroyed;
++    private boolean mDisplayedReady;
++    private boolean mAnimating;
++    private @ColorInt int mDisplayedColor;
++    private @ColorInt int mAnimFrom;
++    private @ColorInt int mAnimTo;
++    private long mAnimStartMs;
++    private boolean mLightIconsReady;
++    private boolean mLightIcons;
++    private final GestureStateListener mGestureListener =
++            new GestureStateListener() {
++                @Override
++                public void onScrollStarted(
++                        int scrollOffsetY, int scrollExtentY, boolean isDirectionUp) {
++                    mScrollActive = true;
++                    scheduleSample(0);
++                }
++
++                @Override
++                public void onScrollEnded(int scrollOffsetY, int scrollExtentY) {
++                    mScrollActive = false;
++                    mSettleSamples = Math.max(mSettleSamples, 2);
++                    scheduleSample(0);
++                }
++
++                @Override
++                public void onFlingStartGesture(
++                        int scrollOffsetY, int scrollExtentY, boolean isDirectionUp) {
++                    mFlingActive = true;
++                    scheduleSample(0);
++                }
++
++                @Override
++                public void onFlingEndGesture(int scrollOffsetY, int scrollExtentY) {
++                    mFlingActive = false;
++                    mSettleSamples = Math.max(mSettleSamples, 2);
++                    scheduleSample(0);
++                }
++            };
++    private final Runnable mSampleTask =
++            () -> {
++                mSampleScheduled = false;
++                runSample();
++            };
++    private final Runnable mAnimTask = this::tickAnimation;
++    private @Nullable FullscreenManager mFullscreenManager;
++    private @Nullable BareStatusBarLayer mBareStatusBarLayer;
++    // Fade opacity for the top-address-bar gate: 0 while the top bar is fully shown, 1 otherwise.
++    private boolean mFadeOpacityReady;
++    private boolean mFadeOpacityAnimating;
++    private float mFadeOpacity = 1f;
++    private float mFadeOpacityFrom = 1f;
++    private float mFadeOpacityTo = 1f;
++    private long mFadeOpacityStartMs;
++    private final Runnable mFadeOpacityTask = this::tickFadeOpacity;
++
+     private boolean mShouldUpdateStatusBarColorForNtp;
+     private @ColorInt int mStatusIndicatorColor;
+     private @ColorInt int mStatusBarColorWithoutStatusIndicator;
+@@ -180,6 +267,13 @@ public class StatusBarColorController
+ 
+     private final LayoutStateObserver mLayoutStateObserver =
+             new LayoutStateObserver() {
++                @Override
++                public void onStartedShowing(@LayoutType int layoutType) {
++                    if (layoutType == LayoutType.HUB) {
++                        updateStatusBarColor();
++                    }
++                }
++
+                 @Override
+                 public void onFinishedHiding(@LayoutType int layoutType) {
+                     if (layoutType != LayoutType.HUB) {
+@@ -187,6 +281,15 @@ public class StatusBarColorController
+                     }
+                     updateStatusBarColor();
+                 }
++
++                @Override
++                public void onFinishedShowing(@LayoutType int layoutType) {
++                    // The tab switcher still counts as visible when it finishes hiding. Refresh
++                    // once the page is back so the fade and the strip are not left off.
++                    if (layoutType == LayoutType.BROWSING) {
++                        updateStatusBarColor();
++                    }
++                }
+             };
+ 
+     /**
+@@ -223,6 +326,9 @@ public class StatusBarColorController
+         mAllowToolbarColorOnTablets = false;
+         mOverviewColorSupplier = overviewColorSupplier;
+         mBrowserControlsStateProvider = browserControlsStateProvider;
++        mBrowserControlsStateProvider.addObserver(mBareControlsObserver);
++        ContextUtils.getAppSharedPreferences()
++                .registerOnSharedPreferenceChangeListener(mBareKeepStatusBarListener);
+ 
+         mStandardDefaultThemeColor =
+                 ChromeColors.getDefaultThemeColor(activity, /* isIncognito= */ false);
+@@ -249,6 +355,22 @@ public class StatusBarColorController
+                     @Override
+                     public void onShown(Tab tab, @TabSelectionType int type) {
+                         updateStatusBarColor();
++                        mSettleSamples = Math.max(mSettleSamples, 2);
++                        scheduleSample(0);
++                    }
++
++                    @Override
++                    public void onLoadStarted(Tab tab, boolean toDifferentDocument) {
++                        if (toDifferentDocument) resetSampledColor();
++                        mLoadActive = true;
++                        scheduleSample(0);
++                    }
++
++                    @Override
++                    public void onLoadStopped(Tab tab, boolean toDifferentDocument) {
++                        mLoadActive = false;
++                        mSettleSamples = Math.max(mSettleSamples, 3);
++                        scheduleSample(0);
+                     }
+ 
+                     @Override
+@@ -274,6 +396,7 @@ public class StatusBarColorController
+                             updateStatusBarColor();
+                         }
+                         mShouldUpdateStatusBarColorForNtp = newShouldUpdateStatusBarColorForNtp;
++                        rebindGestureListener(tab);
+                     }
+ 
+                     @Override
+@@ -292,18 +415,29 @@ public class StatusBarColorController
+                         // called.
+                         mCurrentTab = null;
+                         mShouldUpdateStatusBarColorForNtp = false;
++                        mLoadActive = false;
++                        rebindGestureListener(null);
++                        resetSampledColor();
+                     }
+ 
+                     @Override
+                     protected void onObservingDifferentTab(@Nullable Tab tab) {
+                         mCurrentTab = tab;
+                         mShouldUpdateStatusBarColorForNtp = isStandardNtp();
++                        mLoadActive = false;
++                        mScrollActive = false;
++                        mFlingActive = false;
++                        resetSampledColor();
++                        rebindGestureListener(tab);
++                        // A few samples cover the new surface becoming available.
++                        mSettleSamples = 4;
+ 
+                         // |tab == null| means we're switching tabs - by the tab switcher or by
+                         // swiping on the omnibox. These cases are dealt with differently,
+                         // elsewhere.
+                         if (tab == null) return;
+                         updateStatusBarColor();
++                        scheduleSample(0);
+                     }
+                 };
+ 
+@@ -327,6 +461,11 @@ public class StatusBarColorController
+                                 }
+                                 mLayoutStateProvider = layoutManager;
+                                 mLayoutStateProvider.addObserver(mLayoutStateObserver);
++                                if (mStatusFade == null) {
++                                    mStatusFade = new BareStatusFadeSceneLayer(mActivity);
++                                    layoutManager.addSceneOverlay(mStatusFade);
++                                    mLayoutManager = layoutManager;
++                                }
+                             }));
+         }
+ 
+@@ -405,7 +544,24 @@ public class StatusBarColorController
+     @Override
+     @SuppressWarnings("NullAway")
+     public void onDestroy() {
++        mSamplerDestroyed = true;
++        mAnimating = false;
++        mSampleHandler.removeCallbacksAndMessages(null);
++        rebindGestureListener(null);
+         mStatusBarColorTabObserver.destroy();
++        ContextUtils.getAppSharedPreferences()
++                .unregisterOnSharedPreferenceChangeListener(mBareKeepStatusBarListener);
++        mBrowserControlsStateProvider.removeObserver(mBareControlsObserver);
++        if (mFullscreenManager != null) {
++            mFullscreenManager.removeObserver(mFullscreenObserver);
++            mFullscreenManager = null;
++        }
++        if (mStatusFade != null) {
++            mStatusFade.setShown(false);
++            mStatusFade.removeFromParent();
++            mStatusFade.destroy();
++            mStatusFade = null;
++        }
+         if (mLayoutStateProvider != null) {
+             mLayoutStateProvider.removeObserver(mLayoutStateObserver);
+         }
+@@ -548,12 +704,29 @@ public class StatusBarColorController
+ 
+             backgroundColor = ColorUtils.getOpaqueColor(tabStripColor);
+         }
+-        setStatusBarColor(
+-                mEdgeToEdgeSystemBarColorHelper,
++        boolean forceLightIcons =
++                mForceLightIconColorForNtp && isStandardNtp() && !mIsOmniboxFocused;
++        boolean hubShowing =
++                mLayoutStateProvider != null
++                        && (mLayoutStateProvider.isLayoutVisible(LayoutType.HUB)
++                                || mLayoutStateProvider.isLayoutStartingToShow(LayoutType.HUB));
++        setFadeOpacityTarget(fadeGateTarget());
++        if (!hubShowing) {
++            applyBareStatusBar(statusBarColor, forceLightIcons, backgroundColor);
++        } else {
++            setBareSystemStatusBarHidden(false);
++            setStatusBarColor(
++                    mEdgeToEdgeSystemBarColorHelper,
++                    mActivity,
++                    statusBarColor,
++                    forceLightIcons,
++                    backgroundColor);
++        }
++        org.chromium.chrome.browser.bare.BarePinnedOffset.sync(
+                 mActivity,
+-                statusBarColor,
+-                mForceLightIconColorForNtp && isStandardNtp() && !mIsOmniboxFocused,
+-                backgroundColor);
++                mCurrentTab,
++                !hubShowing && mBareStatusHidden && !keepStatusBarShown());
++        syncStatusFade(hubShowing);
+     }
+ 
+     /**
+@@ -789,6 +962,274 @@ public class StatusBarColorController
+         return mCurrentTab != null && mCurrentTab.getNativePage() instanceof NewTabPage;
+     }
+ 
++    private final BrowserControlsStateProvider.Observer mBareControlsObserver =
++            new BrowserControlsStateProvider.Observer() {
++                @Override
++                public void onControlsOffsetChanged(
++                        int topOffset,
++                        int topControlsMinHeightOffset,
++                        boolean topControlsMinHeightChanged,
++                        int bottomOffset,
++                        int bottomControlsMinHeightOffset,
++                        boolean bottomControlsMinHeightChanged,
++                        boolean requestNewFrame,
++                        boolean isVisibilityForced) {
++                    int height = mBrowserControlsStateProvider.getTopControlsHeight();
++                    int minHeight = mBrowserControlsStateProvider.getTopControlsMinHeight();
++                    boolean hidden = height > minHeight && topOffset <= minHeight - height;
++                    boolean gateChanged = fadeGateTarget() != mFadeOpacityTo;
++                    if (hidden == mBareStatusHidden && !gateChanged) return;
++                    mBareStatusHidden = hidden;
++                    updateStatusBarColor();
++                }
++
++                @Override
++                public void onControlsPositionChanged(@ControlsPosition int controlsPosition) {
++                    updateStatusBarColor();
++                }
++            };
++    private boolean mBareStatusHidden;
++    private boolean mBareStatusHiddenApplied;
++
++    // Held strongly: shared preferences keep only a weak reference to a listener.
++    private final SharedPreferences.OnSharedPreferenceChangeListener mBareKeepStatusBarListener =
++            (prefs, key) -> {
++                if (ChromePreferenceKeys.BARE_KEEP_STATUS_BAR_SHOWN.equals(key)) {
++                    updateStatusBarColor();
++                }
++            };
++
++    /** Dark theme, including an incognito window, which is forced into night mode. */
++    private boolean darkThemeOrIncognito() {
++        if (mIsIncognitoBranded) return true;
++        int night =
++                mActivity.getResources().getConfiguration().uiMode
++                        & Configuration.UI_MODE_NIGHT_MASK;
++        return night == Configuration.UI_MODE_NIGHT_YES;
++    }
++
++    /**
++     * Opaque background of the current page. White in light theme and black in dark theme or
++     * incognito when the page has not reported a color.
++     */
++    private @ColorInt int pageFadeColor() {
++        if (mCurrentTab != null) {
++            @ColorInt int page = mCurrentTab.getBackgroundColor();
++            if (Color.alpha(page) == 255) return page;
++        }
++        return darkThemeOrIncognito() ? Color.BLACK : Color.WHITE;
++    }
++
++    /**
++     * Page-colored fade over the status inset.
++     *
++     * <p>On for both values of Keep status bar shown. With the address bar at the top it eases
++     * out while the bar is fully shown, and the strip paints the toolbar color instead. With the
++     * address bar at the bottom it stays on. Off for the tab switcher, a sheet scrim, and
++     * fullscreen video. Height is {@code BareStatusBarLayer.statusBarHeight}.
++     */
++    private void syncStatusFade(boolean hubShowing) {
++        if (mStatusFade == null) return;
++        boolean scrimShowing = Color.alpha(mScrimColor) > 0;
++        boolean fullscreen = fullscreenVideo();
++        boolean allowed = !hubShowing && !scrimShowing && !fullscreen;
++        boolean show = allowed && mFadeOpacity > 0f;
++        @ColorInt int color = withOpacity(displayedFadeColor(), mFadeOpacity);
++        boolean becameShown = show && !mStatusFadeShown;
++        boolean changed = show != mStatusFadeShown || (show && color != mStatusFadeColor);
++        mStatusFadeShown = show;
++        mStatusFadeColor = color;
++        mStatusFade.setShown(show);
++        mStatusFade.setColor(color);
++        if (changed && mLayoutManager != null) {
++            mLayoutManager.requestUpdate();
++        }
++        if (becameShown) {
++            mSettleSamples = Math.max(mSettleSamples, 2);
++            scheduleSample(0);
++        }
++        // While the top bar is fully shown the strip paints the toolbar color behind the clock.
++        // A scrim makes the strip paint on its own.
++        if (mBareStatusBarLayer != null) {
++            mBareStatusBarLayer.setToolbarCover(
++                    allowed ? 1f - mFadeOpacity : 0f, bareToolbarColor());
++        }
++    }
++
++    /** The strip that paints the toolbar color behind the status bar. */
++    public void setBareStatusBarLayer(@Nullable BareStatusBarLayer layer) {
++        mBareStatusBarLayer = layer;
++        updateStatusBarColor();
++    }
++
++    /** True while the address bar is at the top and fully shown. The fade is off then. */
++    private boolean topBarFullyShown() {
++        return mBrowserControlsStateProvider.getControlsPosition() == ControlsPosition.TOP
++                && mBrowserControlsStateProvider.getTopControlOffset() >= 0;
++    }
++
++    private float fadeGateTarget() {
++        return topBarFullyShown() ? 0f : 1f;
++    }
++
++    /** Eases the fade toward {@code target} over 150 ms. The first call snaps. */
++    private void setFadeOpacityTarget(float target) {
++        if (!mFadeOpacityReady) {
++            mFadeOpacityReady = true;
++            mFadeOpacity = target;
++            mFadeOpacityTo = target;
++            return;
++        }
++        if (target == mFadeOpacityTo) return;
++        mFadeOpacityFrom = mFadeOpacity;
++        mFadeOpacityTo = target;
++        mFadeOpacityStartMs = SystemClock.uptimeMillis();
++        mFadeOpacityAnimating = true;
++        mSampleHandler.removeCallbacks(mFadeOpacityTask);
++        mSampleHandler.post(mFadeOpacityTask);
++    }
++
++    private void tickFadeOpacity() {
++        if (!mFadeOpacityAnimating || mSamplerDestroyed) return;
++        float t = (SystemClock.uptimeMillis() - mFadeOpacityStartMs) / 150f;
++        if (t >= 1f) {
++            t = 1f;
++            mFadeOpacityAnimating = false;
++        }
++        float s = t * t * (3f - 2f * t);
++        mFadeOpacity = mFadeOpacityFrom + (mFadeOpacityTo - mFadeOpacityFrom) * s;
++        updateStatusBarColor();
++        if (mFadeOpacityAnimating) mSampleHandler.postDelayed(mFadeOpacityTask, 16);
++    }
++
++    private static @ColorInt int withOpacity(@ColorInt int color, float opacity) {
++        int alpha = Math.round(Math.max(0f, Math.min(1f, opacity)) * 255f);
++        return (color & 0x00FFFFFF) | (alpha << 24);
++    }
++
++    /** Renderer fullscreen, such as a video. A missing manager counts as not fullscreen. */
++    private boolean fullscreenVideo() {
++        return mFullscreenManager != null && mFullscreenManager.getPersistentFullscreenMode();
++    }
++
++    private final FullscreenManager.Observer mFullscreenObserver =
++            new FullscreenManager.Observer() {
++                @Override
++                public void onEnterFullscreen(Tab tab, FullscreenOptions options) {
++                    updateStatusBarColor();
++                }
++
++                @Override
++                public void onExitFullscreen(Tab tab) {
++                    updateStatusBarColor();
++                }
++            };
++
++    /** Wired from the activity so a fullscreen video can drop the fade. */
++    public void setFullscreenManager(@Nullable FullscreenManager fullscreenManager) {
++        if (mFullscreenManager == fullscreenManager) return;
++        if (mFullscreenManager != null) {
++            mFullscreenManager.removeObserver(mFullscreenObserver);
++        }
++        mFullscreenManager = fullscreenManager;
++        if (mFullscreenManager != null) {
++            mFullscreenManager.addObserver(mFullscreenObserver);
++        }
++        updateStatusBarColor();
++    }
++
++    /** Default off. The same key the toolbar settings screen writes. */
++    private static boolean keepStatusBarShown() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_KEEP_STATUS_BAR_SHOWN, false);
++    }
++
++    /**
++     * Leaves the status bar nearly clear so the page-colored fade shows, for both values of
++     * Keep status bar shown. A sheet scrim paints the toolbar theme color while the top toolbar
++     * is up. The system status bar hides once the top controls scroll away, unless that setting
++     * is on.
++     */
++    private void applyBareStatusBar(@ColorInt int themeColor, boolean forceLightIcons,
++            @ColorInt int taskDescriptionBackgroundColor) {
++        boolean addressAtTop =
++                mBrowserControlsStateProvider.getControlsPosition() != ControlsPosition.BOTTOM;
++        boolean scrimShowing = Color.alpha(mScrimColor) > 0;
++        // Opaque toolbar color only while a scrim covers the top. Both setting values leave the
++        // inset clear so the fade is what shows.
++        if (addressAtTop && !mBareStatusHidden && scrimShowing) {
++            setStatusBarColor(
++                    mEdgeToEdgeSystemBarColorHelper,
++                    mActivity,
++                    bareToolbarThemeColor(),
++                    forceLightIcons,
++                    taskDescriptionBackgroundColor);
++            if (!fullscreenVideo()) setBareSystemStatusBarHidden(false);
++            return;
++        }
++        // The fade paints this color. Alpha 1 draws nothing but keeps the RGB the icon color is
++        // computed from, including when the edge-to-edge layout re-applies it after an inset
++        // change. Dark icons on a light page, light icons on a dark page. A customized NTP image
++        // can still force light icons.
++        @ColorInt int fade = displayedFadeColor();
++        boolean toolbarBehindIcons = mFadeOpacity < 0.5f;
++        @ColorInt int iconBase = toolbarBehindIcons ? bareToolbarColor() : fade;
++        boolean lightIcons =
++                forceLightIcons
++                        || (toolbarBehindIcons
++                                ? ColorUtils.shouldUseLightForegroundOnBackground(iconBase)
++                                : lightIconsFor(fade));
++        @ColorInt int nearlyClear = (iconBase & 0x00FFFFFF) | 0x01000000;
++        setStatusBarColor(
++                mEdgeToEdgeSystemBarColorHelper, mActivity, nearlyClear, lightIcons,
++                taskDescriptionBackgroundColor);
++        mWindow.setStatusBarColor(Color.TRANSPARENT);
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
++            mWindow.setStatusBarContrastEnforced(false);
++        }
++        UiUtils.setStatusBarIconColor(mWindow.getDecorView().getRootView(), !lightIcons);
++        // Off matches the previous behavior: hide with the toolbar. On keeps the icons.
++        // Fullscreen video owns the system bars; do not show them again from here.
++        if (!fullscreenVideo()) {
++            setBareSystemStatusBarHidden(mBareStatusHidden && !keepStatusBarShown());
++        }
++    }
++
++    /**
++     * Color the toolbar draws, including the new tab page background. The theme color until the
++     * toolbar reports one.
++     */
++    private @ColorInt int bareToolbarColor() {
++        return mToolbarColorChanged ? mToolbarColor : bareToolbarThemeColor();
++    }
++
++    /** Theme color {@link TopUiThemeColorProvider} feeds to the toolbar background. */
++    private @ColorInt int bareToolbarThemeColor() {
++        if (mCurrentTab != null) {
++            return mTopUiThemeColor.getToolbarBackgroundColor(mCurrentTab);
++        }
++        return mIsIncognitoBranded ? mIncognitoDefaultThemeColor : mStandardDefaultThemeColor;
++    }
++
++    private void setBareSystemStatusBarHidden(boolean hide) {
++        if (hide != mBareStatusHiddenApplied) {
++            mBareStatusHiddenApplied = hide;
++            View decor = mWindow.getDecorView();
++            decor.post(
++                    () -> {
++                        WindowInsetsController controller = decor.getWindowInsetsController();
++                        if (controller == null) return;
++                        controller.setSystemBarsBehavior(
++                                WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
++                        if (hide) {
++                            controller.hide(WindowInsets.Type.statusBars());
++                        } else {
++                            controller.show(WindowInsets.Type.statusBars());
++                        }
++                    });
++        }
++    }
++
+     private boolean isBottomBarEnabledAndBottomControls() {
+         // Bare: the minimal layout's bar at the bottom leaves the status bar to the page, as the
+         // full layout does, now that it has the bar colour rather than the page's.
+@@ -805,4 +1246,143 @@ public class StatusBarColorController
+     public boolean getForceLightIconColorForNtpForTesting() {
+         return mForceLightIconColorForNtp;
+     }
++
++    /**
++     * Page background until the first agreed sample, then the color animated toward that sample.
++     */
++    private @ColorInt int displayedFadeColor() {
++        if (!mDisplayedReady) return pageFadeColor();
++        return mDisplayedColor;
++    }
++
++    /** Light icons on a dark fade. The band around 0.5 keeps the icons from flickering. */
++    private boolean lightIconsFor(@ColorInt int color) {
++        float luminance = ColorUtils.calculateLuminance(color);
++        if (!mLightIconsReady) {
++            mLightIcons = !ColorUtils.isHighLuminance(luminance);
++            mLightIconsReady = true;
++            return mLightIcons;
++        }
++        if (mLightIcons) {
++            if (luminance > 0.62f) mLightIcons = false;
++        } else if (luminance < 0.38f) {
++            mLightIcons = true;
++        }
++        return mLightIcons;
++    }
++
++    private void resetSampledColor() {
++        mSampleGeneration++;
++        mAnimating = false;
++        mDisplayedReady = false;
++        mLightIconsReady = false;
++        mSampleHandler.removeCallbacks(mAnimTask);
++    }
++
++    private void rebindGestureListener(@Nullable Tab tab) {
++        if (mGestureManager != null) {
++            mGestureManager.removeListener(mGestureListener);
++            mGestureManager = null;
++        }
++        if (tab == null) return;
++        WebContents webContents = tab.getWebContents();
++        if (webContents == null || webContents.isDestroyed()) return;
++        GestureListenerManager manager = GestureListenerManager.fromWebContents(webContents);
++        if (manager == null) return;
++        manager.addListener(mGestureListener);
++        mGestureManager = manager;
++    }
++
++    private boolean sampleSessionActive() {
++        return mScrollActive || mFlingActive || mLoadActive || mSettleSamples > 0;
++    }
++
++    /** Glyph line, in window pixels. The native readback takes the 2 px row just below it. */
++    private int sampleScreenY() {
++        int inset = BareStatusBarLayer.statusBarHeight(mActivity);
++        return (int) (inset * 107f / 173f + 0.5f);
++    }
++
++    private void scheduleSample(long delayMs) {
++        if (mSamplerDestroyed || mSampleScheduled) return;
++        mSampleScheduled = true;
++        mSampleHandler.postDelayed(mSampleTask, delayMs);
++    }
++
++    private void runSample() {
++        if (mSamplerDestroyed || !mStatusFadeShown || !sampleSessionActive()) return;
++        long now = SystemClock.uptimeMillis();
++        if (mLastSampleMs != 0) {
++            long wait = 200 - (now - mLastSampleMs);
++            if (wait > 0) {
++                scheduleSample(wait);
++                return;
++            }
++        }
++        Tab tab = mCurrentTab;
++        if (tab == null) return;
++        // A native page (new tab page, bookmarks, history) draws over a blank web page, so a
++        // readback would return that page. Use the color the native page reports instead.
++        if (tab.isNativePage()) {
++            animateTo(pageFadeColor());
++            return;
++        }
++        int generation = mSampleGeneration;
++        boolean started =
++                BarePageColorSampler.request(
++                        tab, sampleScreenY(), colors -> onSampled(generation, colors));
++        if (!started) {
++            // A busy readback retries. Idle retries are capped by the settle count.
++            if (mSettleSamples > 0 && !mScrollActive && !mFlingActive && !mLoadActive) {
++                mSettleSamples--;
++            }
++            if (sampleSessionActive()) scheduleSample(200);
++            return;
++        }
++        mLastSampleMs = now;
++    }
++
++    private void onSampled(int generation, int[] colors) {
++        if (mSamplerDestroyed || generation != mSampleGeneration) return;
++        if (mSettleSamples > 0) mSettleSamples--;
++        Integer agreed = BarePageColorSampler.agreedColor(colors);
++        if (agreed != null) animateTo(agreed);
++        if (mStatusFadeShown && sampleSessionActive()) scheduleSample(200);
++    }
++
++    private void tickAnimation() {
++        if (!mAnimating || mSamplerDestroyed) return;
++        float t = (SystemClock.uptimeMillis() - mAnimStartMs) / 150f;
++        if (t >= 1f) {
++            t = 1f;
++            mAnimating = false;
++        }
++        float s = t * t * (3f - 2f * t);
++        mDisplayedColor = blendColor(mAnimFrom, mAnimTo, s);
++        updateStatusBarColor();
++        if (mAnimating) mSampleHandler.postDelayed(mAnimTask, 16);
++    }
++
++    private void animateTo(@ColorInt int target) {
++        target |= 0xFF000000;
++        if (!mDisplayedReady) {
++            mDisplayedColor = pageFadeColor();
++            mDisplayedReady = true;
++        }
++        if (mAnimating && target == mAnimTo) return;
++        if (!mAnimating && target == mDisplayedColor) return;
++        mAnimFrom = mDisplayedColor;
++        mAnimTo = target;
++        mAnimStartMs = SystemClock.uptimeMillis();
++        mAnimating = true;
++        mSampleHandler.removeCallbacks(mAnimTask);
++        mSampleHandler.post(mAnimTask);
++    }
++
++    private static @ColorInt int blendColor(@ColorInt int from, @ColorInt int to, float t) {
++        int red = Math.round(Color.red(from) + (Color.red(to) - Color.red(from)) * t);
++        int green = Math.round(Color.green(from) + (Color.green(to) - Color.green(from)) * t);
++        int blue = Math.round(Color.blue(from) + (Color.blue(to) - Color.blue(from)) * t);
++        return Color.rgb(red, green, blue);
++    }
+ }
+diff --git a/chrome/browser/android/BUILD.gn b/chrome/browser/android/BUILD.gn
+index a9a4bb85c3f78..9fe1f08428a13 100644
+--- a/chrome/browser/android/BUILD.gn
++++ b/chrome/browser/android/BUILD.gn
+@@ -441,6 +441,8 @@ if (is_android) {
+       "compositor/retry_strategy.cc",
+       "compositor/retry_strategy.h",
+       "compositor/retryable_task.h",
++      "compositor/scene_layer/bare_status_fade_scene_layer.cc",
++      "compositor/scene_layer/bare_status_fade_scene_layer.h",
+       "compositor/scene_layer/bookmark_bar_scene_layer.cc",
+       "compositor/scene_layer/bookmark_bar_scene_layer.h",
+       "compositor/scene_layer/contextual_search_scene_layer.cc",
+@@ -477,6 +479,7 @@ if (is_android) {
+       "content/web_contents_factory_data_deleter.h",
+       "bare_canvas_block.cc",
+       "bare_canvas_block.h",
++      "bare_page_color_sampler.cc",
+       "bare_player_bridge.cc",
+       "context_menu/context_menu_native_delegate_impl.cc",
+       "context_menu/context_menu_native_delegate_impl.h",
+diff --git a/chrome/browser/android/bare_page_color_sampler.cc b/chrome/browser/android/bare_page_color_sampler.cc
+new file mode 100644
+index 0000000000000..c9654255be9ca
+--- /dev/null
++++ b/chrome/browser/android/bare_page_color_sampler.cc
+@@ -0,0 +1,124 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <algorithm>
++#include <memory>
++
++#include "base/android/callback_android.h"
++#include "base/android/jni_android.h"
++#include "base/android/jni_array.h"
++#include "base/android/scoped_java_ref.h"
++#include "base/containers/span.h"
++#include "base/functional/bind.h"
++#include "base/time/time.h"
++#include "chrome/browser/android/tab_android.h"
++#include "components/viz/common/frame_sinks/copy_output_result.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "content/public/browser/web_contents.h"
++#include "third_party/skia/include/core/SkBitmap.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/android/view_android.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
++
++// Must come after all headers that specialize FromJniType() / ToJniType().
++#include "chrome/android/chrome_jni_headers/BarePageColorSampler_jni.h"
++
++namespace android {
++namespace {
++
++// One readback at a time. A new request while this is set is dropped.
++bool g_in_flight = false;
++
++struct PendingSample {
++  base::android::ScopedJavaGlobalRef<jobject> callback;
++};
++
++void Deliver(const base::android::JavaRef<jobject>& callback,
++             base::span<const int32_t> samples) {
++  JNIEnv* env = base::android::AttachCurrentThread();
++  base::android::RunObjectCallbackAndroid(
++      callback, base::android::ToJavaIntArray(env, samples));
++}
++
++void OnCopyDone(std::unique_ptr<PendingSample> pending,
++                const content::CopyFromSurfaceResult& result) {
++  g_in_flight = false;
++  int32_t samples[5];
++  bool ok = false;
++  if (result.has_value() && !result->bitmap.empty()) {
++    const SkBitmap& bitmap = result->bitmap;
++    const int width = bitmap.width();
++    const int height = bitmap.height();
++    if (width > 0 && height > 0) {
++      base::span<int32_t> sample_span(samples);
++      const int y = height / 2;
++      for (size_t i = 0; i < sample_span.size(); ++i) {
++        const int x = width == 1 ? 0 : static_cast<int>(i) * (width - 1) / 4;
++        sample_span[i] = static_cast<int32_t>(bitmap.getColor(x, y));
++      }
++      ok = true;
++    }
++  }
++  if (!ok) {
++    Deliver(pending->callback, base::span<const int32_t>());
++    return;
++  }
++  Deliver(pending->callback, base::span(samples));
++}
++
++}  // namespace
++
++// Copies a 2 px row of the page compositor surface (not the browser window,
++// so the fade is not in the sample) and scales it to 5x1. `sample_screen_y`
++// is the glyph line in window pixels. The row is just below that line, in
++// the page view's pixel space.
++static void JNI_BarePageColorSampler_Sample(
++    JNIEnv* env,
++    const jni_zero::JavaRef<jobject>& j_tab,
++    int32_t sample_screen_y,
++    const jni_zero::JavaRef<jobject>& j_callback) {
++  if (g_in_flight) {
++    Deliver(j_callback, base::span<const int32_t>());
++    return;
++  }
++
++  TabAndroid* tab = TabAndroid::GetNativeTab(env, j_tab);
++  content::WebContents* web_contents = tab ? tab->web_contents() : nullptr;
++  content::RenderWidgetHostView* view =
++      web_contents ? web_contents->GetRenderWidgetHostView() : nullptr;
++  ui::ViewAndroid* native_view = view ? view->GetNativeView() : nullptr;
++  if (!view || !native_view || !view->IsSurfaceAvailableForCopy()) {
++    Deliver(j_callback, base::span<const int32_t>());
++    return;
++  }
++
++  const gfx::Size size = native_view->GetSizeDevicePx();
++  if (size.IsEmpty()) {
++    Deliver(j_callback, base::span<const int32_t>());
++    return;
++  }
++
++  const int view_top = native_view->GetLocationOfContainerViewInWindow().y();
++  int y = sample_screen_y - view_top;
++  if (y < 0) {
++    y = 0;
++  }
++  if (y >= size.height()) {
++    y = size.height() - 1;
++  }
++  const int row_height = std::min(2, size.height() - y);
++  const gfx::Rect src(0, y, size.width(), row_height);
++
++  g_in_flight = true;
++  auto pending = std::make_unique<PendingSample>();
++  pending->callback.Reset(env, j_callback);
++  // Short timeout: a stalled readback must not block the next sample.
++  view->CopyFromSurface(src, gfx::Size(5, 1), base::Milliseconds(250),
++                        base::BindOnce(&OnCopyDone, std::move(pending)));
++}
++
++}  // namespace android
++
++DEFINE_JNI(BarePageColorSampler)
+diff --git a/chrome/browser/android/compositor/scene_layer/bare_status_fade_scene_layer.cc b/chrome/browser/android/compositor/scene_layer/bare_status_fade_scene_layer.cc
+new file mode 100644
+index 0000000000000..ffb44f52817ad
+--- /dev/null
++++ b/chrome/browser/android/compositor/scene_layer/bare_status_fade_scene_layer.cc
+@@ -0,0 +1,120 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/android/compositor/scene_layer/bare_status_fade_scene_layer.h"
++
++#include <algorithm>
++
++#include "cc/slim/solid_color_layer.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/gfx/geometry/linear_gradient.h"
++#include "ui/gfx/geometry/point_f.h"
++#include "ui/gfx/geometry/size.h"
++
++// Must come after all headers that specialize FromJniType() / ToJniType().
++#include "chrome/android/chrome_jni_headers/BareStatusFadeSceneLayer_jni.h"
++
++using base::android::JavaRef;
++
++namespace android {
++namespace {
++
++// Smoothstep. 0 at the glyph line, 1 at the top of the eased region.
++float Smoothstep(float t) {
++  t = std::clamp(t, 0.f, 1.f);
++  return t * t * (3.f - 2.f * t);
++}
++
++// Angle 90 puts fraction 0 at the bottom of the layer and 1 at the top.
++// The top two pixels stay at 255 so text on that edge disappears. Below that
++// pin, seven smoothstep samples ease to 0 at the glyph line. LinearGradient
++// holds at most eight steps.
++gfx::LinearGradient FadeMask(int coverage) {
++  constexpr int kTopAlpha = 255;
++  constexpr int kEaseIntervals = 6;
++  const float two_px = 2.f / static_cast<float>(std::max(coverage, 1));
++  const float pin = std::clamp(1.f - two_px, 0.5f, 0.995f);
++  gfx::LinearGradient gradient(90);
++  for (int i = 0; i <= kEaseIntervals; ++i) {
++    const float u = static_cast<float>(i) / static_cast<float>(kEaseIntervals);
++    const float alpha = Smoothstep(u) * static_cast<float>(kTopAlpha);
++    gradient.AddStep(u * pin, static_cast<uint8_t>(alpha + 0.5f));
++  }
++  gradient.AddStep(1.f, static_cast<uint8_t>(kTopAlpha));
++  return gradient;
++}
++
++}  // namespace
++
++BareStatusFadeSceneLayer::BareStatusFadeSceneLayer(JNIEnv* env,
++                                                   const JavaRef<jobject>& jobj)
++    : SceneLayer(env, jobj), fade_(cc::slim::SolidColorLayer::Create()) {
++  layer()->SetIsDrawable(true);
++
++  fade_->SetIsDrawable(true);
++  fade_->SetPosition(gfx::PointF(0, 0));
++  // SetBackgroundColor() marks an opaque color contents-opaque. That draws a
++  // solid quad and hides the page under the mask. The mask is the coverage.
++  fade_->SetContentsOpaque(false);
++  layer()->AddChild(fade_);
++}
++
++BareStatusFadeSceneLayer::~BareStatusFadeSceneLayer() = default;
++
++void BareStatusFadeSceneLayer::UpdateFade(JNIEnv* env,
++                                          int32_t width,
++                                          int32_t height,
++                                          int32_t color_argb) {
++  if (width <= 0 || height <= 1) {
++    return;
++  }
++
++  // The status icons end at about 62% of the inset (107 of 173 px on a 173 px
++  // inset). The fade stops there. Nothing below the icons is covered.
++  constexpr float kGlyphBottom = 107.f / 173.f;
++  const int coverage =
++      std::max(1, static_cast<int>(height * kGlyphBottom + 0.5f));
++  fade_->SetBounds(gfx::Size(width, coverage));
++  fade_->SetBackgroundColor(SkColor4f::FromColor(color_argb));
++  fade_->SetContentsOpaque(false);
++  fade_->SetGradientMask(FadeMask(coverage));
++}
++
++void BareStatusFadeSceneLayer::SetContentTree(
++    JNIEnv* env,
++    const JavaRef<jobject>& jcontent_tree) {
++  SceneLayer* content_tree = FromJavaObject(env, jcontent_tree);
++  if (!content_tree || !content_tree->layer()) {
++    return;
++  }
++
++  if (!content_tree->layer()->parent() ||
++      content_tree->layer()->parent()->id() != layer_->id()) {
++    layer_->RemoveAllChildren();
++    layer_->AddChild(content_tree->layer());
++    layer_->AddChild(fade_);
++  }
++
++  should_show_background_ = content_tree->ShouldShowBackground();
++  background_color_ = content_tree->GetBackgroundColor();
++}
++
++SkColor BareStatusFadeSceneLayer::GetBackgroundColor() {
++  return background_color_;
++}
++
++bool BareStatusFadeSceneLayer::ShouldShowBackground() {
++  return should_show_background_;
++}
++
++static int64_t JNI_BareStatusFadeSceneLayer_Init(JNIEnv* env,
++                                                 const JavaRef<jobject>& jobj) {
++  BareStatusFadeSceneLayer* scene_layer =
++      new BareStatusFadeSceneLayer(env, jobj);
++  return reinterpret_cast<intptr_t>(scene_layer);
++}
++
++}  // namespace android
++
++DEFINE_JNI(BareStatusFadeSceneLayer)
+diff --git a/chrome/browser/android/compositor/scene_layer/bare_status_fade_scene_layer.h b/chrome/browser/android/compositor/scene_layer/bare_status_fade_scene_layer.h
+new file mode 100644
+index 0000000000000..784b3e6a5c354
+--- /dev/null
++++ b/chrome/browser/android/compositor/scene_layer/bare_status_fade_scene_layer.h
+@@ -0,0 +1,56 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_ANDROID_COMPOSITOR_SCENE_LAYER_BARE_STATUS_FADE_SCENE_LAYER_H_
++#define CHROME_BROWSER_ANDROID_COMPOSITOR_SCENE_LAYER_BARE_STATUS_FADE_SCENE_LAYER_H_
++
++#include <cstdint>
++
++#include "base/android/jni_android.h"
++#include "base/android/scoped_java_ref.h"
++#include "chrome/browser/ui/android/layouts/scene_layer.h"
++
++namespace cc::slim {
++class SolidColorLayer;
++}  // namespace cc::slim
++
++namespace android {
++
++// Page-colored fade over the status-bar inset. Shown while
++// page content is under the status bar, with "Keep status bar shown" on or
++// off and the address bar at the top or the bottom. Off for the tab switcher,
++// a full-screen scrim, and full-screen video.
++class BareStatusFadeSceneLayer : public SceneLayer {
++ public:
++  BareStatusFadeSceneLayer(JNIEnv* env,
++                           const base::android::JavaRef<jobject>& jobj);
++
++  BareStatusFadeSceneLayer(const BareStatusFadeSceneLayer&) = delete;
++  BareStatusFadeSceneLayer& operator=(const BareStatusFadeSceneLayer&) = delete;
++
++  ~BareStatusFadeSceneLayer() override;
++
++  // `height` is the status-bar inset in pixels. `color_argb` is the opaque
++  // page color. The mask supplies the only alpha.
++  void UpdateFade(JNIEnv* env,
++                  int32_t width,
++                  int32_t height,
++                  int32_t color_argb);
++
++  void SetContentTree(JNIEnv* env,
++                      const base::android::JavaRef<jobject>& jcontent_tree);
++
++  SkColor GetBackgroundColor() override;
++  bool ShouldShowBackground() override;
++
++ private:
++  bool should_show_background_{false};
++  SkColor background_color_{SK_ColorWHITE};
++  // Page color. Not contents-opaque: the gradient mask is the only alpha.
++  scoped_refptr<cc::slim::SolidColorLayer> fade_;
++};
++
++}  // namespace android
++
++#endif  // CHROME_BROWSER_ANDROID_COMPOSITOR_SCENE_LAYER_BARE_STATUS_FADE_SCENE_LAYER_H_
+diff --git a/chrome/browser/browser_controls/android/BUILD.gn b/chrome/browser/browser_controls/android/BUILD.gn
+index 3617f4008160f..4dc2607adf909 100644
+--- a/chrome/browser/browser_controls/android/BUILD.gn
++++ b/chrome/browser/browser_controls/android/BUILD.gn
+@@ -6,6 +6,7 @@ import("//build/config/android/rules.gni")
+ 
+ android_library("java") {
+   sources = [
++    "java/src/org/chromium/chrome/browser/browser_controls/BareMenuScrim.java",
+     "java/src/org/chromium/chrome/browser/browser_controls/BottomControlsLayer.java",
+     "java/src/org/chromium/chrome/browser/browser_controls/BottomControlsStacker.java",
+     "java/src/org/chromium/chrome/browser/browser_controls/BottomOverscrollHandler.java",
+diff --git a/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/BareMenuScrim.java b/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/BareMenuScrim.java
+new file mode 100644
+index 0000000000000..650ef4c1d6169
+--- /dev/null
++++ b/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/BareMenuScrim.java
+@@ -0,0 +1,29 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.browser_controls;
++
++import androidx.annotation.ColorInt;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++
++import java.util.function.IntConsumer;
++
++/** Lets the menu sheet tell the status bar about the dim it paints over the page. */
++@NullMarked
++public final class BareMenuScrim {
++    private static @Nullable IntConsumer sListener;
++
++    private BareMenuScrim() {}
++
++    public static void setListener(@Nullable IntConsumer listener) {
++        sListener = listener;
++    }
++
++    public static void dispatch(@ColorInt int color) {
++        IntConsumer listener = sListener;
++        if (listener != null) listener.accept(color);
++    }
++}
+diff --git a/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/TopControlsStacker.java b/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/TopControlsStacker.java
+index 36821eb64a60e..02b7881984950 100644
+--- a/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/TopControlsStacker.java
++++ b/chrome/browser/browser_controls/android/java/src/org/chromium/chrome/browser/browser_controls/TopControlsStacker.java
+@@ -54,6 +54,7 @@ public class TopControlsStacker implements BrowserControlsStateProvider.Observer
+         TopControlType.PROGRESS_BAR,
+         TopControlType.TAB_SHARING_TOOLBAR,
+         TopControlType.TOP_SCALP,
++        TopControlType.BARE_STATUS_BAR,
+     })
+     public @interface TopControlType {
+         int STATUS_INDICATOR = 0;
+@@ -64,6 +65,7 @@ public class TopControlsStacker implements BrowserControlsStateProvider.Observer
+         int PROGRESS_BAR = 5;
+         int TAB_SHARING_TOOLBAR = 6;
+         int TOP_SCALP = 7;
++        int BARE_STATUS_BAR = 8;
+     }
+ 
+     // LINT.ThenChange(:TopControlTypeName)
+@@ -128,6 +130,7 @@ public class TopControlsStacker implements BrowserControlsStateProvider.Observer
+     // The pre-defined stack order for different top controls.
+     private static final @TopControlType int[] STACK_ORDER =
+             new int[] {
++                TopControlType.BARE_STATUS_BAR,
+                 TopControlType.TOP_SCALP,
+                 TopControlType.STATUS_INDICATOR,
+                 TopControlType.TABSTRIP,
+@@ -859,6 +862,8 @@ public class TopControlsStacker implements BrowserControlsStateProvider.Observer
+     // LINT.IfChange(TopControlTypeName)
+     private static String getName(@TopControlType int type) {
+         switch (type) {
++            case TopControlType.BARE_STATUS_BAR:
++                return "BARE_STATUS_BAR";
+             case TopControlType.STATUS_INDICATOR:
+                 return "STATUS_INDICATOR";
+             case TopControlType.TABSTRIP:
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 9b98b0438ab78..e5854e8cdf599 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -550,6 +550,9 @@ public final class ChromePreferenceKeys {
+     public static final String BARE_GLASS = "Bare.Glass";
+     public static final String BARE_TOOLBAR_ALWAYS_VISIBLE = "Bare.ToolbarAlwaysVisible";
+ 
++    /** Status bar icons stay visible while scrolling. Off hides the bar with the toolbar. */
++    public static final String BARE_KEEP_STATUS_BAR_SHOWN = "Bare.KeepStatusBarShown";
++
+     /** Whether screenshots are blocked in Incognito. Off unless the user turned it on. */
+     public static final String BARE_INCOGNITO_BLOCK_SCREENSHOTS = "Bare.Incognito.BlockScreenshots";
+ 
+@@ -1521,6 +1524,7 @@ public final class ChromePreferenceKeys {
+                 BARE_HAPTICS,
+                 BARE_GLASS,
+                 BARE_TOOLBAR_ALWAYS_VISIBLE,
++                BARE_KEEP_STATUS_BAR_SHOWN,
+                 BARE_INCOGNITO_BLOCK_SCREENSHOTS,
+                 BARE_INCOGNITO_ENTRY_HAPTIC,
+                 BARE_APP_MENU_EDIT_TIP_COUNT,
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+index 62553b640dfc3..b6787e863039d 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/BareMenuSheet.java
+@@ -117,6 +117,17 @@ final class BareMenuSheet {
+         mScrim = new View(context);
+         mScrim.setBackgroundColor(SCRIM_COLOR);
+         mScrim.setAlpha(0f);
++        mScrim.addOnAttachStateChangeListener(
++                new View.OnAttachStateChangeListener() {
++                    @Override
++                    public void onViewAttachedToWindow(View v) {}
++
++                    @Override
++                    public void onViewDetachedFromWindow(View v) {
++                        org.chromium.chrome.browser.browser_controls.BareMenuScrim.dispatch(
++                                Color.TRANSPARENT);
++                    }
++                });
+         mFrame.addView(
+                 mScrim,
+                 new FrameLayout.LayoutParams(
+@@ -270,7 +281,11 @@ final class BareMenuSheet {
+     private void moveTo(float y) {
+         mContent.setTranslationY(y);
+         float shown = (mHeight - y) / Math.max(1f, mHeight - mCompactY);
+-        mScrim.setAlpha(Math.max(0f, Math.min(1f, shown)));
++        float fraction = Math.max(0f, Math.min(1f, shown));
++        mScrim.setAlpha(fraction);
++        int alpha = Math.round(Color.alpha(SCRIM_COLOR) * fraction);
++        org.chromium.chrome.browser.browser_controls.BareMenuScrim.dispatch(
++                Color.argb(alpha, 0, 0, 0));
+     }
+ 
+     private void animateTo(
+diff --git a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeControllerImpl.java b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeControllerImpl.java
+index 29ee3989692c0..e8969bab18a28 100644
+--- a/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeControllerImpl.java
++++ b/chrome/browser/ui/android/edge_to_edge/internal/java/src/org/chromium/chrome/browser/ui/edge_to_edge/EdgeToEdgeControllerImpl.java
+@@ -102,6 +102,8 @@ public class EdgeToEdgeControllerImpl
+ 
+     private final @Nullable EdgeToEdgeOSWrapper mEdgeToEdgeOsWrapper;
+     private @Nullable LayoutManager mLayoutManager;
++    // Bare: the tab switcher keeps its top padding; only web pages draw under the status bar.
++    private boolean mBareHubShowing;
+ 
+     private @Nullable Tab mCurrentTab;
+     private @Nullable WebContentsObserver mWebContentsObserver;
+@@ -355,6 +357,9 @@ public class EdgeToEdgeControllerImpl
+ 
+     @Override
+     public boolean isDrawingToTopEdge() {
++        if (!mBareHubShowing) {
++            return true;
++        }
+         // TODO(crbug.com/498302496): When top edge-to-edge expands to web pages, update this to
+         // also check top edge-to-edge page opt-in.
+         assert !mConsumeTopInset || mIsEdgeToEdgeRefactorEnabled
+@@ -547,6 +552,12 @@ public class EdgeToEdgeControllerImpl
+ 
+     @Override
+     public void onStartedShowing(int layoutType) {
++        boolean hubShowing = layoutType == LayoutType.HUB;
++        if (hubShowing != mBareHubShowing) {
++            mBareHubShowing = hubShowing;
++            adjustEdgePaddings();
++            if (mInsetObserver != null) mInsetObserver.retriggerOnApplyWindowInsets();
++        }
+         drawToBottomEdge(mIsPageOptedIntoBottomEdgeToEdge, false);
+     }
+ 
+@@ -792,9 +803,10 @@ public class EdgeToEdgeControllerImpl
+         }
+ 
+         boolean consumeTopInsets =
+-                mIsEdgeToEdgeRefactorEnabled
+-                        ? shouldConsumeTopInsets()
+-                        : (mAppliedContentViewPadding.top == 0);
++                !mBareHubShowing
++                        || (mIsEdgeToEdgeRefactorEnabled
++                                ? shouldConsumeTopInsets()
++                                : (mAppliedContentViewPadding.top == 0));
+         boolean consumeBottomInsets = mAppliedContentViewPadding.bottom == 0;
+         return consumeWindowInsets(windowInsets, consumeTopInsets, consumeBottomInsets);
+     }
