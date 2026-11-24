@@ -1,0 +1,336 @@
+diff --git a/chrome/browser/download/internal/android/BUILD.gn b/chrome/browser/download/internal/android/BUILD.gn
+index 1c5049a1b26..8b5508dcf3a 100644
+--- a/chrome/browser/download/internal/android/BUILD.gn
++++ b/chrome/browser/download/internal/android/BUILD.gn
+@@ -37,6 +37,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/download/home/glue/ThumbnailRequestGlue.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/BatchListModel.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListCoordinator.java",
++    "java/src/org/chromium/chrome/browser/download/home/list/BareDownloadDelete.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListMediator.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListView.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListViewAdapter.java",
+@@ -44,8 +45,8 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/download/home/list/ItemUtils.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/ListItem.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/ListItemModel.java",
+-    "java/src/org/chromium/chrome/browser/download/home/list/ListProperties.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/BareDownloadSelect.java",
++    "java/src/org/chromium/chrome/browser/download/home/list/ListProperties.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/ListPropertyViewBinder.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/ListUtils.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/ShareUtils.java",
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/DownloadManagerCoordinatorImpl.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/DownloadManagerCoordinatorImpl.java
+index 4aeeb7d388e..31791786d58 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/DownloadManagerCoordinatorImpl.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/DownloadManagerCoordinatorImpl.java
+@@ -20,6 +20,7 @@ import org.chromium.base.task.TaskTraits;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.chrome.browser.download.home.filter.Filters;
+ import org.chromium.chrome.browser.download.home.filter.Filters.FilterType;
++import org.chromium.chrome.browser.download.home.list.BareDownloadDelete;
+ import org.chromium.chrome.browser.download.home.list.DateOrderedListCoordinator;
+ import org.chromium.chrome.browser.download.home.list.DateOrderedListCoordinator.DateOrderedListObserver;
+ import org.chromium.chrome.browser.download.home.list.ListItem;
+@@ -86,7 +87,19 @@ class DownloadManagerCoordinatorImpl
+                         config,
+                         exploreOfflineTabVisibilitySupplier,
+                         provider,
+-                        mDeleteCoordinator::showSnackbar,
++                        new DateOrderedListCoordinator.DeleteController() {
++                            @Override
++                            public void canDelete(
++                                    List<OfflineItem> items, Callback<Boolean> callback) {
++                                mDeleteCoordinator.showSnackbar(items, callback);
++                            }
++
++                            @Override
++                            public void confirm(
++                                    List<OfflineItem> items, Callback<Boolean> callback) {
++                                BareDownloadDelete.confirm(mActivity, items, callback);
++                            }
++                        },
+                         mSelectionDelegate,
+                         this::notifyFilterChanged,
+                         createDateOrderedListObserver(),
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/BareDownloadDelete.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/BareDownloadDelete.java
+new file mode 100644
+index 00000000000..72d8494d467
+--- /dev/null
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/BareDownloadDelete.java
+@@ -0,0 +1,180 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.download.home.list;
++
++import android.app.Activity;
++import android.graphics.Color;
++import android.graphics.drawable.GradientDrawable;
++import android.text.TextUtils;
++import android.util.TypedValue;
++import android.view.Gravity;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
++import androidx.annotation.ColorInt;
++
++import org.chromium.base.Callback;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.download.internal.R;
++import org.chromium.components.browser_ui.widget.RiseSheet;
++import org.chromium.components.offline_items_collection.OfflineItem;
++
++import java.util.List;
++
++/**
++ * The question that comes before a file is deleted from the Downloads page: a card that rises from
++ * the bottom edge, with Cancel and Delete. Nothing is removed until Delete is tapped.
++ */
++@NullMarked
++public final class BareDownloadDelete {
++    private BareDownloadDelete() {}
++
++    /** Asks whether {@code items} may be deleted; {@code answer} gets false for anything else. */
++    public static void confirm(Activity activity, List<OfflineItem> items, Callback<Boolean> answer) {
++        View root = activity.findViewById(android.R.id.content);
++        if (root == null || items.isEmpty()) {
++            answer.onResult(false);
++            return;
++        }
++        float density = activity.getResources().getDisplayMetrics().density;
++        int bar = RiseSheet.barColor(root);
++        boolean light = luminance(bar) > 150;
++        @ColorInt int ink = light ? 0xFF1B1B1F : 0xFFE6E6EA;
++        @ColorInt int soft = (ink & 0x00FFFFFF) | 0x14000000;
++        @ColorInt int danger = light ? 0xFFB3261E : 0xFFF2B8B5;
++        @ColorInt int onDanger = light ? Color.WHITE : 0xFF601410;
++
++        LinearLayout content = new LinearLayout(activity);
++        content.setOrientation(LinearLayout.VERTICAL);
++        int side = Math.round(20 * density);
++        content.setPadding(side, 0, side, Math.round(14 * density));
++
++        boolean one = items.size() == 1;
++        content.addView(
++                text(
++                        activity,
++                        one
++                                ? activity.getString(R.string.bare_download_delete_title)
++                                : activity.getString(
++                                        R.string.bare_download_delete_title_many, items.size()),
++                        18,
++                        ink));
++        if (one) {
++            TextView name = text(activity, items.get(0).title, 14, (ink & 0x00FFFFFF) | 0xB3000000);
++            name.setSingleLine();
++            name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
++            LinearLayout.LayoutParams nameParams =
++                    new LinearLayout.LayoutParams(
++                            ViewGroup.LayoutParams.MATCH_PARENT,
++                            ViewGroup.LayoutParams.WRAP_CONTENT);
++            nameParams.topMargin = Math.round(6 * density);
++            content.addView(name, nameParams);
++        }
++        TextView body =
++                text(
++                        activity,
++                        activity.getString(
++                                one
++                                        ? R.string.bare_download_delete_body
++                                        : R.string.bare_download_delete_body_many),
++                        14,
++                        (ink & 0x00FFFFFF) | 0xB3000000);
++        LinearLayout.LayoutParams bodyParams =
++                new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        bodyParams.topMargin = Math.round(6 * density);
++        content.addView(body, bodyParams);
++
++        LinearLayout buttons = new LinearLayout(activity);
++        buttons.setOrientation(LinearLayout.HORIZONTAL);
++        TextView cancel = button(activity, activity.getString(R.string.cancel), ink, soft, density);
++        TextView delete =
++                button(
++                        activity,
++                        activity.getString(R.string.bare_download_delete_confirm),
++                        onDanger,
++                        danger,
++                        density);
++        LinearLayout.LayoutParams left =
++                new LinearLayout.LayoutParams(0, Math.round(44 * density), 1f);
++        left.rightMargin = Math.round(4 * density);
++        LinearLayout.LayoutParams right =
++                new LinearLayout.LayoutParams(0, Math.round(44 * density), 1f);
++        right.leftMargin = Math.round(4 * density);
++        buttons.addView(cancel, left);
++        buttons.addView(delete, right);
++        LinearLayout.LayoutParams buttonsParams =
++                new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        buttonsParams.topMargin = Math.round(16 * density);
++        content.addView(buttons, buttonsParams);
++
++        boolean[] answered = {false};
++        RiseSheet[] sheet = new RiseSheet[1];
++        cancel.setOnClickListener(
++                v -> {
++                    if (sheet[0] != null) sheet[0].fold();
++                });
++        delete.setOnClickListener(
++                v -> {
++                    if (answered[0]) return;
++                    answered[0] = true;
++                    answer.onResult(true);
++                    if (sheet[0] != null) sheet[0].fold();
++                });
++        sheet[0] =
++                RiseSheet.showCard(
++                        root,
++                        content,
++                        /* modal= */ true,
++                        /* closeAfterMs= */ 0,
++                        () -> {
++                            // Back, a tap outside and Cancel all end up here without an answer.
++                            if (answered[0]) return;
++                            answered[0] = true;
++                            answer.onResult(false);
++                        });
++        if (sheet[0] == null && !answered[0]) {
++            // Another card is up: ask again later rather than delete.
++            answered[0] = true;
++            answer.onResult(false);
++        }
++    }
++
++    private static int luminance(@ColorInt int color) {
++        return (Color.red(color) * 299 + Color.green(color) * 587 + Color.blue(color) * 114) / 1000;
++    }
++
++    private static TextView text(Activity activity, String value, int sp, @ColorInt int color) {
++        TextView view = new TextView(activity);
++        view.setText(value);
++        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
++        view.setTextColor(color);
++        return view;
++    }
++
++    private static TextView button(
++            Activity activity,
++            String label,
++            @ColorInt int textColor,
++            @ColorInt int fill,
++            float density) {
++        TextView view = new TextView(activity);
++        view.setText(label);
++        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
++        view.setGravity(Gravity.CENTER);
++        view.setTextColor(textColor);
++        GradientDrawable shape = new GradientDrawable();
++        shape.setColor(fill);
++        shape.setCornerRadius(14 * density);
++        view.setBackground(shape);
++        view.setClickable(true);
++        view.setFocusable(true);
++        return view;
++    }
++}
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListCoordinator.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListCoordinator.java
+index b404fc55805..fd6d73dde9f 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListCoordinator.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListCoordinator.java
+@@ -66,6 +66,14 @@ public class DateOrderedListCoordinator implements ToolbarCoordinator.ToolbarLis
+          *                 The callback value represents whether or not the deletion should occur.
+          */
+         void canDelete(List<OfflineItem> items, Callback<Boolean> callback);
++
++        /**
++         * Bare: asked before anything is hidden or removed. {@code callback} gets true to go on
++         * with the delete and false to leave the files alone.
++         */
++        default void confirm(List<OfflineItem> items, Callback<Boolean> callback) {
++            callback.onResult(true);
++        }
+     }
+ 
+     /**
+@@ -343,14 +351,6 @@ public class DateOrderedListCoordinator implements ToolbarCoordinator.ToolbarLis
+         return mMediator.shareSelectedItems();
+     }
+ 
+-    /** Called to handle a back press event. */
+-    public boolean handleBackPressed() {
+-        return mMediator.onBackPressed();
+-    }
+-
+-    /**
+-     * @return A list of {@link BackPressHandler}, which supports predictive back press.
+-     */
+     @Override
+     public void startSelecting() {
+         BareDownloadSelect.sArmed = true;
+@@ -362,6 +362,14 @@ public class DateOrderedListCoordinator implements ToolbarCoordinator.ToolbarLis
+                 .show();
+     }
+ 
++    /** Called to handle a back press event. */
++    public boolean handleBackPressed() {
++        return mMediator.onBackPressed();
++    }
++
++    /**
++     * @return A list of {@link BackPressHandler}, which supports predictive back press.
++     */
+     public BackPressHandler getBackPressHandler() {
+         return mMediator;
+     }
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListMediator.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListMediator.java
+index e2ee66a079b..68dcad48b6d 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListMediator.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListMediator.java
+@@ -440,6 +440,15 @@ class DateOrderedListMediator implements BackPressHandler {
+      * @param items The list of items to delete.
+      */
+     private void deleteItemsInternal(List<OfflineItem> items) {
++        // Bare: nothing is hidden or removed until the user has said yes.
++        mDeleteController.confirm(
++                items,
++                confirmed -> {
++                    if (confirmed) deleteConfirmedItems(items);
++                });
++    }
++
++    private void deleteConfirmedItems(List<OfflineItem> items) {
+         // Calculate the real offline items we are going to remove here.
+         final Collection<OfflineItem> itemsToDelete =
+                 ItemUtils.findItemsWithSameFilePath(items, mSource.getItems());
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 13ed68480d7..5de0119f0d0 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4477,6 +4477,21 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_DOWNLOAD_LOCATION_PHONE_FOLDER" desc="Choice in the download location list: the phone's own Download folder.">
+         Download folder (on this phone)
+       </message>
++      <message name="IDS_BARE_DOWNLOAD_DELETE_TITLE" desc="Downloads page: question on a card before one file is deleted.">
++        Delete this file?
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_DELETE_TITLE_MANY" desc="Downloads page: question on a card before several selected files are deleted.">
++        Delete <ph name="COUNT">%1$d<ex>3</ex></ph> files?
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_DELETE_BODY" desc="Downloads page: second line of the delete card for one file.">
++        It is removed from your phone. This can't be undone.
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_DELETE_BODY_MANY" desc="Downloads page: second line of the delete card for several files.">
++        They are removed from your phone. This can't be undone.
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_DELETE_CONFIRM" desc="Downloads page: button on the delete card that deletes the file.">
++        Delete
++      </message>
+       <message name="IDS_BARE_DOWNLOAD_LOCATION_CHOOSE" desc="Choice in the download location list: opens the system folder picker.">
+         Choose a folder…
+       </message>

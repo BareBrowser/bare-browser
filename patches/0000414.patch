@@ -1,0 +1,516 @@
+diff --git a/chrome/browser/download/android/BUILD.gn b/chrome/browser/download/android/BUILD.gn
+index 50a8c9f5eab..5f7a1c367ba 100644
+--- a/chrome/browser/download/android/BUILD.gn
++++ b/chrome/browser/download/android/BUILD.gn
+@@ -53,6 +53,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/download/BareDownloadEngine.java",
+     "java/src/org/chromium/chrome/browser/download/BareDownloadHost.java",
+     "java/src/org/chromium/chrome/browser/download/BareDownloadLocation.java",
++    "java/src/org/chromium/chrome/browser/download/BareDownloadNotice.java",
+     "java/src/org/chromium/chrome/browser/download/BareDownloadParts.java",
+     "java/src/org/chromium/chrome/browser/download/BareDownloadPlay.java",
+     "java/src/org/chromium/chrome/browser/download/DangerousDownloadDialogBridge.java",
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadNotice.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadNotice.java
+new file mode 100644
+index 00000000000..3880147c6ec
+--- /dev/null
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadNotice.java
+@@ -0,0 +1,344 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.download;
++
++import android.app.Activity;
++import android.graphics.Color;
++import android.graphics.drawable.GradientDrawable;
++import android.os.SystemClock;
++import android.text.TextUtils;
++import android.util.TypedValue;
++import android.view.Gravity;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
++import androidx.annotation.ColorInt;
++
++import org.chromium.base.ApplicationStatus;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.components.browser_ui.util.DownloadUtils;
++import org.chromium.components.browser_ui.widget.BareProgressLine;
++import org.chromium.components.browser_ui.widget.RiseSheet;
++import org.chromium.components.offline_items_collection.ContentId;
++import org.chromium.components.offline_items_collection.OfflineItem;
++import org.chromium.components.offline_items_collection.OfflineItemState;
++
++import java.io.File;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.Map;
++import java.util.Set;
++
++/**
++ * Bare: shows a download's progress as a green line in the address bar pill, and when it is saved,
++ * a small card from behind the address bar that folds away by itself. It replaces the banner
++ * Chromium drops in from the top of the screen.
++ */
++@NullMarked
++public final class BareDownloadNotice {
++    /** What the card's buttons do. */
++    public interface Actions {
++        void open(OfflineItem item);
++
++        void showInFolder(OfflineItem item);
++    }
++
++    private static final long CARD_MS = 5000;
++
++    private static final Set<String> sQuiet = new HashSet<>();
++
++    /**
++     * A file with this name, when it finishes, gets no card. For a download the browser makes on
++     * its own behalf and then removes. Counts once.
++     */
++    public static void keepQuiet(String fileName) {
++        sQuiet.add(fileName);
++    }
++
++    private final Actions mActions;
++    private final Map<ContentId, OfflineItem> mRunning = new HashMap<>();
++    private final Set<ContentId> mAnnounced = new HashSet<>();
++
++    // How long a download shows in the address bar pill when it starts. After that the pill is the
++    // address again.
++    private static final long BRIEF_MS = 3000;
++    // For the speed: the bytes seen at the last sample, when, and the smoothed bytes per second.
++    private long mSampleBytes = -1;
++    private long mSampleAt;
++    private double mSpeed;
++
++    public BareDownloadNotice(Actions actions) {
++        mActions = actions;
++    }
++
++    /** An item of the download list changed. Only saves Bare makes itself reach this. */
++    public void onItem(OfflineItem item) {
++        ContentId id = item.id;
++        if (id == null) return;
++        if (item.state == OfflineItemState.IN_PROGRESS) {
++            boolean started = !mRunning.containsKey(id);
++            mRunning.put(id, item);
++            if (started) BareProgressLine.showBriefly(BRIEF_MS);
++            updateLine();
++        } else if (item.state == OfflineItemState.COMPLETE) {
++            boolean wasRunning = mRunning.remove(id) != null;
++            updateLine();
++            // A file that was running, or one that finished a moment ago and was never seen
++            // running, as a small file can. Old items listed at startup do not count.
++            boolean recent = System.currentTimeMillis() - item.completionTimeMs < 10_000;
++            if ((wasRunning || recent) && mAnnounced.add(id) && !sQuiet.remove(item.title)) {
++                showDone(item);
++            }
++        } else {
++            if (mRunning.remove(id) != null) updateLine();
++        }
++    }
++
++    /** An item left the list. */
++    public void onRemoved(@Nullable ContentId id) {
++        if (id != null && mRunning.remove(id) != null) updateLine();
++    }
++
++    private void updateLine() {
++        if (mRunning.isEmpty()) {
++            mSampleBytes = -1;
++            mSpeed = 0;
++            BareProgressLine.setDownload(-1f);
++            BareProgressLine.setText(null, null);
++            return;
++        }
++        long value = 0;
++        long max = 0;
++        boolean known = true;
++        for (OfflineItem item : mRunning.values()) {
++            OfflineItem.Progress progress = item.progress;
++            if (progress == null || progress.isIndeterminate() || progress.max == null) {
++                known = false;
++                if (progress != null) value += progress.value;
++                continue;
++            }
++            value += progress.value;
++            max += progress.max;
++        }
++        float fraction = known && max > 0 ? Math.min(1f, value / (float) max) : Float.NaN;
++        sampleSpeed(value);
++        setWords();
++        BareProgressLine.setDownload(fraction);
++    }
++
++    /** Takes the speed from the bytes that arrived since the last sample, a second or so ago. */
++    private void sampleSpeed(long bytes) {
++        long now = SystemClock.uptimeMillis();
++        if (mSampleBytes < 0 || bytes < mSampleBytes) {
++            mSampleBytes = bytes;
++            mSampleAt = now;
++            return;
++        }
++        long elapsed = now - mSampleAt;
++        if (elapsed < 700) return;
++        double speed = (bytes - mSampleBytes) * 1000.0 / elapsed;
++        mSpeed = mSpeed == 0 ? speed : 0.6 * mSpeed + 0.4 * speed;
++        mSampleBytes = bytes;
++        mSampleAt = now;
++    }
++
++    /**
++     * "Downloading 4.2 MB · 1.1 MB/s" in the pill, with "Downloading 4.2 MB…" as the shorter words
++     * for when those do not fit; with no size, "Downloading…" in its place; with no speed yet,
++     * only the shorter words.
++     */
++    private void setWords() {
++        Activity activity = ApplicationStatus.getLastTrackedFocusedActivity();
++        if (activity == null) return;
++        long total = 0;
++        boolean known = true;
++        for (OfflineItem item : mRunning.values()) {
++            if (item.totalSizeBytes <= 0) known = false;
++            total += item.totalSizeBytes;
++        }
++        String head =
++                known
++                        ? activity.getString(
++                                R.string.bare_download_progress_downloading,
++                                DownloadUtils.getStringForBytes(activity, total))
++                        : activity.getString(R.string.bare_download_progress_downloading_unknown);
++        if (mSpeed < 1) {
++            BareProgressLine.setText(head, null);
++            return;
++        }
++        // The words end in an ellipsis, which goes when the speed follows them.
++        String plain = head.endsWith("…") ? head.substring(0, head.length() - 1) : head;
++        String speed =
++                activity.getString(
++                        R.string.bare_downloads_speed,
++                        DownloadUtils.getStringForBytes(activity, (long) mSpeed));
++        BareProgressLine.setText(plain + " \u00b7 " + speed, head);
++    }
++
++    private void showDone(OfflineItem item) {
++        Activity activity = ApplicationStatus.getLastTrackedFocusedActivity();
++        if (activity == null) return;
++        View root = activity.findViewById(android.R.id.content);
++        if (root == null) return;
++        float density = activity.getResources().getDisplayMetrics().density;
++        int bar = RiseSheet.barColor(root);
++        boolean light = luminance(bar) > 150;
++        @ColorInt int ink = light ? 0xFF1B1B1F : 0xFFE6E6EA;
++        @ColorInt int soft = (ink & 0x00FFFFFF) | 0x14000000;
++        @ColorInt int accent = SemanticColorUtils.getDefaultControlColorActive(activity);
++        @ColorInt int onAccent = luminance(accent) > 150 ? 0xFF0B1B33 : Color.WHITE;
++        @ColorInt int green = light ? 0xFF1E8E3E : 0xFF5DCA8A;
++
++        LinearLayout content = new LinearLayout(activity);
++        content.setOrientation(LinearLayout.VERTICAL);
++        int side = Math.round(20 * density);
++        content.setPadding(side, 0, side, Math.round(14 * density));
++
++        LinearLayout head = new LinearLayout(activity);
++        head.setOrientation(LinearLayout.HORIZONTAL);
++        head.setGravity(Gravity.CENTER_VERTICAL);
++        TextView tick = text(activity, "✓", 22, green);
++        tick.setGravity(Gravity.CENTER);
++        tick.setBackground(round((green & 0x00FFFFFF) | 0x26000000, 12 * density));
++        head.addView(
++                tick,
++                new LinearLayout.LayoutParams(Math.round(40 * density), Math.round(40 * density)));
++        LinearLayout names = new LinearLayout(activity);
++        names.setOrientation(LinearLayout.VERTICAL);
++        TextView name = text(activity, item.title, 16, ink);
++        name.setSingleLine();
++        name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
++        names.addView(name);
++        names.addView(
++                text(
++                        activity,
++                        activity.getString(R.string.bare_download_done_saved_to, folderOf(item)),
++                        13,
++                        (ink & 0x00FFFFFF) | 0xB3000000));
++        LinearLayout.LayoutParams namesParams =
++                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
++        namesParams.leftMargin = Math.round(12 * density);
++        head.addView(names, namesParams);
++        content.addView(head);
++
++        LinearLayout buttons = new LinearLayout(activity);
++        buttons.setOrientation(LinearLayout.HORIZONTAL);
++        TextView open = button(activity, R.string.bare_download_done_open, onAccent, accent, density);
++        TextView folder =
++                button(activity, R.string.bare_download_done_show_in_folder, ink, soft, density);
++        LinearLayout.LayoutParams left =
++                new LinearLayout.LayoutParams(0, Math.round(44 * density), 1f);
++        left.rightMargin = Math.round(4 * density);
++        LinearLayout.LayoutParams right =
++                new LinearLayout.LayoutParams(0, Math.round(44 * density), 1f);
++        right.leftMargin = Math.round(4 * density);
++        buttons.addView(open, left);
++        buttons.addView(folder, right);
++        LinearLayout.LayoutParams buttonsParams =
++                new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        buttonsParams.topMargin = Math.round(10 * density);
++        content.addView(buttons, buttonsParams);
++
++        RiseSheet[] sheet = new RiseSheet[1];
++        open.setOnClickListener(
++                v -> {
++                    mActions.open(item);
++                    if (sheet[0] != null) sheet[0].fold();
++                });
++        folder.setOnClickListener(
++                v -> {
++                    mActions.showInFolder(item);
++                    if (sheet[0] != null) sheet[0].fold();
++                });
++        sheet[0] = RiseSheet.showCard(root, content, /* modal= */ false, CARD_MS, null);
++    }
++
++    /** The folder the file is in, written the way the card says it: Downloads / Bare. */
++    private static String folderOf(OfflineItem item) {
++        String path = item.filePath;
++        if (path == null) return "";
++        // Files in the public Download folder are listed by a content address.
++        if (path.startsWith("content:")) return folderOfContent(path);
++        File parent = new File(path).getParentFile();
++        if (parent == null) return "";
++        String full = parent.getPath();
++        int at = full.indexOf("/Download");
++        if (at >= 0) {
++            String rest = full.substring(at + "/Download".length());
++            if (rest.startsWith("s")) rest = rest.substring(1);
++            return ("Downloads" + rest).replace("/", " / ");
++        }
++        return parent.getName();
++    }
++
++    /**
++     * The folder of a file named by a content address. A file saved in a folder the user chose
++     * has the document path in its last segment (primary:Documents/clip.mp4); one in the public
++     * Download folder has only a number.
++     */
++    private static String folderOfContent(String address) {
++        String last = android.net.Uri.parse(address).getLastPathSegment();
++        if (last != null) {
++            int colon = last.indexOf(':');
++            String relative = colon >= 0 ? last.substring(colon + 1) : "";
++            int slash = relative.lastIndexOf('/');
++            if (slash > 0) {
++                String folder = relative.substring(0, slash);
++                if (folder.equals("Download")) folder = "Downloads";
++                return folder.replace("/", " / ");
++            }
++            if (colon >= 0 && !relative.isEmpty()) return "";
++        }
++        // A file moved into the chosen folder can still be named by its old number.
++        android.net.Uri tree = BareDownloadLocation.get();
++        if (tree != null) {
++            try {
++                String id = android.provider.DocumentsContract.getTreeDocumentId(tree);
++                int colon = id.indexOf(':');
++                String path = colon >= 0 ? id.substring(colon + 1) : id;
++                if (path.equals("Download")) return "Downloads";
++                if (!path.isEmpty()) return path.replace("/", " / ");
++            } catch (IllegalArgumentException e) {
++                // Not a folder address: say Downloads.
++            }
++        }
++        return "Downloads";
++    }
++
++    private static TextView text(Activity activity, String value, int sp, @ColorInt int color) {
++        TextView view = new TextView(activity);
++        view.setText(value);
++        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
++        view.setTextColor(color);
++        return view;
++    }
++
++    private static TextView button(
++            Activity activity, int label, @ColorInt int textColor, @ColorInt int fill, float density) {
++        TextView view = new TextView(activity);
++        view.setText(label);
++        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
++        view.setGravity(Gravity.CENTER);
++        view.setTextColor(textColor);
++        view.setBackground(round(fill, 14 * density));
++        return view;
++    }
++
++    private static GradientDrawable round(@ColorInt int color, float radius) {
++        GradientDrawable shape = new GradientDrawable();
++        shape.setColor(color);
++        shape.setCornerRadius(radius);
++        return shape;
++    }
++
++    private static double luminance(@ColorInt int color) {
++        return 0.299 * Color.red(color) + 0.587 * Color.green(color) + 0.114 * Color.blue(color);
++    }
++}
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/BareDownloadCard.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/BareDownloadCard.java
+index bd2a823055b..3ac4ab9e52b 100644
+--- a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/BareDownloadCard.java
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/BareDownloadCard.java
+@@ -83,6 +83,9 @@ public final class BareDownloadCard {
+         }
+     }
+ 
++    /** Turn on when native can save into Download/Bare. */
++    private static final boolean SHOW_BARE_FOLDER = false;
++
+     private static final String PREF_LAST = "bare_download_card_last";
+     private static final String LAST_TREE = "tree";
+ 
+@@ -243,6 +246,18 @@ public final class BareDownloadCard {
+ 
+     private void buildRows(List<DirectoryOption> dirs) {
+         Context context = mActivity;
++        // Downloads are published to the Download folder only, so a Bare subfolder is not offered
++        // until the download engine can save there.
++        if (SHOW_BARE_FOLDER) {
++            java.io.File bare = new java.io.File(mDefaultLocation, "Bare");
++            if (bare.isDirectory() || bare.mkdirs()) {
++                mRows.add(
++                        new Row(
++                                context.getString(R.string.bare_download_card_folder_bare),
++                                bare.getAbsolutePath(),
++                                false));
++            }
++        }
+         mRows.add(
+                 new Row(
+                         context.getString(R.string.bare_download_card_folder_downloads),
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/DownloadMessageUiControllerImpl.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/DownloadMessageUiControllerImpl.java
+index 31b83bb99ef..bf49fb15246 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/DownloadMessageUiControllerImpl.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/DownloadMessageUiControllerImpl.java
+@@ -355,6 +355,28 @@ public class DownloadMessageUiControllerImpl implements DownloadMessageUiControl
+     // The delegate to provide dependencies.
+     private final Delegate mDelegate;
+ 
++    // Bare: progress in the address bar and the finished card.
++    private final BareDownloadNotice mBareNotice =
++            new BareDownloadNotice(
++                    new BareDownloadNotice.Actions() {
++                        @Override
++                        public void open(OfflineItem item) {
++                            mDelegate.openDownload(
++                                    item,
++                                    getOtrProfileIdFromItems(List.of(item)),
++                                    DownloadOpenSource.DOWNLOAD_PROGRESS_MESSAGE,
++                                    getContext());
++                        }
++
++                        @Override
++                        public void showInFolder(OfflineItem item) {
++                            mDelegate.openDownloadsPage(
++                                    getOtrProfileIdFromItems(List.of(item)),
++                                    DownloadOpenSource.DOWNLOAD_PROGRESS_MESSAGE);
++                        }
++
++                    });
++
+     // The model used to update the UI properties.
+     private @Nullable PropertyModel mPropertyModel;
+ 
+@@ -500,12 +522,14 @@ public class DownloadMessageUiControllerImpl implements DownloadMessageUiControl
+     public void onItemsAdded(List<OfflineItem> items) {
+         for (OfflineItem item : items) {
+             if (!isVisibleToUser(item)) continue;
++            if (!item.isDangerous) mBareNotice.onItem(item);
+             computeNextStepForUpdate(item);
+         }
+     }
+ 
+     @Override
+     public void onItemRemoved(@Nullable ContentId id) {
++        mBareNotice.onRemoved(id);
+         if (!mSeenItems.contains(id)) return;
+ 
+         mTrackedItems.remove(id);
+@@ -526,6 +550,7 @@ public class DownloadMessageUiControllerImpl implements DownloadMessageUiControl
+             onItemRemoved(item.id);
+             return;
+         }
++        if (!item.isDangerous) mBareNotice.onItem(item);
+ 
+         if (updateDelta != null
+                 && !updateDelta.stateChanged
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarBackgroundDrawable.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarBackgroundDrawable.java
+index 1f55db7f471..6b7402c9c60 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarBackgroundDrawable.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarBackgroundDrawable.java
+@@ -269,6 +269,8 @@ public class LocationBarBackgroundDrawable extends Drawable {
+                 mDarkPill,
+                 mDensity,
+                 this);
++        BareProgressLine.drawText(
++                canvas, mOuterPath, mDarkPill, LocalizationUtils.isLayoutRtl(), mDensity, this);
+     }
+ 
+     /** Controls the opacity of the rainbow outline. */
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBar.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBar.java
+index 9f0b7ef8b1c..6f7315f497c 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBar.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBar.java
+@@ -43,6 +43,7 @@ import androidx.core.text.BidiFormatter;
+ import androidx.core.text.TextDirectionHeuristicsCompat;
+ import androidx.core.view.inputmethod.EditorInfoCompat;
+ 
++import org.chromium.components.browser_ui.widget.BareProgressLine;
+ import org.chromium.base.Callback;
+ import org.chromium.base.Log;
+ import org.chromium.base.MathUtils;
+@@ -282,6 +283,7 @@ public class UrlBar extends AutocompleteEditText {
+     public UrlBar(Context context, AttributeSet attrs) {
+         super(context, attrs);
+         mUrlDirection = LAYOUT_DIRECTION_LOCALE;
++        BareProgressLine.registerView(this);
+ 
+         // The URL Bar is derived from an text edit class, and as such is focusable by
+         // default. This means that if it is created before the first draw of the UI it
+@@ -338,6 +340,8 @@ public class UrlBar extends AutocompleteEditText {
+ 
+     @Override
+     protected void onDraw(Canvas canvas) {
++        // Bare: while a download runs the pill says so in place of the address.
++        if (BareProgressLine.hasText() && !hasFocus()) return;
+         canvas.save();
+ 
+         // Ensure glitch text does not render outside of the url bar bounds.
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 05ddeb3dc65..160d514b648 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4516,12 +4516,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_DOWNLOAD_CARD_SEND_TO_APP" desc="Download card: choice to hand the file to another download app, such as 1DM.">
+         Send to app
+       </message>
++      <message name="IDS_BARE_DOWNLOAD_CARD_FOLDER_BARE" desc="Download card: folder choice, the Bare folder inside the phone's Downloads folder. Not shown until the download engine can save there.">
++        Downloads / Bare
++      </message>
+       <message name="IDS_BARE_DOWNLOAD_CARD_FOLDER_DOWNLOADS" desc="Download card: folder choice, the phone's Downloads folder.">
+         Downloads
+       </message>
+       <message name="IDS_BARE_DOWNLOAD_PROGRESS_DOWNLOADING" desc="Shown in the address bar while a file is downloading. %1$s is the file size.">
+         Downloading <ph name="SIZE">%1$s<ex>4.2 MB</ex></ph>…
+       </message>
++      <message name="IDS_BARE_DOWNLOAD_PROGRESS_DOWNLOADING_UNKNOWN" desc="Shown in the address bar while a file of unknown size is downloading.">
++        Downloading…
++      </message>
+       <message name="IDS_BARE_DOWNLOAD_DONE_SAVED_TO" desc="Card after a download finished. %1$s is the folder it was saved in.">
+         Saved to <ph name="FOLDER">%1$s<ex>Downloads / Bare</ex></ph>
+       </message>

@@ -298,7 +298,7 @@ index 01181dbc25e..de686b0486c 100644
      /* package */ void setBareActionHandlers(Runnable share, Runnable copy) {
          if (mBareShareButton != null) mBareShareButton.setOnClickListener(v -> share.run());
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
-index 4d4585e6fef..d35e453056d 100644
+index 4d4585e6fef..0b99bdda8d0 100644
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
 @@ -14,12 +14,18 @@ import android.animation.AnimatorListenerAdapter;
@@ -413,19 +413,49 @@ index 4d4585e6fef..d35e453056d 100644
          mLocationBarLayout.setBackButtonVisibility(showBackButton);
          mLocationBarLayout.setBackButtonEnabled(tab.canGoBack());
      }
-@@ -2598,8 +2654,12 @@ public class LocationBarMediator
+@@ -2598,8 +2654,13 @@ public class LocationBarMediator
          return mCurrentInput;
      }
  
-+    private static final boolean BARE_NO_MIC = true;
++    // Bare: tests turn this off to run the stock mic cases.
++    @VisibleForTesting static boolean sBareNoMic = true;
 +
      @VisibleForTesting
      boolean shouldShowMicButton() {
 +        // Bare: no mic in the address bar, at rest or while typing.
-+        if (BARE_NO_MIC) return false;
++        if (sBareNoMic) return false;
          boolean useDesktopBehavior =
                  mFuseboxCoordinator.getFuseboxLayoutModeSupplier().get()
                          == FuseboxLayoutMode.SUGGESTIONS_POPOVER;
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediatorUnitTest.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediatorUnitTest.java
+index cc7912d4a80..55a5fedea4e 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediatorUnitTest.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediatorUnitTest.java
+@@ -50,6 +50,7 @@ import android.widget.TextView;
+ import androidx.test.core.app.ApplicationProvider;
+ 
+ import org.jni_zero.JniUniquePtr;
++import org.junit.After;
+ import org.junit.Before;
+ import org.junit.BeforeClass;
+ import org.junit.Rule;
+@@ -341,9 +342,16 @@ public class LocationBarMediatorUnitTest {
+         MockitoAnnotations.openMocks(new LocationBarMediatorUnitTest()).close();
+     }
+ 
++    @After
++    public void tearDown() {
++        LocationBarMediator.sBareNoMic = true;
++    }
++
+     @Before
+     @SuppressWarnings("DirectInvocationOnMock")
+     public void setUp() {
++        // Bare hides the mic in the address bar; these tests cover the stock mic logic.
++        LocationBarMediator.sBareNoMic = false;
+         // All lenient() mock actions below should be reevaluated at some point. There is a
+         // likelihood some of these are not needed anymore. Infrequent actions should ideally
+         // be moved to tests that actually need them.
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java
 index afb8e4c9800..43ee0eb7506 100644
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarPhone.java

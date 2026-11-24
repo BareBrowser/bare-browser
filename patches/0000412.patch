@@ -1,0 +1,1793 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index 271f2167440..6863a8b2ef5 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -132,6 +132,7 @@ import org.chromium.chrome.browser.desktop_site.DesktopSiteUtils;
+ import org.chromium.chrome.browser.device.DeviceClassManager;
+ import org.chromium.chrome.browser.devtools.DevToolsWindowAndroid;
+ import org.chromium.chrome.browser.dom_distiller.ReaderModeManager;
++import org.chromium.chrome.browser.download.BareDownloadHost;
+ import org.chromium.chrome.browser.download.DownloadManagerService;
+ import org.chromium.chrome.browser.download.DownloadUtils;
+ import org.chromium.chrome.browser.download.items.OfflineContentAggregatorNotificationBridgeUiFactory;
+@@ -336,7 +337,8 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+                 KeyboardShortcutsDelegate,
+                 TabModelInitializer,
+                 ThemeResourceWrapperProvider,
+-                UmaActivityObserver.UmaSessionAwareActivity {
++                UmaActivityObserver.UmaSessionAwareActivity,
++                BareDownloadHost {
+     public static final String UNFOLD_LATENCY_BEGIN_TIMESTAMP = "unfold_latency_begin_timestamp";
+     public static final String IS_FROM_RECREATING = "is_from_recreating";
+ 
+@@ -2681,6 +2683,19 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+         return modelSelector.getCurrentModel();
+     }
+ 
++    @Override
++    public @Nullable String getBareSiteHost() {
++        Tab tab = getActivityTab();
++        if (tab == null) return null;
++        String host = tab.getUrl().getHost();
++        return host == null || host.isEmpty() ? null : host;
++    }
++
++    @Override
++    public @Nullable Tab getBareDownloadTab() {
++        return getActivityTab();
++    }
++
+     /**
+      * Returns the tab being displayed by this ChromeActivity instance. This allows differentiation
+      * between ChromeActivity subclasses that swap between multiple tabs (e.g. ChromeTabbedActivity)
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
+index 75f0e88d99e..75e0d2e461b 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadController.java
+@@ -10,6 +10,7 @@ import org.jni_zero.CalledByNative;
+ import org.jni_zero.JniType;
+ import org.jni_zero.NativeMethods;
+ 
++import android.app.Activity;
+ import android.content.ActivityNotFoundException;
+ import android.content.ComponentName;
+ import android.content.Context;
+@@ -19,8 +20,10 @@ import android.content.pm.ResolveInfo;
+ import android.net.Uri;
+ import android.os.Bundle;
+ import android.provider.Browser;
++import android.webkit.URLUtil;
+ import android.widget.Toast;
+ 
++import org.chromium.base.ApplicationStatus;
+ import org.chromium.base.ContextUtils;
+ import org.chromium.base.Log;
+ import org.chromium.build.annotations.NullMarked;
+@@ -33,6 +36,8 @@ import org.chromium.chrome.browser.pdf.PdfUtils;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tab.TabObserver;
++import org.chromium.chrome.browser.download.dialogs.BareDownloadCard;
++import org.chromium.components.browser_ui.widget.RiseSheet;
+ import org.chromium.chrome.browser.ui.native_page.NativePage;
+ import org.chromium.content_public.browser.LoadUrlParams;
+ import org.chromium.content_public.browser.WebContents;
+@@ -42,7 +47,10 @@ import org.chromium.url.GURL;
+ import org.chromium.url.Origin;
+ 
+ import java.util.ArrayList;
++import java.util.Collections;
++import java.util.HashSet;
+ import java.util.List;
++import java.util.Set;
+ 
+ /** Java counterpart of android DownloadController. Owned by native. */
+ @NullMarked
+@@ -98,6 +106,24 @@ public class DownloadController {
+     @VisibleForTesting
+     static Intent buildHandoffIntent(
+             String url, String mimeType, String referrer, String userAgent, String cookie) {
++        return buildHandoffIntent(url, mimeType, referrer, userAgent, cookie, "");
++    }
++
++    /**
++     * The same, with the name the browser would have saved the file under ("" when unknown).
++     *
++     * <p>Android has no standard key for a download's file name. The title extra is the standard
++     * place for a name; the plain keys are ones a download manager may read instead. An app that
++     * reads none of them names the file itself, as before.
++     */
++    @VisibleForTesting
++    static Intent buildHandoffIntent(
++            String url,
++            String mimeType,
++            String referrer,
++            String userAgent,
++            String cookie,
++            String fileName) {
+         Intent intent = new Intent(Intent.ACTION_VIEW);
+         Uri uri = Uri.parse(url);
+         if (mimeType != null && !mimeType.isEmpty()) {
+@@ -113,6 +139,12 @@ public class DownloadController {
+         if (!userAgent.isEmpty()) headers.putString("User-Agent", userAgent);
+         if (!cookie.isEmpty()) headers.putString("Cookie", cookie);
+         if (!headers.isEmpty()) intent.putExtra(Browser.EXTRA_HEADERS, headers);
++        if (!fileName.isEmpty()) {
++            intent.putExtra(Intent.EXTRA_TITLE, fileName);
++            intent.putExtra("title", fileName);
++            intent.putExtra("filename", fileName);
++            intent.putExtra("name", fileName);
++        }
+         return intent;
+     }
+ 
+@@ -125,6 +157,12 @@ public class DownloadController {
+     @CalledByNative
+     private static boolean canSendToExternalDownloadManager(
+             GURL url, @JniType("std::string") String mimeType) {
++        // Bare: the card's "Save in Bare" choice starts the same download again and it must stay
++        // in the browser this time.
++        if (sSaveInBareUrl != null && sSaveInBareUrl.equals(url.getSpec())) {
++            sSaveInBareUrl = null;
++            return false;
++        }
+         if (!ChromeSharedPreferences.getInstance()
+                 .readBoolean(
+                         ChromePreferenceKeys.DOWNLOAD_USE_EXTERNAL_DOWNLOAD_MANAGER, false)) {
+@@ -166,13 +204,170 @@ public class DownloadController {
+             @JniType("std::string") String mimeType,
+             @JniType("std::string") String referrer,
+             @JniType("std::string") String userAgent,
+-            @JniType("std::string") String cookie) {
++            @JniType("std::string") String cookie,
++            @JniType("std::string") String fileName) {
++        Context context = ContextUtils.getApplicationContext();
++        if (context == null) return;
++
++        // Bare: with no app chosen in settings, ask first on a card: save in Bare or send it on.
++        if (ChromeSharedPreferences.getInstance()
++                .readString(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_MANAGER_PACKAGE, "")
++                .isEmpty()) {
++            Activity activity = ApplicationStatus.getLastTrackedFocusedActivity();
++            if (activity instanceof BareDownloadHost host
++                    && host.getBareDownloadTab() != null
++                    && askBeforeSending(
++                            activity, host, url, mimeType, referrer, userAgent, cookie, fileName)) {
++                return;
++            }
++        }
++        handOffToExternalDownloadManager(url, mimeType, referrer, userAgent, cookie, fileName);
++    }
++
++    /** Bare: the url whose next download must stay in the browser. */
++    private static @Nullable String sSaveInBareUrl;
++
++    private static boolean askBeforeSending(
++            Activity activity,
++            BareDownloadHost host,
++            GURL url,
++            String mimeType,
++            String referrer,
++            String userAgent,
++            String cookie,
++            String fileName) {
++        if (RiseSheet.isOpen()) return false;
++        String name =
++                fileName.isEmpty()
++                        ? URLUtil.guessFileName(url.getSpec(), null, mimeType)
++                        : fileName;
++        String site = url.getHost();
++        List<BareDownloadCard.App> apps = findApps(activity, url, mimeType);
++        DownloadDirectoryProvider.getInstance()
++                .getAllDirectoriesOptions(
++                        (ArrayList<DirectoryOption> dirs) -> {
++                            boolean shown =
++                                    BareDownloadCard.show(
++                                            activity,
++                                            name,
++                                            /* totalBytes= */ 0,
++                                            site,
++                                            dirs,
++                                            /* offerApp= */ true,
++                                            apps,
++                                            new BareDownloadCard.Listener() {
++                                                @Override
++                                                public void onStart(
++                                                        String location, boolean sendToApp) {
++                                                    if (sendToApp) {
++                                                        handOffToExternalDownloadManager(
++                                                                url,
++                                                                mimeType,
++                                                                referrer,
++                                                                userAgent,
++                                                                cookie,
++                                                                fileName);
++                                                    } else {
++                                                        saveInBare(host, url, location);
++                                                    }
++                                                }
++
++                                                @Override
++                                                public void onSendTo(ComponentName app) {
++                                                    launchHandoffTo(
++                                                            app,
++                                                            url,
++                                                            mimeType,
++                                                            referrer,
++                                                            userAgent,
++                                                            cookie,
++                                                            fileName);
++                                                }
++
++                                                @Override
++                                                public void onCancel() {}
++                                            });
++                            if (!shown) {
++                                handOffToExternalDownloadManager(
++                                        url, mimeType, referrer, userAgent, cookie, fileName);
++                            }
++                        });
++        return true;
++    }
++
++    /** The apps the card lists for this download: its handlers, this browser left out. */
++    private static List<BareDownloadCard.App> findApps(
++            Activity activity, GURL url, String mimeType) {
++        List<BareDownloadCard.App> apps = new ArrayList<>();
++        PackageManager pm = activity.getPackageManager();
++        String self = activity.getPackageName();
++        Intent probe = buildHandoffIntent(url.getSpec(), mimeType, "", "", "");
++        Set<String> seen = new HashSet<>();
++        for (ResolveInfo info : pm.queryIntentActivities(probe, 0)) {
++            if (info.activityInfo == null || self.equals(info.activityInfo.packageName)) continue;
++            ComponentName name =
++                    new ComponentName(info.activityInfo.packageName, info.activityInfo.name);
++            if (!seen.add(name.flattenToString())) continue;
++            apps.add(new BareDownloadCard.App(name, info.loadLabel(pm), info.loadIcon(pm)));
++        }
++        Collections.sort(
++                apps, (a, b) -> a.label.toString().compareToIgnoreCase(b.label.toString()));
++        return apps;
++    }
++
++    /**
++     * Sends the download to the one app the user tapped on the card, with what the page knew: the
++     * Referer and User-Agent always, the cookies only if the user allowed them. The cookies go on
++     * this intent alone, which names its app.
++     */
++    private static void launchHandoffTo(
++            ComponentName app,
++            GURL url,
++            String mimeType,
++            String referrer,
++            String userAgent,
++            String cookie,
++            String fileName) {
++        Context context = ContextUtils.getApplicationContext();
++        if (context == null) return;
++        String sentCookie = shouldSendSignInToExternalDownloadManager() ? cookie : "";
++        Intent direct =
++                buildHandoffIntent(
++                        url.getSpec(), mimeType, referrer, userAgent, sentCookie, fileName);
++        direct.setComponent(app);
++        direct.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++        try {
++            context.startActivity(direct);
++        } catch (ActivityNotFoundException | SecurityException e) {
++            Log.w(TAG, "The app tapped on the card would not start.");
++            Toast.makeText(context, R.string.external_download_manager_failed, Toast.LENGTH_LONG)
++                    .show();
++        }
++    }
++
++    private static void saveInBare(BareDownloadHost host, GURL url, String location) {
++        Tab tab = host.getBareDownloadTab();
++        if (tab == null) return;
++        DownloadDialogBridge.setDownloadAndSaveFileDefaultDirectory(tab.getProfile(), location);
++        sSaveInBareUrl = url.getSpec();
++        BareDownloadCard.skipNextPrompt();
++        downloadUrl(url.getSpec(), tab);
++    }
++
++    private static void handOffToExternalDownloadManager(
++            GURL url,
++            String mimeType,
++            String referrer,
++            String userAgent,
++            String cookie,
++            String fileName) {
+         Context context = ContextUtils.getApplicationContext();
+         if (context == null) return;
+ 
+         // Cookies only on the intent for the app the user chose; the chooser could hand them to
+         // any app that answers.
+-        Intent intent = buildHandoffIntent(url.getSpec(), mimeType, referrer, userAgent, "");
++        Intent intent =
++                buildHandoffIntent(url.getSpec(), mimeType, referrer, userAgent, "", fileName);
+         Handlers handlers =
+                 findHandlers(context, buildHandoffIntent(url.getSpec(), mimeType, "", "", ""));
+ 
+@@ -181,7 +376,8 @@ public class DownloadController {
+                         .readString(ChromePreferenceKeys.DOWNLOAD_EXTERNAL_MANAGER_PACKAGE, "");
+         if (!preferred.isEmpty() && handlers.components.contains(preferred)) {
+             Intent direct =
+-                    buildHandoffIntent(url.getSpec(), mimeType, referrer, userAgent, cookie);
++                    buildHandoffIntent(
++                            url.getSpec(), mimeType, referrer, userAgent, cookie, fileName);
+             direct.setComponent(ComponentName.unflattenFromString(preferred));
+             direct.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+             try {
+diff --git a/chrome/browser/download/android/BUILD.gn b/chrome/browser/download/android/BUILD.gn
+index f1fb9a1c7bd..50a8c9f5eab 100644
+--- a/chrome/browser/download/android/BUILD.gn
++++ b/chrome/browser/download/android/BUILD.gn
+@@ -51,6 +51,7 @@ android_library("toolbar_button_state_java") {
+ android_library("java") {
+   sources = [
+     "java/src/org/chromium/chrome/browser/download/BareDownloadEngine.java",
++    "java/src/org/chromium/chrome/browser/download/BareDownloadHost.java",
+     "java/src/org/chromium/chrome/browser/download/BareDownloadLocation.java",
+     "java/src/org/chromium/chrome/browser/download/BareDownloadParts.java",
+     "java/src/org/chromium/chrome/browser/download/BareDownloadPlay.java",
+@@ -72,6 +73,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/download/MimeUtils.java",
+     "java/src/org/chromium/chrome/browser/download/PolicyWarningDownloadDialogBridge.java",
+     "java/src/org/chromium/chrome/browser/download/StringUtils.java",
++    "java/src/org/chromium/chrome/browser/download/dialogs/BareDownloadCard.java",
+     "java/src/org/chromium/chrome/browser/download/dialogs/DangerousDownloadDialog.java",
+     "java/src/org/chromium/chrome/browser/download/dialogs/DownloadDialogUtils.java",
+     "java/src/org/chromium/chrome/browser/download/dialogs/DownloadLocationCustomView.java",
+diff --git a/chrome/browser/download/android/download_controller.cc b/chrome/browser/download/android/download_controller.cc
+index 83cd4724cb7..fe105e21694 100644
+--- a/chrome/browser/download/android/download_controller.cc
++++ b/chrome/browser/download/android/download_controller.cc
+@@ -352,12 +352,13 @@ void DownloadController::SendToExternalDownloadManager(
+     const std::string& mime_type,
+     const std::string& referrer,
+     const std::string& user_agent,
+-    const std::string& cookie) {
++    const std::string& cookie,
++    const std::string& file_name) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   JNIEnv* env = base::android::AttachCurrentThread();
+   ScopedJavaLocalRef<jobject> jurl = url::GURLAndroid::FromNativeGURL(env, url);
+   Java_DownloadController_sendToExternalDownloadManager(
+-      env, jurl, mime_type, referrer, user_agent, cookie);
++      env, jurl, mime_type, referrer, user_agent, cookie, file_name);
+ }
+ 
+ void DownloadController::CreateAndroidDownload(
+diff --git a/chrome/browser/download/android/download_controller.h b/chrome/browser/download/android/download_controller.h
+index 318183e95e0..7ec774ce19a 100644
+--- a/chrome/browser/download/android/download_controller.h
++++ b/chrome/browser/download/android/download_controller.h
+@@ -56,12 +56,14 @@ class DownloadController : public DownloadControllerBase {
+   static bool ShouldSendSignInToExternalDownloadManager();
+ 
+   // Hands the download to another app. `referrer`, `user_agent` and `cookie`
+-  // are empty when there is nothing to send.
++  // are empty when there is nothing to send. `file_name` is the name the
++  // browser would have saved the file under.
+   static void SendToExternalDownloadManager(const GURL& url,
+                                             const std::string& mime_type,
+                                             const std::string& referrer,
+                                             const std::string& user_agent,
+-                                            const std::string& cookie);
++                                            const std::string& cookie,
++                                            const std::string& file_name);
+ 
+   // UMA histogram enum for download storage permission requests. Keep this
+   // in sync with MobileDownloadStoragePermission in histograms.xml. This should
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadHost.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadHost.java
+new file mode 100644
+index 00000000000..63edafcbe82
+--- /dev/null
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadHost.java
+@@ -0,0 +1,19 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.download;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.tab.Tab;
++
++/** Bare: what the download cards ask the browser window about the tab in front. */
++@NullMarked
++public interface BareDownloadHost {
++    /** The host of the page in front, such as files.example.com, or null. */
++    @Nullable String getBareSiteHost();
++
++    /** The tab in front, or null. */
++    @Nullable Tab getBareDownloadTab();
++}
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/BareDownloadCard.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/BareDownloadCard.java
+new file mode 100644
+index 00000000000..bd2a823055b
+--- /dev/null
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/BareDownloadCard.java
+@@ -0,0 +1,678 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.download.dialogs;
++
++import android.app.Activity;
++import android.content.ComponentName;
++import android.content.Context;
++import android.content.Intent;
++import android.content.SharedPreferences;
++import android.graphics.Color;
++import android.graphics.drawable.Drawable;
++import android.graphics.drawable.GradientDrawable;
++import android.net.Uri;
++import android.provider.DocumentsContract;
++import android.text.TextUtils;
++import android.util.TypedValue;
++import android.view.Gravity;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.FrameLayout;
++import android.widget.ImageView;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++import android.widget.Toast;
++
++import androidx.activity.ComponentActivity;
++import androidx.activity.result.ActivityResult;
++import androidx.activity.result.ActivityResultLauncher;
++import androidx.activity.result.contract.ActivityResultContracts;
++import androidx.annotation.ColorInt;
++
++import org.chromium.base.ContextUtils;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.download.BareDownloadLocation;
++import org.chromium.chrome.browser.download.DirectoryOption;
++import org.chromium.chrome.browser.download.R;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.components.browser_ui.util.DownloadUtils;
++import org.chromium.components.browser_ui.widget.RiseSheet;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++
++/**
++ * Bare: the "ask where to save" card. It rises from behind the address bar and shows the file,
++ * where it will be saved and Cancel / Start. When an external download manager could take the
++ * file instead, a switch at the top picks between saving in Bare and sending it to that app.
++ * Tapping "Save to" swaps in a short list of folders; the last folder chosen is remembered.
++ */
++@NullMarked
++public final class BareDownloadCard {
++    /** What the user decided. */
++    public interface Listener {
++        /**
++         * Start was tapped.
++         *
++         * @param location The folder to save in, for a save in Bare.
++         * @param sendToApp True when the file should go to the external download manager.
++         */
++        void onStart(String location, boolean sendToApp);
++
++        /** The card went away without Start. */
++        void onCancel();
++
++        /** An app in the list was tapped: the file goes to that app and nowhere else. */
++        default void onSendTo(ComponentName app) {}
++    }
++
++    /** An installed app that can take the download, as the card lists it. */
++    public static final class App {
++        public final ComponentName component;
++        public final CharSequence label;
++        public final @Nullable Drawable icon;
++
++        public App(ComponentName component, CharSequence label, @Nullable Drawable icon) {
++            this.component = component;
++            this.label = label;
++            this.icon = icon;
++        }
++    }
++
++    private static final String PREF_LAST = "bare_download_card_last";
++    private static final String LAST_TREE = "tree";
++
++    private static final class Row {
++        final String label;
++        final @Nullable String location;
++        final boolean tree;
++
++        Row(String label, @Nullable String location, boolean tree) {
++            this.label = label;
++            this.location = location;
++            this.tree = tree;
++        }
++
++        String key() {
++            return tree ? LAST_TREE : String.valueOf(location);
++        }
++    }
++
++    private static long sSkipUntil;
++
++    /**
++     * The next save prompt, if it comes within a few seconds, is skipped: the user has just
++     * answered it on this card.
++     */
++    public static void skipNextPrompt() {
++        sSkipUntil = android.os.SystemClock.uptimeMillis() + 8000;
++    }
++
++    /** Whether the prompt that is about to show was already answered. Counts once. */
++    static boolean consumeSkip() {
++        boolean skip = android.os.SystemClock.uptimeMillis() < sSkipUntil;
++        sSkipUntil = 0;
++        return skip;
++    }
++
++    private static boolean sOpen;
++
++    /** Whether a card is up and waiting for an answer. */
++    public static boolean isOpen() {
++        return sOpen;
++    }
++
++    private final Activity mActivity;
++    private final String mFileName;
++    private final long mTotalBytes;
++    private final @Nullable String mSite;
++    private final boolean mOfferApp;
++    private final List<App> mApps;
++    private final Listener mListener;
++    private final String mDefaultLocation;
++    private final List<Row> mRows = new ArrayList<>();
++    private int mSelected;
++    private boolean mSendToApp;
++    private boolean mAnswered;
++    private @Nullable RiseSheet mSheet;
++    private @Nullable View mMainPage;
++    private @Nullable View mListPage;
++    private @Nullable TextView mFolderLabel;
++    private @Nullable ActivityResultLauncher<Intent> mPicker;
++    private final @ColorInt int mInk;
++    private final @ColorInt int mSoft;
++    private final @ColorInt int mAccent;
++    private final @ColorInt int mOnAccent;
++    private final float mDensity;
++
++    /**
++     * Shows the card.
++     *
++     * @return false when it could not be shown, so the caller falls back to its own dialog.
++     */
++    public static boolean show(
++            Activity activity,
++            String fileName,
++            long totalBytes,
++            @Nullable String site,
++            List<DirectoryOption> dirs,
++            boolean offerApp,
++            Listener listener) {
++        return show(
++                activity,
++                fileName,
++                totalBytes,
++                site,
++                dirs,
++                offerApp,
++                Collections.<App>emptyList(),
++                listener);
++    }
++
++    /**
++     * Shows the card with the apps that can take the download listed on it, each one a tap away.
++     * With no apps the card has its Save in Bare / Send to app switch instead.
++     */
++    public static boolean show(
++            Activity activity,
++            String fileName,
++            long totalBytes,
++            @Nullable String site,
++            List<DirectoryOption> dirs,
++            boolean offerApp,
++            List<App> apps,
++            Listener listener) {
++        View root = activity.findViewById(android.R.id.content);
++        if (root == null || RiseSheet.isOpen()) return false;
++        String defaultLocation = null;
++        for (DirectoryOption dir : dirs) {
++            if (dir.type == DirectoryOption.DownloadLocationDirectoryType.DEFAULT
++                    && !TextUtils.isEmpty(dir.location)) {
++                defaultLocation = dir.location;
++                break;
++            }
++        }
++        if (defaultLocation == null) return false;
++        BareDownloadCard card =
++                new BareDownloadCard(
++                        activity,
++                        root,
++                        fileName,
++                        totalBytes,
++                        site,
++                        dirs,
++                        defaultLocation,
++                        offerApp,
++                        apps,
++                        listener);
++        return card.open(root);
++    }
++
++    private BareDownloadCard(
++            Activity activity,
++            View root,
++            String fileName,
++            long totalBytes,
++            @Nullable String site,
++            List<DirectoryOption> dirs,
++            String defaultLocation,
++            boolean offerApp,
++            List<App> apps,
++            Listener listener) {
++        mActivity = activity;
++        mFileName = fileName;
++        mTotalBytes = totalBytes;
++        mSite = site;
++        mOfferApp = offerApp;
++        mApps = apps;
++        mListener = listener;
++        mDefaultLocation = defaultLocation;
++        mDensity = activity.getResources().getDisplayMetrics().density;
++        int bar = RiseSheet.barColor(root);
++        boolean light = luminance(bar) > 150;
++        mInk = light ? 0xFF1B1B1F : 0xFFE6E6EA;
++        mSoft = (mInk & 0x00FFFFFF) | 0x14000000;
++        mAccent = SemanticColorUtils.getDefaultControlColorActive(activity);
++        mOnAccent = luminance(mAccent) > 150 ? 0xFF0B1B33 : Color.WHITE;
++        buildRows(dirs);
++    }
++
++    private void buildRows(List<DirectoryOption> dirs) {
++        Context context = mActivity;
++        mRows.add(
++                new Row(
++                        context.getString(R.string.bare_download_card_folder_downloads),
++                        mDefaultLocation,
++                        false));
++        for (DirectoryOption dir : dirs) {
++            if (dir.type == DirectoryOption.DownloadLocationDirectoryType.DEFAULT
++                    || TextUtils.isEmpty(dir.location)
++                    || dir.name == null) {
++                continue;
++            }
++            mRows.add(new Row(dir.name, dir.location, false));
++        }
++        addTreeRow();
++        selectRemembered();
++    }
++
++    private void addTreeRow() {
++        Uri tree = BareDownloadLocation.get();
++        if (tree == null) return;
++        mRows.add(new Row(folderName(tree), null, true));
++    }
++
++    private void selectRemembered() {
++        String last = prefs().getString(PREF_LAST, "");
++        mSelected = 0;
++        for (int i = 0; i < mRows.size(); i++) {
++            if (mRows.get(i).key().equals(last)) {
++                mSelected = i;
++                return;
++            }
++        }
++        if (BareDownloadLocation.get() != null) mSelected = mRows.size() - 1;
++    }
++
++    private static SharedPreferences prefs() {
++        return ContextUtils.getAppSharedPreferences();
++    }
++
++    private boolean open(View root) {
++        FrameLayout content = new FrameLayout(mActivity);
++        int side = dp(20);
++        content.setPadding(side, 0, side, dp(14));
++        mMainPage = buildMainPage();
++        mListPage = buildListPage();
++        content.addView(mMainPage);
++        content.addView(mListPage);
++        // The card is as tall as the taller of its two pages, so swapping them does not resize it.
++        int width = RiseSheet.cardWidth(root) - 2 * side;
++        int tallest = 0;
++        for (View page : new View[] {mMainPage, mListPage}) {
++            page.measure(
++                    View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
++                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
++            tallest = Math.max(tallest, page.getMeasuredHeight());
++        }
++        content.setMinimumHeight(tallest + dp(14));
++        mListPage.setVisibility(View.GONE);
++        mSheet = RiseSheet.showCard(root, content, /* modal= */ true, 0, this::onDismissed);
++        sOpen = mSheet != null;
++        return sOpen;
++    }
++
++    private View buildMainPage() {
++        LinearLayout page = new LinearLayout(mActivity);
++        page.setOrientation(LinearLayout.VERTICAL);
++
++        LinearLayout head = new LinearLayout(mActivity);
++        head.setOrientation(LinearLayout.HORIZONTAL);
++        head.setGravity(Gravity.CENTER_VERTICAL);
++        TextView badge = label(extension(mFileName), 12, true);
++        badge.setGravity(Gravity.CENTER);
++        badge.setBackground(round(mSoft, 12));
++        head.addView(badge, new LinearLayout.LayoutParams(dp(44), dp(44)));
++        LinearLayout names = new LinearLayout(mActivity);
++        names.setOrientation(LinearLayout.VERTICAL);
++        TextView name = label(mFileName, 16, true);
++        name.setSingleLine();
++        name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
++        names.addView(name);
++        String detail = detailLine();
++        if (!detail.isEmpty()) names.addView(label(detail, 13, false));
++        LinearLayout.LayoutParams namesParams =
++                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
++        namesParams.leftMargin = dp(12);
++        head.addView(names, namesParams);
++        page.addView(head);
++
++        if (mOfferApp && !mApps.isEmpty()) {
++            page.addView(buildApps(), topMargin(10));
++        } else if (mOfferApp) {
++            page.addView(buildSwitch(), topMargin(10));
++        }
++
++        LinearLayout where = new LinearLayout(mActivity);
++        where.setOrientation(LinearLayout.HORIZONTAL);
++        where.setGravity(Gravity.CENTER_VERTICAL);
++        where.setBackground(round(mSoft, 12));
++        where.setPadding(dp(12), dp(10), dp(12), dp(10));
++        LinearLayout texts = new LinearLayout(mActivity);
++        texts.setOrientation(LinearLayout.VERTICAL);
++        texts.addView(label(mActivity.getString(R.string.bare_download_card_save_to), 14, true));
++        mFolderLabel = label(mRows.get(mSelected).label, 13, false);
++        texts.addView(mFolderLabel);
++        where.addView(texts, new LinearLayout.LayoutParams(0, -2, 1f));
++        where.addView(label("›", 22, false));
++        where.setOnClickListener(v -> showList());
++        where.setTag("where");
++        page.addView(where, topMargin(10));
++
++        LinearLayout buttons = new LinearLayout(mActivity);
++        buttons.setOrientation(LinearLayout.HORIZONTAL);
++        TextView cancel = button(mActivity.getString(R.string.cancel), false);
++        cancel.setOnClickListener(v -> cancel());
++        TextView start = button(mActivity.getString(R.string.bare_download_card_start), true);
++        start.setOnClickListener(v -> start());
++        LinearLayout.LayoutParams left = new LinearLayout.LayoutParams(0, dp(46), 1f);
++        left.rightMargin = dp(4);
++        LinearLayout.LayoutParams right = new LinearLayout.LayoutParams(0, dp(46), 1f);
++        right.leftMargin = dp(4);
++        buttons.addView(cancel, left);
++        buttons.addView(start, right);
++        page.addView(buttons, topMargin(12));
++        mWhere = where;
++        return page;
++    }
++
++    private @Nullable View mWhere;
++
++    /**
++     * The apps that can take this download, one row each, then the words that start the card's own
++     * save. A tap on an app sends the file there at once.
++     */
++    private View buildApps() {
++        LinearLayout block = new LinearLayout(mActivity);
++        block.setOrientation(LinearLayout.VERTICAL);
++        block.addView(
++                label(mActivity.getString(R.string.bare_download_card_send_to_app), 13, false));
++        int shown = Math.min(4, mApps.size());
++        for (int i = 0; i < shown; i++) {
++            App app = mApps.get(i);
++            LinearLayout row = new LinearLayout(mActivity);
++            row.setOrientation(LinearLayout.HORIZONTAL);
++            row.setGravity(Gravity.CENTER_VERTICAL);
++            row.setBackground(round(mSoft, 12));
++            row.setPadding(dp(12), dp(8), dp(12), dp(8));
++            ImageView icon = new ImageView(mActivity);
++            if (app.icon != null) icon.setImageDrawable(app.icon);
++            row.addView(icon, new LinearLayout.LayoutParams(dp(28), dp(28)));
++            TextView name = label(app.label.toString(), 15, true);
++            name.setSingleLine();
++            name.setEllipsize(TextUtils.TruncateAt.END);
++            LinearLayout.LayoutParams nameParams = new LinearLayout.LayoutParams(0, -2, 1f);
++            nameParams.leftMargin = dp(12);
++            row.addView(name, nameParams);
++            row.addView(label("›", 22, false));
++            row.setOnClickListener(v -> sendTo(app));
++            block.addView(row, topMargin(6));
++        }
++        block.addView(
++                label(mActivity.getString(R.string.bare_download_card_save_in_bare), 13, false),
++                topMargin(12));
++        return block;
++    }
++
++    private void sendTo(App app) {
++        if (mAnswered) return;
++        mAnswered = true;
++        mListener.onSendTo(app.component);
++        if (mSheet != null) mSheet.fold();
++    }
++
++    private View buildSwitch() {
++        LinearLayout seg = new LinearLayout(mActivity);
++        seg.setOrientation(LinearLayout.HORIZONTAL);
++        seg.setBackground(round(mSoft, 12));
++        seg.setPadding(dp(3), dp(3), dp(3), dp(3));
++        TextView save = label(mActivity.getString(R.string.bare_download_card_save_in_bare), 14, false);
++        TextView send = label(mActivity.getString(R.string.bare_download_card_send_to_app), 14, false);
++        for (TextView t : new TextView[] {save, send}) {
++            t.setGravity(Gravity.CENTER);
++            t.setPadding(0, dp(8), 0, dp(8));
++        }
++        Runnable paint =
++                () -> {
++                    save.setBackground(mSendToApp ? null : round(mSoft | 0x26000000, 9));
++                    send.setBackground(mSendToApp ? round(mSoft | 0x26000000, 9) : null);
++                    if (mWhere != null) mWhere.setVisibility(mSendToApp ? View.GONE : View.VISIBLE);
++                };
++        save.setOnClickListener(
++                v -> {
++                    mSendToApp = false;
++                    paint.run();
++                });
++        send.setOnClickListener(
++                v -> {
++                    mSendToApp = true;
++                    paint.run();
++                });
++        seg.addView(save, new LinearLayout.LayoutParams(0, -2, 1f));
++        seg.addView(send, new LinearLayout.LayoutParams(0, -2, 1f));
++        seg.post(paint);
++        return seg;
++    }
++
++    private View buildListPage() {
++        LinearLayout page = new LinearLayout(mActivity);
++        page.setOrientation(LinearLayout.VERTICAL);
++        TextView title = label("‹  " + mActivity.getString(R.string.bare_download_card_save_to), 16, true);
++        title.setPadding(0, dp(2), 0, dp(10));
++        title.setOnClickListener(v -> showMain());
++        page.addView(title);
++        for (int i = 0; i < mRows.size(); i++) {
++            int index = i;
++            page.addView(listRow(mRows.get(i).label, i == mSelected, v -> choose(index)), topMargin(6));
++        }
++        page.addView(
++                listRow(
++                        mActivity.getString(R.string.bare_download_location_choose_other),
++                        false,
++                        v -> pickFolder()),
++                topMargin(6));
++        return page;
++    }
++
++    private View listRow(String text, boolean checked, View.OnClickListener onClick) {
++        LinearLayout row = new LinearLayout(mActivity);
++        row.setOrientation(LinearLayout.HORIZONTAL);
++        row.setGravity(Gravity.CENTER_VERTICAL);
++        row.setBackground(round(checked ? (mSoft | 0x26000000) : mSoft, 12));
++        row.setPadding(dp(12), dp(11), dp(12), dp(11));
++        row.addView(label(text, 15, false), new LinearLayout.LayoutParams(0, -2, 1f));
++        if (checked) row.addView(label("✓", 16, true));
++        row.setOnClickListener(onClick);
++        return row;
++    }
++
++    private void rebuildList() {
++        if (mListPage == null || !(mListPage.getParent() instanceof FrameLayout parent)) return;
++        boolean visible = mListPage.getVisibility() == View.VISIBLE;
++        parent.removeView(mListPage);
++        mListPage = buildListPage();
++        mListPage.setVisibility(visible ? View.VISIBLE : View.GONE);
++        parent.addView(mListPage);
++    }
++
++    private void showList() {
++        if (mMainPage == null || mListPage == null) return;
++        mMainPage.setVisibility(View.GONE);
++        mListPage.setVisibility(View.VISIBLE);
++    }
++
++    private void showMain() {
++        if (mMainPage == null || mListPage == null) return;
++        mListPage.setVisibility(View.GONE);
++        mMainPage.setVisibility(View.VISIBLE);
++        if (mFolderLabel != null) mFolderLabel.setText(mRows.get(mSelected).label);
++    }
++
++    private void choose(int index) {
++        mSelected = index;
++        rebuildList();
++        showMain();
++    }
++
++    private void pickFolder() {
++        if (!(mActivity instanceof ComponentActivity componentActivity)) return;
++        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
++        intent.addFlags(
++                Intent.FLAG_GRANT_READ_URI_PERMISSION
++                        | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
++                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
++                        | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
++        Uri current = BareDownloadLocation.get();
++        if (current != null) intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, current);
++        mPicker =
++                componentActivity
++                        .getActivityResultRegistry()
++                        .register(
++                                "bare_download_card_picker_" + System.nanoTime(),
++                                new ActivityResultContracts.StartActivityForResult(),
++                                this::onFolderPicked);
++        try {
++            mPicker.launch(intent);
++        } catch (RuntimeException e) {
++            Toast.makeText(mActivity, R.string.bare_download_location_no_picker, Toast.LENGTH_SHORT)
++                    .show();
++        }
++    }
++
++    private void onFolderPicked(ActivityResult result) {
++        if (mPicker != null) mPicker.unregister();
++        mPicker = null;
++        Intent data = result.getData();
++        if (result.getResultCode() != Activity.RESULT_OK || data == null) return;
++        Uri tree = data.getData();
++        if (tree == null) return;
++        try {
++            mActivity
++                    .getContentResolver()
++                    .takePersistableUriPermission(
++                            tree,
++                            Intent.FLAG_GRANT_READ_URI_PERMISSION
++                                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
++        } catch (SecurityException e) {
++            Toast.makeText(mActivity, R.string.bare_download_location_no_picker, Toast.LENGTH_SHORT)
++                    .show();
++            return;
++        }
++        Uri previous = BareDownloadLocation.get();
++        if (previous != null && !previous.equals(tree)) release(previous);
++        BareDownloadLocation.set(tree);
++        for (int i = mRows.size() - 1; i >= 0; i--) {
++            if (mRows.get(i).tree) mRows.remove(i);
++        }
++        addTreeRow();
++        mSelected = mRows.size() - 1;
++        rebuildList();
++        showMain();
++    }
++
++    private void release(Uri tree) {
++        try {
++            mActivity
++                    .getContentResolver()
++                    .releasePersistableUriPermission(
++                            tree,
++                            Intent.FLAG_GRANT_READ_URI_PERMISSION
++                                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
++        } catch (SecurityException e) {
++            // Already gone.
++        }
++    }
++
++    private void start() {
++        if (mAnswered) return;
++        mAnswered = true;
++        Row row = mRows.get(mSelected);
++        if (!mSendToApp) {
++            prefs().edit().putString(PREF_LAST, row.key()).apply();
++            if (!row.tree) {
++                Uri tree = BareDownloadLocation.get();
++                if (tree != null) {
++                    release(tree);
++                    BareDownloadLocation.clear();
++                }
++            }
++        }
++        String location = row.tree || row.location == null ? mDefaultLocation : row.location;
++        mListener.onStart(location, mSendToApp);
++        if (mSheet != null) mSheet.fold();
++    }
++
++    private void cancel() {
++        if (mSheet != null) mSheet.fold();
++    }
++
++    private void onDismissed() {
++        sOpen = false;
++        if (mPicker != null) mPicker.unregister();
++        if (mAnswered) return;
++        mAnswered = true;
++        mListener.onCancel();
++    }
++
++    private String detailLine() {
++        List<String> parts = new ArrayList<>();
++        if (mTotalBytes > 0) parts.add(DownloadUtils.getStringForBytes(mActivity, mTotalBytes));
++        if (!TextUtils.isEmpty(mSite)) parts.add(mSite);
++        return TextUtils.join(" · ", parts);
++    }
++
++    private String folderName(Uri tree) {
++        try {
++            String id = DocumentsContract.getTreeDocumentId(tree);
++            int colon = id.indexOf(':');
++            String path = colon >= 0 ? id.substring(colon + 1) : id;
++            if (path.isEmpty()) return id;
++            return path.replace("/", " / ");
++        } catch (IllegalArgumentException e) {
++            String last = tree.getLastPathSegment();
++            return last == null ? tree.toString() : last;
++        }
++    }
++
++    private static String extension(String fileName) {
++        int dot = fileName.lastIndexOf('.');
++        if (dot < 0 || dot == fileName.length() - 1) return "FILE";
++        String ext = fileName.substring(dot + 1).toUpperCase(java.util.Locale.ROOT);
++        return ext.length() > 4 ? ext.substring(0, 4) : ext;
++    }
++
++    private TextView label(String text, int sp, boolean strong) {
++        TextView view = new TextView(mActivity);
++        view.setText(text);
++        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
++        view.setTextColor(strong ? mInk : ((mInk & 0x00FFFFFF) | 0xB3000000));
++        return view;
++    }
++
++    private TextView button(String text, boolean primary) {
++        TextView view = new TextView(mActivity);
++        view.setText(text);
++        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
++        view.setGravity(Gravity.CENTER);
++        view.setTextColor(primary ? mOnAccent : mInk);
++        view.setBackground(round(primary ? mAccent : mSoft, 14));
++        return view;
++    }
++
++    private GradientDrawable round(@ColorInt int color, int radiusDp) {
++        GradientDrawable shape = new GradientDrawable();
++        shape.setColor(color);
++        shape.setCornerRadius(radiusDp * mDensity);
++        return shape;
++    }
++
++    private LinearLayout.LayoutParams topMargin(int dp) {
++        LinearLayout.LayoutParams params =
++                new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        params.topMargin = dp(dp);
++        return params;
++    }
++
++    private int dp(int value) {
++        return Math.round(value * mDensity);
++    }
++
++    private static double luminance(@ColorInt int color) {
++        return 0.299 * Color.red(color) + 0.587 * Color.green(color) + 0.114 * Color.blue(color);
++    }
++}
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/DownloadLocationDialogCoordinator.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/DownloadLocationDialogCoordinator.java
+index c0859a163c2..4320d565a01 100644
+--- a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/DownloadLocationDialogCoordinator.java
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/DownloadLocationDialogCoordinator.java
+@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assertNonNull;
+ import static org.chromium.build.NullUtil.assumeNonNull;
+ import static org.chromium.chrome.browser.download.settings.DownloadDirectoryAdapter.NO_SELECTED_ITEM_ID;
+ 
++import android.app.Activity;
+ import android.content.Context;
+ import android.content.res.Resources;
+ import android.text.TextUtils;
+@@ -18,6 +19,7 @@ import android.widget.AdapterView;
+ import org.chromium.build.annotations.Initializer;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.download.BareDownloadHost;
+ import org.chromium.chrome.browser.download.DirectoryOption;
+ import org.chromium.chrome.browser.download.DownloadDialogBridge;
+ import org.chromium.chrome.browser.download.DownloadDirectoryProvider;
+@@ -100,6 +102,10 @@ public class DownloadLocationDialogCoordinator
+             return;
+         }
+ 
++        // Bare: a card is waiting for its answer. A second request must not take its file name
++        // and folder; like the stock dialog, it is left alone.
++        if (BareDownloadCard.isOpen()) return;
++
+         mContext = context;
+         mModalDialogManager = modalDialogManager;
+         mTotalBytes = totalBytes;
+@@ -185,6 +191,61 @@ public class DownloadLocationDialogCoordinator
+         assertNonNull(mSuggestedPath);
+         assertNonNull(mProfile);
+ 
++        // Bare: a plain save prompt is a card from behind the address bar. Name conflicts, disk
++        // errors and incognito keep the stock dialog.
++        if (mDialogType == DownloadLocationDialogType.DEFAULT
++                && !mProfile.isOffTheRecord()
++                && BareDownloadCard.consumeSkip()) {
++            mController.onDownloadLocationDialogComplete(
++                    mSuggestedPath, /* didUserConfirm= */ false);
++            resetDialogState();
++            return;
++        }
++        if ((mDialogType == DownloadLocationDialogType.DEFAULT
++                        || mDialogType == DownloadLocationDialogType.FORCE_PROMPT)
++                && !mLocationDialogManaged
++                && !mProfile.isOffTheRecord()
++                && mContext instanceof Activity activity
++                && mDialogModel == null) {
++            String host = null;
++            if (activity instanceof BareDownloadHost hostProvider) {
++                host = hostProvider.getBareSiteHost();
++            }
++            Profile profile = mProfile;
++            String suggested = mSuggestedPath;
++            if (BareDownloadCard.show(
++                    activity,
++                    new File(suggested).getName(),
++                    mTotalBytes,
++                    host,
++                    dirs,
++                    /* offerApp= */ false,
++                    new BareDownloadCard.Listener() {
++                        @Override
++                        public void onStart(String location, boolean sendToApp) {
++                            DownloadDialogBridge.setDownloadAndSaveFileDefaultDirectory(
++                                    profile, location);
++                            if (DownloadDialogBridge.getPromptForDownloadAndroid(profile)
++                                    == DownloadPromptStatus.SHOW_INITIAL) {
++                                DownloadDialogBridge.setPromptForDownloadAndroid(
++                                        profile, DownloadPromptStatus.SHOW_PREFERENCE);
++                            }
++                            mController.onDownloadLocationDialogComplete(
++                                    new File(location, new File(suggested).getName())
++                                            .getAbsolutePath(),
++                                    /* didUserConfirm= */ true);
++                        }
++
++                        @Override
++                        public void onCancel() {
++                            cancel();
++                        }
++                    })) {
++                resetDialogState();
++                return;
++            }
++        }
++
+         // If there is only one directory available, don't show the default dialog, and set the
+         // download directory to default. Dialog will still show for other types of dialogs, like
+         // name conflict or disk error or if Incognito download warning is needed.
+diff --git a/chrome/browser/download/chrome_download_manager_delegate.cc b/chrome/browser/download/chrome_download_manager_delegate.cc
+index 70b5e591fd4..0321dddfcee 100644
+--- a/chrome/browser/download/chrome_download_manager_delegate.cc
++++ b/chrome/browser/download/chrome_download_manager_delegate.cc
+@@ -1322,10 +1322,11 @@ void SendWithCookies(GURL url,
+                      std::string mime_type,
+                      std::string referrer,
+                      std::string user_agent,
++                     std::string file_name,
+                      const net::CookieAccessResultList& cookies,
+                      const net::CookieAccessResultList& excluded_cookies) {
+   DownloadController::SendToExternalDownloadManager(
+-      url, mime_type, referrer, user_agent, JoinCookies(cookies));
++      url, mime_type, referrer, user_agent, JoinCookies(cookies), file_name);
+ }
+ 
+ }  // namespace
+@@ -1380,6 +1381,15 @@ bool ChromeDownloadManagerDelegate::InterceptDownloadForExternalApp(
+     agent = embedder_support::GetUserAgent();
+   }
+   const std::string page_spec = bare_download::HandoffReferrer(info.referrer_url);
++  // The name the browser would have saved the file under: the server's own
++  // (Content-Disposition), else the one Bare suggested, else one from the
++  // address and type. The other app makes its own request and may not ask for
++  // or get the name, so it goes along.
++  const std::string file_name = base::UTF16ToUTF8(net::GetSuggestedFilename(
++      url, info.content_disposition, std::string(),
++      info.save_info ? base::UTF16ToUTF8(info.save_info->suggested_name)
++                     : std::string(),
++      mime_type, std::string()));
+ 
+   // Cookies go along only when the user allowed it and chose an app, and only
+   // the ones the browser itself would send on this request.
+@@ -1389,8 +1399,8 @@ bool ChromeDownloadManagerDelegate::InterceptDownloadForExternalApp(
+         url, info.url_chain, info.isolation_info, info.request_initiator);
+   }
+   if (!cookie_options) {
+-    DownloadController::SendToExternalDownloadManager(url, mime_type, page_spec,
+-                                                      agent, std::string());
++    DownloadController::SendToExternalDownloadManager(
++        url, mime_type, page_spec, agent, std::string(), file_name);
+     return true;
+   }
+ 
+@@ -1398,7 +1408,7 @@ bool ChromeDownloadManagerDelegate::InterceptDownloadForExternalApp(
+       ->GetCookieManagerForBrowserProcess()
+       ->GetCookieList(url, cookie_options->options, cookie_options->keys,
+                       base::BindOnce(&SendWithCookies, url, mime_type,
+-                                     page_spec, agent));
++                                     page_spec, agent, file_name));
+   return true;
+ #else
+   return false;
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 5de0119f0d0..05ddeb3dc65 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4504,6 +4504,33 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_DOWNLOAD_LOCATION_NO_PICKER" desc="Shown when the phone has no app to pick a folder.">
+         No folder picker on this phone
+       </message>
++      <message name="IDS_BARE_DOWNLOAD_CARD_SAVE_TO" desc="Download card: row that shows where the file will be saved. Tapping it opens the list of folders.">
++        Save to
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_CARD_START" desc="Download card: button that starts the download.">
++        Start
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_CARD_SAVE_IN_BARE" desc="Download card: choice to save the file in this browser. Sits beside the choice to send it to another app.">
++        Save in Bare
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_CARD_SEND_TO_APP" desc="Download card: choice to hand the file to another download app, such as 1DM.">
++        Send to app
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_CARD_FOLDER_DOWNLOADS" desc="Download card: folder choice, the phone's Downloads folder.">
++        Downloads
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_PROGRESS_DOWNLOADING" desc="Shown in the address bar while a file is downloading. %1$s is the file size.">
++        Downloading <ph name="SIZE">%1$s<ex>4.2 MB</ex></ph>…
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_DONE_SAVED_TO" desc="Card after a download finished. %1$s is the folder it was saved in.">
++        Saved to <ph name="FOLDER">%1$s<ex>Downloads / Bare</ex></ph>
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_DONE_OPEN" desc="Card after a download finished: button that opens the file.">
++        Open
++      </message>
++      <message name="IDS_BARE_DOWNLOAD_DONE_SHOW_IN_FOLDER" desc="Card after a download finished: button that shows the file in its folder.">
++        Show in folder
++      </message>
+       <message name="IDS_BARE_DOWNLOAD_ASK_EACH_TIME" desc="Title of the setting: before each download, ask where to save it and under what name.">
+         Ask where to save each time
+       </message>
+diff --git a/chrome/browser/ui/android/strings/translations/android_chrome_strings_ar.xtb b/chrome/browser/ui/android/strings/translations/android_chrome_strings_ar.xtb
+index b91b6c515e4..068b7fe3d1c 100644
+--- a/chrome/browser/ui/android/strings/translations/android_chrome_strings_ar.xtb
++++ b/chrome/browser/ui/android/strings/translations/android_chrome_strings_ar.xtb
+@@ -101,6 +101,7 @@
+ <translation id="1303507811548703290"><ph name="DOMAIN" /> - تم الإرسال من <ph name="DEVICE_NAME" /></translation>
+ <translation id="1310482092992808703">جمع علامات التبويب</translation>
+ <translation id="1318262688555255786">يؤدي النقر على الزرّ إلى مشاركة رابط صفحة الويب "<ph name="PAGE_TITLE" />". المصدر: <ph name="PAGE_URL" /></translation>
++<translation id="1326097763474481075">تم الحفظ في <ph name="FOLDER"/></translation>
+ <translation id="1327257854815634930">يتم فتح سجلّ التنقُّل.</translation>
+ <translation id="1331212799747679585">‏يتعذَّر تحديث Chrome. يُرجى الاطِّلاع على مزيد من الخيارات</translation>
+ <translation id="1332501820983677155">‏اختصارات ميزات Google Chrome</translation>
+@@ -211,6 +212,7 @@
+ <translation id="1728803206919861584">هل تريد حفظ مفتاح المرور خارج وضع التصفُّح المتخفي؟</translation>
+ <translation id="1732514748744806741">إذا تم اختراق كلمات المرور الخاصّة بك، سنُعلمك بذلك</translation>
+ <translation id="1737694586321018892">‏الحصول على أعلى مستوى من الأمان في متصفِّح Chrome</translation>
++<translation id="1738218860257023907">جارٍ تنزيل <ph name="SIZE"/>…</translation>
+ <translation id="1749561566933687563">مزامنة الإشارات المرجعية</translation>
+ <translation id="1750238553597293878">‏مواصلة استخدام كلمات المرور في حسابك على Google</translation>
+ <translation id="1753744496844366747">Aa</translation>
+@@ -496,6 +498,7 @@
+ <translation id="2735021886040496572">يقلّل احتمال إيقاف Android للإضافات أثناء وجودك في تطبيق آخر، ويعيد تحميلها إذا فعل. يستهلك مزيدًا قليلاً من الذاكرة والبطارية.</translation>
+ <translation id="2739887572830526131">يمكنك الاحتفاظ بهذه المجموعة لإضافة علامات تبويب إليها لاحقًا، أو حذفها إذا لم تعُد بحاجة إليها.</translation>
+ <translation id="2742373789128106053">"<ph name="IDENTITY_PROVIDER_ETLD_PLUS_ONE" />" غير متوفّر الآن.</translation>
++<translation id="2743301740238894839">بدء</translation>
+ <translation id="2760805590727089264">MM/YY</translation>
+ <translation id="2761162135224472056">المشاهدة باستخدام وضع "التشغيل الغامر"؟</translation>
+ <translation id="2762000892062317888">الآن</translation>
+@@ -1277,6 +1280,7 @@
+ <translation id="5437430997766914418">تعذّر فتح مدير التنزيلات</translation>
+ <translation id="5438292632479953702">تنزيل الملف مرة أخرى</translation>
+ <translation id="5439191312780166229">‏ستتلقّى تحذيرات بشأن المواقع الإلكترونية الخطيرة، بما فيها المواقع الإلكترونية التي لم يتعرّف عليها محرك بحث Google، من خلال تحليل قدر أكبر من البيانات الواردة من المواقع الإلكترونية، مقارنةً بالحماية العادية. يمكنك اختيار تخطّي تحذيرات Chrome.</translation>
++<translation id="5440797310249424861">إرسال إلى تطبيق</translation>
+ <translation id="5441466871879044658">ترجمة لهذه اللغة</translation>
+ <translation id="544285856361623600">‏يمكنك تسجيل الدخول إلى هذا الموقع الإلكتروني وإلى Chrome للوصول إلى الإشارات المرجعية وغيرها من <ph name="DEVICE_TYPE" /></translation>
+ <translation id="5444999712122199445">الرجوع إلى الموقع الإلكتروني</translation>
+@@ -1600,6 +1604,7 @@
+ <translation id="6521218807522232085">يمكنك إنشاء كلمات المرور وحفظها وإدارتها لتسجيل الدخول بسهولة</translation>
+ <translation id="6527303717912515753">مشاركة</translation>
+ <translation id="652948702951888897">‏سجل Chrome</translation>
++<translation id="6532186922548891250">حفظ في Bare</translation>
+ <translation id="6532866250404780454">‏لن يتم عرض المواقع الإلكترونية التي تزورها في Chrome. سيتم حذف جميع موقِّتات الموقع الإلكتروني.</translation>
+ <translation id="6541983376925655882">{NUM_HOURS,plural, =1{تمّ إجراء عملية التحقُّق قبل ساعة واحدة.}zero{تمّ إجراء عملية التحقُّق قبل # ساعة.}two{تمّ إجراء عملية التحقُّق قبل ساعتَين.}few{تمّ إجراء عملية التحقُّق قبل # ساعات.}many{تمّ إجراء عملية التحقُّق قبل # ساعة.}other{تمّ إجراء عملية التحقُّق قبل # ساعة.}}</translation>
+ <translation id="6545017243486555795">محو جميع البيانات</translation>
+@@ -1734,6 +1739,7 @@
+ <translation id="6922812712751566567">‏<ph name="PERMISSION" /> <ph name="SEPARATOR" /> أزال Chrome هذا الإذن لأنك لم تزُر هذا الموقع الإلكتروني مؤخرًا</translation>
+ <translation id="6923291640965724312">تنسيق غامر</translation>
+ <translation id="6927821422725196292">{TABS_COUNT,plural, =1{علامة تبويب واحدة}zero{‫<ph name="NUMBER_OF_TABS" /> علامة تبويب}two{علامتا تبويب (<ph name="NUMBER_OF_TABS" />)}few{‫<ph name="NUMBER_OF_TABS" /> علامات تبويب}many{‫<ph name="NUMBER_OF_TABS" /> علامة تبويب}other{‫<ph name="NUMBER_OF_TABS" /> علامة تبويب}}</translation>
++<translation id="6931576957638141829">حفظ في</translation>
+ <translation id="6932458763202212477">ملاءمة الشاشة</translation>
+ <translation id="6933180670536678127">‫"<ph name="TAB_TITLE" />"، علامة تبويب مثبَّتة تشغّل صوتًا وتم اختيارها</translation>
+ <translation id="6934359797430850647">"خروج" يغلق Bare. يتم حذف كل ما تم تحديده هنا أولاً. عند فتح أكثر من نافذة، يغلق "خروج" هذه النافذة. لا يتم حذف الإشارات المرجعية والإضافات والإعدادات أبدًا.</translation>
+diff --git a/chrome/browser/ui/android/strings/translations/android_chrome_strings_de.xtb b/chrome/browser/ui/android/strings/translations/android_chrome_strings_de.xtb
+index 703f74d6ba3..dc3d2a9481d 100644
+--- a/chrome/browser/ui/android/strings/translations/android_chrome_strings_de.xtb
++++ b/chrome/browser/ui/android/strings/translations/android_chrome_strings_de.xtb
+@@ -101,6 +101,7 @@
+ <translation id="1303507811548703290"><ph name="DOMAIN" />: gesendet von <ph name="DEVICE_NAME" /></translation>
+ <translation id="1310482092992808703">Tabs gruppieren</translation>
+ <translation id="1318262688555255786">Link zur Webseite „<ph name="PAGE_TITLE" />“ teilen. Quelle: <ph name="PAGE_URL" /></translation>
++<translation id="1326097763474481075">Gespeichert in <ph name="FOLDER"/></translation>
+ <translation id="1327257854815634930">Der Navigationsverlauf ist geöffnet</translation>
+ <translation id="1331212799747679585">Chrome kann nicht aktualisiert werden. Weitere Optionen</translation>
+ <translation id="1332501820983677155">Tastenkombinationen für Google Chrome-Funktionen</translation>
+@@ -211,6 +212,7 @@ Nur Personen, die deine Passphrase kennen, können deine verschlüsselten Daten
+ <translation id="1728803206919861584">Passkey außerhalb des Inkognitomodus speichern?</translation>
+ <translation id="1732514748744806741">Wenn deine Passwörter gehackt werden, informieren wir dich darüber</translation>
+ <translation id="1737694586321018892">Höchste Sicherheit in Chrome</translation>
++<translation id="1738218860257023907"><ph name="SIZE"/> wird heruntergeladen…</translation>
+ <translation id="1749561566933687563">Lesezeichen synchronisieren</translation>
+ <translation id="1750238553597293878">Passwörter in deinem Google-Konto weiterhin verwenden</translation>
+ <translation id="1753744496844366747">Aa</translation>
+@@ -496,6 +498,7 @@ Nur Personen, die deine Passphrase kennen, können deine verschlüsselten Daten
+ <translation id="2735021886040496572">Macht es unwahrscheinlicher, dass Android Erweiterungen beendet, während du in einer anderen App bist, und lädt sie neu, falls doch. Verbraucht etwas mehr Arbeitsspeicher und Akku.</translation>
+ <translation id="2739887572830526131">Du kannst diese Gruppe beibehalten, um später Tabs hinzuzufügen, oder sie löschen, wenn du sie nicht mehr benötigst.</translation>
+ <translation id="2742373789128106053"><ph name="IDENTITY_PROVIDER_ETLD_PLUS_ONE" /> ist momentan nicht verfügbar.</translation>
++<translation id="2743301740238894839">Starten</translation>
+ <translation id="2760805590727089264">MM/JJ</translation>
+ <translation id="2761162135224472056">Im immersiven Modus wiedergeben?</translation>
+ <translation id="2762000892062317888">gerade eben</translation>
+@@ -1275,6 +1278,7 @@ Eventuell findest du unter <ph name="BEGIN_LINK" />history.google.com<ph name="E
+ <translation id="5437430997766914418">Download-Manager konnte nicht geöffnet werden</translation>
+ <translation id="5438292632479953702">Noch einmal herunterladen</translation>
+ <translation id="5439191312780166229">Warnt dich vor schädlichen Websites, auch solchen, die Google vorher nicht bekannt waren, indem mehr Daten von Websites analysiert werden als beim Standardschutz. Du kannst Warnungen von Chrome überspringen.</translation>
++<translation id="5440797310249424861">An App senden</translation>
+ <translation id="5441466871879044658">In diese Sprache übersetzen</translation>
+ <translation id="544285856361623600">Melde dich in dieser Website und Chrome an, um auf deine Lesezeichen und mehr auf <ph name="DEVICE_TYPE" /> zuzugreifen</translation>
+ <translation id="5444999712122199445">Zurück zur Website</translation>
+@@ -1598,6 +1602,7 @@ Einige Websites schalten möglicherweise Werbeanzeigen, deren Auswahl nicht dara
+ <translation id="6521218807522232085">Du kannst Passwörter erstellen, speichern und verwalten, um dich ganz einfach anzumelden</translation>
+ <translation id="6527303717912515753">Teilen</translation>
+ <translation id="652948702951888897">Chrome-Verlauf</translation>
++<translation id="6532186922548891250">In Bare speichern</translation>
+ <translation id="6532866250404780454">In Chrome aufgerufene Websites werden nicht angezeigt. Alle Timer für Websites werden gelöscht.</translation>
+ <translation id="6541983376925655882">{NUM_HOURS,plural, =1{Zuletzt geprüft: vor 1 Stunde}other{Zuletzt geprüft: vor # Stunden}}</translation>
+ <translation id="6545017243486555795">Alle Daten löschen</translation>
+@@ -1732,6 +1737,7 @@ Einige Websites schalten möglicherweise Werbeanzeigen, deren Auswahl nicht dara
+ <translation id="6922812712751566567"><ph name="PERMISSION" /> <ph name="SEPARATOR" /> Chrome hat diese Berechtigungen entfernt, weil du die Website in letzter Zeit nicht besucht hast</translation>
+ <translation id="6923291640965724312">Format für immersive Wiedergabe</translation>
+ <translation id="6927821422725196292">{TABS_COUNT,plural, =1{1 Tab}other{<ph name="NUMBER_OF_TABS" /> Tabs}}</translation>
++<translation id="6931576957638141829">Speichern in</translation>
+ <translation id="6932458763202212477">An Bildschirm anpassen</translation>
+ <translation id="6933180670536678127"><ph name="TAB_TITLE" />, ausgewählter, angepinnter Tab mit Audio</translation>
+ <translation id="6934359797430850647">Beenden schließt Bare. Alles, was hier ausgewählt ist, wird zuvor gelöscht. Sind mehrere Fenster geöffnet, schließt Beenden dieses Fenster. Lesezeichen, Erweiterungen und Einstellungen werden nie gelöscht.</translation>
+diff --git a/chrome/browser/ui/android/strings/translations/android_chrome_strings_es.xtb b/chrome/browser/ui/android/strings/translations/android_chrome_strings_es.xtb
+index 3a5df012ff3..54ecc50693b 100644
+--- a/chrome/browser/ui/android/strings/translations/android_chrome_strings_es.xtb
++++ b/chrome/browser/ui/android/strings/translations/android_chrome_strings_es.xtb
+@@ -101,6 +101,7 @@
+ <translation id="1303507811548703290"><ph name="DOMAIN" /> - Enviado desde <ph name="DEVICE_NAME" /></translation>
+ <translation id="1310482092992808703">Agrupar pestañas</translation>
+ <translation id="1318262688555255786">Comparte el enlace a la página web <ph name="PAGE_TITLE" />. Fuente: <ph name="PAGE_URL" /></translation>
++<translation id="1326097763474481075">Guardado en <ph name="FOLDER"/></translation>
+ <translation id="1327257854815634930">El historial de navegación está abierto</translation>
+ <translation id="1331212799747679585">No se ha podido actualizar Chrome. Más opciones</translation>
+ <translation id="1332501820983677155">Combinaciones de teclas de funciones de Google Chrome</translation>
+@@ -211,6 +212,7 @@ Solo las personas que tengan tu frase de contraseña podrán leer tus datos cifr
+ <translation id="1728803206919861584">¿Guardar llave de acceso fuera de Incógnito?</translation>
+ <translation id="1732514748744806741">Si se vulneran tus contraseñas, te avisaremos</translation>
+ <translation id="1737694586321018892">La máxima seguridad de Chrome</translation>
++<translation id="1738218860257023907">Descargando <ph name="SIZE"/>…</translation>
+ <translation id="1749561566933687563">Sincronizar marcadores</translation>
+ <translation id="1750238553597293878">Sigue usando las contraseñas en tu cuenta de Google</translation>
+ <translation id="1753744496844366747">Aa</translation>
+@@ -496,6 +498,7 @@ Solo las personas que tengan tu frase de contraseña podrán leer tus datos cifr
+ <translation id="2735021886040496572">Reduce la probabilidad de que Android detenga las extensiones mientras estás en otra aplicación y las vuelve a cargar si lo hace. Usa algo más de memoria y batería.</translation>
+ <translation id="2739887572830526131">Conserva este grupo para añadir pestañas más tarde o elimínalo si ya no lo necesitas.</translation>
+ <translation id="2742373789128106053"><ph name="IDENTITY_PROVIDER_ETLD_PLUS_ONE" /> no está disponible en este momento.</translation>
++<translation id="2743301740238894839">Iniciar</translation>
+ <translation id="2760805590727089264">MM/AA</translation>
+ <translation id="2761162135224472056">¿Reproducir en modo envolvente?</translation>
+ <translation id="2762000892062317888">justo ahora</translation>
+@@ -1276,6 +1279,7 @@ Es posible que tu cuenta de Google tenga otros tipos de historial de navegación
+ <translation id="5437430997766914418">No se pudo abrir la aplicación de descargas</translation>
+ <translation id="5438292632479953702">Volver a descargar</translation>
+ <translation id="5439191312780166229">Te envía advertencias sobre sitios peligrosos (aunque Google no los conozca) analizando más datos de sitios que la protección estándar. Si quieres, puedes omitir las advertencias de Chrome.</translation>
++<translation id="5440797310249424861">Enviar a una app</translation>
+ <translation id="5441466871879044658">Traducir a este idioma</translation>
+ <translation id="544285856361623600">Inicia sesión en este sitio y en Chrome para acceder a tus marcadores y a mucho más desde <ph name="DEVICE_TYPE" /></translation>
+ <translation id="5444999712122199445">Volver al sitio</translation>
+@@ -1599,6 +1603,7 @@ Por ejemplo, algunos sitios web pueden responder a la solicitud mostrándote anu
+ <translation id="6521218807522232085">Crea, guarda y gestiona tus contraseñas para iniciar sesión fácilmente</translation>
+ <translation id="6527303717912515753">Compartir</translation>
+ <translation id="652948702951888897">Historial de Chrome</translation>
++<translation id="6532186922548891250">Guardar en Bare</translation>
+ <translation id="6532866250404780454">Los sitios que visites en Chrome no se mostrarán. Se eliminarán todos los temporizadores de los sitios.</translation>
+ <translation id="6541983376925655882">{NUM_HOURS,plural, =1{Comprobado hace 1 hora}other{Comprobado hace # horas}}</translation>
+ <translation id="6545017243486555795">Borrar todos los datos</translation>
+@@ -1733,6 +1738,7 @@ Por ejemplo, algunos sitios web pueden responder a la solicitud mostrándote anu
+ <translation id="6922812712751566567"><ph name="PERMISSION" /> <ph name="SEPARATOR" /> Chrome ha eliminado estos permisos porque no has visitado el sitio recientemente</translation>
+ <translation id="6923291640965724312">Formato envolvente</translation>
+ <translation id="6927821422725196292">{TABS_COUNT,plural, =1{1 pestaña}other{<ph name="NUMBER_OF_TABS" /> pestañas}}</translation>
++<translation id="6931576957638141829">Guardar en</translation>
+ <translation id="6932458763202212477">Ajustar a la pantalla</translation>
+ <translation id="6933180670536678127"><ph name="TAB_TITLE" />, pestaña audible seleccionada fijada</translation>
+ <translation id="6934359797430850647">Salir cierra Bare. Lo que selecciones aquí se borra antes. Si hay más de una ventana abierta, Salir cierra esta ventana. Los marcadores, las extensiones y los ajustes nunca se borran.</translation>
+diff --git a/chrome/browser/ui/android/strings/translations/android_chrome_strings_fr.xtb b/chrome/browser/ui/android/strings/translations/android_chrome_strings_fr.xtb
+index 95bfde55a0c..ac4e9b1a4fb 100644
+--- a/chrome/browser/ui/android/strings/translations/android_chrome_strings_fr.xtb
++++ b/chrome/browser/ui/android/strings/translations/android_chrome_strings_fr.xtb
+@@ -101,6 +101,7 @@
+ <translation id="1303507811548703290"><ph name="DOMAIN" /> (envoyé depuis <ph name="DEVICE_NAME" />)</translation>
+ <translation id="1310482092992808703">Regrouper les onglets</translation>
+ <translation id="1318262688555255786">Partager le lien vers la page Web <ph name="PAGE_TITLE" />. Source : <ph name="PAGE_URL" />.</translation>
++<translation id="1326097763474481075">Enregistré dans <ph name="FOLDER"/></translation>
+ <translation id="1327257854815634930">Historique de navigation ouvert</translation>
+ <translation id="1331212799747679585">Impossible de mettre à jour Chrome. Plus d'options</translation>
+ <translation id="1332501820983677155">Raccourcis liés aux fonctionnalités de Google Chrome</translation>
+@@ -211,6 +212,7 @@ Seule une personne connaissant votre phrase secrète peut lire vos données chif
+ <translation id="1728803206919861584">Enregistrer la clé d'accès en dehors de la navigation privée ?</translation>
+ <translation id="1732514748744806741">Si vos mots de passe sont compromis, nous vous préviendrons</translation>
+ <translation id="1737694586321018892">Profitez du niveau de sécurité le plus élevé pour Chrome</translation>
++<translation id="1738218860257023907">Téléchargement de <ph name="SIZE"/>…</translation>
+ <translation id="1749561566933687563">Synchroniser vos favoris</translation>
+ <translation id="1750238553597293878">Continuez d'utiliser les mots de passe de votre compte Google</translation>
+ <translation id="1753744496844366747">Aa</translation>
+@@ -496,6 +498,7 @@ Seule une personne connaissant votre phrase secrète peut lire vos données chif
+ <translation id="2735021886040496572">Réduit le risque qu'Android arrête les extensions pendant que vous êtes dans une autre application, et les recharge s'il le fait. Utilise un peu plus de mémoire et de batterie.</translation>
+ <translation id="2739887572830526131">Conservez ce groupe pour y ajouter des onglets plus tard, ou supprimez-le si vous n'en avez plus besoin.</translation>
+ <translation id="2742373789128106053"><ph name="IDENTITY_PROVIDER_ETLD_PLUS_ONE" /> n'est pas disponible pour le moment.</translation>
++<translation id="2743301740238894839">Démarrer</translation>
+ <translation id="2760805590727089264">MM/AA</translation>
+ <translation id="2761162135224472056">Regarder en mode immersif ?</translation>
+ <translation id="2762000892062317888">à l'instant</translation>
+@@ -1276,6 +1279,7 @@ Votre compte Google conserve peut-être d'autres contenus d'historique de naviga
+ <translation id="5437430997766914418">Impossible d'ouvrir le gestionnaire de téléchargement</translation>
+ <translation id="5438292632479953702">Retélécharger</translation>
+ <translation id="5439191312780166229">Vous avertit en cas de sites dangereux, y compris pour ceux dont Google n'avait pas connaissance, en analysant plus de données provenant des sites que la protection standard. Vous pouvez ignorer les avertissements de Chrome.</translation>
++<translation id="5440797310249424861">Envoyer à une appli</translation>
+ <translation id="5441466871879044658">Traduire dans cette langue</translation>
+ <translation id="544285856361623600">Connectez-vous à ce site et à Chrome pour accéder sur <ph name="DEVICE_TYPE" /> à vos favoris et bien plus</translation>
+ <translation id="5444999712122199445">Revenir au site</translation>
+@@ -1599,6 +1603,7 @@ Par exemple, certains sites Web peuvent répondre à cette demande en diffusant
+ <translation id="6521218807522232085">Créez, enregistrez et gérez vos mots de passe pour vous connecter facilement</translation>
+ <translation id="6527303717912515753">Partager</translation>
+ <translation id="652948702951888897">Historique Chrome</translation>
++<translation id="6532186922548891250">Enregistrer dans Bare</translation>
+ <translation id="6532866250404780454">Les sites que vous consultez dans Chrome ne s'afficheront pas. Tous les minuteurs de site seront supprimés.</translation>
+ <translation id="6541983376925655882">{NUM_HOURS,plural, =1{Vérification effectuée il y a 1 heure}one{Vérification effectuée il y a # heure}other{Vérification effectuée il y a # heures}}</translation>
+ <translation id="6545017243486555795">Supprimer toutes les données</translation>
+@@ -1733,6 +1738,7 @@ Par exemple, certains sites Web peuvent répondre à cette demande en diffusant
+ <translation id="6922812712751566567"><ph name="PERMISSION" /> <ph name="SEPARATOR" /> Chrome a retiré ces autorisations, car vous n'avez pas consulté ce site récemment</translation>
+ <translation id="6923291640965724312">Format immersif</translation>
+ <translation id="6927821422725196292">{TABS_COUNT,plural, =1{1 onglet}one{<ph name="NUMBER_OF_TABS" /> onglet}other{<ph name="NUMBER_OF_TABS" /> onglets}}</translation>
++<translation id="6931576957638141829">Enregistrer dans</translation>
+ <translation id="6932458763202212477">Ajuster à l'écran</translation>
+ <translation id="6933180670536678127"><ph name="TAB_TITLE" />, onglet épinglé sélectionné avec audio</translation>
+ <translation id="6934359797430850647">Quitter ferme Bare. Tout ce qui est sélectionné ici est d'abord supprimé. Si plusieurs fenêtres sont ouvertes, Quitter ferme cette fenêtre. Les favoris, les extensions et les paramètres ne sont jamais supprimés.</translation>
+diff --git a/chrome/browser/ui/android/strings/translations/android_chrome_strings_hi.xtb b/chrome/browser/ui/android/strings/translations/android_chrome_strings_hi.xtb
+index 50a69a694ee..150ca55a711 100644
+--- a/chrome/browser/ui/android/strings/translations/android_chrome_strings_hi.xtb
++++ b/chrome/browser/ui/android/strings/translations/android_chrome_strings_hi.xtb
+@@ -101,6 +101,7 @@
+ <translation id="1303507811548703290"><ph name="DOMAIN" /> - <ph name="DEVICE_NAME" /> से भेजा गया</translation>
+ <translation id="1310482092992808703">टैब को समूह में लगाएं</translation>
+ <translation id="1318262688555255786"><ph name="PAGE_TITLE" /> वेबपेज का लिंक शेयर करें. सोर्स: <ph name="PAGE_URL" /></translation>
++<translation id="1326097763474481075"><ph name="FOLDER"/> में सेव किया गया</translation>
+ <translation id="1327257854815634930">नेविगेशन का इतिहास अपने पूरे आकार में खुला हुआ है</translation>
+ <translation id="1331212799747679585">Chrome अपडेट नहीं किया जा सकता. ज़्यादा विकल्प</translation>
+ <translation id="1332501820983677155">Google Chrome सुविधा शॉर्टकट</translation>
+@@ -211,6 +212,7 @@ Chrome के अनुभव को बेहतर बनाने के ल
+ <translation id="1728803206919861584">क्या आपको गुप्त मोड के बाहर आकर पासकी सेव करनी है?</translation>
+ <translation id="1732514748744806741">अगर आपके पासवर्ड हैक या चोरी होते हैं, तो हम आपको इसकी जानकारी देंगे</translation>
+ <translation id="1737694586321018892">Chrome की बेहतरीन सुरक्षा सुविधा पाएं</translation>
++<translation id="1738218860257023907"><ph name="SIZE"/> डाउनलोड हो रहा है…</translation>
+ <translation id="1749561566933687563">अपने बुकमार्क समन्‍वयित करें</translation>
+ <translation id="1750238553597293878">अपने Google खाते में सेव किए गए पासवर्ड का इस्तेमाल जारी रखें</translation>
+ <translation id="1753744496844366747">Aa</translation>
+@@ -496,6 +498,7 @@ Chrome के अनुभव को बेहतर बनाने के ल
+ <translation id="2735021886040496572">आपके दूसरे ऐप में होने पर Android के एक्‍सटेंशन बंद करने की संभावना घटाता है, और बंद कर दे तो उन्हें फिर लोड करता है. थोड़ी ज़्यादा मेमोरी और बैटरी लगती है.</translation>
+ <translation id="2739887572830526131">बाद में टैब जोड़ने के लिए, इस ग्रुप को सेव रखें. अगर आपको इसकी ज़रूरत नहीं है, तो इसे मिटा दें.</translation>
+ <translation id="2742373789128106053">फ़िलहाल, <ph name="IDENTITY_PROVIDER_ETLD_PLUS_ONE" /> उपलब्ध नहीं है.</translation>
++<translation id="2743301740238894839">शुरू करें</translation>
+ <translation id="2760805590727089264">महीना / साल</translation>
+ <translation id="2761162135224472056">क्या आपको इमर्सिव मोड में कॉन्टेंट देखना है?</translation>
+ <translation id="2762000892062317888">अभी-अभी</translation>
+@@ -1276,6 +1279,7 @@ Chrome के अनुभव को बेहतर बनाने के ल
+ <translation id="5437430997766914418">डाउनलोड मैनेजर नहीं खुल सका</translation>
+ <translation id="5438292632479953702">फिर से डाउनलोड करें</translation>
+ <translation id="5439191312780166229">स्टैंडर्ड सुरक्षा मोड की तुलना में ज़्यादा डेटा का विश्लेषण किया जाता है. इससे आपको ऐसी खतरनाक साइटों के बारे में भी चेतावनी मिलती है जिनके बारे में Google को पहले नहीं पता था. Chrome की चेतावनियों को अनदेखा किया जा सकता है.</translation>
++<translation id="5440797310249424861">ऐप को भेजें</translation>
+ <translation id="5441466871879044658">इस भाषा में अनुवाद करें</translation>
+ <translation id="544285856361623600">अपने <ph name="DEVICE_TYPE" /> में सेव किए गए बुकमार्क वगैरह ऐक्सेस करने के लिए, इस साइट और Chrome में साइन इन करें</translation>
+ <translation id="5444999712122199445">साइट पर वापस जाएं</translation>
+@@ -1599,6 +1603,7 @@ Chrome के अनुभव को बेहतर बनाने के ल
+ <translation id="6521218807522232085">पासवर्ड बनाएं, उन्हें सेव करें, और मैनेज करें, ताकि आप आसानी से साइन इन कर पाएं</translation>
+ <translation id="6527303717912515753">शेयर करें</translation>
+ <translation id="652948702951888897">Chrome इतिहास</translation>
++<translation id="6532186922548891250">Bare में सेव करें</translation>
+ <translation id="6532866250404780454">आप Chrome में जिन साइटों पर जाते हैं, वे नहीं दिखाई देंगी. साइट के सभी टाइमर मिटा दिए जाएंगे.</translation>
+ <translation id="6541983376925655882">{NUM_HOURS,plural, =1{जांच 1 घंटा पहले की गई}one{जांच # घंटा पहले की गई}other{जांच # घंटे पहले की गई}}</translation>
+ <translation id="6545017243486555795">सभी डेटा साफ़ करें</translation>
+@@ -1733,6 +1738,7 @@ Chrome के अनुभव को बेहतर बनाने के ल
+ <translation id="6922812712751566567"><ph name="PERMISSION" /> <ph name="SEPARATOR" /> Chrome ने इस साइट के लिए यह अनुमति हटा दी है, क्योंकि आपने हाल ही में इसका इस्तेमाल नहीं किया है</translation>
+ <translation id="6923291640965724312">इमर्सिव फ़ॉर्मैट</translation>
+ <translation id="6927821422725196292">{TABS_COUNT,plural, =1{1 टैब}one{<ph name="NUMBER_OF_TABS" /> टैब}other{<ph name="NUMBER_OF_TABS" /> टैब}}</translation>
++<translation id="6931576957638141829">यहां सेव करें</translation>
+ <translation id="6932458763202212477">स्क्रीन में फ़िट करें</translation>
+ <translation id="6933180670536678127"><ph name="TAB_TITLE" />, चुना गया ऐसा टैब जिसे पिन किया गया है और जिसमें ऑडियो चल रहा है</translation>
+ <translation id="6934359797430850647">"बाहर निकलें" Bare को बंद करता है. यहां चुनी गई हर चीज़ पहले हटा दी जाती है. एक से ज़्यादा विंडो खुली होने पर यह सिर्फ़ इस विंडो को बंद करता है. बुकमार्क, एक्‍सटेंशन और सेटिंग कभी नहीं हटतीं.</translation>
+diff --git a/chrome/browser/ui/android/strings/translations/android_chrome_strings_id.xtb b/chrome/browser/ui/android/strings/translations/android_chrome_strings_id.xtb
+index 7e2dc9e1818..2e366639c7e 100644
+--- a/chrome/browser/ui/android/strings/translations/android_chrome_strings_id.xtb
++++ b/chrome/browser/ui/android/strings/translations/android_chrome_strings_id.xtb
+@@ -101,6 +101,7 @@
+ <translation id="1303507811548703290"><ph name="DOMAIN" /> - Dikirim dari <ph name="DEVICE_NAME" /></translation>
+ <translation id="1310482092992808703">Grupkan tab</translation>
+ <translation id="1318262688555255786">Bagikan link ke halaman web <ph name="PAGE_TITLE" />. Sumber: <ph name="PAGE_URL" /></translation>
++<translation id="1326097763474481075">Disimpan ke <ph name="FOLDER"/></translation>
+ <translation id="1327257854815634930">Histori navigasi terbuka</translation>
+ <translation id="1331212799747679585">Chrome tidak dapat diupdate. Opsi lainnya</translation>
+ <translation id="1332501820983677155">Pintasan fitur Google Chrome</translation>
+@@ -211,6 +212,7 @@ Hanya orang yang memiliki frasa sandi Anda yang dapat membaca data terenkripsi A
+ <translation id="1728803206919861584">Simpan kunci sandi di luar mode Samaran?</translation>
+ <translation id="1732514748744806741">Jika sandi Anda dibobol, kami akan memberi tahu Anda</translation>
+ <translation id="1737694586321018892">Dapatkan keamanan terkuat Chrome</translation>
++<translation id="1738218860257023907">Men-download <ph name="SIZE"/>…</translation>
+ <translation id="1749561566933687563">Sinkronisasikan bookmark Anda</translation>
+ <translation id="1750238553597293878">Tetap gunakan sandi yang tersimpan di Akun Google Anda</translation>
+ <translation id="1753744496844366747">Aa</translation>
+@@ -496,6 +498,7 @@ Hanya orang yang memiliki frasa sandi Anda yang dapat membaca data terenkripsi A
+ <translation id="2735021886040496572">Mengurangi kemungkinan Android menghentikan ekstensi saat Anda di aplikasi lain, dan memuatnya lagi jika itu terjadi. Memakai sedikit lebih banyak memori dan baterai.</translation>
+ <translation id="2739887572830526131">Simpan grup ini untuk menambahkan tab nanti, atau hapus grup jika Anda tidak lagi memerlukannya.</translation>
+ <translation id="2742373789128106053"><ph name="IDENTITY_PROVIDER_ETLD_PLUS_ONE" /> tidak tersedia untuk saat ini.</translation>
++<translation id="2743301740238894839">Mulai</translation>
+ <translation id="2760805590727089264">BB/TT</translation>
+ <translation id="2761162135224472056">Tonton dengan pemutaran mode imersif?</translation>
+ <translation id="2762000892062317888">baru saja</translation>
+@@ -1276,6 +1279,7 @@ Akun Google Anda mungkin memiliki bentuk histori penjelajahan lain seperti penel
+ <translation id="5437430997766914418">Tidak dapat membuka pengelola download</translation>
+ <translation id="5438292632479953702">Download lagi</translation>
+ <translation id="5439191312780166229">Memperingatkan Anda tentang situs berbahaya, bahkan situs yang tidak diketahui Google sebelumnya, dengan menganalisis lebih banyak data dari situs dibandingkan perlindungan standar. Anda dapat memilih untuk melewati peringatan Chrome.</translation>
++<translation id="5440797310249424861">Kirim ke aplikasi</translation>
+ <translation id="5441466871879044658">Terjemahkan ke bahasa ini</translation>
+ <translation id="544285856361623600">Login ke situs ini dan Chrome untuk mendapatkan bookmark Anda dan data lainnya dari <ph name="DEVICE_TYPE" /></translation>
+ <translation id="5444999712122199445">Kembali ke situs</translation>
+@@ -1599,6 +1603,7 @@ Misalnya, beberapa situs web mungkin menanggapi permintaan ini dengan menayangka
+ <translation id="6521218807522232085">Buat, simpan, dan kelola sandi agar Anda dapat login dengan mudah</translation>
+ <translation id="6527303717912515753">Bagikan</translation>
+ <translation id="652948702951888897">Histori Chrome</translation>
++<translation id="6532186922548891250">Simpan di Bare</translation>
+ <translation id="6532866250404780454">Situs yang Anda kunjungi di Chrome tidak akan ditampilkan. Semua timer situs akan dihapus.</translation>
+ <translation id="6541983376925655882">{NUM_HOURS,plural, =1{Diperiksa 1 jam yang lalu}other{Diperiksa # jam yang lalu}}</translation>
+ <translation id="6545017243486555795">Hapus Semua Data</translation>
+@@ -1733,6 +1738,7 @@ Misalnya, beberapa situs web mungkin menanggapi permintaan ini dengan menayangka
+ <translation id="6922812712751566567"><ph name="PERMISSION" /> <ph name="SEPARATOR" /> Chrome menghapus izin ini karena Anda tidak mengunjungi situs tersebut baru-baru ini</translation>
+ <translation id="6923291640965724312">Format imersif</translation>
+ <translation id="6927821422725196292">{TABS_COUNT,plural, =1{1 tab}other{<ph name="NUMBER_OF_TABS" /> tab}}</translation>
++<translation id="6931576957638141829">Simpan ke</translation>
+ <translation id="6932458763202212477">Sesuaikan dengan layar</translation>
+ <translation id="6933180670536678127"><ph name="TAB_TITLE" />, Tab Bersuara yang Disematkan dan Dipilih</translation>
+ <translation id="6934359797430850647">Keluar menutup Bare. Apa pun yang dipilih di sini dihapus lebih dulu. Jika lebih dari satu jendela terbuka, Keluar menutup jendela ini. Bookmark, ekstensi, dan setelan tidak pernah dihapus.</translation>
+diff --git a/chrome/browser/ui/android/strings/translations/android_chrome_strings_ja.xtb b/chrome/browser/ui/android/strings/translations/android_chrome_strings_ja.xtb
+index e17fb57d0c9..2317f2e0fed 100644
+--- a/chrome/browser/ui/android/strings/translations/android_chrome_strings_ja.xtb
++++ b/chrome/browser/ui/android/strings/translations/android_chrome_strings_ja.xtb
+@@ -101,6 +101,7 @@
+ <translation id="1303507811548703290"><ph name="DOMAIN" /> - <ph name="DEVICE_NAME" /> から送信</translation>
+ <translation id="1310482092992808703">タブをグループ化</translation>
+ <translation id="1318262688555255786">ウェブページ「<ph name="PAGE_TITLE" />」へのリンクを共有します。ソース: <ph name="PAGE_URL" /></translation>
++<translation id="1326097763474481075"><ph name="FOLDER"/> に保存しました</translation>
+ <translation id="1327257854815634930">ナビゲーション履歴が開いています</translation>
+ <translation id="1331212799747679585">Chrome を更新できません。その他のオプション</translation>
+ <translation id="1332501820983677155">Google Chrome 機能のショートカット</translation>
+@@ -211,6 +212,7 @@ Chrome を使いやすくするためにデータを使用するその他の設
+ <translation id="1728803206919861584">シークレット モード以外でパスキーを保存しますか？</translation>
+ <translation id="1732514748744806741">パスワードが不正使用された場合はお知らせします</translation>
+ <translation id="1737694586321018892">Chrome の最高水準のセキュリティで保護</translation>
++<translation id="1738218860257023907"><ph name="SIZE"/> をダウンロード中…</translation>
+ <translation id="1749561566933687563">ブックマークの同期</translation>
+ <translation id="1750238553597293878">Google アカウントのパスワードを引き続き使用してください</translation>
+ <translation id="1753744496844366747">Aあ</translation>
+@@ -495,6 +497,7 @@ Chrome を使いやすくするためにデータを使用するその他の設
+ <translation id="2735021886040496572">他のアプリを使っている間に Android が拡張機能を停止しにくくし、停止された場合は再び読み込みます。メモリとバッテリーの消費が少し増えます。</translation>
+ <translation id="2739887572830526131">後でタブを追加できるようにこのグループを保持するか、今後使用しない場合は削除します。</translation>
+ <translation id="2742373789128106053"><ph name="IDENTITY_PROVIDER_ETLD_PLUS_ONE" /> は現在使用できません。</translation>
++<translation id="2743301740238894839">開始</translation>
+ <translation id="2760805590727089264">MM/YY</translation>
+ <translation id="2761162135224472056">没入モードで再生しますか？</translation>
+ <translation id="2762000892062317888">たった今</translation>
+@@ -1273,6 +1276,7 @@ Chrome を使いやすくするためにデータを使用するその他の設
+ <translation id="5437430997766914418">ダウンロード マネージャを開けませんでした</translation>
+ <translation id="5438292632479953702">再ダウンロード</translation>
+ <translation id="5439191312780166229">標準保護機能より多くのサイトデータを分析して、危険なサイト（Google が認識していなかったサイトも含む）について警告します。Chrome の警告をスキップすることもできます。</translation>
++<translation id="5440797310249424861">アプリに送信</translation>
+ <translation id="5441466871879044658">この言語に翻訳する</translation>
+ <translation id="544285856361623600">このサイトと Chrome にログインすると、<ph name="DEVICE_TYPE" /> で保存したブックマークなどを使用できます</translation>
+ <translation id="5444999712122199445">サイトに戻ってください</translation>
+@@ -1596,6 +1600,7 @@ Chrome を使いやすくするためにデータを使用するその他の設
+ <translation id="6521218807522232085">パスワードを作成、保存、管理して、簡単にログインできるようにします</translation>
+ <translation id="6527303717912515753">共有</translation>
+ <translation id="652948702951888897">Chrome 履歴</translation>
++<translation id="6532186922548891250">Bare に保存</translation>
+ <translation id="6532866250404780454">Chrome でアクセスしたサイトは表示されなくなり、サイトに設定したタイマーはすべて削除されます。</translation>
+ <translation id="6541983376925655882">{NUM_HOURS,plural, =1{前回の確認: 1 時間前}other{前回の確認: # 時間前}}</translation>
+ <translation id="6545017243486555795">すべてのデータを削除</translation>
+@@ -1730,6 +1735,7 @@ Chrome を使いやすくするためにデータを使用するその他の設
+ <translation id="6922812712751566567"><ph name="PERMISSION" /> <ph name="SEPARATOR" /> 最近アクセスしていないため、サイトから権限を削除しました</translation>
+ <translation id="6923291640965724312">没入型フォーマット</translation>
+ <translation id="6927821422725196292">{TABS_COUNT,plural, =1{1 個のタブ}other{<ph name="NUMBER_OF_TABS" /> 個のタブ}}</translation>
++<translation id="6931576957638141829">保存先</translation>
+ <translation id="6932458763202212477">画面に合わせる</translation>
+ <translation id="6933180670536678127"><ph name="TAB_TITLE" />、選択された音声ありの固定のタブ</translation>
+ <translation id="6934359797430850647">[終了] で Bare を閉じます。ここで選択した項目は、先に削除されます。ウィンドウが複数開いている場合は、このウィンドウだけを閉じます。ブックマーク、拡張機能、設定は削除されません。</translation>
+diff --git a/chrome/browser/ui/android/strings/translations/android_chrome_strings_pt-BR.xtb b/chrome/browser/ui/android/strings/translations/android_chrome_strings_pt-BR.xtb
+index c35b026f740..93bd76d6f62 100644
+--- a/chrome/browser/ui/android/strings/translations/android_chrome_strings_pt-BR.xtb
++++ b/chrome/browser/ui/android/strings/translations/android_chrome_strings_pt-BR.xtb
+@@ -101,6 +101,7 @@
+ <translation id="1303507811548703290"><ph name="DOMAIN" />: enviado de <ph name="DEVICE_NAME" /></translation>
+ <translation id="1310482092992808703">Agrupar guias</translation>
+ <translation id="1318262688555255786">Compartilhar o link para a página da Web <ph name="PAGE_TITLE" />. Fonte: <ph name="PAGE_URL" /></translation>
++<translation id="1326097763474481075">Salvo em <ph name="FOLDER"/></translation>
+ <translation id="1327257854815634930">O histórico de navegação está aberto</translation>
+ <translation id="1331212799747679585">Não é possível atualizar o Chrome. Mais opções</translation>
+ <translation id="1332501820983677155">Atalhos de recursos do Google Chrome</translation>
+@@ -211,6 +212,7 @@ Só uma pessoa com sua senha longa pode ler seus dados criptografados. Essa senh
+ <translation id="1728803206919861584">Salvar chave de acesso fora da navegação anônima?</translation>
+ <translation id="1732514748744806741">Vamos avisar você se as senhas forem comprometidas</translation>
+ <translation id="1737694586321018892">Usar o nível mais alto de segurança do Chrome</translation>
++<translation id="1738218860257023907">Baixando <ph name="SIZE"/>…</translation>
+ <translation id="1749561566933687563">Sincronize seus favoritos</translation>
+ <translation id="1750238553597293878">Continue usando as senhas na sua Conta do Google</translation>
+ <translation id="1753744496844366747">Aa</translation>
+@@ -496,6 +498,7 @@ Só uma pessoa com sua senha longa pode ler seus dados criptografados. Essa senh
+ <translation id="2735021886040496572">Reduz a chance de o Android parar as extensões enquanto você está em outro app e as carrega de novo se isso acontecer. Usa um pouco mais de memória e bateria.</translation>
+ <translation id="2739887572830526131">Mantenha este grupo para adicionar guias mais tarde ou exclua se não precisar mais dele.</translation>
+ <translation id="2742373789128106053">O <ph name="IDENTITY_PROVIDER_ETLD_PLUS_ONE" /> não está disponível no momento.</translation>
++<translation id="2743301740238894839">Iniciar</translation>
+ <translation id="2760805590727089264">MM / AA</translation>
+ <translation id="2761162135224472056">Assistir com reprodução imersiva?</translation>
+ <translation id="2762000892062317888">agora mesmo</translation>
+@@ -1276,6 +1279,7 @@ Só uma pessoa com sua senha longa pode ler seus dados criptografados. Essa senh
+ <translation id="5437430997766914418">Não foi possível abrir o gerenciador de downloads</translation>
+ <translation id="5438292632479953702">Fazer o download novamente</translation>
+ <translation id="5439191312780166229">Avisa você sobre sites perigosos, mesmo aqueles que o Google não conhecia, analisando mais dados de sites do que a proteção padrão. Você pode ignorar os avisos do Chrome.</translation>
++<translation id="5440797310249424861">Enviar para um app</translation>
+ <translation id="5441466871879044658">Traduzir para este idioma</translation>
+ <translation id="544285856361623600">Faça login neste site e no Chrome para acessar seus favoritos e muito mais do <ph name="DEVICE_TYPE" /></translation>
+ <translation id="5444999712122199445">Voltar para o site</translation>
+@@ -1598,6 +1602,7 @@ Por exemplo, alguns sites podem responder a esse pedido mostrando anúncios que
+ <translation id="6521218807522232085">Crie, salve e gerencie suas senhas para fazer login com facilidade</translation>
+ <translation id="6527303717912515753">Compartilhar</translation>
+ <translation id="652948702951888897">Histórico do Chrome</translation>
++<translation id="6532186922548891250">Salvar no Bare</translation>
+ <translation id="6532866250404780454">Os sites que você visita no Chrome não serão exibidos. Todos os timers do site serão excluídos.</translation>
+ <translation id="6541983376925655882">{NUM_HOURS,plural, =1{Verificado 1 hora atrás}one{Verificado # hora atrás}other{Verificado # horas atrás}}</translation>
+ <translation id="6545017243486555795">Limpar todos os dados</translation>
+@@ -1732,6 +1737,7 @@ Por exemplo, alguns sites podem responder a esse pedido mostrando anúncios que
+ <translation id="6922812712751566567"><ph name="PERMISSION" /> <ph name="SEPARATOR" /> O Chrome removeu essas permissões porque você não acessou o site recentemente</translation>
+ <translation id="6923291640965724312">Formato imersivo</translation>
+ <translation id="6927821422725196292">{TABS_COUNT,plural, =1{1 guia}one{<ph name="NUMBER_OF_TABS" /> guia}other{<ph name="NUMBER_OF_TABS" /> guias}}</translation>
++<translation id="6931576957638141829">Salvar em</translation>
+ <translation id="6932458763202212477">Ajustar à tela</translation>
+ <translation id="6933180670536678127"><ph name="TAB_TITLE" />, guia com áudio fixada e selecionada</translation>
+ <translation id="6934359797430850647">Sair fecha o Bare. Tudo o que estiver selecionado aqui é apagado antes. Com mais de uma janela aberta, Sair fecha esta janela. Favoritos, extensões e configurações nunca são apagados.</translation>
+diff --git a/chrome/browser/ui/android/strings/translations/android_chrome_strings_ru.xtb b/chrome/browser/ui/android/strings/translations/android_chrome_strings_ru.xtb
+index c9f98b6c79b..ab958b79336 100644
+--- a/chrome/browser/ui/android/strings/translations/android_chrome_strings_ru.xtb
++++ b/chrome/browser/ui/android/strings/translations/android_chrome_strings_ru.xtb
+@@ -101,6 +101,7 @@
+ <translation id="1303507811548703290">Домен: <ph name="DOMAIN" />. Отправлено с устройства "<ph name="DEVICE_NAME" />".</translation>
+ <translation id="1310482092992808703">Сгруппировать вкладки</translation>
+ <translation id="1318262688555255786">Поделиться ссылкой на веб-страницу "<ph name="PAGE_TITLE" />". Источник: <ph name="PAGE_URL" />.</translation>
++<translation id="1326097763474481075">Сохранено: <ph name="FOLDER"/></translation>
+ <translation id="1327257854815634930">История переходов открыта</translation>
+ <translation id="1331212799747679585">Не удалось обновить Chrome. Другие настройки</translation>
+ <translation id="1332501820983677155">Функции Google Chrome</translation>
+@@ -211,6 +212,7 @@
+ <translation id="1728803206919861584">Сохранить ключ доступа не в режиме инкогнито?</translation>
+ <translation id="1732514748744806741">Мы сообщим, если ваши пароли будут раскрыты.</translation>
+ <translation id="1737694586321018892">Используйте лучшую защиту Chrome</translation>
++<translation id="1738218860257023907">Скачивание: <ph name="SIZE"/>…</translation>
+ <translation id="1749561566933687563">Синхронизируйте закладки</translation>
+ <translation id="1750238553597293878">Продолжайте использовать пароли в аккаунте Google.</translation>
+ <translation id="1753744496844366747">Аа</translation>
+@@ -496,6 +498,7 @@
+ <translation id="2735021886040496572">Снижает вероятность того, что Android остановит расширения, пока вы в другом приложении, и загружает их снова, если это произошло. Использует чуть больше памяти и заряда.</translation>
+ <translation id="2739887572830526131">Вы сможете пользоваться ей в дальнейшем. Если группа больше не нужна, удалите ее.</translation>
+ <translation id="2742373789128106053">Сервис "<ph name="IDENTITY_PROVIDER_ETLD_PLUS_ONE" />" сейчас недоступен.</translation>
++<translation id="2743301740238894839">Начать</translation>
+ <translation id="2760805590727089264">ММ/ГГ</translation>
+ <translation id="2761162135224472056">Включить режим виртуальной реальности?</translation>
+ <translation id="2762000892062317888">только что</translation>
+@@ -1276,6 +1279,7 @@
+ <translation id="5437430997766914418">Не удалось открыть менеджер скачивания</translation>
+ <translation id="5438292632479953702">Да</translation>
+ <translation id="5439191312780166229">Предупреждает об опасных сайтах, даже если раньше они были неизвестны Google. При этом анализируется больше данных по сравнению со стандартной защитой. Вы можете пропускать такие уведомления Chrome.</translation>
++<translation id="5440797310249424861">Отправить в приложение</translation>
+ <translation id="5441466871879044658">Переводить на этот язык</translation>
+ <translation id="544285856361623600">Войдите на этот сайт и в Chrome, чтобы получить доступ к закладкам и другим данным с <ph name="DEVICE_TYPE" />.</translation>
+ <translation id="5444999712122199445">Вернуться на сайт</translation>
+@@ -1599,6 +1603,7 @@
+ <translation id="6521218807522232085">Создавайте, сохраняйте и изменяйте пароли. Быстрый доступ к ним позволит вам легко входить в аккаунты.</translation>
+ <translation id="6527303717912515753">Поделиться</translation>
+ <translation id="652948702951888897">История Chrome</translation>
++<translation id="6532186922548891250">Сохранить в Bare</translation>
+ <translation id="6532866250404780454">В сервисе больше не будут отображаться данные о сайтах, которые вы посещаете в Chrome. Кроме того, будут удалены все таймеры сайтов.</translation>
+ <translation id="6541983376925655882">{NUM_HOURS,plural, =1{Проверено 1 час назад.}one{Проверено # час назад.}few{Проверено # часа назад.}many{Проверено # часов назад.}other{Проверено # часа назад.}}</translation>
+ <translation id="6545017243486555795">Удалить все данные</translation>
+@@ -1732,6 +1737,7 @@
+ <translation id="6922812712751566567"><ph name="PERMISSION" /> <ph name="SEPARATOR" /> Chrome отозвал эти разрешения у сайта, так как вы давно его не посещали</translation>
+ <translation id="6923291640965724312">Формат видео</translation>
+ <translation id="6927821422725196292">{TABS_COUNT,plural, =1{1 вкладка}one{<ph name="NUMBER_OF_TABS" /> вкладка}few{<ph name="NUMBER_OF_TABS" /> вкладки}many{<ph name="NUMBER_OF_TABS" /> вкладок}other{<ph name="NUMBER_OF_TABS" /> вкладки}}</translation>
++<translation id="6931576957638141829">Сохранить в</translation>
+ <translation id="6932458763202212477">По размеру экрана</translation>
+ <translation id="6933180670536678127">Выбранная и закрепленная вкладка "<ph name="TAB_TITLE" />" с включенным звуком</translation>
+ <translation id="6934359797430850647">«Выход» закрывает Bare. Всё выбранное здесь сначала удаляется. Если открыто несколько окон, «Выход» закрывает это окно. Закладки, расширения и настройки никогда не удаляются.</translation>
+diff --git a/chrome/browser/ui/android/strings/translations/android_chrome_strings_tr.xtb b/chrome/browser/ui/android/strings/translations/android_chrome_strings_tr.xtb
+index 06c550fdbb4..264bae3ca1e 100644
+--- a/chrome/browser/ui/android/strings/translations/android_chrome_strings_tr.xtb
++++ b/chrome/browser/ui/android/strings/translations/android_chrome_strings_tr.xtb
+@@ -101,6 +101,7 @@
+ <translation id="1303507811548703290"><ph name="DOMAIN" /> - <ph name="DEVICE_NAME" /> cihazından gönderildi</translation>
+ <translation id="1310482092992808703">Sekmeleri grupla</translation>
+ <translation id="1318262688555255786"><ph name="PAGE_TITLE" /> web sayfasının bağlantısını paylaşın. Kaynak: <ph name="PAGE_URL" /></translation>
++<translation id="1326097763474481075">Kaydedildi: <ph name="FOLDER"/></translation>
+ <translation id="1327257854815634930">Gezinme geçmişi açık</translation>
+ <translation id="1331212799747679585">Chrome güncellenemiyor. Diğer seçenekler</translation>
+ <translation id="1332501820983677155">Google Chrome'un özellik kısayolları</translation>
+@@ -211,6 +212,7 @@ Sadece parolanıza sahip olan kişiler şifrelenmiş verilerinizi okuyabilir. Pa
+ <translation id="1728803206919861584">Geçiş anahtarı Gizli mod dışında kaydedilsin mi?</translation>
+ <translation id="1732514748744806741">Şifrelerinizin güvenliği ihlal edilirse size haber veririz</translation>
+ <translation id="1737694586321018892">Chrome'un en güçlü güvenlik özelliklerini edinin</translation>
++<translation id="1738218860257023907"><ph name="SIZE"/> indiriliyor…</translation>
+ <translation id="1749561566933687563">Yer işaretlerinizi senkronize edin</translation>
+ <translation id="1750238553597293878">Google Hesabınızdaki şifreleri kullanmaya devam edin</translation>
+ <translation id="1753744496844366747">Aa</translation>
+@@ -496,6 +498,7 @@ Sadece parolanıza sahip olan kişiler şifrelenmiş verilerinizi okuyabilir. Pa
+ <translation id="2735021886040496572">Başka bir uygulamadayken Android'in uzantıları durdurma ihtimalini azaltır ve durdurursa onları yeniden yükler. Biraz daha fazla bellek ve pil kullanır.</translation>
+ <translation id="2739887572830526131">Daha sonra sekme eklemek için bu grubu tutun ya da artık ihtiyacınız yoksa silin.</translation>
+ <translation id="2742373789128106053"><ph name="IDENTITY_PROVIDER_ETLD_PLUS_ONE" /> şu anda kullanılamıyor.</translation>
++<translation id="2743301740238894839">Başlat</translation>
+ <translation id="2760805590727089264">AA / YY</translation>
+ <translation id="2761162135224472056">Etkileyici modda izlensin mi?</translation>
+ <translation id="2762000892062317888">az önce</translation>
+@@ -1276,6 +1279,7 @@ Diğer Google hizmetlerinden yapılan aramalar ve etkinlikler gibi Google hesab
+ <translation id="5437430997766914418">İndirme yöneticisi açılamadı</translation>
+ <translation id="5438292632479953702">Tekrar indir</translation>
+ <translation id="5439191312780166229">Standart korumaya ek olarak sitelerden alınmış daha fazla veriyi analiz ederek Google'ın daha önce bilmedikleri de dahil olmak üzere tehlikeli siteler hakkında sizi uyarır. Chrome uyarılarını atlamayı seçebilirsiniz.</translation>
++<translation id="5440797310249424861">Uygulamaya gönder</translation>
+ <translation id="5441466871879044658">Şu dile çevir</translation>
+ <translation id="544285856361623600"><ph name="DEVICE_TYPE" /> cihazındaki yer işaretlerinize ve daha fazlasına ulaşmak için bu sitede ve Chrome'da oturum açın</translation>
+ <translation id="5444999712122199445">Siteye geri dönün.</translation>
+@@ -1599,6 +1603,7 @@ Diğer Google hizmetlerinden yapılan aramalar ve etkinlikler gibi Google hesab
+ <translation id="6521218807522232085">Kolayca oturum açabilmek için şifreler oluşturun, kaydedin ve yönetin</translation>
+ <translation id="6527303717912515753">Paylaş</translation>
+ <translation id="652948702951888897">Chrome geçmişi</translation>
++<translation id="6532186922548891250">Bare'de kaydet</translation>
+ <translation id="6532866250404780454">Chrome'da ziyaret ettiğiniz siteler gösterilmez. Tüm site zamanlayıcıları silinir.</translation>
+ <translation id="6541983376925655882">{NUM_HOURS,plural, =1{1 saat önce kontrol edildi}other{# saat önce kontrol edildi}}</translation>
+ <translation id="6545017243486555795">Tüm Verileri Temizle</translation>
+@@ -1733,6 +1738,7 @@ Diğer Google hizmetlerinden yapılan aramalar ve etkinlikler gibi Google hesab
+ <translation id="6922812712751566567"><ph name="PERMISSION" /> <ph name="SEPARATOR" /> Chrome, yakın zamanda ziyaret etmediğiniz için bu izinleri kaldırdı</translation>
+ <translation id="6923291640965724312">Etkileyici biçim</translation>
+ <translation id="6927821422725196292">{TABS_COUNT,plural, =1{1 sekme}other{<ph name="NUMBER_OF_TABS" /> sekme}}</translation>
++<translation id="6931576957638141829">Kaydetme yeri</translation>
+ <translation id="6932458763202212477">Ekrana sığdır</translation>
+ <translation id="6933180670536678127"><ph name="TAB_TITLE" />, Ses Çalan Seçili Sabit Sekme</translation>
+ <translation id="6934359797430850647">Çıkış, Bare'i kapatır. Burada seçilen her şey önce silinir. Birden fazla pencere açıksa Çıkış bu pencereyi kapatır. Yer işaretleri, uzantılar ve ayarlar hiçbir zaman silinmez.</translation>

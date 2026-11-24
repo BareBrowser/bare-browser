@@ -1,8 +1,32 @@
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 0e35a4871e8..0de74a87728 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -482,6 +482,11 @@ chrome_java_resources = [
+   "java/res/layout/bare_welcome_chooser.xml",
+   "java/res/layout/bare_welcome_chooser_row.xml",
+   "java/res/layout/bare_backup_button.xml",
++  "java/res/layout/bare_backup_choice_card.xml",
++  "java/res/layout/bare_backup_choice_row.xml",
++  "java/res/layout/bare_backup_step_bar.xml",
++  "java/res/drawable/bare_backup_chip.xml",
++  "java/res/drawable/bare_backup_chevron.xml",
+   "java/res/layout/bare_backup_kind.xml",
+   "java/res/layout/bare_backup_upgrade_overlay.xml",
+   "java/res/layout/bare_direct_modes.xml",
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
-index 9550ec18b7b..95461743c30 100644
+index 9550ec18b7b..21139eded33 100644
 --- a/chrome/android/chrome_java_sources.gni
 +++ b/chrome/android/chrome_java_sources.gni
-@@ -260,6 +260,7 @@ chrome_java_sources = [
+@@ -251,6 +251,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackupSetupFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupButtonPreference.java",
++  "java/src/org/chromium/chrome/browser/bare/backup/BareBackupChoicePreference.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupCreateFragment.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupDialogs.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareBackupFolder.java",
+@@ -260,6 +261,7 @@ chrome_java_sources = [
    "java/src/org/chromium/chrome/browser/bare/backup/BareBackupPassphraseStep.java",
    "java/src/org/chromium/chrome/browser/bare/backup/BareBackupRestoreFragment.java",
    "java/src/org/chromium/chrome/browser/bare/backup/BareBackupSettingsFragment.java",
@@ -10,6 +34,208 @@ index 9550ec18b7b..95461743c30 100644
    "java/src/org/chromium/chrome/browser/bare/backup/BareBringOverFragment.java",
    "java/src/org/chromium/chrome/browser/bare/backup/BareDirectFragment.java",
    "java/src/org/chromium/chrome/browser/bare/backup/BareDirectGate.java",
+diff --git a/chrome/android/java/res/drawable/bare_backup_chevron.xml b/chrome/android/java/res/drawable/bare_backup_chevron.xml
+new file mode 100644
+index 00000000000..2e2b7dbd5ba
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_backup_chevron.xml
+@@ -0,0 +1,17 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="20dp"
++    android:height="20dp"
++    android:viewportWidth="20"
++    android:viewportHeight="20"
++    android:autoMirrored="true">
++    <path
++        android:fillColor="@color/bare_welcome_body"
++        android:pathData="M7.5,4.5L6.4,5.6L10.8,10L6.4,14.4L7.5,15.5L13,10Z" />
++</vector>
+diff --git a/chrome/android/java/res/drawable/bare_backup_chip.xml b/chrome/android/java/res/drawable/bare_backup_chip.xml
+new file mode 100644
+index 00000000000..2deab5fa4e6
+--- /dev/null
++++ b/chrome/android/java/res/drawable/bare_backup_chip.xml
+@@ -0,0 +1,12 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<shape xmlns:android="http://schemas.android.com/apk/res/android"
++    android:shape="rectangle">
++    <solid android:color="@color/bare_welcome_soft" />
++    <corners android:radius="12dp" />
++</shape>
+diff --git a/chrome/android/java/res/layout/bare_backup_choice_card.xml b/chrome/android/java/res/layout/bare_backup_choice_card.xml
+new file mode 100644
+index 00000000000..673ef1220b6
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_backup_choice_card.xml
+@@ -0,0 +1,19 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<!-- One rounded card holding the rows of a backup choice, see BareBackupChoicePreference. The
++     rows' parent is inside a frame so the preference can always find it by id. -->
++<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content">
++
++    <LinearLayout
++        android:id="@+id/bare_choice_rows"
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:orientation="vertical" />
++</FrameLayout>
+diff --git a/chrome/android/java/res/layout/bare_backup_choice_row.xml b/chrome/android/java/res/layout/bare_backup_choice_row.xml
+new file mode 100644
+index 00000000000..78057e68117
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_backup_choice_row.xml
+@@ -0,0 +1,80 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<!-- A row in the choice card: a round choice with a name, an optional line under it and an
++     optional chip, or an action row with an arrow. -->
++<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content"
++    android:minHeight="60dp"
++    android:orientation="horizontal"
++    android:gravity="center_vertical"
++    android:paddingStart="16dp"
++    android:paddingEnd="16dp"
++    android:paddingTop="10dp"
++    android:paddingBottom="10dp"
++    android:clickable="true"
++    android:focusable="true"
++    android:background="?attr/selectableItemBackground">
++
++    <RadioButton
++        android:id="@+id/bare_choice_radio"
++        android:layout_width="wrap_content"
++        android:layout_height="wrap_content"
++        android:layout_marginEnd="12dp"
++        android:buttonTint="@color/bare_welcome_accent"
++        android:clickable="false"
++        android:focusable="false"
++        android:importantForAccessibility="no" />
++
++    <LinearLayout
++        android:layout_width="0dp"
++        android:layout_height="wrap_content"
++        android:layout_weight="1"
++        android:orientation="vertical">
++
++        <TextView
++            android:id="@+id/bare_choice_title"
++            android:layout_width="wrap_content"
++            android:layout_height="wrap_content"
++            android:textColor="@color/bare_welcome_title"
++            android:textSize="16sp" />
++
++        <TextView
++            android:id="@+id/bare_choice_summary"
++            android:layout_width="wrap_content"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="2dp"
++            android:textColor="@color/bare_welcome_body"
++            android:textSize="13sp"
++            android:visibility="gone" />
++    </LinearLayout>
++
++    <TextView
++        android:id="@+id/bare_choice_chip"
++        android:layout_width="wrap_content"
++        android:layout_height="wrap_content"
++        android:layout_marginStart="8dp"
++        android:paddingStart="10dp"
++        android:paddingEnd="10dp"
++        android:paddingTop="3dp"
++        android:paddingBottom="3dp"
++        android:background="@drawable/bare_backup_chip"
++        android:textColor="@color/bare_welcome_accent"
++        android:textSize="12sp"
++        android:fontFamily="sans-serif-medium"
++        android:visibility="gone" />
++
++    <ImageView
++        android:id="@+id/bare_choice_arrow"
++        android:layout_width="20dp"
++        android:layout_height="20dp"
++        android:layout_marginStart="8dp"
++        android:src="@drawable/bare_backup_chevron"
++        android:importantForAccessibility="no"
++        android:visibility="gone" />
++</LinearLayout>
+diff --git a/chrome/android/java/res/layout/bare_backup_step_bar.xml b/chrome/android/java/res/layout/bare_backup_step_bar.xml
+new file mode 100644
+index 00000000000..c1964940862
+--- /dev/null
++++ b/chrome/android/java/res/layout/bare_backup_step_bar.xml
+@@ -0,0 +1,44 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<!-- The Continue button pinned under a backup step, and for the first step the plain text link
++     below it. -->
++<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content"
++    android:orientation="vertical"
++    android:paddingStart="16dp"
++    android:paddingEnd="16dp"
++    android:paddingTop="8dp"
++    android:paddingBottom="8dp">
++
++    <Button
++        android:id="@+id/bare_step_continue"
++        android:layout_width="match_parent"
++        android:layout_height="52dp"
++        android:background="@drawable/bare_welcome_button_primary"
++        android:stateListAnimator="@null"
++        android:text="@string/bare_autobackup_continue"
++        android:textAllCaps="false"
++        android:textColor="@color/bare_welcome_on_accent"
++        android:textSize="16sp"
++        android:fontFamily="sans-serif-medium" />
++
++    <TextView
++        android:id="@+id/bare_step_link"
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:minHeight="48dp"
++        android:gravity="center"
++        android:clickable="true"
++        android:focusable="true"
++        android:background="?attr/selectableItemBackground"
++        android:text="@string/bare_autobackup_manual_only"
++        android:textColor="@color/bare_welcome_accent"
++        android:textSize="15sp"
++        android:visibility="gone" />
++</LinearLayout>
 diff --git a/chrome/android/java/res/values/bare_backup_strings.xml b/chrome/android/java/res/values/bare_backup_strings.xml
 index 838bc36db7c..8df80ef6d40 100644
 --- a/chrome/android/java/res/values/bare_backup_strings.xml
@@ -205,10 +431,34 @@ index fe277f92372..e9f02ecba46 100644
                      row(
                              screen,
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackupSetupFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackupSetupFragment.java
-index 9c926221406..b33fade1766 100644
+index 9c926221406..57a349bcc2b 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackupSetupFragment.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackupSetupFragment.java
-@@ -68,6 +68,8 @@ public class BareAutoBackupSetupFragment extends ChromeBaseSettingsFragment {
+@@ -10,12 +10,15 @@ import android.content.Context;
+ import android.content.Intent;
+ import android.net.Uri;
+ import android.os.Bundle;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.LinearLayout;
+ 
+ import androidx.activity.OnBackPressedCallback;
+ import androidx.activity.result.ActivityResult;
+ import androidx.activity.result.ActivityResultLauncher;
+ import androidx.activity.result.contract.ActivityResultContracts;
+-import androidx.preference.CheckBoxPreference;
+ import androidx.preference.Preference;
+ import androidx.preference.PreferenceScreen;
+ 
+@@ -62,12 +65,15 @@ public class BareAutoBackupSetupFragment extends ChromeBaseSettingsFragment {
+     private ActivityResultLauncher<Intent> mPicker;
+     private BareScreenLock mScreenLock;
+     private OnBackPressedCallback mBack;
++    private @Nullable View mBar;
+ 
+     private String mMode = MODE_SETUP;
+     private int mStep = STEP_RULE;
      private int mRule = BareAutoBackup.RULE_WEEKLY;
      private @Nullable Uri mFolder;
      private String mFolderLabel = BareBackupFolder.DEFAULT_LABEL;
@@ -217,7 +467,126 @@ index 9c926221406..b33fade1766 100644
      private boolean mIsCode = true;
      private @Nullable String mFolderProblem;
      private @Nullable AlertDialog mDialog;
-@@ -356,9 +358,14 @@ public class BareAutoBackupSetupFragment extends ChromeBaseSettingsFragment {
+@@ -119,6 +125,25 @@ public class BareAutoBackupSetupFragment extends ChromeBaseSettingsFragment {
+         render();
+     }
+ 
++    @Override
++    public View onCreateView(
++            LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle state) {
++        View list = super.onCreateView(inflater, container, state);
++        // The Continue button stays at the bottom of the screen under the list.
++        LinearLayout column = new LinearLayout(inflater.getContext());
++        column.setOrientation(LinearLayout.VERTICAL);
++        column.addView(
++                list,
++                new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, 0, /* weight= */ 1f));
++        mBar = inflater.inflate(R.layout.bare_backup_step_bar, column, false);
++        column.addView(mBar);
++        mBar.setVisibility(View.GONE);
++        // render() ran before this view existed, so the bar was never shown for the step.
++        render();
++        return column;
++    }
++
+     @Override
+     public void onSaveInstanceState(Bundle out) {
+         super.onSaveInstanceState(out);
+@@ -178,6 +203,7 @@ public class BareAutoBackupSetupFragment extends ChromeBaseSettingsFragment {
+         if (context == null) return;
+         PreferenceScreen screen = getPreferenceScreen();
+         screen.removeAll();
++        hideBar();
+         switch (mStep) {
+             case STEP_RULE -> renderRule(context, screen);
+             case STEP_FOLDER -> renderFolder(context, screen);
+@@ -198,61 +224,45 @@ public class BareAutoBackupSetupFragment extends ChromeBaseSettingsFragment {
+             R.string.bare_autobackup_every_week,
+             R.string.bare_autobackup_every_month
+         };
+-        CheckBoxPreference[] rows = new CheckBoxPreference[rules.length];
++        BareBackupChoicePreference card = new BareBackupChoicePreference(context);
+         for (int i = 0; i < rules.length; i++) {
+-            CheckBoxPreference row = new CheckBoxPreference(context);
+-            row.setPersistent(false);
+-            row.setTitle(titles[i]);
+-            if (rules[i] == BareAutoBackup.RULE_WEEKLY) {
+-                row.setSummary(R.string.bare_autobackup_recommended);
+-            }
+-            row.setChecked(rules[i] == mRule);
+             int rule = rules[i];
+-            row.setOnPreferenceClickListener(
+-                    p -> {
+-                        mRule = rule;
+-                        for (CheckBoxPreference other : rows) other.setChecked(other == p);
+-                        return true;
+-                    });
+-            rows[i] = row;
+-            screen.addPreference(row);
++            card.addChoice(
++                    getString(titles[i]),
++                    null,
++                    rule == BareAutoBackup.RULE_WEEKLY
++                            ? getString(R.string.bare_autobackup_recommended)
++                            : null,
++                    rule == mRule,
++                    () -> mRule = rule);
+         }
++        screen.addPreference(card);
+         message(screen, R.string.bare_autobackup_step1_body);
+-        button(screen, R.string.bare_autobackup_continue, () -> go(STEP_FOLDER));
+-        Preference manual = new Preference(context);
+-        manual.setTitle(R.string.bare_autobackup_manual_only);
+-        manual.setOnPreferenceClickListener(
+-                p -> {
+-                    leave();
+-                    return true;
+-                });
+-        screen.addPreference(manual);
++        showBar(() -> go(STEP_FOLDER), this::leave);
+     }
+ 
+     // Step 2.
+ 
+     private void renderFolder(Context context, PreferenceScreen screen) {
+         heading(screen, R.string.bare_autobackup_step2_title);
+-        Preference folder = new Preference(context);
+-        folder.setTitle(mFolderLabel);
+-        folder.setSummary(R.string.bare_autobackup_on_this_phone);
+-        folder.setSelectable(false);
+-        screen.addPreference(folder);
++        BareBackupChoicePreference card = new BareBackupChoicePreference(context);
++        card.addChoice(
++                mFolderLabel,
++                getString(R.string.bare_autobackup_on_this_phone),
++                null,
++                true,
++                () -> {});
++        card.addAction(
++                getString(R.string.bare_autobackup_change),
++                () -> mPicker.launch(BareBackupFolder.pickerIntent()));
++        screen.addPreference(card);
+         message(screen, R.string.bare_autobackup_step2_body);
+         if (mFolderProblem != null) {
+             TextMessagePreference problem = new TextMessagePreference(context, null);
+             problem.setSummary(mFolderProblem);
+             screen.addPreference(problem);
+         }
+-        button(screen, R.string.bare_autobackup_continue, this::continueFromFolder);
+-        Preference change = new Preference(context);
+-        change.setTitle(R.string.bare_autobackup_change);
+-        change.setOnPreferenceClickListener(
+-                p -> {
+-                    mPicker.launch(BareBackupFolder.pickerIntent());
+-                    return true;
+-                });
+-        screen.addPreference(change);
++        showBar(this::continueFromFolder, null);
+     }
+ 
+     private void continueFromFolder() {
+@@ -356,9 +366,14 @@ public class BareAutoBackupSetupFragment extends ChromeBaseSettingsFragment {
                  BareBackupPassphraseStep.show(
                          context,
                          code,
@@ -232,7 +601,7 @@ index 9c926221406..b33fade1766 100644
                              keep(secret, isCode);
                          },
                          () -> {
-@@ -408,6 +415,12 @@ public class BareAutoBackupSetupFragment extends ChromeBaseSettingsFragment {
+@@ -408,6 +423,12 @@ public class BareAutoBackupSetupFragment extends ChromeBaseSettingsFragment {
              return;
          }
          BareAutoBackup.turnOn(mRule, mFolder, mFolderLabel, wrapped, mIsCode);
@@ -245,6 +614,42 @@ index 9c926221406..b33fade1766 100644
          mStep = STEP_DONE;
          render();
      }
+@@ -457,6 +478,22 @@ public class BareAutoBackupSetupFragment extends ChromeBaseSettingsFragment {
+                 });
+     }
+ 
++    // The pinned bar.
++
++    private void hideBar() {
++        if (mBar != null) mBar.setVisibility(View.GONE);
++    }
++
++    /** Shows the Continue button, and under it the plain link when {@code link} is given. */
++    private void showBar(Runnable onContinue, @Nullable Runnable link) {
++        if (mBar == null) return;
++        mBar.setVisibility(View.VISIBLE);
++        mBar.findViewById(R.id.bare_step_continue).setOnClickListener(v -> onContinue.run());
++        View manual = mBar.findViewById(R.id.bare_step_link);
++        manual.setVisibility(link == null ? View.GONE : View.VISIBLE);
++        manual.setOnClickListener(link == null ? null : v -> link.run());
++    }
++
+     // Rows.
+ 
+     private void go(int step) {
+@@ -466,9 +503,9 @@ public class BareAutoBackupSetupFragment extends ChromeBaseSettingsFragment {
+     }
+ 
+     private void heading(PreferenceScreen screen, int title) {
+-        Preference heading = new Preference(getContext());
+-        heading.setTitle(title);
+-        heading.setSelectable(false);
++        // Plain text on the page, not a boxed row, as in the mock.
++        TextMessagePreference heading = new TextMessagePreference(getContext(), null);
++        heading.setSummary(title);
+         screen.addPreference(heading);
+     }
+ 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
 index 682638c5002..04d239f24e9 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupBridge.java
@@ -393,6 +798,168 @@ index 682638c5002..04d239f24e9 100644
                  boolean customDns,
                  boolean lowerProtection,
                  @JniType("std::vector<std::string>") String[] approvedExtensions,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupChoicePreference.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupChoicePreference.java
+new file mode 100644
+index 00000000000..e3c5bde511d
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupChoicePreference.java
+@@ -0,0 +1,156 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare.backup;
++
++import android.content.Context;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.accessibility.AccessibilityNodeInfo;
++import android.widget.LinearLayout;
++import android.widget.RadioButton;
++import android.widget.TextView;
++
++import androidx.preference.Preference;
++import androidx.preference.PreferenceViewHolder;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++
++import java.util.ArrayList;
++import java.util.List;
++
++/**
++ * One rounded card of rows for a backup step. A row is either a round choice, of which one is
++ * picked, or an action with an arrow, such as choosing another folder. The rows sit in the one
++ * preference so the card reads as a group, the way the welcome pages do.
++ */
++@NullMarked
++public class BareBackupChoicePreference extends Preference {
++    private static final class Row {
++        final CharSequence mTitle;
++        final @Nullable CharSequence mSummary;
++        final @Nullable CharSequence mChip;
++        final boolean mRadio;
++        final Runnable mOnClick;
++        boolean mSelected;
++
++        Row(
++                CharSequence title,
++                @Nullable CharSequence summary,
++                @Nullable CharSequence chip,
++                boolean radio,
++                boolean selected,
++                Runnable onClick) {
++            mTitle = title;
++            mSummary = summary;
++            mChip = chip;
++            mRadio = radio;
++            mSelected = selected;
++            mOnClick = onClick;
++        }
++    }
++
++    private final List<Row> mRows = new ArrayList<>();
++
++    public BareBackupChoicePreference(Context context) {
++        super(context);
++        setLayoutResource(R.layout.bare_backup_choice_card);
++        setSelectable(false);
++        setPersistent(false);
++    }
++
++    /** Adds a round choice. Picking it clears the others and runs {@code onPicked}. */
++    void addChoice(
++            CharSequence title,
++            @Nullable CharSequence summary,
++            @Nullable CharSequence chip,
++            boolean selected,
++            Runnable onPicked) {
++        mRows.add(new Row(title, summary, chip, true, selected, onPicked));
++    }
++
++    /** Adds a row with an arrow that runs {@code onClick}. */
++    void addAction(CharSequence title, Runnable onClick) {
++        mRows.add(new Row(title, null, null, false, false, onClick));
++    }
++
++    @Override
++    public void onBindViewHolder(PreferenceViewHolder holder) {
++        super.onBindViewHolder(holder);
++        LinearLayout rows = (LinearLayout) holder.findViewById(R.id.bare_choice_rows);
++        rows.removeAllViews();
++        LayoutInflater inflater = LayoutInflater.from(getContext());
++        for (int i = 0; i < mRows.size(); i++) {
++            Row row = mRows.get(i);
++            if (i > 0) {
++                View divider = new View(getContext());
++                divider.setBackgroundColor(getContext().getColor(R.color.bare_welcome_divider));
++                LinearLayout.LayoutParams params =
++                        new LinearLayout.LayoutParams(
++                                LinearLayout.LayoutParams.MATCH_PARENT,
++                                Math.max(
++                                        1,
++                                        Math.round(
++                                                getContext().getResources().getDisplayMetrics()
++                                                        .density)));
++                params.setMarginStart(
++                        Math.round(52 * getContext().getResources().getDisplayMetrics().density));
++                rows.addView(divider, params);
++            }
++            View view = inflater.inflate(R.layout.bare_backup_choice_row, rows, false);
++            RadioButton radio = view.findViewById(R.id.bare_choice_radio);
++            TextView title = view.findViewById(R.id.bare_choice_title);
++            TextView summary = view.findViewById(R.id.bare_choice_summary);
++            TextView chip = view.findViewById(R.id.bare_choice_chip);
++            title.setText(row.mTitle);
++            if (row.mRadio) {
++                radio.setChecked(row.mSelected);
++            } else {
++                // An action row: no round choice, the title in the accent colour, an arrow.
++                radio.setVisibility(View.GONE);
++                title.setTextColor(getContext().getColor(R.color.bare_welcome_accent));
++                view.findViewById(R.id.bare_choice_arrow).setVisibility(View.VISIBLE);
++                view.setPaddingRelative(
++                        Math.round(20 * getContext().getResources().getDisplayMetrics().density),
++                        view.getPaddingTop(),
++                        view.getPaddingEnd(),
++                        view.getPaddingBottom());
++            }
++            if (row.mSummary != null) {
++                summary.setText(row.mSummary);
++                summary.setVisibility(View.VISIBLE);
++            }
++            if (row.mChip != null) {
++                chip.setText(row.mChip);
++                chip.setVisibility(View.VISIBLE);
++            }
++            view.setAccessibilityDelegate(
++                    new View.AccessibilityDelegate() {
++                        @Override
++                        public void onInitializeAccessibilityNodeInfo(
++                                View host, AccessibilityNodeInfo info) {
++                            super.onInitializeAccessibilityNodeInfo(host, info);
++                            if (row.mRadio) {
++                                info.setClassName(RadioButton.class.getName());
++                                info.setCheckable(true);
++                                info.setChecked(row.mSelected);
++                            }
++                        }
++                    });
++            view.setOnClickListener(
++                    v -> {
++                        if (row.mRadio) {
++                            for (Row other : mRows) {
++                                if (other.mRadio) other.mSelected = other == row;
++                            }
++                            notifyChanged();
++                        }
++                        row.mOnClick.run();
++                    });
++            rows.addView(view);
++        }
++    }
++}
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupCreateFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupCreateFragment.java
 index 25a75b623bc..16bed6886c8 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupCreateFragment.java

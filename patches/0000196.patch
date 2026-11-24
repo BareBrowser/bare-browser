@@ -5364,10 +5364,10 @@ index dd904d50aff..f5c1816d4b4 100644
                  source,
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
 new file mode 100644
-index 00000000000..6a45bdac6d5
+index 00000000000..0522dda95de
 --- /dev/null
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
-@@ -0,0 +1,1186 @@
+@@ -0,0 +1,1218 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -6062,8 +6062,40 @@ index 00000000000..6a45bdac6d5
 +    private void closeTab(Tab tab) {
 +        TabModel model = currentModel();
 +        if (model == null || tab.isClosing() || tab.isDestroyed()) return;
++        // Closing the selected New tab page takes its view away, and Android hands the focus on to
++        // the address bar, which then raises the keyboard. Nobody tapped the bar, so take it back.
++        boolean keepBarQuiet =
++                UrlUtilities.isNtpUrl(tab.getUrl())
++                        && model.index() >= 0
++                        && model.index() < model.getCount()
++                        && model.getTabAt(model.index()) == tab
++                        && !isAddressBarFocused();
 +        model.getTabRemover()
 +                .closeTabs(TabClosureParams.closeTab(tab).allowUndo(true).build(), /* allowDialog= */ true);
++        if (keepBarQuiet) {
++            View decor = mActivity.getWindow().getDecorView();
++            // The focus lands a moment after the tab goes, so look a few times.
++            for (int delay : new int[] {0, 120, 300, 600}) {
++                decor.postDelayed(this::endAddressBarFocus, delay);
++            }
++        }
++    }
++
++    private boolean isAddressBarFocused() {
++        return mActivity instanceof ChromeActivity chromeActivity
++                && chromeActivity.getToolbarManager() != null
++                && chromeActivity.getToolbarManager().isUrlBarFocused();
++    }
++
++    private void endAddressBarFocus() {
++        if (mActivity.isFinishing() || mActivity.isDestroyed()) return;
++        if (!(mActivity instanceof ChromeActivity chromeActivity)
++                || chromeActivity.getToolbarManager() == null
++                || !chromeActivity.getToolbarManager().isUrlBarFocused()) {
++            return;
++        }
++        var stub = chromeActivity.getToolbarManager().getOmniboxStub();
++        if (stub != null) stub.endInput();
 +    }
 +
 +    private void addTab() {
@@ -6555,7 +6587,7 @@ index 00000000000..6a45bdac6d5
 +    }
 +}
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
-index e2cbd874935..b4dd74f13e8 100644
+index c8fd69dc347..4e5df002ed7 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
 @@ -138,6 +138,7 @@ public class BareWelcomeOverlay {
@@ -6582,7 +6614,7 @@ index e2cbd874935..b4dd74f13e8 100644
 -    private static final long WAVE_MS = 3000;
  
      /** How long the splash exit gets to drive the reveal before layout does it instead. */
-     private static final long SPLASH_HANDOVER_MS = 450;
+     private static final long SPLASH_HANDOVER_MS = 0;
 @@ -172,8 +172,8 @@ public class BareWelcomeOverlay {
      /** Request code for Android's default browser dialog. Only its return matters, not its result. */
      private static final int REQUEST_DEFAULT_BROWSER = 0x6261;

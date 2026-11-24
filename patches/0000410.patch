@@ -1,0 +1,89 @@
+diff --git a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
+index 5d220111dde..aedc8f5a32d 100644
+--- a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
++++ b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/RiseSheet.java
+@@ -350,6 +350,84 @@ public final class RiseSheet {
+         return true;
+     }
+ 
++    /** The width a card takes, so a caller can measure its content before showing it. */
++    public static int cardWidth(View root) {
++        Rect frame = new Rect();
++        root.getWindowVisibleDisplayFrame(frame);
++        return frame.width();
++    }
++
++    /**
++     * Shows {@code content}, which the caller built, as a card the height of that content, rising
++     * from behind the toolbar like a message. Returns the card, or null while another card is up.
++     * With {@code modal} the card takes focus and a tap outside it folds it away; without it,
++     * touches outside reach the page and only the card's own views take taps. A card with {@code
++     * closeAfterMs} above zero folds away by itself after that long. {@code onDismissed} runs once
++     * the card has gone.
++     */
++    public static @Nullable RiseSheet showCard(
++            View root,
++            View content,
++            boolean modal,
++            long closeAfterMs,
++            @Nullable Runnable onDismissed) {
++        if (busy()) return null;
++        Context context = root.getContext();
++        float density = context.getResources().getDisplayMetrics().density;
++        Rect frame = new Rect();
++        root.getWindowVisibleDisplayFrame(frame);
++        int bottom = toolbarTop(root, frame.bottom);
++        if (bottom == frame.bottom) {
++            // No bottom toolbar under the card: it fills to the screen edge, behind the gesture
++            // bar, and its content stays above that bar.
++            int[] rootAt = new int[2];
++            root.getLocationOnScreen(rootAt);
++            int extra = Math.max(0, rootAt[1] + root.getHeight() - frame.bottom);
++            if (extra > 0) {
++                content.setPadding(
++                        content.getPaddingLeft(),
++                        content.getPaddingTop(),
++                        content.getPaddingRight(),
++                        content.getPaddingBottom() + extra);
++                bottom += extra;
++            }
++        }
++        content.measure(
++                View.MeasureSpec.makeMeasureSpec(frame.width(), View.MeasureSpec.EXACTLY),
++                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
++        int height = content.getMeasuredHeight() + Math.round(HANDLE_SPACE_DP * density);
++        RiseSheet sheet =
++                new RiseSheet(
++                        context,
++                        content,
++                        content,
++                        height,
++                        toolbarColor(root, context),
++                        frame.width(),
++                        height,
++                        Mode.MESSAGE);
++        sheet.mOnDismissed = onDismissed;
++        if (!modal) {
++            sheet.mPopup.setFocusable(false);
++            sheet.mPopup.setOutsideTouchable(false);
++            sheet.mPopup.setTouchInterceptor(null);
++        }
++        sActive = sheet;
++        sheet.mPopup.setOnDismissListener(
++                () -> {
++                    sheet.mFrame.removeCallbacks(sheet.mTimeout);
++                    if (sActive == sheet) sActive = null;
++                    if (sheet.mOnDismissed != null) sheet.mOnDismissed.run();
++                });
++        sheet.mPopup.showAtLocation(root, Gravity.NO_GRAVITY, frame.left, bottom - height);
++        sheet.mFrame.post(
++                () ->
++                        sheet.animateTo(
++                                0, SETTLE_MS, Interpolators.EMPHASIZED_DECELERATE, null));
++        if (closeAfterMs > 0) sheet.mFrame.postDelayed(sheet.mTimeout, closeAfterMs);
++        return sheet;
++    }
++
+     /**
+      * Shows {@code page}, a view that scrolls by itself such as a web page, as a card that opens
+      * to {@code openFraction} of the space above the toolbar and can be dragged up to {@code

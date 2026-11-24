@@ -1,0 +1,170 @@
+diff --git a/chrome/browser/download/internal/android/BUILD.gn b/chrome/browser/download/internal/android/BUILD.gn
+index c3c54a4551e..1c5049a1b26 100644
+--- a/chrome/browser/download/internal/android/BUILD.gn
++++ b/chrome/browser/download/internal/android/BUILD.gn
+@@ -45,6 +45,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/download/home/list/ListItem.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/ListItemModel.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/ListProperties.java",
++    "java/src/org/chromium/chrome/browser/download/home/list/BareDownloadSelect.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/ListPropertyViewBinder.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/ListUtils.java",
+     "java/src/org/chromium/chrome/browser/download/home/list/ShareUtils.java",
+diff --git a/chrome/browser/download/internal/android/java/res/menu/download_manager_menu.xml b/chrome/browser/download/internal/android/java/res/menu/download_manager_menu.xml
+index 53cf485c164..cc50a991912 100644
+--- a/chrome/browser/download/internal/android/java/res/menu/download_manager_menu.xml
++++ b/chrome/browser/download/internal/android/java/res/menu/download_manager_menu.xml
+@@ -24,6 +24,11 @@ found in the LICENSE file.
+             android:visible="false"
+             app:showAsAction="ifRoom"
+             app:iconTint="@color/default_icon_color_secondary_tint_list" />
++        <item
++            android:id="@+id/bare_select_menu_id"
++            android:title="@string/bare_downloads_select"
++            android:visible="true"
++            app:showAsAction="never" />
+         <item
+             android:id="@+id/close_menu_id"
+             android:icon="@drawable/btn_close"
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/BareDownloadSelect.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/BareDownloadSelect.java
+new file mode 100644
+index 00000000000..fa85cf56685
+--- /dev/null
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/BareDownloadSelect.java
+@@ -0,0 +1,19 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.download.home.list;
++
++import org.chromium.build.annotations.NullMarked;
++
++/**
++ * Set when "Select" is chosen in the Downloads page menu: the next tap on a file selects it
++ * instead of opening it, which starts the page's usual multi-select.
++ */
++@NullMarked
++public final class BareDownloadSelect {
++    private BareDownloadSelect() {}
++
++    /** Whether the next tap on a row selects it. Read and written on the UI thread. */
++    public static boolean sArmed;
++}
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListCoordinator.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListCoordinator.java
+index a1167e3695e..b404fc55805 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListCoordinator.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListCoordinator.java
+@@ -351,6 +351,17 @@ public class DateOrderedListCoordinator implements ToolbarCoordinator.ToolbarLis
+     /**
+      * @return A list of {@link BackPressHandler}, which supports predictive back press.
+      */
++    @Override
++    public void startSelecting() {
++        BareDownloadSelect.sArmed = true;
++        android.widget.Toast.makeText(
++                        mMainView.getContext(),
++                        org.chromium.chrome.browser.download.internal.R.string
++                                .bare_downloads_select_hint,
++                        android.widget.Toast.LENGTH_SHORT)
++                .show();
++    }
++
+     public BackPressHandler getBackPressHandler() {
+         return mMediator;
+     }
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/OfflineItemViewHolder.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/OfflineItemViewHolder.java
+index 37078848828..4ca4fa6bd95 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/OfflineItemViewHolder.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/holder/OfflineItemViewHolder.java
+@@ -18,6 +18,7 @@ import androidx.annotation.CallSuper;
+ 
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.download.home.list.BareDownloadSelect;
+ import org.chromium.chrome.browser.download.home.list.ListItem;
+ import org.chromium.chrome.browser.download.home.list.ListProperties;
+ import org.chromium.chrome.browser.download.home.list.UiUtils;
+@@ -78,10 +79,9 @@ class OfflineItemViewHolder extends ListItemViewHolder implements ListMenuDelega
+     public void bind(PropertyModel properties, ListItem item) {
+         OfflineItem offlineItem = ((ListItem.OfflineItemListItem) item).item;
+         mCanRename = offlineItem.canRename;
++        // Bare: every finished file can be opened with another app, not only PDFs.
+         mCanOpenWith =
+-                offlineItem.mimeType != null
+-                        && offlineItem.mimeType.equals(
+-                                org.chromium.ui.base.MimeTypeUtils.PDF_MIME_TYPE);
++                offlineItem.state == org.chromium.components.offline_items_collection.OfflineItemState.COMPLETE;
+         mCanShare = UiUtils.canShare(offlineItem);
+         mShowRemoveFromHistory = DownloadUtils.isBlockedSensitiveDownload(offlineItem);
+         mCanShowWarningBypassDialog = canShowWarningBypassDialog(offlineItem);
+@@ -129,7 +129,11 @@ class OfflineItemViewHolder extends ListItemViewHolder implements ListMenuDelega
+     private void bindOnClick(PropertyModel properties, ListItem item, OfflineItem offlineItem) {
+         itemView.setOnClickListener(
+                 v -> {
+-                    if (mSelectionView != null && mSelectionView.isInSelectionMode()) {
++                    if (BareDownloadSelect.sArmed) {
++                        // Bare: "Select" was chosen in the menu, so this tap picks the file.
++                        BareDownloadSelect.sArmed = false;
++                        properties.get(ListProperties.CALLBACK_SELECTION).onResult(item);
++                    } else if (mSelectionView != null && mSelectionView.isInSelectionMode()) {
+                         properties.get(ListProperties.CALLBACK_SELECTION).onResult(item);
+                     } else if (canShowWarningBypassDialog(offlineItem)) {
+                         properties
+@@ -148,6 +152,15 @@ class OfflineItemViewHolder extends ListItemViewHolder implements ListMenuDelega
+ 
+         itemView.setOnLongClickListener(
+                 v -> {
++                    // Bare: a long press opens the file menu (Open with, Share, Rename, Delete).
++                    // Multi-select starts from Select in the page menu.
++                    if (mMore != null
++                            && mMore.isShown()
++                            && mMore.isClickable()
++                            && !(mSelectionView != null && mSelectionView.isInSelectionMode())) {
++                        mMore.showMenu();
++                        return true;
++                    }
+                     properties.get(ListProperties.CALLBACK_SELECTION).onResult(item);
+                     return true;
+                 });
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/toolbar/ToolbarCoordinator.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/toolbar/ToolbarCoordinator.java
+index 602cd439825..1a770029912 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/toolbar/ToolbarCoordinator.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/toolbar/ToolbarCoordinator.java
+@@ -45,6 +45,9 @@ public class ToolbarCoordinator implements SelectionObserver<ListItem>, BackPres
+          */
+         int shareSelectedItems();
+ 
++        /** Bare: invoked when "Select" is chosen in the menu; the next tap selects a file. */
++        void startSelecting();
++
+         /**
+          * Invoked when user starts a search on download home.
+          * @param query The search text on which downloads will be filtered.
+@@ -208,6 +211,9 @@ public class ToolbarCoordinator implements SelectionObserver<ListItem>, BackPres
+         } else if (item.getItemId() == R.id.selection_mode_share_menu_id) {
+             mListActionDelegate.shareSelectedItems();
+             return true;
++        } else if (item.getItemId() == R.id.bare_select_menu_id) {
++            mListActionDelegate.startSelecting();
++            return true;
+         } else if (item.getItemId() == R.id.search_menu_id) {
+             mToolbar.showSearchView(true);
+             updateShadowVisibility();
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index a803070a128..13ed68480d7 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4465,6 +4465,12 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_BARE_DOWNLOADS_START_AGAIN" desc="Button and menu item: start a download again from the beginning.">
+         Start again
+       </message>
++      <message name="IDS_BARE_DOWNLOADS_SELECT" desc="Downloads page menu item: start choosing several files to share or delete.">
++        Select
++      </message>
++      <message name="IDS_BARE_DOWNLOADS_SELECT_HINT" desc="Downloads page: short message after Select is chosen in the menu.">
++        Tap the files you want to select
++      </message>
+       <message name="IDS_BARE_DOWNLOADS_CAPTION" desc="Under a finished download: its size and the folder it was saved to. Reads as: 391 KB · Download.">
+         <ph name="SIZE">%1$s<ex>391 KB</ex></ph> · <ph name="FOLDER">%2$s<ex>Download</ex></ph>
+       </message>

@@ -1,0 +1,394 @@
+diff --git a/chrome/android/java/res/raw/bare_video_match.js b/chrome/android/java/res/raw/bare_video_match.js
+index c1f40e843ec..aa640eeec10 100644
+--- a/chrome/android/java/res/raw/bare_video_match.js
++++ b/chrome/android/java/res/raw/bare_video_match.js
+@@ -22,7 +22,7 @@
+ (function (x, y) {
+   var MIN_SIDE = 48, MAX_GROUPS = 16, MIN_KB = 64, HEAD = 32768, MAX_SIDX = 262144;
+   var MAX_ADDRESS = 4096, MAX_BLOCKS = 40, MAX_SCRIPT_CHARS = 4000000;
+-  var MAX_COMPARED = 4, FRAME_MS = 5000, CLEAR_DIFF = 14;
++  var MAX_COMPARED = 4, FRAME_MS = 5000, CLEAR_DIFF = 24, MAX_MOOV = 2097152;
+   var state = window.__bareVideoMatch = {state: 'running', why: '', pressed: null, options: []};
+   var heads = window.__bareVideoHeads || (window.__bareVideoHeads = {});
+ 
+@@ -70,7 +70,30 @@
+     return r.width >= MIN_SIDE && r.height >= MIN_SIDE &&
+            x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+   }
+-  var stack = (document.elementsFromPoint(x, y) || []).slice(0, 16), found = [];
++  // Sites built from web components keep their video inside a shadow root, where the page's own
++  // hit test stops at the component. Open shadow roots are searched too.
++  function deepStack() {
++    var out = [], roots = [document];
++    for (var r = 0; r < roots.length && r < 8; r++) {
++      var list = roots[r].elementsFromPoint ? roots[r].elementsFromPoint(x, y) || [] : [];
++      for (var i = 0; i < list.length && i < 16; i++) {
++        if (out.indexOf(list[i]) < 0) out.push(list[i]);
++        if (list[i].shadowRoot && roots.indexOf(list[i].shadowRoot) < 0) roots.push(list[i].shadowRoot);
++      }
++    }
++    return out;
++  }
++  function videosIn(node, out, depth) {
++    var vids = node.querySelectorAll ? node.querySelectorAll('video') : [];
++    for (var k = 0; k < vids.length && out.length < 64; k++) out.push(vids[k]);
++    if (depth >= 4 || !node.querySelectorAll) return out;
++    var all = node.querySelectorAll('*');
++    for (var h = 0; h < all.length && h < 20000; h++) {
++      if (all[h].shadowRoot) videosIn(all[h].shadowRoot, out, depth + 1);
++    }
++    return out;
++  }
++  var stack = deepStack().slice(0, 32), found = [];
+   function addVideo(v) { if (found.indexOf(v) < 0 && visible(v) && contains(v)) found.push(v); }
+   for (var i = 0; i < stack.length; i++) if (stack[i].tagName === 'VIDEO') addVideo(stack[i]);
+   var up = null;
+@@ -81,6 +104,10 @@
+   for (var n = 0; up && n < 6 && up !== document.body; n++, up = up.parentElement) {
+     var inside = up.querySelectorAll ? up.querySelectorAll('video') : [];
+     for (var j = 0; j < inside.length && j < 8; j++) addVideo(inside[j]);
++    if (up.shadowRoot) {
++      var shadowed = videosIn(up.shadowRoot, [], 3);
++      for (var sj = 0; sj < shadowed.length && sj < 8; sj++) addVideo(shadowed[sj]);
++    }
+   }
+   if (found.length !== 1) { done(found.length > 1 ? 'two' : 'nothing'); return 'started'; }
+   var video = found[0];
+@@ -134,7 +161,8 @@
+   if (src && !/^blob:/i.test(src) && safe(src)) {
+     state.options.push({video: new URL(src, location.href).href, audio: '', width: pressed.width,
+                         height: pressed.height, duration: duration, bytes: 0, audioBytes: 0,
+-                        sound: true, from: 'src'});
++                        sound: true, from: 'src', name: ''});
++    state.options[0].name = fileNameFor(state.options[0].video);
+     sizeOf(state.options[0].video).then(function (b) { state.options[0].bytes = b; done(); });
+     return 'started';
+   }
+@@ -173,9 +201,10 @@
+   }
+   // What the start of a file says: its tracks, its length and, for a fragmented file, its size.
+   function parseHead(b) {
+-    var info = {tracks: [], duration: 0, bytes: 0, sidxAt: -1, sidxEnd: -1};
++    var info = {tracks: [], duration: 0, bytes: 0, sidxAt: -1, sidxEnd: -1, moovEnd: 0};
+     boxes(b, 0, b.length, function (type, ps, pe, end) {
+       if (type === 'moov') {
++        if (end > b.length) info.moovEnd = end;
+         var mvhd = child(b, ps, pe, 'mvhd');
+         if (mvhd && mvhd[0] + 32 <= pe) {
+           var v1 = b[mvhd[0]] === 1, sc = u32(b, mvhd[0] + (v1 ? 20 : 12));
+@@ -246,6 +275,20 @@
+         .then(function (r) { if (!r.ok) throw new Error('status'); return r.arrayBuffer(); })
+         .then(function (buf) {
+           var b = new Uint8Array(buf), info = parseHead(b);
++          // A whole file lists all its tracks in one moov box, which can be bigger than the first
++          // read; the sound track comes after the picture. Read the whole box then, and the start
++          // of the next one, which is where a fragmented file keeps its index.
++          if (info.moovEnd > b.length && info.moovEnd <= MAX_MOOV) {
++            return fetchRange(u, 0, info.moovEnd + 4095, byQuery)
++                .then(function (r) { return r.arrayBuffer(); })
++                .then(function (whole) {
++                  var w = new Uint8Array(whole);
++                  return w.length > b.length ? parseHead(w) : info;
++                }, function () { return info; });
++          }
++          return info;
++        })
++        .then(function (info) {
+           // The index of a long video can run past the first read; fetch exactly that box.
+           if (info.sidxAt >= 0 && !info.sidxDone && info.sidxEnd - info.sidxAt <= MAX_SIDX) {
+             return fetchRange(u, info.sidxAt, info.sidxEnd - 1, byQuery)
+@@ -358,8 +401,37 @@
+     return false;
+   }
+ 
++  // A name for a file whose address carries none (TikTok's end in "/"), so it is not saved as
++  // "download.mp4": the site and the video's id from a link in the same post or the page's own
++  // address, else the page's title. '' when the address has a name of its own; a name the server
++  // sends with the file still wins over this one.
++  function fileNameFor(address) {
++    try {
++      if (/\.(mp4|m4v|mov|m4a|webm)$/i.test(new URL(address).pathname)) return '';
++    } catch (e) { return ''; }
++    var id = '', up = video.parentElement;
++    for (var n = 0; up && n < 10 && !id; n++, up = up.parentElement) {
++      // Climbing out of the pressed video's own post would pick up another post's link.
++      if (!up.querySelectorAll || up.querySelectorAll('video').length > 1) break;
++      var links = up.querySelectorAll('a[href*="/video/"]');
++      for (var k = 0; k < links.length && !id; k++) {
++        var hit = /\/video\/(\d{6,})/.exec(links[k].getAttribute('href') || '');
++        if (hit) id = hit[1];
++      }
++    }
++    if (!id && sizeableVideos() === 1) {
++      var own = /\/video\/(\d{6,})/.exec(location.pathname);
++      if (own) id = own[1];
++    }
++    var site = location.hostname.replace(/^(www|m)\./, '').split('.')[0];
++    var base = id ? site + '-' + id : document.title || site;
++    base = base.replace(/[\u0000-\u001f\u007f\\\/:*?"<>|#%]+/g, ' ').replace(/\s+/g, ' ').trim();
++    base = base.slice(0, 80).replace(/[. ]+$/, '');
++    return (base || 'video') + '.mp4';
++  }
++
+   function sizeableVideos() {
+-    var count = 0, all = document.querySelectorAll('video');
++    var count = 0, all = videosIn(document, [], 0);
+     for (var a = 0; a < all.length; a++) {
+       var rr = all[a].getBoundingClientRect();
+       if (rr.width > MIN_SIDE && rr.height > MIN_SIDE) count++;
+@@ -621,6 +693,7 @@
+       return options;
+     });
+   }).then(function (options) {
++    options.forEach(function (o) { o.name = fileNameFor(o.video); });
+     state.options = options;
+     done(options.length ? '' : (segmentsOnly() ? 'stream' : 'nothing'));
+   }, function () { done('nothing'); });
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoMatch.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoMatch.java
+index 4d9d326885c..a44966ed924 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoMatch.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoMatch.java
+@@ -25,6 +25,7 @@ import org.chromium.content_public.browser.WebContents;
+ import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.List;
++import java.util.Locale;
+ 
+ /**
+  * Finds the file that holds the video under a press.
+@@ -73,6 +74,12 @@ public final class BareVideoMatch {
+         /** Whether the video file has its own sound. */
+         public final boolean sound;
+ 
++        /**
++         * The name to save the file under when its address carries none (TikTok's), or "" to
++         * leave it to the browser. A name the server sends with the file still wins.
++         */
++        public final String name;
++
+         /**
+          * The file's own picture at the moment the pressed video was showing, or null. Only taken
+          * when several files fit, so the user can see which is which.
+@@ -88,6 +95,7 @@ public final class BareVideoMatch {
+                 long bytes,
+                 long audioBytes,
+                 boolean sound,
++                String name,
+                 @Nullable Bitmap thumbnail) {
+             this.video = video;
+             this.audio = audio;
+@@ -97,6 +105,7 @@ public final class BareVideoMatch {
+             this.bytes = bytes;
+             this.audioBytes = audioBytes;
+             this.sound = sound;
++            this.name = name;
+             this.thumbnail = thumbnail;
+         }
+     }
+@@ -193,6 +202,7 @@ public final class BareVideoMatch {
+                                 o.optLong("bytes", 0),
+                                 hasAudio ? o.optLong("audioBytes", 0) : 0,
+                                 o.optBoolean("sound", true),
++                                fileName(o.optString("name", "")),
+                                 decodeThumbnail(o.optString("thumb", ""))));
+             }
+             String why = options.isEmpty() ? state.optString("why", NOTHING) : "";
+@@ -205,6 +215,17 @@ public final class BareVideoMatch {
+         }
+     }
+ 
++    /**
++     * A name the page script made up from the page's title or a video id, cleaned again here: it
++     * comes from the page, so nothing that could reach outside the download folder is kept.
++     */
++    private static String fileName(String name) {
++        String clean = name.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", " ").trim();
++        if (clean.length() > 100 || !clean.toLowerCase(Locale.ROOT).endsWith(".mp4")) return "";
++        if (clean.startsWith(".")) return "";
++        return clean;
++    }
++
+     private static @Nullable Bitmap decodeThumbnail(String dataUrl) {
+         String prefix = "data:image/jpeg;base64,";
+         if (!dataUrl.startsWith(prefix) || dataUrl.length() > 200_000) return null;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSaver.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSaver.java
+index efabba57791..6d99158b7e7 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSaver.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSaver.java
+@@ -42,9 +42,12 @@ import java.util.List;
+ public final class BareVideoSaver {
+     private BareVideoSaver() {}
+ 
+-    /** Starts the download of one address through the browser's own download path. */
++    /**
++     * Starts the download of one address through the browser's own download path, saved under
++     * {@code name} unless the server names the file itself; an empty name leaves it to the browser.
++     */
+     public interface Downloader {
+-        void download(GURL url);
++        void download(GURL url, String name);
+     }
+ 
+     /** Acts on what the page said about the press. */
+@@ -77,10 +80,10 @@ public final class BareVideoSaver {
+         GURL video = new GURL(option.video);
+         String audioAddress = option.audio;
+         if (audioAddress == null) {
+-            downloader.download(video);
++            downloader.download(video, option.name);
+             return;
+         }
+-        new JoinWatch(root, video, new GURL(audioAddress), downloader).start();
++        new JoinWatch(root, video, new GURL(audioAddress), option.name, downloader).start();
+     }
+ 
+     /**
+@@ -120,6 +123,7 @@ public final class BareVideoSaver {
+         private final View mRoot;
+         private final GURL mVideo;
+         private final GURL mAudio;
++        private final String mName;
+         private final Downloader mDownloader;
+         private final long mStartedAt = System.currentTimeMillis();
+         private final long mStartedUptime = SystemClock.uptimeMillis();
+@@ -131,16 +135,17 @@ public final class BareVideoSaver {
+         private long mCardClosedAt;
+         private boolean mAudioStarted;
+ 
+-        JoinWatch(View root, GURL video, GURL audio, Downloader downloader) {
++        JoinWatch(View root, GURL video, GURL audio, String name, Downloader downloader) {
+             mRoot = root;
+             mVideo = video;
+             mAudio = audio;
++            mName = name;
+             mDownloader = downloader;
+         }
+ 
+         void start() {
+             OfflineContentAggregatorFactory.get().addObserver(this);
+-            mDownloader.download(mVideo);
++            mDownloader.download(mVideo, mName);
+             PostTask.postDelayedTask(TaskTraits.UI_DEFAULT, this::poll, POLL_MS);
+         }
+ 
+@@ -182,17 +187,17 @@ public final class BareVideoSaver {
+ 
+         private void startAudio(boolean external) {
+             mAudioStarted = true;
++            String soundName = soundName();
+             if (external) {
+-                mDownloader.download(mAudio);
++                mDownloader.download(mAudio, soundName);
+                 tell(mRoot, R.string.bare_video_saved_two_files);
+                 stop();
+                 return;
+             }
+             BareDownloadCard.skipNextPrompt();
+             // The sound file is removed once it is inside the video, so it gets no finished card.
+-            String soundName = new java.io.File(mAudio.getPath()).getName();
+-            if (!soundName.isEmpty()) BareDownloadNotice.keepQuiet(soundName);
+-            mDownloader.download(mAudio);
++            BareDownloadNotice.keepQuiet(soundName);
++            mDownloader.download(mAudio, soundName);
+             PostTask.postDelayedTask(
+                     TaskTraits.UI_DEFAULT,
+                     () -> {
+@@ -202,6 +207,26 @@ public final class BareVideoSaver {
+             see(null);
+         }
+ 
++        /**
++         * The sound file's name: the picture's own name with "-audio.m4a". A sound-only file kept
++         * under the server's ".mp4" name is given ".m4a" on top by some Android versions (seen on
++         * Android 12: "x.mp4.m4a"), and next to the picture it is clear what it is.
++         */
++        private String soundName() {
++            OfflineItem video = mVideoItem;
++            String picture = video != null && video.title != null ? video.title : "";
++            if (picture.isEmpty()) picture = mName;
++            if (picture.isEmpty()) picture = new java.io.File(mVideo.getPath()).getName();
++            // While it is being written the picture's name may still end in Bare's pending suffix.
++            if (picture.endsWith(".baredownload")) {
++                picture = picture.substring(0, picture.length() - ".baredownload".length());
++            }
++            int dot = picture.lastIndexOf('.');
++            String base = dot > 0 ? picture.substring(0, dot) : picture;
++            if (base.isEmpty()) base = "video";
++            return base + "-audio.m4a";
++        }
++
+         private void stop() {
+             if (mDone) return;
+             mDone = true;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java
+index fe683fdab55..57f54fb8fa8 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java
+@@ -90,8 +90,17 @@ public final class BarePlayerBridge {
+ 
+     /** Downloads {@code url} as the page's video, like the long-press menu's Save video. */
+     public static void download(@Nullable WebContents webContents, int frameId, String url) {
++        download(webContents, frameId, url, "");
++    }
++
++    /**
++     * The same, saved under {@code name} unless the server names the file itself. An empty name
++     * leaves the choice to the browser.
++     */
++    public static void download(
++            @Nullable WebContents webContents, int frameId, String url, String name) {
+         if (webContents == null || webContents.isDestroyed()) return;
+-        BarePlayerBridgeJni.get().download(webContents, frameId, url);
++        BarePlayerBridgeJni.get().download(webContents, frameId, url, name);
+     }
+ 
+     /** The id {@link #evaluateIn} takes for a frame, or -1 if there is none. */
+@@ -122,6 +131,6 @@ public final class BarePlayerBridge {
+ 
+         void setNetworkCap(WebContents webContents, int frameId, double bytesPerSecond);
+ 
+-        void download(WebContents webContents, int frameId, String url);
++        void download(WebContents webContents, int frameId, String url, String name);
+     }
+ }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
+index 85660f87aa9..fbacbffbf03 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
+@@ -2043,7 +2043,9 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+                     BareVideoSaver.handle(
+                             activity,
+                             result,
+-                            url -> BarePlayerBridge.download(webContents, -1, url.getSpec()));
++                            (url, name) ->
++                                    BarePlayerBridge.download(
++                                            webContents, -1, url.getSpec(), name));
+                 });
+     }
+ 
+diff --git a/chrome/browser/android/bare_player_bridge.cc b/chrome/browser/android/bare_player_bridge.cc
+index 4e78c437a5d..68026fe3790 100644
+--- a/chrome/browser/android/bare_player_bridge.cc
++++ b/chrome/browser/android/bare_player_bridge.cc
+@@ -298,7 +298,8 @@ static jint JNI_BarePlayerBridge_FrameIdOf(JNIEnv* env,
+ static void JNI_BarePlayerBridge_Download(JNIEnv* env,
+                                           const JavaRef<jobject>& jweb_contents,
+                                           jint frame_id,
+-                                          const JavaRef<jstring>& jurl) {
++                                          const JavaRef<jstring>& jurl,
++                                          const JavaRef<jstring>& jname) {
+   content::WebContents* web_contents =
+       content::WebContents::FromJavaWebContents(jweb_contents);
+   if (!web_contents) {
+@@ -316,6 +317,11 @@ static void JNI_BarePlayerBridge_Download(JNIEnv* env,
+   params.src_url = url;
+   params.media_type = blink::mojom::ContextMenuDataMediaType::kVideo;
+   params.referrer_policy = network::mojom::ReferrerPolicy::kDefault;
++  // The name to save under when the address carries none (TikTok's). The
++  // download path cleans it like any other suggested name, and a name the
++  // server sends with the file still wins.
++  params.suggested_filename =
++      base::android::ConvertJavaStringToUTF16(env, jname);
+   DownloadControllerBase::Get()->StartContextMenuDownload(url, params,
+                                                           web_contents,
+                                                           /*is_media=*/true);
