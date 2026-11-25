@@ -1,0 +1,125 @@
+diff --git a/chrome/android/java/res/xml/about_chrome_preferences.xml b/chrome/android/java/res/xml/about_chrome_preferences.xml
+index b9e0b8d87f4..6c8f8e69107 100644
+--- a/chrome/android/java/res/xml/about_chrome_preferences.xml
++++ b/chrome/android/java/res/xml/about_chrome_preferences.xml
+@@ -23,4 +23,8 @@ found in the LICENSE file.
+         android:fragment="org.chromium.chrome.browser.about_settings.LegalInformationSettings"
+         android:key="legal_information"
+         android:title="@string/legal_information_title" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="bare_whats_new_after_update"
++        android:title="@string/bare_about_whats_new_title"
++        android:persistent="false" />
+ </PreferenceScreen>
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index bc411459e3e..1d36239914f 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -222,6 +222,7 @@ found in the LICENSE file.
+     <string name="bare_about_version_title">Bare version</string>
+     <string name="bare_about_chromium_title">Chromium version</string>
+     <string name="bare_about_built_on">Bare is built on Chromium.</string>
++    <string name="bare_about_whats_new_title">Show What\'s new after updates</string>
+     <string name="bare_made_with_love">Made with ❤️ in San Francisco</string>
+     <string name="bare_welcome_made_with">Made with</string>
+     <string name="bare_welcome_heart" translatable="false">❤️</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AboutChromeSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AboutChromeSettings.java
+index 665d0e42c07..6e00739c64d 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AboutChromeSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AboutChromeSettings.java
+@@ -23,9 +23,12 @@ import org.chromium.base.version_info.VersionInfo;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
+ import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
+ import org.chromium.chrome.browser.tracing.settings.DeveloperSettings;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+ import org.chromium.components.browser_ui.settings.EmbeddableSettingsPage;
+ import org.chromium.components.browser_ui.settings.SettingsFragment;
+ import org.chromium.components.browser_ui.settings.SettingsUtils;
+@@ -48,6 +51,7 @@ public class AboutChromeSettings extends ChromeBaseSettingsFragment
+     private static final String PREF_CHROMIUM_VERSION = "chromium_version";
+     private static final String PREF_OS_VERSION = "os_version";
+     private static final String PREF_LEGAL_INFORMATION = "legal_information";
++    private static final String PREF_WHATS_NEW_AFTER_UPDATE = "bare_whats_new_after_update";
+ 
+     // Non-translated strings:
+     @SuppressWarnings("InlineFormatString")
+@@ -91,6 +95,22 @@ public class AboutChromeSettings extends ChromeBaseSettingsFragment
+                 getString(R.string.bare_about_built_on)
+                         + " "
+                         + getString(R.string.legal_information_summary, currentYear));
++
++        // Bare: whether the What's new screen shows after an update. On unless turned off.
++        ChromeSwitchPreference whatsNew =
++                (ChromeSwitchPreference) findPreference(PREF_WHATS_NEW_AFTER_UPDATE);
++        assumeNonNull(whatsNew);
++        whatsNew.setChecked(
++                ChromeSharedPreferences.getInstance()
++                        .readBoolean(ChromePreferenceKeys.BARE_WHATS_NEW_AFTER_UPDATE, true));
++        whatsNew.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    ChromeSharedPreferences.getInstance()
++                            .writeBoolean(
++                                    ChromePreferenceKeys.BARE_WHATS_NEW_AFTER_UPDATE,
++                                    (boolean) newValue);
++                    return true;
++                });
+     }
+ 
+     /** Bare's versionName and versionCode, such as "2.0.5 (802000515)". */
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWhatsNewOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWhatsNewOverlay.java
+index 6543c3606cd..47f458660b3 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWhatsNewOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWhatsNewOverlay.java
+@@ -20,6 +20,8 @@ import androidx.core.view.WindowInsetsCompat;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+ 
+ /**
+  * What an update shows in place of the welcome: the logo, the version, a link to what changed and
+@@ -41,6 +43,14 @@ final class BareWhatsNewOverlay {
+             then.run();
+             return;
+         }
++        // Turned off in About: nothing to show. This version counts as seen, so turning the
++        // setting back on does not bring up an old update screen.
++        if (!ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_WHATS_NEW_AFTER_UPDATE, true)) {
++            prefs.edit().putString(KEY_WHATS_NEW_FOR_VERSION, version).apply();
++            then.run();
++            return;
++        }
+         @Nullable ViewGroup root = activity.findViewById(android.R.id.content);
+         if (root == null) return;
+ 
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 9b98b0438ab..1dc8781dc3c 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -658,6 +658,11 @@ public final class ChromePreferenceKeys {
+      */
+     public static final String BARE_KEYBOARD_ON_NEW_TAB = "Chrome.Bare.KeyboardOnNewTab";
+ 
++    /**
++     * Whether the What's new screen is shown after an update. Absent means on, as it always was.
++     */
++    public static final String BARE_WHATS_NEW_AFTER_UPDATE = "Chrome.Bare.WhatsNewAfterUpdate";
++
+     /**
+      * Whether Bare starts on a new tab when it is opened from the launcher after it was closed.
+      * Absent means off, so Bare reopens on the tab the user left.
+@@ -1499,6 +1504,7 @@ public final class ChromePreferenceKeys {
+                 BARE_OPEN_LINKS_IN_APPS,
+                 BARE_TAB_VIEW,
+                 BARE_KEYBOARD_ON_NEW_TAB,
++                BARE_WHATS_NEW_AFTER_UPDATE,
+                 BARE_OPEN_ON_NEW_TAB,
+                 BARE_DOWNLOAD_PROGRESS_NOTIFICATION,
+                 BARE_DOWNLOAD_NOTIFICATION_ASKED,

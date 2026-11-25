@@ -1,0 +1,429 @@
+diff --git a/chrome/android/java/res/raw/bare_video_match.js b/chrome/android/java/res/raw/bare_video_match.js
+index 43694e1a125..c1f40e843ec 100644
+--- a/chrome/android/java/res/raw/bare_video_match.js
++++ b/chrome/android/java/res/raw/bare_video_match.js
+@@ -4,7 +4,7 @@
+ //   state    "running" or "done"
+ //   why      "" when options were found, otherwise "nothing", "two", "protected" or "stream"
+ //   pressed  {width, height, duration, thumb}: the pressed video as the page plays it
+-//   options  best first: {video, audio, width, height, duration, bytes, audioBytes, sound, from}
++//   options  best first: {video, audio, width, height, duration, bytes, audioBytes, sound, from, thumb}
+ //            video is the file to save, audio the separate sound file to join to it or "".
+ //            sound is true when the video file has its own sound. from is "src", "page" or "fetched".
+ //
+@@ -15,11 +15,14 @@
+ //     which goes on after the page's own record of 250 fetches is full). Picture-only and
+ //     sound-only files are told apart, and their picture size and length read, from the first bytes of each file, so the
+ //     pressed video is matched by its picture size and then by its length.
+-// A file whose length or size does not fit the pressed video is never offered. Several that fit
+-// are all returned, for the user to choose; none that fit returns no options.
++// A file whose length or size does not fit the pressed video is never offered. When several fit, a
++// frame is taken from each at the moment the pressed video is showing and compared with what it
++// shows: a clear winner is returned alone, otherwise all are returned, each with its frame, for the
++// user to choose. None that fit returns no options.
+ (function (x, y) {
+   var MIN_SIDE = 48, MAX_GROUPS = 16, MIN_KB = 64, HEAD = 32768, MAX_SIDX = 262144;
+   var MAX_ADDRESS = 4096, MAX_BLOCKS = 40, MAX_SCRIPT_CHARS = 4000000;
++  var MAX_COMPARED = 4, FRAME_MS = 5000, CLEAR_DIFF = 14;
+   var state = window.__bareVideoMatch = {state: 'running', why: '', pressed: null, options: []};
+   var heads = window.__bareVideoHeads || (window.__bareVideoHeads = {});
+ 
+@@ -85,16 +88,45 @@
+   var duration = isFinite(video.duration) ? video.duration : 0;
+   var pressed = state.pressed = {width: video.videoWidth || 0, height: video.videoHeight || 0,
+                                  duration: duration, thumb: ''};
++  // A small picture for the card, and a 16 x 16 grey copy of the same frame to compare files with.
++  function snapshot(v, side) { return picture(v, v.videoWidth, v.videoHeight, side); }
++  function picture(v, w, h, side) {
++    var cw = side, ch = Math.round(side * h / w);
++    if (ch > side * 4 / 3) { ch = Math.round(side * 4 / 3); cw = Math.round(ch * w / h); }
++    var c = document.createElement('canvas');
++    c.width = cw; c.height = ch;
++    c.getContext('2d').drawImage(v, 0, 0, cw, ch);
++    return c.toDataURL('image/jpeg', 0.7);
++  }
++  function signature(v) {
++    var c = document.createElement('canvas');
++    c.width = 16; c.height = 16;
++    var g = c.getContext('2d');
++    g.drawImage(v, 0, 0, 16, 16);
++    var d = g.getImageData(0, 0, 16, 16).data, out = [];
++    for (var p = 0; p < d.length; p += 4) out.push((d[p] * 3 + d[p + 1] * 6 + d[p + 2]) / 10);
++    return out;
++  }
++  // A read that is black, or all but black, everywhere. Some phones (a Pixel 3 here) hand back a
++  // black picture for a moment after a seek, which would make every file look different from the
++  // pressed video; and a picture this dark tells nothing on the card either.
++  function blank(sig) {
++    for (var p = 0; p < sig.length; p++) if (sig[p] > 24) return false;
++    return true;
++  }
++  function difference(a, b) {
++    var sum = 0;
++    for (var p = 0; p < a.length; p++) sum += Math.abs(a[p] - b[p]);
++    return sum / a.length;
++  }
++  var pressedTime = video.currentTime || 0, pressedSig = null;
+   try {
+     if (pressed.width && pressed.height) {
+-      var cw = 240, ch = Math.round(cw * pressed.height / pressed.width);
+-      if (ch > 320) { ch = 320; cw = Math.round(ch * pressed.width / pressed.height); }
+-      var canvas = document.createElement('canvas');
+-      canvas.width = cw; canvas.height = ch;
+-      canvas.getContext('2d').drawImage(video, 0, 0, cw, ch);
+-      pressed.thumb = canvas.toDataURL('image/jpeg', 0.7);
++      pressedSig = signature(video);
++      // A black read is left out; the frame is read again before the card shows.
++      if (!blank(pressedSig)) pressed.thumb = snapshot(video, 240);
+     }
+-  } catch (e) { /* A picture from another site cannot be read back; the sheet shows none. */ }
++  } catch (e) { /* A picture from another site cannot be read back; there is nothing to compare. */ }
+ 
+   var src = video.currentSrc || video.src || '';
+   // A playlist is a list of pieces, not a video; saving it would save nothing anyone can play.
+@@ -352,6 +384,114 @@
+     return '';
+   }
+ 
++  // ---- Telling apart files that fit equally ---------------------------------------------------
++  // The frame a file holds at the time the pressed video shows, or null. The file is opened in an
++  // element that is never shown or played, and let go as soon as the frame is read.
++  function frameOf(url, time) {
++    return new Promise(function (resolve) {
++      var v = document.createElement('video'), finished = false;
++      var timer = setTimeout(function () { finish(null); }, FRAME_MS);
++      function finish(r) {
++        if (finished) return;
++        finished = true;
++        clearTimeout(timer);
++        v.removeAttribute('src');
++        try { v.load(); } catch (e) {}
++        resolve(r);
++      }
++      v.muted = true;
++      v.preload = 'auto';
++      v.crossOrigin = 'anonymous';
++      v.onloadedmetadata = function () {
++        v.currentTime = Math.max(0.01, Math.min(time, (v.duration || time) - 0.05));
++      };
++      v.onseeked = function () {
++        var tries = 0;
++        (function read() {
++          try {
++            // Read again until the frame is there; a picture that stays black compares nothing.
++            var sig = signature(v);
++            if (blank(sig) && ++tries < 10) { setTimeout(read, 100); return; }
++            finish(blank(sig) ? null : {sig: sig, thumb: snapshot(v, 160)});
++          } catch (e) { finish(null); }
++        })();
++      };
++      v.onerror = function () { finish(null); };
++      v.src = url;
++    });
++  }
++  // The pressed video keeps playing, so its frame is read again together with the exact time of
++  // that frame, which the files are then seeked to.
++  function pressedFrame() {
++    return new Promise(function (resolve) {
++      var tries = 0;
++      function grab(time) {
++        try {
++          var sig = signature(video);
++          // A phone can hand back a black picture for a moment, as with the files: read again.
++          if (blank(sig) && ++tries < 10) {
++            setTimeout(function () { grab(video.currentTime); }, 100);
++            return;
++          }
++          if (!blank(sig) && !pressed.thumb) pressed.thumb = snapshot(video, 240);
++          resolve({sig: sig, time: time});
++        } catch (e) { resolve(null); }
++      }
++      if (!video.paused && video.requestVideoFrameCallback) {
++        var fired = false;
++        var timer = setTimeout(function () { fired = true; grab(video.currentTime); }, 400);
++        video.requestVideoFrameCallback(function (now, meta) {
++          if (fired) return;
++          clearTimeout(timer);
++          grab(meta.mediaTime);
++        });
++      } else {
++        grab(video.currentTime);
++      }
++    });
++  }
++  // The page's own still for the pressed video, as a picture for the card, or '' when there is
++  // none or it cannot be read.
++  function posterPicture() {
++    return new Promise(function (resolve) {
++      var url = video.poster;
++      if (!url || !(safe(url) || /^data:image\//i.test(url))) { resolve(''); return; }
++      var img = new Image(), timer = setTimeout(function () { resolve(''); }, 1500);
++      img.crossOrigin = 'anonymous';
++      img.onload = function () {
++        clearTimeout(timer);
++        try {
++          if (!img.naturalWidth || !img.naturalHeight) { resolve(''); return; }
++          resolve(picture(img, img.naturalWidth, img.naturalHeight, 240));
++        } catch (e) { resolve(''); /* A picture another site does not let pages read. */ }
++      };
++      img.onerror = function () { clearTimeout(timer); resolve(''); };
++      img.src = url;
++    });
++  }
++  function settle(options) {
++    if (options.length < 2 || options.length > MAX_COMPARED || !pressedSig) return options;
++    return pressedFrame().then(function (now) {
++      var sig = now && !blank(now.sig) ? now.sig : pressedSig, time = now ? now.time : pressedTime;
++      if (blank(sig)) return options.map(function (o) { o.diff = -1; return o; });
++      return Promise.all(options.map(function (o) {
++        return frameOf(o.video, time).then(function (f) {
++          o.diff = -1;
++          if (f) { o.thumb = f.thumb; o.diff = difference(f.sig, sig); }
++          return o;
++        });
++      }));
++    }).then(function (list) {
++      if (list.some(function (o) { return o.diff < 0; })) return list;
++      list.sort(function (a, b) { return a.diff - b.diff; });
++      // Files that show what the pressed video shows stay; files that clearly show something
++      // else go. One left is the answer; more are the same picture and only the user can tell.
++      if (list[0].diff > CLEAR_DIFF) return list;
++      var limit = Math.max(list[0].diff * 2 + 10, list[0].diff + 20);
++      return list.filter(function (o) { return o.diff < limit; });
++    });
++  }
++
+   // ---- Matching -------------------------------------------------------------------------------
+   function fits(w, h, d) {
+     if (w !== pressed.width || h !== pressed.height) return false;
+@@ -467,11 +607,19 @@
+       }
+       return options;
+     });
+-  }).then(function (options) {
++  }).then(settle).then(function (options) {
+     // The sheet shows each file's size, so fill in the ones not known yet.
+     return Promise.all(options.map(function (o) {
+       return o.bytes ? o : sizeOf(o.video).then(function (b) { o.bytes = b; return o; });
+     }));
++  }).then(function (options) {
++    // The card shows the page's own poster for the pressed video when it has one; otherwise the
++    // frames read above (never black), and the card's plain tile when there are none.
++    if (options.length < 2) return options;
++    return posterPicture().then(function (poster) {
++      if (poster) pressed.thumb = options[0].thumb = poster;
++      return options;
++    });
+   }).then(function (options) {
+     state.options = options;
+     done(options.length ? '' : (segmentsOnly() ? 'stream' : 'nothing'));
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoMatch.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoMatch.java
+index 606121f7dad..4d9d326885c 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoMatch.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoMatch.java
+@@ -33,7 +33,8 @@ import java.util.List;
+  * the page has fetched files for several videos at once. The script, {@code
+  * res/raw/bare_video_match.js}, matches the pressed video to a file by its picture size and then by
+  * its length, which it reads from the start of each file. It also finds the separate sound file
+- * when the site keeps picture and sound apart. Only files that fit the pressed video are returned;
++ * when the site keeps picture and sound apart. When several files fit, it compares a frame from
++ * each with what the pressed video shows. Only files that fit the pressed video are returned;
+  * when none fit, nothing is.
+  */
+ @NullMarked
+@@ -72,6 +73,12 @@ public final class BareVideoMatch {
+         /** Whether the video file has its own sound. */
+         public final boolean sound;
+ 
++        /**
++         * The file's own picture at the moment the pressed video was showing, or null. Only taken
++         * when several files fit, so the user can see which is which.
++         */
++        public final @Nullable Bitmap thumbnail;
++
+         Option(
+                 String video,
+                 @Nullable String audio,
+@@ -80,7 +87,8 @@ public final class BareVideoMatch {
+                 double durationSeconds,
+                 long bytes,
+                 long audioBytes,
+-                boolean sound) {
++                boolean sound,
++                @Nullable Bitmap thumbnail) {
+             this.video = video;
+             this.audio = audio;
+             this.width = width;
+@@ -89,6 +97,7 @@ public final class BareVideoMatch {
+             this.bytes = bytes;
+             this.audioBytes = audioBytes;
+             this.sound = sound;
++            this.thumbnail = thumbnail;
+         }
+     }
+ 
+@@ -183,7 +192,8 @@ public final class BareVideoMatch {
+                                 o.optDouble("duration", 0),
+                                 o.optLong("bytes", 0),
+                                 hasAudio ? o.optLong("audioBytes", 0) : 0,
+-                                o.optBoolean("sound", true)));
++                                o.optBoolean("sound", true),
++                                decodeThumbnail(o.optString("thumb", ""))));
+             }
+             String why = options.isEmpty() ? state.optString("why", NOTHING) : "";
+             if (options.isEmpty() && why.isEmpty()) why = NOTHING;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSheet.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSheet.java
+index a9a99376c34..9f22b40d2b2 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSheet.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSheet.java
+@@ -5,6 +5,7 @@
+ package org.chromium.chrome.browser.bare;
+ 
+ import android.content.Context;
++import android.content.res.ColorStateList;
+ import android.graphics.Bitmap;
+ import android.graphics.Outline;
+ import android.text.format.DateUtils;
+@@ -22,6 +23,7 @@ import android.widget.TextView;
+ 
+ import org.chromium.base.Callback;
+ import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.components.browser_ui.widget.RiseSheet;
+@@ -32,9 +34,9 @@ import java.util.Locale;
+ 
+ /**
+  * The card that asks which file to save when more than one file on the page fits the pressed
+- * video. It rises from behind the address bar like Bare's other cards. It shows the picture the
+- * video was showing when it was pressed, and the length, picture size and file size of the best
+- * fit, with Save, and "Choose another file" for the others.
++ * video. It rises from behind the address bar like Bare's other cards. Each file is shown with its
++ * own frame at the moment the pressed video was showing, its length, picture size and file size.
++ * The best fit comes first, with Save, and "Choose another file" lists the others.
+  */
+ @NullMarked
+ final class BareVideoSheet {
+@@ -69,41 +71,9 @@ final class BareVideoSheet {
+         scroll.addView(body);
+         card.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+ 
+-        // The best fit, beside the picture of the pressed video.
+-        LinearLayout first = new LinearLayout(context);
+-        first.setOrientation(LinearLayout.HORIZONTAL);
+-        first.setGravity(Gravity.CENTER_VERTICAL);
+-        Bitmap thumbnail = result.thumbnail;
+-        if (thumbnail != null) {
+-            ImageView picture = new ImageView(context);
+-            picture.setImageBitmap(thumbnail);
+-            picture.setScaleType(ImageView.ScaleType.CENTER_CROP);
+-            picture.setClipToOutline(true);
+-            picture.setOutlineProvider(
+-                    new ViewOutlineProvider() {
+-                        @Override
+-                        public void getOutline(View view, Outline outline) {
+-                            outline.setRoundRect(
+-                                    0, 0, view.getWidth(), view.getHeight(), dp(context, 10));
+-                        }
+-                    });
+-            int width = dp(context, 96);
+-            int height =
+-                    Math.min(
+-                            dp(context, 160),
+-                            Math.round(width * thumbnail.getHeight() / (float) thumbnail.getWidth()));
+-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(width, height);
+-            params.setMarginEnd(dp(context, 16));
+-            first.addView(picture, params);
+-        }
+-        LinearLayout details = new LinearLayout(context);
+-        details.setOrientation(LinearLayout.VERTICAL);
+-        details.addView(text(context, headline(best), 16, true));
+-        TextView size = text(context, sizeLine(context, best), 14, false);
+-        size.setTextColor(SemanticColorUtils.getDefaultTextColorSecondary(context));
+-        details.addView(size);
+-        first.addView(details, new LinearLayout.LayoutParams(0, -2, 1f));
+-        body.addView(first);
++        // The best fit, with its own frame, or the pressed video's when the file gave none.
++        Bitmap bestPicture = best.thumbnail != null ? best.thumbnail : result.thumbnail;
++        body.addView(row(context, best, bestPicture, 96, true));
+ 
+         // The others, shown on request, each a tap to save.
+         LinearLayout others = new LinearLayout(context);
+@@ -112,13 +82,8 @@ final class BareVideoSheet {
+         others.setPadding(0, dp(context, 12), 0, 0);
+         for (int i = 1; i < options.size(); i++) {
+             BareVideoMatch.Option option = options.get(i);
+-            LinearLayout row = new LinearLayout(context);
+-            row.setOrientation(LinearLayout.VERTICAL);
+-            row.setPadding(0, dp(context, 10), 0, dp(context, 10));
+-            row.addView(text(context, headline(option), 15, false));
+-            TextView rowSize = text(context, sizeLine(context, option), 13, false);
+-            rowSize.setTextColor(SemanticColorUtils.getDefaultTextColorSecondary(context));
+-            row.addView(rowSize);
++            LinearLayout row = row(context, option, option.thumbnail, 64, false);
++            row.setPadding(0, dp(context, 8), 0, dp(context, 8));
+             TypedValue ripple = new TypedValue();
+             context.getTheme()
+                     .resolveAttribute(android.R.attr.selectableItemBackground, ripple, true);
+@@ -170,6 +135,60 @@ final class BareVideoSheet {
+                 });
+     }
+ 
++    /** A file: its frame if there is one, then its length, picture size and file size. */
++    private static LinearLayout row(
++            Context context,
++            BareVideoMatch.Option option,
++            @Nullable Bitmap thumbnail,
++            int pictureWidthDp,
++            boolean main) {
++        LinearLayout row = new LinearLayout(context);
++        row.setOrientation(LinearLayout.HORIZONTAL);
++        row.setGravity(Gravity.CENTER_VERTICAL);
++        // A file with no picture of its own gets a plain tile with a video sign, never a black box.
++        ImageView picture = new ImageView(context);
++        if (thumbnail != null) {
++            picture.setImageBitmap(thumbnail);
++            picture.setScaleType(ImageView.ScaleType.CENTER_CROP);
++        } else {
++            picture.setImageResource(R.drawable.ic_videocam_fill_24dp);
++            int sign = SemanticColorUtils.getDefaultIconColorSecondary(context);
++            picture.setImageTintList(ColorStateList.valueOf(sign));
++            picture.setScaleType(ImageView.ScaleType.CENTER);
++            // The text colour, faint: the sheet's own surface colours are too close to show a tile.
++            int text = SemanticColorUtils.getDefaultTextColor(context);
++            picture.setBackgroundColor((text & 0x00FFFFFF) | 0x1F000000);
++        }
++        picture.setClipToOutline(true);
++        picture.setOutlineProvider(
++                new ViewOutlineProvider() {
++                    @Override
++                    public void getOutline(View view, Outline outline) {
++                        outline.setRoundRect(
++                                0, 0, view.getWidth(), view.getHeight(), dp(context, 10));
++                    }
++                });
++        int width = dp(context, pictureWidthDp);
++        // Without a picture the tile takes the shape of the file's own picture.
++        int pictureWidth = thumbnail != null ? thumbnail.getWidth() : Math.max(1, option.width);
++        int pictureHeight = thumbnail != null ? thumbnail.getHeight() : Math.max(1, option.height);
++        int height =
++                Math.min(
++                        dp(context, pictureWidthDp * 5 / 3f),
++                        Math.round(width * pictureHeight / (float) pictureWidth));
++        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(width, height);
++        params.setMarginEnd(dp(context, 16));
++        row.addView(picture, params);
++        LinearLayout details = new LinearLayout(context);
++        details.setOrientation(LinearLayout.VERTICAL);
++        details.addView(text(context, headline(option), main ? 16 : 15, main));
++        TextView size = text(context, sizeLine(context, option), main ? 14 : 13, false);
++        size.setTextColor(SemanticColorUtils.getDefaultTextColorSecondary(context));
++        details.addView(size);
++        row.addView(details, new LinearLayout.LayoutParams(0, -2, 1f));
++        return row;
++    }
++
+     /** "1:07 · 720 × 1280" */
+     private static String headline(BareVideoMatch.Option option) {
+         StringBuilder out = new StringBuilder();

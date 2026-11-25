@@ -1,0 +1,78 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupDialogs.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupDialogs.java
+index f92ce949dfd..dcf000ec154 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupDialogs.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupDialogs.java
+@@ -10,12 +10,14 @@ import android.text.InputType;
+ import android.view.Gravity;
+ import android.view.Window;
+ import android.view.WindowManager;
++
+ import android.widget.EditText;
+ import android.widget.LinearLayout;
+ import android.widget.ProgressBar;
+ import android.widget.TextView;
+ 
+ import androidx.annotation.StringRes;
++import androidx.core.view.inputmethod.EditorInfoCompat;
+ 
+ import org.chromium.chrome.R;
+ 
+@@ -69,6 +71,8 @@ final class BareBackupDialogs {
+                         | (visible
+                                 ? InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                                 : InputType.TYPE_TEXT_VARIATION_PASSWORD));
++        // Ask the keyboard not to learn what is typed here.
++        field.setImeOptions(EditorInfoCompat.IME_FLAG_NO_PERSONALIZED_LEARNING);
+         return field;
+     }
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupPassphraseStep.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupPassphraseStep.java
+index e03ce899a49..cb834c1c1d8 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupPassphraseStep.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/backup/BareBackupPassphraseStep.java
+@@ -22,6 +22,9 @@ import android.text.TextWatcher;
+ import android.util.TypedValue;
+ import android.view.Gravity;
+ import android.view.View;
++import android.view.Window;
++import android.view.WindowManager;
++import android.view.inputmethod.InputMethodManager;
+ import android.widget.Button;
+ import android.widget.CheckBox;
+ import android.widget.EditText;
+@@ -94,6 +97,8 @@ final class BareBackupPassphraseStep {
+     }
+ 
+     private void showNumber() {
++        // The number view has no text field, so the dialog keeps the IME alt-focusable flag here.
++        setAltFocusableIm(true);
+         mBody.removeAllViews();
+         String[] groups = mCode.split("-");
+         TextView number = new TextView(mContext);
+@@ -219,6 +224,26 @@ final class BareBackupPassphraseStep {
+         mBody.addView(text(R.string.bare_autobackup_code_warning));
+         mBody.addView(next);
+         mBody.addView(number);
++
++        // The flag set for the number view would make the system refuse the keyboard here.
++        setAltFocusableIm(false);
++        first.post(
++                () -> {
++                    first.requestFocus();
++                    InputMethodManager imm =
++                            mContext.getSystemService(InputMethodManager.class);
++                    if (imm != null) imm.showSoftInput(first, 0);
++                });
++    }
++
++    private void setAltFocusableIm(boolean on) {
++        Window window = mDialog.getWindow();
++        if (window == null) return;
++        if (on) {
++            window.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
++        } else {
++            window.clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
++        }
+     }
+ 
+     /** Copies the number, marked sensitive so the keyboard doesn't show it, then clears it. */

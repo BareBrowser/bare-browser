@@ -1,0 +1,558 @@
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index f43b414bb4f..7a6d83dbca4 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -246,6 +246,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BarePressedMedia.java",
+   "java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java",
+   "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
++  "java/src/org/chromium/chrome/browser/bare/BareVideoJoiner.java",
+   "java/src/org/chromium/chrome/browser/bare/BareVideoMatch.java",
+   "java/src/org/chromium/chrome/browser/bare/BareVideoSaver.java",
+   "java/src/org/chromium/chrome/browser/bare/BareVideoSheet.java",
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 61125b94195..b13a5c394a3 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -82,6 +82,8 @@ found in the LICENSE file.
+     <string name="bare_video_save">Save</string>
+     <string name="bare_video_choose_another">Choose another file</string>
+     <string name="bare_video_protected">This video is protected, so it can’t be saved</string>
++    <string name="bare_video_saved_with_sound">Video saved with its sound</string>
++    <string name="bare_video_saved_two_files">The video and its sound were saved as two separate files</string>
+     <string name="bare_video_stream_only">This video is only streamed in pieces, so it can’t be saved as one file</string>
+     <string name="bare_welcome_security_note">Websites can still use the information they receive, and characteristics of your browser, to recognize or track a visitor.</string>
+     <string name="bare_page_translation_title">Translate pages with Google</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoJoiner.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoJoiner.java
+new file mode 100644
+index 00000000000..5a8f7006c6d
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoJoiner.java
+@@ -0,0 +1,213 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.content.Context;
++import android.media.MediaCodec;
++import android.media.MediaExtractor;
++import android.media.MediaFormat;
++import android.media.MediaMuxer;
++import android.net.Uri;
++import android.os.ParcelFileDescriptor;
++
++import org.chromium.base.Log;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++
++import java.io.File;
++import java.io.FileInputStream;
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.io.InputStream;
++import java.io.OutputStream;
++import java.io.RandomAccessFile;
++import java.nio.ByteBuffer;
++
++/**
++ * Joins a picture-only mp4 and a sound-only mp4 into one mp4, with Android's own MediaExtractor and
++ * MediaMuxer. Nothing is decoded or re-encoded: the samples are copied as they are, so it takes
++ * about a second for a short clip. Streaming sites keep picture and sound in separate fragmented
++ * files; MediaExtractor reads those, and MediaMuxer writes an ordinary mp4.
++ *
++ * <p>MediaMuxer only writes the codecs an mp4 may hold on this Android version (H.264, H.265, and
++ * AV1 from Android 14, with AAC sound). A VP9 picture, for one, is refused, and the caller then
++ * keeps the two files as they are.
++ */
++@NullMarked
++final class BareVideoJoiner {
++    private static final String TAG = "BareVideoJoin";
++    private static final int START_BUFFER = 1 << 20;
++    private static final int MAX_SAMPLE = 32 << 20;
++
++    private BareVideoJoiner() {}
++
++    /**
++     * Joins {@code picture} and {@code sound} (content addresses or file paths) and writes the
++     * result over {@code picture}. Returns whether it did. On failure {@code picture} is left as it
++     * was. Runs on a background thread.
++     */
++    static boolean joinInto(Context context, String picture, String sound) {
++        File joined = new File(context.getCacheDir(), "bare-video-join.mp4");
++        try {
++            if (!join(context, picture, sound, joined)) return false;
++            if (!looksPlayable(joined)) return false;
++            copy(joined, context, picture);
++            return true;
++        } catch (IOException | RuntimeException e) {
++            Log.w(TAG, "Could not join picture and sound", e);
++            return false;
++        } finally {
++            joined.delete();
++        }
++    }
++
++    private static boolean join(Context context, String picture, String sound, File out)
++            throws IOException {
++        MediaExtractor video = new MediaExtractor();
++        MediaExtractor audio = new MediaExtractor();
++        ParcelFileDescriptor videoFd = null;
++        ParcelFileDescriptor audioFd = null;
++        MediaMuxer muxer = null;
++        boolean started = false;
++        try (RandomAccessFile file = new RandomAccessFile(out, "rw")) {
++            file.setLength(0);
++            videoFd = openRead(context, picture);
++            audioFd = openRead(context, sound);
++            video.setDataSource(videoFd.getFileDescriptor());
++            audio.setDataSource(audioFd.getFileDescriptor());
++            int videoTrack = track(video, "video/");
++            int audioTrack = track(audio, "audio/");
++            if (videoTrack < 0 || audioTrack < 0) return false;
++            MediaFormat videoFormat = video.getTrackFormat(videoTrack);
++            MediaFormat audioFormat = audio.getTrackFormat(audioTrack);
++            video.selectTrack(videoTrack);
++            audio.selectTrack(audioTrack);
++
++            muxer = new MediaMuxer(file.getFD(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
++            if (videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
++                muxer.setOrientationHint(videoFormat.getInteger(MediaFormat.KEY_ROTATION));
++            }
++            int outVideo;
++            int outAudio;
++            try {
++                outVideo = muxer.addTrack(videoFormat);
++                outAudio = muxer.addTrack(audioFormat);
++            } catch (IllegalStateException | IllegalArgumentException e) {
++                // A codec an mp4 cannot hold on this Android version.
++                Log.i(TAG, "Codec not supported for joining: " + videoFormat.getString(
++                        MediaFormat.KEY_MIME) + " + " + audioFormat.getString(MediaFormat.KEY_MIME));
++                return false;
++            }
++            muxer.start();
++            started = true;
++
++            ByteBuffer buffer = ByteBuffer.allocateDirect(START_BUFFER);
++            MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
++            long videoSamples = 0;
++            long audioSamples = 0;
++            // Samples are written in time order across the two tracks, so a player reading the
++            // file from the start finds picture and sound together.
++            while (true) {
++                long videoTime = video.getSampleTime();
++                long audioTime = audio.getSampleTime();
++                if (videoTime < 0 && audioTime < 0) break;
++                boolean takeVideo = audioTime < 0 || (videoTime >= 0 && videoTime <= audioTime);
++                MediaExtractor from = takeVideo ? video : audio;
++                long size = from.getSampleSize();
++                if (size > MAX_SAMPLE) return false;
++                if (size > buffer.capacity()) buffer = ByteBuffer.allocateDirect((int) size);
++                buffer.clear();
++                int read = from.readSampleData(buffer, 0);
++                if (read < 0) {
++                    from.unselectTrack(takeVideo ? videoTrack : audioTrack);
++                    continue;
++                }
++                int flags =
++                        (from.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) != 0
++                                ? MediaCodec.BUFFER_FLAG_KEY_FRAME
++                                : 0;
++                info.set(0, read, from.getSampleTime(), flags);
++                muxer.writeSampleData(takeVideo ? outVideo : outAudio, buffer, info);
++                if (takeVideo) videoSamples++;
++                else audioSamples++;
++                from.advance();
++            }
++            muxer.stop();
++            started = false;
++            return videoSamples > 0 && audioSamples > 0;
++        } finally {
++            if (muxer != null) {
++                try {
++                    if (started) muxer.stop();
++                } catch (IllegalStateException e) {
++                    // Already failed; the file is discarded.
++                }
++                muxer.release();
++            }
++            video.release();
++            audio.release();
++            closeQuietly(videoFd);
++            closeQuietly(audioFd);
++        }
++    }
++
++    /** Whether the joined file reads back with a picture track and a sound track. */
++    private static boolean looksPlayable(File file) throws IOException {
++        MediaExtractor check = new MediaExtractor();
++        try {
++            check.setDataSource(file.getAbsolutePath());
++            return track(check, "video/") >= 0 && track(check, "audio/") >= 0;
++        } finally {
++            check.release();
++        }
++    }
++
++    private static int track(MediaExtractor extractor, String prefix) {
++        for (int i = 0; i < extractor.getTrackCount(); i++) {
++            String mime = extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME);
++            if (mime != null && mime.startsWith(prefix)) return i;
++        }
++        return -1;
++    }
++
++    private static ParcelFileDescriptor openRead(Context context, String where)
++            throws IOException {
++        if (where.startsWith("content:")) {
++            ParcelFileDescriptor fd =
++                    context.getContentResolver().openFileDescriptor(Uri.parse(where), "r");
++            if (fd == null) throw new IOException("no descriptor");
++            return fd;
++        }
++        return ParcelFileDescriptor.open(new File(where), ParcelFileDescriptor.MODE_READ_ONLY);
++    }
++
++    /** Writes {@code from} over the download at {@code to}, replacing what was there. */
++    private static void copy(File from, Context context, String to) throws IOException {
++        try (InputStream in = new FileInputStream(from);
++                OutputStream out = openWrite(context, to)) {
++            byte[] buffer = new byte[256 * 1024];
++            int read;
++            while ((read = in.read(buffer)) > 0) out.write(buffer, 0, read);
++        }
++    }
++
++    private static OutputStream openWrite(Context context, String where) throws IOException {
++        if (where.startsWith("content:")) {
++            OutputStream out = context.getContentResolver().openOutputStream(Uri.parse(where), "wt");
++            if (out == null) throw new IOException("no stream");
++            return out;
++        }
++        return new FileOutputStream(where, false);
++    }
++
++    private static void closeQuietly(@Nullable ParcelFileDescriptor fd) {
++        if (fd == null) return;
++        try {
++            fd.close();
++        } catch (IOException e) {
++            // Nothing to do.
++        }
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSaver.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSaver.java
+index 5a5c23e584e..efabba57791 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSaver.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSaver.java
+@@ -5,11 +5,25 @@
+ package org.chromium.chrome.browser.bare;
+ 
+ import android.app.Activity;
++import android.content.Context;
++import android.os.SystemClock;
+ import android.view.View;
+ 
++import org.chromium.base.ContextUtils;
++import org.chromium.base.task.PostTask;
++import org.chromium.base.task.TaskTraits;
+ import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.download.BareDownloadNotice;
++import org.chromium.chrome.browser.download.dialogs.BareDownloadCard;
++import org.chromium.chrome.browser.download.items.OfflineContentAggregatorFactory;
+ import org.chromium.components.browser_ui.widget.RiseSheet;
++import org.chromium.components.offline_items_collection.ContentId;
++import org.chromium.components.offline_items_collection.OfflineContentProvider;
++import org.chromium.components.offline_items_collection.OfflineItem;
++import org.chromium.components.offline_items_collection.OfflineItemState;
++import org.chromium.components.offline_items_collection.UpdateDelta;
+ import org.chromium.url.GURL;
+ 
+ import java.util.List;
+@@ -19,7 +33,10 @@ import java.util.List;
+  *
+  * <p>One file that fits is saved at once, since a signed address soon expires. Several are shown
+  * on a card for the user to choose. None gives an honest message and saves nothing. When the
+- * site keeps the sound in a file of its own, that file is downloaded as well.
++ * site keeps the sound in a file of its own, both files are downloaded through the browser's
++ * ordinary download path and, once both have finished, joined into the video file, so the user
++ * ends up with one video with sound. If they cannot be joined, both files are kept and the user
++ * is told so.
+  */
+ @NullMarked
+ public final class BareVideoSaver {
+@@ -39,10 +56,10 @@ public final class BareVideoSaver {
+             return;
+         }
+         if (options.size() == 1) {
+-            save(options.get(0), downloader);
++            save(root, options.get(0), downloader);
+             return;
+         }
+-        BareVideoSheet.show(root, result, option -> save(option, downloader));
++        BareVideoSheet.show(root, result, option -> save(root, option, downloader));
+     }
+ 
+     static int messageFor(String why) {
+@@ -56,19 +73,253 @@ public final class BareVideoSaver {
+         }
+     }
+ 
+-    private static void save(BareVideoMatch.Option option, Downloader downloader) {
++    private static void save(View root, BareVideoMatch.Option option, Downloader downloader) {
+         GURL video = new GURL(option.video);
+         String audioAddress = option.audio;
+         if (audioAddress == null) {
+             downloader.download(video);
+             return;
+         }
+-        // The site keeps the sound in a file of its own, so it is saved too.
+-        downloader.download(video);
+-        downloader.download(new GURL(audioAddress));
++        new JoinWatch(root, video, new GURL(audioAddress), downloader).start();
+     }
+ 
++    /**
++     * Shows a message card. Another card may be up, such as the one that says a download
++     * finished, so this tries again for a few seconds.
++     */
+     private static void tell(View root, int message) {
+-        RiseSheet.showMessage(root, root.getContext().getString(message), null, null, null);
++        tell(root, root.getContext().getString(message), 10);
++    }
++
++    private static void tell(View root, String text, int triesLeft) {
++        if (RiseSheet.showMessage(root, text, null, null, null) || triesLeft <= 0) return;
++        PostTask.postDelayedTask(
++                TaskTraits.UI_DEFAULT, () -> tell(root, text, triesLeft - 1), 1000);
++    }
++
++    /**
++     * Downloads the picture, then its sound, and joins them once both have finished.
++     *
++     * <p>Each download may ask where to save it, on a card, and only one such question can be
++     * open at a time. So only the picture is asked about. The sound is started once the user has
++     * answered that card and the picture is coming in, and it goes to the default folder without
++     * asking; it is removed again once it is inside the video.
++     *
++     * <p>A download handed to another app, such as an external download manager, never shows up
++     * here and asks nothing. When no card comes up and the picture does not appear, the sound is
++     * sent the same way, and the user is told it is a second file. When the user cancels the card,
++     * the sound is not downloaded.
++     */
++    private static final class JoinWatch implements OfflineContentProvider.Observer {
++        private static final long POLL_MS = 500;
++        private static final long NO_CARD_MS = 3_000;
++        private static final long ANSWER_MS = 10 * 60_000;
++        private static final long APPEAR_MS = 30_000;
++        private static final long FINISH_MS = 60 * 60_000;
++
++        private final View mRoot;
++        private final GURL mVideo;
++        private final GURL mAudio;
++        private final Downloader mDownloader;
++        private final long mStartedAt = System.currentTimeMillis();
++        private final long mStartedUptime = SystemClock.uptimeMillis();
++        private final long mDeadline = mStartedUptime + FINISH_MS;
++        private @Nullable OfflineItem mVideoItem;
++        private @Nullable OfflineItem mAudioItem;
++        private boolean mDone;
++        private boolean mSawCard;
++        private long mCardClosedAt;
++        private boolean mAudioStarted;
++
++        JoinWatch(View root, GURL video, GURL audio, Downloader downloader) {
++            mRoot = root;
++            mVideo = video;
++            mAudio = audio;
++            mDownloader = downloader;
++        }
++
++        void start() {
++            OfflineContentAggregatorFactory.get().addObserver(this);
++            mDownloader.download(mVideo);
++            PostTask.postDelayedTask(TaskTraits.UI_DEFAULT, this::poll, POLL_MS);
++        }
++
++        /** Decides when to start the sound, while the picture's save card may be open. */
++        private void poll() {
++            if (mDone || mAudioStarted) return;
++            long now = SystemClock.uptimeMillis();
++            if (RiseSheet.isOpen()) {
++                mSawCard = true;
++                mCardClosedAt = 0;
++            } else if (pictureIsComing()) {
++                startAudio(/* external= */ false);
++                return;
++            } else if (!mSawCard && mVideoItem == null && now - mStartedUptime > NO_CARD_MS) {
++                // No card and no download here: another app took the picture.
++                startAudio(/* external= */ true);
++                return;
++            } else if (mSawCard) {
++                if (mCardClosedAt == 0) mCardClosedAt = now;
++                // The card closed and nothing came in: the user cancelled it.
++                if (now - mCardClosedAt > NO_CARD_MS) {
++                    stop();
++                    return;
++                }
++            }
++            if (now - mStartedUptime > ANSWER_MS) {
++                stop();
++                return;
++            }
++            PostTask.postDelayedTask(TaskTraits.UI_DEFAULT, this::poll, POLL_MS);
++        }
++
++        /** Whether the picture's save location is settled and its bytes are arriving. */
++        private boolean pictureIsComing() {
++            OfflineItem video = mVideoItem;
++            if (video == null) return false;
++            return video.receivedBytes > 0 || video.state == OfflineItemState.COMPLETE;
++        }
++
++        private void startAudio(boolean external) {
++            mAudioStarted = true;
++            if (external) {
++                mDownloader.download(mAudio);
++                tell(mRoot, R.string.bare_video_saved_two_files);
++                stop();
++                return;
++            }
++            BareDownloadCard.skipNextPrompt();
++            // The sound file is removed once it is inside the video, so it gets no finished card.
++            String soundName = new java.io.File(mAudio.getPath()).getName();
++            if (!soundName.isEmpty()) BareDownloadNotice.keepQuiet(soundName);
++            mDownloader.download(mAudio);
++            PostTask.postDelayedTask(
++                    TaskTraits.UI_DEFAULT,
++                    () -> {
++                        if (mAudioItem == null) stop();
++                    },
++                    APPEAR_MS);
++            see(null);
++        }
++
++        private void stop() {
++            if (mDone) return;
++            mDone = true;
++            OfflineContentAggregatorFactory.get().removeObserver(this);
++        }
++
++        private boolean isOurs(OfflineItem item, GURL url) {
++            if (item.creationTimeMs != 0 && item.creationTimeMs < mStartedAt - 5_000) return false;
++            return url.equals(item.originalUrl) || url.equals(item.url);
++        }
++
++        private void see(@Nullable OfflineItem item) {
++            if (mDone) return;
++            if (item != null) {
++                if (mVideoItem == null && isOurs(item, mVideo)) {
++                    mVideoItem = item;
++                } else if (mAudioStarted && mAudioItem == null && isOurs(item, mAudio)) {
++                    mAudioItem = item;
++                }
++                if (mVideoItem != null && mVideoItem.id != null && mVideoItem.id.equals(item.id)) {
++                    mVideoItem = item;
++                }
++                if (mAudioItem != null && mAudioItem.id != null && mAudioItem.id.equals(item.id)) {
++                    mAudioItem = item;
++                }
++            }
++            OfflineItem video = mVideoItem;
++            if (video != null && failed(video)) {
++                stop();
++                return;
++            }
++            OfflineItem audio = mAudioItem;
++            if (video == null || audio == null) return;
++            if (failed(video) || failed(audio) || SystemClock.uptimeMillis() > mDeadline) {
++                stop();
++                return;
++            }
++            if (video.state == OfflineItemState.COMPLETE && audio.state == OfflineItemState.COMPLETE) {
++                stop();
++                join(video, audio);
++            }
++        }
++
++        private static boolean failed(OfflineItem item) {
++            return item.state == OfflineItemState.FAILED
++                    || item.state == OfflineItemState.CANCELLED
++                    || item.externallyRemoved;
++        }
++
++        private void join(OfflineItem video, OfflineItem audio) {
++            ContentId videoId = video.id;
++            ContentId audioId = audio.id;
++            if (videoId == null || audioId == null) return;
++            OfflineContentProvider provider = OfflineContentAggregatorFactory.get();
++            // A finished download may have moved from where it was written to where it is
++            // published, so ask for both again.
++            provider.getItemById(
++                    videoId,
++                    currentVideo ->
++                            provider.getItemById(
++                                    audioId,
++                                    currentAudio -> joinFiles(currentVideo, currentAudio)));
++        }
++
++        private void joinFiles(@Nullable OfflineItem video, @Nullable OfflineItem audio) {
++            if (video == null || audio == null) {
++                tell(mRoot, R.string.bare_video_saved_two_files);
++                return;
++            }
++            String picture = video.filePath;
++            String sound = audio.filePath;
++            if (picture == null || sound == null || picture.isEmpty() || sound.isEmpty()) {
++                tell(mRoot, R.string.bare_video_saved_two_files);
++                return;
++            }
++            joinPaths(picture, sound, audio.id);
++        }
++
++        private void joinPaths(String picture, String sound, @Nullable ContentId audioId) {
++            Context context = ContextUtils.getApplicationContext();
++            PostTask.postTask(
++                    TaskTraits.USER_VISIBLE_MAY_BLOCK,
++                    () -> {
++                        boolean joined = BareVideoJoiner.joinInto(context, picture, sound);
++                        PostTask.postTask(
++                                TaskTraits.UI_DEFAULT,
++                                () -> {
++                                    if (joined) {
++                                        // The sound is inside the video now; its own file would
++                                        // only be a second copy of it.
++                                        if (audioId != null) {
++                                            OfflineContentAggregatorFactory.get()
++                                                    .removeItem(audioId);
++                                        }
++                                        tell(mRoot, R.string.bare_video_saved_with_sound);
++                                    } else {
++                                        tell(mRoot, R.string.bare_video_saved_two_files);
++                                    }
++                                });
++                    });
++        }
++
++        @Override
++        public void onItemsAdded(List<OfflineItem> items) {
++            for (OfflineItem item : items) see(item);
++        }
++
++        @Override
++        public void onItemRemoved(ContentId id) {
++            if ((mVideoItem != null && id.equals(mVideoItem.id))
++                    || (mAudioItem != null && id.equals(mAudioItem.id))) {
++                stop();
++            }
++        }
++
++        @Override
++        public void onItemUpdated(OfflineItem item, @Nullable UpdateDelta updateDelta) {
++            see(item);
++        }
+     }
+ }

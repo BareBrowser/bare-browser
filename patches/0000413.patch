@@ -1,0 +1,511 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+index baf221f9260..ce21c0bb782 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -1278,6 +1278,7 @@ public class ToolbarManager
+                 mProgressBarContainer.findViewById(R.id.toolbar_progress_bar);
+         progressBar.setAnimatingView(
+                 mProgressBarContainer.findViewById(R.id.progress_bar_animating_view));
++        if (!mIsCustomTab && mToolbarLayout instanceof ToolbarPhone) progressBar.useBareLine();
+         mBrowserControlsSizer.addObserver(progressBar);
+         mToolbarProgressBarLayer =
+                 new ToolbarProgressBarLayer(
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarBackgroundDrawable.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarBackgroundDrawable.java
+index 5802fb20c25..1f55db7f471 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarBackgroundDrawable.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarBackgroundDrawable.java
+@@ -12,6 +12,7 @@ import android.content.Context;
+ import android.graphics.BlurMaskFilter;
+ import android.graphics.BlurMaskFilter.Blur;
+ import android.graphics.Canvas;
++import android.graphics.Color;
+ import android.graphics.ColorFilter;
+ import android.graphics.Paint;
+ import android.graphics.Paint.Style;
+@@ -33,6 +34,8 @@ import org.chromium.base.MathUtils;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.omnibox.GlifGradientUtil.RotationProperty;
++import org.chromium.components.browser_ui.widget.BareProgressLine;
++import org.chromium.ui.base.LocalizationUtils;
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -96,6 +99,9 @@ public class LocationBarBackgroundDrawable extends Drawable {
+     private @HairlineBehavior int mHairlineBehavior = HairlineBehavior.NONE;
+     private final AnimatorSet mAnimator;
+     private float mBlurStrokePx;
++    private boolean mDarkPill;
++    private final float mDensity =
++            android.content.res.Resources.getSystem().getDisplayMetrics().density;
+ 
+     /**
+      * Creates a new instance of {@link LocationBarBackgroundDrawable}.
+@@ -137,6 +143,7 @@ public class LocationBarBackgroundDrawable extends Drawable {
+             int[] colors,
+             float[] positions) {
+         mBackgroundGradient = backgroundGradient;
++        BareProgressLine.register(this);
+         mCornerRadiusPx = cornerRadiusPx;
+         mStrokePx = strokePx;
+         // Blur stroke width starts at effective 0 (can't be actually 0; BlurMaskFilter doesn't
+@@ -254,6 +261,14 @@ public class LocationBarBackgroundDrawable extends Drawable {
+             default:
+                 break;
+         }
++        // Bare: the loading and download line runs along the bottom of the pill.
++        BareProgressLine.draw(
++                canvas,
++                mOuterPath,
++                LocalizationUtils.isLayoutRtl(),
++                mDarkPill,
++                mDensity,
++                this);
+     }
+ 
+     /** Controls the opacity of the rainbow outline. */
+@@ -298,6 +313,9 @@ public class LocationBarBackgroundDrawable extends Drawable {
+      * @param color The color to set as the background.
+      */
+     public void setBackgroundColor(@ColorInt int color) {
++        mDarkPill =
++                (0.299 * Color.red(color) + 0.587 * Color.green(color) + 0.114 * Color.blue(color))
++                        < 140;
+         mBackgroundGradient.setColor(color);
+         invalidateSelf();
+     }
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBar.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBar.java
+index f4e024d177e..9f0b7ef8b1c 100644
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBar.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBar.java
+@@ -465,6 +465,7 @@ public class UrlBar extends AutocompleteEditText {
+         }
+         boolean wasFocused = mFocused;
+         mFocused = focused;
++        BareProgressLine.setFocused(focused);
+ 
+         if (!mFocused) {
+             mCurrentInputCanBeWrapped = false;
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarProgressBar.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarProgressBar.java
+index 6ddd0b7e4d6..f34eef7affc 100644
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarProgressBar.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ToolbarProgressBar.java
+@@ -28,6 +28,7 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ import org.chromium.chrome.browser.theme.ThemeUtils;
+ import org.chromium.components.browser_ui.styles.ChromeColors;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.components.browser_ui.widget.BareProgressLine;
+ import org.chromium.components.browser_ui.widget.ClipDrawableProgressBar;
+ import org.chromium.ui.interpolators.Interpolators;
+ import org.chromium.ui.util.ColorUtils;
+@@ -84,6 +85,9 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
+     /** Whether or not the progress bar has started processing updates. */
+     private boolean mIsStarted;
+ 
++    /** Bare: whether the address bar pill draws the progress. */
++    private boolean mBareLine;
++
+     /** The target progress the smooth animation should move to (when animating smoothly). */
+     private float mTargetProgress;
+ 
+@@ -299,7 +303,37 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
+     @Override
+     public void setAlpha(float alpha) {
+         super.setAlpha(alpha);
+-        if (mAnimatingView != null) mAnimatingView.setAlpha(alpha);
++        if (mAnimatingView != null) mAnimatingView.setAlpha(mBareLine ? 0f : alpha);
++        if (mBareLine) BareProgressLine.setPage(getProgress(), alpha);
++    }
++
++    /**
++     * Bare: the progress is drawn along the bottom of the address bar pill instead. This bar keeps
++     * running as usual, but draws nothing and feeds the line its progress and fade.
++     */
++    public void useBareLine() {
++        mBareLine = true;
++        if (mAnimatingView != null) mAnimatingView.setAlpha(0f);
++    }
++
++    /** Bare: the bar the compositor draws above the address bar is as empty as the view. */
++    @Override
++    public void getDrawingInfo(DrawingInfo drawingInfoOut) {
++        super.getDrawingInfo(drawingInfoOut);
++        if (!mBareLine) return;
++        drawingInfoOut.visible = false;
++        drawingInfoOut.progressBarColor = android.graphics.Color.TRANSPARENT;
++        drawingInfoOut.progressBarBackgroundColor = android.graphics.Color.TRANSPARENT;
++        drawingInfoOut.progressBarStaticBackgroundColor = android.graphics.Color.TRANSPARENT;
++    }
++
++    @Override
++    public void draw(android.graphics.Canvas canvas) {
++        if (!mBareLine) {
++            super.draw(canvas);
++            return;
++        }
++        BareProgressLine.setPage(getProgress(), getAlpha());
+     }
+ 
+     @Override
+diff --git a/components/browser_ui/widget/android/BUILD.gn b/components/browser_ui/widget/android/BUILD.gn
+index d8acba9945c..27d4af0e537 100644
+--- a/components/browser_ui/widget/android/BUILD.gn
++++ b/components/browser_ui/widget/android/BUILD.gn
+@@ -22,6 +22,7 @@ android_library("java") {
+     "java/src/org/chromium/components/browser_ui/widget/DialogListItemDecoration.java",
+     "java/src/org/chromium/components/browser_ui/widget/DualControlLayout.java",
+     "java/src/org/chromium/components/browser_ui/widget/FadingEdgeScrollView.java",
++    "java/src/org/chromium/components/browser_ui/widget/BareProgressLine.java",
+     "java/src/org/chromium/components/browser_ui/widget/RiseSheet.java",
+     "java/src/org/chromium/components/browser_ui/widget/FadingShadow.java",
+     "java/src/org/chromium/components/browser_ui/widget/FadingShadowView.java",
+diff --git a/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/BareProgressLine.java b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/BareProgressLine.java
+new file mode 100644
+index 00000000000..d5cb3ea991d
+--- /dev/null
++++ b/components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/BareProgressLine.java
+@@ -0,0 +1,344 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.components.browser_ui.widget;
++
++import android.graphics.Canvas;
++import android.graphics.Paint;
++import android.graphics.Path;
++import android.graphics.RectF;
++import android.graphics.drawable.Drawable;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.SystemClock;
++import android.view.View;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++
++import java.lang.ref.WeakReference;
++import java.util.ArrayList;
++import java.util.Iterator;
++import java.util.List;
++
++/**
++ * Bare: the thin line along the bottom edge inside the address bar pill. It shows a page loading
++ * in blue and, for a few seconds when a download starts, the download in green with a few words.
++ * While the download shows only it shows, so the two never fight over the same line. Whatever
++ * draws the pill calls {@link #draw} and {@link #drawText}; the page progress bar and the download
++ * observer feed it.
++ */
++@NullMarked
++public final class BareProgressLine {
++    private static final float HEIGHT_DP = 3f;
++    private static final long SWEEP_MS = 1400;
++
++    private static final int BLUE_ON_DARK = 0xFF8AB4F8;
++    private static final int BLUE_ON_LIGHT = 0xFF1A73E8;
++    private static final int GREEN_ON_DARK = 0xFF5DCA8A;
++    private static final int GREEN_ON_LIGHT = 0xFF1E8E3E;
++
++    private static final List<WeakReference<Drawable>> sTargets = new ArrayList<>();
++    private static final List<WeakReference<View>> sViews = new ArrayList<>();
++    private static final Paint sPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private static final android.text.TextPaint sTextPaint =
++            new android.text.TextPaint(Paint.ANTI_ALIAS_FLAG);
++    static {
++        sTextPaint.setTextAlign(Paint.Align.CENTER);
++    }
++    private static final RectF sBounds = new RectF();
++    private static final RectF sLine = new RectF();
++    private static final int[] sAt = new int[2];
++
++    // A page load that has not moved for this long is stuck, as when a link turns out to be a
++    // download and the load never finishes. The line is hidden rather than left at the bottom.
++    private static final long STALE_MS = 8000;
++    private static final Handler sHandler = new Handler(Looper.getMainLooper());
++    private static final Runnable sStale = BareProgressLine::onStale;
++    private static long sPageChangedAt;
++
++    // The download words: the full ones, and shorter ones for when the full ones do not fit.
++    private static @Nullable String sText;
++    private static @Nullable String sShortText;
++
++    private static float sPage;
++    private static float sPageAlpha;
++    // Below zero means no download; NaN is a download of unknown size.
++    private static float sDownload = -1f;
++    // The address bar has focus (the user is typing): the download words and line step aside.
++    private static boolean sFocused;
++    // The download shows until this time, in uptime milliseconds, and then goes for good.
++    private static long sBriefUntil;
++    private static final Runnable sBriefEnd = BareProgressLine::onBriefEnd;
++    // Whether the download shows right now, as last worked out by refresh().
++    private static boolean sShown;
++
++    private BareProgressLine() {}
++
++    /** Draws the line on a pill drawable; it is redrawn when the line changes. */
++    public static void register(Drawable target) {
++        synchronized (sTargets) {
++            for (WeakReference<Drawable> ref : sTargets) {
++                if (ref.get() == target) return;
++            }
++            sTargets.add(new WeakReference<>(target));
++        }
++    }
++
++    /**
++     * The address field. It leaves its own drawing out while {@link #hasText} is true, and it is
++     * redrawn when that changes. The download words are kept inside it, between the site icon and
++     * the buttons at the end of the pill.
++     */
++    public static void registerView(View view) {
++        synchronized (sViews) {
++            for (WeakReference<View> ref : sViews) {
++                if (ref.get() == view) return;
++            }
++            sViews.add(new WeakReference<>(view));
++        }
++    }
++
++    /** The page's loading progress as drawn by the stock bar: 0 to 1 and its fade, 0 to 1. */
++    public static void setPage(float progress, float alpha) {
++        if (sPage == progress && sPageAlpha == alpha) return;
++        sPage = progress;
++        sPageAlpha = alpha;
++        sPageChangedAt = SystemClock.uptimeMillis();
++        sHandler.removeCallbacks(sStale);
++        if (alpha > 0f) sHandler.postDelayed(sStale, STALE_MS + 100);
++        if (!refresh() && !downloading()) invalidate();
++    }
++
++    /**
++     * The download's progress, 0 to 1; NaN when its size is not known; a negative number when
++     * there is none.
++     */
++    public static void setDownload(float fraction) {
++        if (Float.compare(sDownload, fraction) == 0) return;
++        sDownload = fraction;
++        if (!refresh()) invalidate();
++    }
++
++    /**
++     * A download has started: it shows for this many milliseconds, then the pill goes back to the
++     * address and stays that way.
++     */
++    public static void showBriefly(long millis) {
++        sBriefUntil = SystemClock.uptimeMillis() + millis;
++        sHandler.removeCallbacks(sBriefEnd);
++        sHandler.postDelayed(sBriefEnd, millis);
++        refresh();
++    }
++
++    private static void onBriefEnd() {
++        sBriefUntil = 0;
++        if (!refresh()) invalidate();
++    }
++
++    /**
++     * Whether the address bar has focus. While it does, the download words and line are left out
++     * so they do not sit over what the user types.
++     */
++    public static void setFocused(boolean focused) {
++        if (sFocused == focused) return;
++        sFocused = focused;
++        refresh();
++    }
++
++    /**
++     * The words shown in the pill while a download shows, such as "Downloading 4.2 MB · 1.1 MB/s",
++     * and shorter ones, such as "Downloading 4.2 MB", for when those do not fit; or null for
++     * none. The address bar leaves its own text out while these show.
++     */
++    public static void setText(@Nullable String text, @Nullable String shortText) {
++        if (java.util.Objects.equals(sText, text)
++                && java.util.Objects.equals(sShortText, shortText)) {
++            return;
++        }
++        sText = text;
++        sShortText = shortText;
++        invalidate();
++        invalidateViews();
++    }
++
++    private static void invalidateViews() {
++        synchronized (sViews) {
++            Iterator<WeakReference<View>> it = sViews.iterator();
++            while (it.hasNext()) {
++                View view = it.next().get();
++                if (view == null) it.remove();
++                else view.invalidate();
++            }
++        }
++    }
++
++    /** Whether a page is loading: the blue line has the pill, then the download comes back. */
++    private static boolean pageLoading() {
++        return sPageAlpha > 0f
++                && sPage > 0f
++                && sPage < 1f
++                && SystemClock.uptimeMillis() - sPageChangedAt <= STALE_MS;
++    }
++
++    /** The page line went stale: the download may come back, else the line just goes. */
++    private static void onStale() {
++        if (!refresh()) invalidate();
++    }
++
++    /** Works out whether the download shows; redraws everything if that changed. */
++    private static boolean refresh() {
++        boolean briefly = SystemClock.uptimeMillis() < sBriefUntil;
++        boolean shown = hasDownload() && briefly && !sFocused && !pageLoading();
++        if (shown == sShown) return false;
++        sShown = shown;
++        invalidate();
++        invalidateViews();
++        return true;
++    }
++
++    /** Whether the pill shows download words in place of the address. */
++    public static boolean hasText() {
++        return sText != null && sShown;
++    }
++
++    /**
++     * Draws the download words in the middle of the address field, if there are any. The field
++     * lies between the site icon and the buttons at the end of the pill, so nothing is drawn over
++     * them: the shorter words are used when the full ones do not fit, and the words are cut with
++     * an ellipsis when even those do not.
++     */
++    public static void drawText(
++            Canvas canvas,
++            Path pill,
++            boolean darkPill,
++            boolean rtl,
++            float density,
++            Drawable owner) {
++        String full = sText;
++        if (full == null || !sShown) return;
++        pill.computeBounds(sBounds, true);
++        float left = sBounds.left + 72 * density;
++        float right = sBounds.right - 72 * density;
++        View field = firstView();
++        if (field != null && field.getWidth() > 0 && owner.getCallback() instanceof View host) {
++            host.getLocationOnScreen(sAt);
++            float hostX = sAt[0];
++            field.getLocationOnScreen(sAt);
++            left = Math.max(sBounds.left, sAt[0] - hostX);
++            right = Math.min(sBounds.right, sAt[0] - hostX + field.getWidth());
++        }
++        float room = right - left - 8 * density;
++        if (room <= 0) return;
++        sTextPaint.setTextSize(15 * density);
++        sTextPaint.setColor(darkPill ? 0xFFE6E6EA : 0xFF1B1B1F);
++        String shown = full;
++        String shorter = sShortText;
++        if (sTextPaint.measureText(full) > room && shorter != null) shown = shorter;
++        CharSequence fitted =
++                android.text.TextUtils.ellipsize(
++                        shown, sTextPaint, room, android.text.TextUtils.TruncateAt.END);
++        float baseline = sBounds.centerY() - (sTextPaint.ascent() + sTextPaint.descent()) / 2f;
++        canvas.drawText(fitted, 0, fitted.length(), (left + right) / 2f, baseline, sTextPaint);
++    }
++
++    /** The address field, the first view registered, or null. */
++    private static @Nullable View firstView() {
++        synchronized (sViews) {
++            for (WeakReference<View> ref : sViews) {
++                View view = ref.get();
++                if (view != null) return view;
++            }
++        }
++        return null;
++    }
++
++    /** Whether there is a download, shown or not. */
++    private static boolean hasDownload() {
++        return Float.isNaN(sDownload) || sDownload >= 0f;
++    }
++
++    /** Whether a download is showing on the line. */
++    public static boolean downloading() {
++        return sShown;
++    }
++
++    private static void invalidate() {
++        synchronized (sTargets) {
++            Iterator<WeakReference<Drawable>> it = sTargets.iterator();
++            while (it.hasNext()) {
++                Drawable drawable = it.next().get();
++                if (drawable == null) {
++                    it.remove();
++                } else {
++                    drawable.invalidateSelf();
++                }
++            }
++        }
++    }
++
++    /**
++     * Draws the line along the bottom of the pill and clipped to its rounded shape.
++     *
++     * @param pill The pill's outline.
++     * @param rtl Whether the line fills from the right.
++     * @param darkPill Whether the pill is a dark colour.
++     * @param density The screen density.
++     * @param owner The drawable being drawn, asked to draw again while a line is sweeping.
++     */
++    public static void draw(
++            Canvas canvas, Path pill, boolean rtl, boolean darkPill, float density, Drawable owner) {
++        float fraction;
++        float alpha = 1f;
++        int color;
++        boolean sweep = false;
++        if (downloading()) {
++            color = darkPill ? GREEN_ON_DARK : GREEN_ON_LIGHT;
++            if (Float.isNaN(sDownload)) {
++                sweep = true;
++                fraction = 1f;
++            } else {
++                fraction = Math.min(1f, sDownload);
++            }
++        } else {
++            if (sPageAlpha <= 0f || sPage <= 0f) return;
++            if (SystemClock.uptimeMillis() - sPageChangedAt > STALE_MS) return;
++            color = darkPill ? BLUE_ON_DARK : BLUE_ON_LIGHT;
++            fraction = Math.min(1f, sPage);
++            alpha = sPageAlpha;
++        }
++        pill.computeBounds(sBounds, true);
++        float width = sBounds.width();
++        float height = HEIGHT_DP * density;
++        float left;
++        float right;
++        if (sweep) {
++            float t = (SystemClock.uptimeMillis() % SWEEP_MS) / (float) SWEEP_MS;
++            float segment = width * 0.3f;
++            float start = -segment + t * (width + segment);
++            left = start;
++            right = start + segment;
++            owner.invalidateSelf();
++        } else {
++            left = 0;
++            right = width * fraction;
++        }
++        left = Math.max(0, left);
++        right = Math.min(width, right);
++        if (right <= left) return;
++        if (rtl) {
++            float flippedLeft = width - right;
++            right = width - left;
++            left = flippedLeft;
++        }
++        sLine.set(
++                sBounds.left + left, sBounds.bottom - height, sBounds.left + right, sBounds.bottom);
++        sPaint.setColor(color);
++        sPaint.setAlpha(Math.round(255 * alpha));
++        canvas.save();
++        canvas.clipPath(pill);
++        canvas.drawRect(sLine, sPaint);
++        canvas.restore();
++    }
++}

@@ -265,7 +265,7 @@ index 812724898c5..63c5bbeb97c 100644
      int getIconVisibility() {
          return mIconView.getVisibility();
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
-index 4be84a40543..bfc11332a31 100644
+index 4be84a40543..0d1b89232fe 100644
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusMediator.java
 @@ -9,6 +9,9 @@ import static org.chromium.build.NullUtil.assumeNonNull;
@@ -346,7 +346,19 @@ index 4be84a40543..bfc11332a31 100644
          setFuseboxSessionState(null);
          updateVerboseStatusTextVisibility();
          updateLocationBarIcon(IconTransitionType.CROSSFADE);
-@@ -831,7 +867,7 @@ public class StatusMediator
+@@ -734,6 +770,11 @@ public class StatusMediator
+         mModel.set(
+                 StatusProperties.STATUS_ACCESSIBILITY_DOUBLE_TAP_DESCRIPTION_RES,
+                 doubleTapDescriptionRes);
++        // Bare: the site icon opens page info (site settings) even where Chromium 158 moved page
++        // info to the app menu and cleared the listener.
++        if (clickListener == null && mModel.get(StatusProperties.SITE_FAVICON) != null) {
++            clickListener = this::onClickOpenPageInfo;
++        }
+         setStatusClickListener(clickListener);
+ 
+         updateStatusViewVisibility();
+@@ -831,7 +872,7 @@ public class StatusMediator
       */
      boolean shouldDisplaySearchEngineIcon() {
          if (PageClassificationUtils.isHubOrTabSearch(
@@ -355,7 +367,7 @@ index 4be84a40543..bfc11332a31 100644
              return false;
          }
  
-@@ -961,6 +997,75 @@ public class StatusMediator
+@@ -961,6 +1002,82 @@ public class StatusMediator
          }
      }
  
@@ -411,6 +423,7 @@ index 4be84a40543..bfc11332a31 100644
 +                                        /* prefetch= */ false));
 +        if (!show) {
 +            mModel.set(StatusProperties.SITE_FAVICON, null);
++            updateStatusViewVisibility();
 +            return;
 +        }
 +        Drawable icon = mSiteFavicon;
@@ -426,12 +439,18 @@ index 4be84a40543..bfc11332a31 100644
 +            }
 +        }
 +        mModel.set(StatusProperties.SITE_FAVICON, icon);
++        // Tapping the site icon opens page info.
++        if (mModel.get(StatusProperties.STATUS_CLICK_LISTENER) == null) {
++            setStatusClickListener(this::onClickOpenPageInfo);
++        }
++        // The site icon lives in the status view, so the view has to stay up while it shows.
++        updateStatusViewVisibility();
 +    }
 +
      @VisibleForTesting
      /* package */ void onFaviconFetched(GURL url, @Nullable Drawable favicon) {
          // If we're not the most recent fetch request, give up.
-@@ -1064,6 +1169,7 @@ public class StatusMediator
+@@ -1064,6 +1181,7 @@ public class StatusMediator
      }
  
      public void onUrlChanged() {
@@ -439,6 +458,14 @@ index 4be84a40543..bfc11332a31 100644
          updateStatusViewMinWidth();
          Tab currentTab = mLocationBarDataProvider.getTab();
          Profile profile = mProfileSupplier.get();
+@@ -1172,6 +1290,7 @@ public class StatusMediator
+                         || mShowStatusIconForSecureOrigins
+                         || mIsSecurityViewShown
+                         || hasStatusIconResource()
++                        || mModel.get(StatusProperties.SITE_FAVICON) != null
+                         || shouldShowVerboseStatusText());
+     }
+ 
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusProperties.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusProperties.java
 index 4ebb8aa0cbc..b22344e95ce 100644
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/status/StatusProperties.java

@@ -1,0 +1,1297 @@
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+index 51fa9eb1ff0..d577c05c9a0 100644
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -732,6 +732,7 @@ chrome_java_resources = [
+   "java/res/raw/back_gesture_arrow_animation.json",
+   "java/res/raw/bare_media_candidates.js",
+   "java/res/raw/bare_pressed_media_probe.js",
++  "java/res/raw/bare_video_match.js",
+   "java/res/raw/finds_opt_in_animation.json",
+   "java/res/transition/fade.xml",
+   "java/res/transition/move_image.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 134e5a819b4..f43b414bb4f 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -246,6 +246,9 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BarePressedMedia.java",
+   "java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java",
+   "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
++  "java/src/org/chromium/chrome/browser/bare/BareVideoMatch.java",
++  "java/src/org/chromium/chrome/browser/bare/BareVideoSaver.java",
++  "java/src/org/chromium/chrome/browser/bare/BareVideoSheet.java",
+   "java/src/org/chromium/chrome/browser/bare/BareUboUpdate.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackup.java",
+   "java/src/org/chromium/chrome/browser/bare/backup/BareAutoBackupFragment.java",
+diff --git a/chrome/android/java/res/raw/bare_video_match.js b/chrome/android/java/res/raw/bare_video_match.js
+new file mode 100644
+index 00000000000..43694e1a125
+--- /dev/null
++++ b/chrome/android/java/res/raw/bare_video_match.js
+@@ -0,0 +1,480 @@
++// Works out which file holds the video that was pressed, so "Download video" saves that one and not
++// another post's. Called as (function)(x, y) with the press position in CSS pixels. It starts the work
++// and returns at once; the answer is read later from window.__bareVideoMatch:
++//   state    "running" or "done"
++//   why      "" when options were found, otherwise "nothing", "two", "protected" or "stream"
++//   pressed  {width, height, duration, thumb}: the pressed video as the page plays it
++//   options  best first: {video, audio, width, height, duration, bytes, audioBytes, sound, from}
++//            video is the file to save, audio the separate sound file to join to it or "".
++//            sound is true when the video file has its own sound. from is "src", "page" or "fetched".
++//
++// Three places can name the file:
++//  1. the element's own address, when it is a real file;
++//  2. the page's data, where a site names each video with its picture size ("video_versions");
++//  3. the files the page itself fetched (Resource Timing, and the list BareMediaMenuGuard keeps,
++//     which goes on after the page's own record of 250 fetches is full). Picture-only and
++//     sound-only files are told apart, and their picture size and length read, from the first bytes of each file, so the
++//     pressed video is matched by its picture size and then by its length.
++// A file whose length or size does not fit the pressed video is never offered. Several that fit
++// are all returned, for the user to choose; none that fit returns no options.
++(function (x, y) {
++  var MIN_SIDE = 48, MAX_GROUPS = 16, MIN_KB = 64, HEAD = 32768, MAX_SIDX = 262144;
++  var MAX_ADDRESS = 4096, MAX_BLOCKS = 40, MAX_SCRIPT_CHARS = 4000000;
++  var state = window.__bareVideoMatch = {state: 'running', why: '', pressed: null, options: []};
++  var heads = window.__bareVideoHeads || (window.__bareVideoHeads = {});
++
++  function done(why) { state.why = state.options.length ? '' : (why || 'nothing'); state.state = 'done'; }
++  function safe(u) {
++    if (typeof u !== 'string' || !u || u.length > MAX_ADDRESS) return false;
++    try {
++      var p = new URL(u, location.href);
++      if (p.username || p.password) return false;
++      if (p.protocol === 'https:') return true;
++      return p.protocol === 'http:' && /^(localhost|127\.)/.test(p.hostname);
++    } catch (e) { return false; }
++  }
++  // One address per file: the byte range a player asks for in the query is dropped, everything
++  // else is kept, because it carries the signature the server checks.
++  // The address with its byte range taken out of the query, or set to [from, to]. Everything else
++  // is kept byte for byte, empty parts included: a signed address, such as TikTok's, answers 403
++  // once its query is written again (URLSearchParams turns ~ into %7E and drops "&&").
++  function withRange(u, from, to) {
++    var p = new URL(u, location.href);
++    p.hash = '';
++    var parts = p.search ? p.search.slice(1).split('&') : [];
++    var kept = parts.filter(function (s) { return !/^(bytestart|byteend)=/.test(s); });
++    if (from !== undefined) kept.push('bytestart=' + from, 'byteend=' + to);
++    if (kept.length !== parts.length || from !== undefined) {
++      p.search = kept.length ? '?' + kept.join('&') : '';
++    }
++    return p.href;
++  }
++  function whole(u) { return withRange(u); }
++  function path(u) { try { var p = new URL(u); return p.host + p.pathname; } catch (e) { return ''; } }
++  function near(a, b, tol) { return a > 0 && b > 0 && Math.abs(a - b) <= tol; }
++  function lengthTolerance(d) { return Math.max(0.5, d * 0.02); }
++  function sameShape(w1, h1, w2, h2) {
++    return w1 > 0 && h1 > 0 && w2 > 0 && h2 > 0 && Math.abs(w1 / h1 - w2 / h2) < 0.02;
++  }
++
++  // ---- The pressed video ----------------------------------------------------------------------
++  function visible(el) {
++    var cs = getComputedStyle(el);
++    return cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity) > 0.05;
++  }
++  function contains(el) {
++    var r = el.getBoundingClientRect();
++    return r.width >= MIN_SIDE && r.height >= MIN_SIDE &&
++           x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
++  }
++  var stack = (document.elementsFromPoint(x, y) || []).slice(0, 16), found = [];
++  function addVideo(v) { if (found.indexOf(v) < 0 && visible(v) && contains(v)) found.push(v); }
++  for (var i = 0; i < stack.length; i++) if (stack[i].tagName === 'VIDEO') addVideo(stack[i]);
++  var up = null;
++  for (var t = 0; t < stack.length && !up; t++) {
++    var r0 = stack[t].getBoundingClientRect();
++    if (contains(stack[t]) && r0.width * r0.height <= 0.9 * innerWidth * innerHeight) up = stack[t];
++  }
++  for (var n = 0; up && n < 6 && up !== document.body; n++, up = up.parentElement) {
++    var inside = up.querySelectorAll ? up.querySelectorAll('video') : [];
++    for (var j = 0; j < inside.length && j < 8; j++) addVideo(inside[j]);
++  }
++  if (found.length !== 1) { done(found.length > 1 ? 'two' : 'nothing'); return 'started'; }
++  var video = found[0];
++  if (video.mediaKeys) { done('protected'); return 'started'; }
++  var duration = isFinite(video.duration) ? video.duration : 0;
++  var pressed = state.pressed = {width: video.videoWidth || 0, height: video.videoHeight || 0,
++                                 duration: duration, thumb: ''};
++  try {
++    if (pressed.width && pressed.height) {
++      var cw = 240, ch = Math.round(cw * pressed.height / pressed.width);
++      if (ch > 320) { ch = 320; cw = Math.round(ch * pressed.width / pressed.height); }
++      var canvas = document.createElement('canvas');
++      canvas.width = cw; canvas.height = ch;
++      canvas.getContext('2d').drawImage(video, 0, 0, cw, ch);
++      pressed.thumb = canvas.toDataURL('image/jpeg', 0.7);
++    }
++  } catch (e) { /* A picture from another site cannot be read back; the sheet shows none. */ }
++
++  var src = video.currentSrc || video.src || '';
++  // A playlist is a list of pieces, not a video; saving it would save nothing anyone can play.
++  if (/\.(m3u8|mpd)(\?|#|$)/i.test(src)) { done('stream'); return 'started'; }
++  if (src && !/^blob:/i.test(src) && safe(src)) {
++    state.options.push({video: new URL(src, location.href).href, audio: '', width: pressed.width,
++                        height: pressed.height, duration: duration, bytes: 0, audioBytes: 0,
++                        sound: true, from: 'src'});
++    sizeOf(state.options[0].video).then(function (b) { state.options[0].bytes = b; done(); });
++    return 'started';
++  }
++
++  // ---- Reading the start of an mp4 ------------------------------------------------------------
++  function u32(b, o) { return b[o] * 16777216 + (b[o + 1] << 16) + (b[o + 2] << 8) + b[o + 3]; }
++  function u64(b, o) { return u32(b, o) * 4294967296 + u32(b, o + 4); }
++  function fourcc(b, o) { return String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]); }
++  // Calls fn(type, payload start, end within the buffer, declared end) for each box in [s, e).
++  // A box cut off by the end of the buffer is still reported, so its first children can be read.
++  function boxes(b, s, e, fn) {
++    var o = s;
++    while (o + 8 <= e) {
++      var size = u32(b, o), head = 8;
++      if (size === 1 && o + 16 <= e) { size = u64(b, o + 8); head = 16; }
++      else if (size === 0) size = e - o;
++      if (size < head) return;
++      if (fn(fourcc(b, o + 4), o + head, Math.min(o + size, e), o + size) === false) return;
++      o += size;
++    }
++  }
++  function child(b, s, e, type) {
++    var hit = null;
++    boxes(b, s, e, function (t, ps, pe) { if (t === type) { hit = [ps, pe]; return false; } });
++    return hit;
++  }
++  function parseSidx(b, ps, pe, boxEnd) {
++    if (ps + 12 > pe) return null;
++    var version = b[ps], scale = u32(b, ps + 8), o = ps + 12, first;
++    if (version === 0) { first = u32(b, o + 4); o += 8; } else { first = u64(b, o + 8); o += 16; }
++    var count = (b[o + 2] << 8) + b[o + 3]; o += 4;
++    if (o + count * 12 > pe || !scale) return null;
++    var dur = 0, bytes = 0;
++    for (var k = 0; k < count; k++, o += 12) { bytes += u32(b, o) & 0x7fffffff; dur += u32(b, o + 4); }
++    return {duration: dur / scale, bytes: boxEnd + first + bytes};
++  }
++  // What the start of a file says: its tracks, its length and, for a fragmented file, its size.
++  function parseHead(b) {
++    var info = {tracks: [], duration: 0, bytes: 0, sidxAt: -1, sidxEnd: -1};
++    boxes(b, 0, b.length, function (type, ps, pe, end) {
++      if (type === 'moov') {
++        var mvhd = child(b, ps, pe, 'mvhd');
++        if (mvhd && mvhd[0] + 32 <= pe) {
++          var v1 = b[mvhd[0]] === 1, sc = u32(b, mvhd[0] + (v1 ? 20 : 12));
++          var d = v1 ? u64(b, mvhd[0] + 24) : u32(b, mvhd[0] + 16);
++          if (sc && d && d !== 0xffffffff) info.duration = d / sc;
++        }
++        boxes(b, ps, pe, function (t2, tps, tpe) {
++          if (t2 !== 'trak') return;
++          var track = {handler: '', width: 0, height: 0, codec: '', duration: 0};
++          var tkhd = child(b, tps, tpe, 'tkhd');
++          if (tkhd && tkhd[1] - tkhd[0] >= 84) {
++            track.width = u32(b, tkhd[1] - 8) >>> 16;
++            track.height = u32(b, tkhd[1] - 4) >>> 16;
++          }
++          var mdia = child(b, tps, tpe, 'mdia');
++          if (mdia) {
++            var hdlr = child(b, mdia[0], mdia[1], 'hdlr');
++            if (hdlr && hdlr[0] + 12 <= mdia[1]) track.handler = fourcc(b, hdlr[0] + 8);
++            var mdhd = child(b, mdia[0], mdia[1], 'mdhd');
++            if (mdhd && mdhd[0] + 32 <= mdia[1]) {
++              var m1 = b[mdhd[0]] === 1, ts = u32(b, mdhd[0] + (m1 ? 20 : 12));
++              var md = m1 ? u64(b, mdhd[0] + 24) : u32(b, mdhd[0] + 16);
++              if (ts && md && md !== 0xffffffff) track.duration = md / ts;
++            }
++            var minf = child(b, mdia[0], mdia[1], 'minf');
++            var stbl = minf && child(b, minf[0], minf[1], 'stbl');
++            var stsd = stbl && child(b, stbl[0], stbl[1], 'stsd');
++            if (stsd && stsd[0] + 16 <= stbl[1]) track.codec = fourcc(b, stsd[0] + 12);
++          }
++          info.tracks.push(track);
++        });
++        // A fragmented file can state its length here instead.
++        var mvex = child(b, ps, pe, 'mvex'), mehd = mvex && child(b, mvex[0], mvex[1], 'mehd');
++        if (!info.duration && mehd && mvhd) {
++          var mv1 = b[mvhd[0]] === 1, msc = u32(b, mvhd[0] + (mv1 ? 20 : 12));
++          var fd = b[mehd[0]] === 1 ? u64(b, mehd[0] + 4) : u32(b, mehd[0] + 4);
++          if (msc && fd) info.duration = fd / msc;
++        }
++      } else if (type === 'sidx' && info.sidxAt < 0) {
++        info.sidxAt = ps - 8;
++        info.sidxEnd = end;
++        var sx = parseSidx(b, ps, pe, end);
++        if (sx) { info.duration = info.duration || sx.duration; info.bytes = sx.bytes; info.sidxDone = true; }
++      } else if (type === 'moof' || type === 'mdat') {
++        return false;
++      }
++    });
++    if (!info.duration) {
++      for (var q = 0; q < info.tracks.length; q++) info.duration = Math.max(info.duration, info.tracks[q].duration);
++    }
++    return info;
++  }
++
++  // ---- Fetching the start of a file, the way the page does ------------------------------------
++  function ranged(u) { var p = new URL(u); return p.searchParams.has('bytestart') || /[?&]bytestart=/.test(u); }
++  function fetchRange(u, from, to, byQuery) {
++    if (byQuery) return fetch(withRange(u, from, to), {credentials: 'omit'});
++    return fetch(u, {credentials: 'omit', headers: {Range: 'bytes=' + from + '-' + to}});
++  }
++  function sizeOf(u) {
++    return fetch(u, {method: 'HEAD', credentials: 'omit'})
++        .then(function (r) { return r.ok ? (parseInt(r.headers.get('content-length') || '0', 10) || 0) : 0; })
++        .catch(function () { return 0; });
++  }
++  function head(u, byQuery) {
++    if (heads[u]) return heads[u];
++    var p = fetchRange(u, 0, HEAD - 1, byQuery)
++        .then(function (r) { if (!r.ok) throw new Error('status'); return r.arrayBuffer(); })
++        .then(function (buf) {
++          var b = new Uint8Array(buf), info = parseHead(b);
++          // The index of a long video can run past the first read; fetch exactly that box.
++          if (info.sidxAt >= 0 && !info.sidxDone && info.sidxEnd - info.sidxAt <= MAX_SIDX) {
++            return fetchRange(u, info.sidxAt, info.sidxEnd - 1, byQuery)
++                .then(function (r) { return r.arrayBuffer(); })
++                .then(function (sb) {
++                  var s = new Uint8Array(sb);
++                  if (s.length >= 12 && fourcc(s, 4) === 'sidx') {
++                    var sx = parseSidx(s, 8, s.length, info.sidxEnd);
++                    if (sx) { info.duration = info.duration || sx.duration; info.bytes = sx.bytes; }
++                  }
++                  return info;
++                }, function () { return info; });
++          }
++          return info;
++        })
++        .then(function (info) {
++          if (info.bytes) return info;
++          return sizeOf(u).then(function (s) { info.bytes = s; return info; });
++        })
++        .catch(function () { return null; });
++    heads[u] = p;
++    return p;
++  }
++  function trackOf(info, handler) {
++    for (var k = 0; info && k < info.tracks.length; k++) if (info.tracks[k].handler === handler) return info.tracks[k];
++    return null;
++  }
++
++  // ---- 2. The page's own data -----------------------------------------------------------------
++  // Each video a page describes, as {urls: [{url, width, height}], duration}. Read from the JSON in
++  // the page's scripts. A site that changes its layout simply yields nothing here.
++  function pageBlocks() {
++    var out = [], text = '', ss = document.querySelectorAll('script');
++    for (var q = 0; q < ss.length && text.length < MAX_SCRIPT_CHARS; q++) {
++      var s = ss[q].textContent || '';
++      if (s.indexOf('video_versions') >= 0) text += s + '\n';
++    }
++    var needle = '"video_versions":[', at = 0;
++    while ((at = text.indexOf(needle, at)) >= 0 && out.length < MAX_BLOCKS) {
++      var startArr = at + needle.length - 1, depth = 0, k = startArr, inStr = false;
++      for (; k < text.length && k < startArr + 200000; k++) {
++        var c = text.charCodeAt(k);
++        if (inStr) { if (c === 92) k++; else if (c === 34) inStr = false; continue; }
++        if (c === 34) inStr = true;
++        else if (c === 91) depth++;
++        else if (c === 93 && --depth === 0) break;
++      }
++      var block = {urls: [], duration: 0};
++      try {
++        var arr = JSON.parse(text.slice(startArr, k + 1));
++        for (var a = 0; a < arr.length; a++) {
++          var e = arr[a];
++          if (e && safe(e.url) && e.width > 0 && e.height > 0) block.urls.push({url: e.url, width: e.width, height: e.height});
++        }
++      } catch (err) {}
++      // The length, when the page states it, sits beside the list in the same object.
++      var around = text.slice(Math.max(0, at - 3000), Math.min(text.length, k + 3000));
++      var dm = /"video_duration":\s*([0-9.]+)/.exec(around);
++      if (dm) block.duration = parseFloat(dm[1]) || 0;
++      if (block.urls.length) {
++        block.urls.sort(function (p1, p2) { return p2.width * p2.height - p1.width * p1.height; });
++        out.push(block);
++      }
++      at = k;
++    }
++    return out;
++  }
++
++  // ---- 3. What the page fetched ---------------------------------------------------------------
++  function allEntries() {
++    var out = [], seen = {}, lists = [performance.getEntriesByType('resource'), window.__bareMediaFetches || []];
++    for (var l = 0; l < lists.length; l++) {
++      for (var q = 0; q < lists[l].length; q++) {
++        var e = lists[l][q], k = e.name + '|' + e.startTime;
++        if (!seen[k]) { seen[k] = true; out.push(e); }
++      }
++    }
++    return out;
++  }
++  function fetchedFiles() {
++    var groups = {}, list = [];
++    var entries = allEntries();
++    for (var q = 0; q < entries.length; q++) {
++      var e = entries[q], u;
++      if (e.initiatorType !== 'fetch' && e.initiatorType !== 'xmlhttprequest' &&
++          e.initiatorType !== 'video' && e.initiatorType !== 'other') continue;
++      if (!safe(e.name)) continue;
++      try { u = new URL(e.name); } catch (x2) { continue; }
++      // TikTok's file addresses have no extension and name the type in the query instead.
++      if (!/\.(mp4|m4v|m4a|mov)$/i.test(u.pathname) &&
++          !/^(video|audio)_mp4$/i.test(u.searchParams.get('mime_type') || '')) continue;
++      var key = whole(e.name);
++      var g = groups[key] || (groups[key] = {url: key, byQuery: ranged(e.name), kb: 0, last: 0, first: e.startTime});
++      g.kb += Math.round((e.encodedBodySize || e.transferSize || 0) / 1024);
++      g.last = Math.max(g.last, e.responseEnd);
++      g.first = Math.min(g.first, e.startTime);
++      if (!g.byQuery && ranged(e.name)) g.byQuery = true;
++    }
++    for (var gk in groups) list.push(groups[gk]);
++    // A cross-site response can report no size at all, so a zero is not taken as small.
++    list = list.filter(function (g2) { return g2.kb === 0 || g2.kb >= MIN_KB; })
++        .sort(function (g1, g2) { return g2.last - g1.last; }).slice(0, MAX_GROUPS);
++    return list;
++  }
++  function segmentsOnly() {
++    var entries = allEntries();
++    for (var q = 0; q < entries.length; q++) {
++      if (/\.(m3u8|mpd|m4s|ts)(\?|$)/i.test(entries[q].name)) return true;
++    }
++    return false;
++  }
++
++  function sizeableVideos() {
++    var count = 0, all = document.querySelectorAll('video');
++    for (var a = 0; a < all.length; a++) {
++      var rr = all[a].getBoundingClientRect();
++      if (rr.width > MIN_SIDE && rr.height > MIN_SIDE) count++;
++    }
++    return count;
++  }
++  function namedAddress() {
++    var KEYS = ['playable_url_quality_hd', 'browser_native_hd_url', 'playable_url',
++                'browser_native_sd_url', 'video_url', 'contentUrl'];
++    var text = '', ss = document.querySelectorAll('script');
++    for (var q = 0; q < ss.length && q < 200 && text.length < MAX_SCRIPT_CHARS; q++) text += ss[q].textContent + ' ';
++    for (var w = 0; w < KEYS.length; w++) {
++      var needle = '"' + KEYS[w] + '":"', p = text.indexOf(needle);
++      if (p < 0) continue;
++      p += needle.length;
++      var end = p;
++      while (end < text.length && !(text.charCodeAt(end) === 34 && text.charCodeAt(end - 1) !== 92)) end++;
++      var c = text.slice(p, end);
++      try { c = JSON.parse('"' + c + '"'); } catch (err) {}
++      if (safe(c) && !/\.(m3u8|mpd)(\?|$)/i.test(c)) return c;
++    }
++    return '';
++  }
++
++  // ---- Matching -------------------------------------------------------------------------------
++  function fits(w, h, d) {
++    if (w !== pressed.width || h !== pressed.height) return false;
++    return !(pressed.duration && d) || near(d, pressed.duration, lengthTolerance(pressed.duration));
++  }
++
++  var blocks = pageBlocks(), files = fetchedFiles();
++  Promise.all(files.map(function (g) {
++    return head(g.url, g.byQuery).then(function (info) { g.info = info; return g; });
++  })).then(function () {
++    var pictures = [], sounds = [];
++    files.forEach(function (g) {
++      if (!g.info) return;
++      var v = trackOf(g.info, 'vide'), s = trackOf(g.info, 'soun');
++      if (v) pictures.push({url: g.url, byQuery: g.byQuery, width: v.width, height: v.height,
++                            duration: g.info.duration, bytes: g.info.bytes, sound: !!s, codec: v.codec, first: g.first});
++      else if (s) sounds.push({url: g.url, duration: g.info.duration, bytes: g.info.bytes, first: g.first});
++    });
++
++    // The pressed video's own file among what was fetched: same picture size, same length.
++    var matched = pictures.filter(function (p) { return fits(p.width, p.height, p.duration); });
++    if (pressed.duration && matched.some(function (p) { return p.duration > 0; })) {
++      matched = matched.filter(function (p) { return p.duration > 0; });
++    }
++
++    var options = [], seen = {};
++    function add(o) {
++      var k = path(o.video) + '|' + o.width + 'x' + o.height;
++      if (seen[k]) return;
++      seen[k] = true;
++      options.push(o);
++    }
++
++    matched.forEach(function (m) {
++      // The page's data names a file with sound for this same media: same address path.
++      for (var bi = 0; bi < blocks.length; bi++) {
++        var bl = blocks[bi];
++        for (var ui = 0; ui < bl.urls.length; ui++) {
++          if (path(bl.urls[ui].url) === path(m.url)) {
++            var best = bl.urls[0];
++            add({video: best.url, audio: '', width: best.width, height: best.height,
++                 duration: m.duration || bl.duration, bytes: 0, audioBytes: 0, sound: true, from: 'page'});
++            return;
++          }
++        }
++      }
++      // The player switches quality as it goes, so the pressed element may be showing a smaller
++      // copy of a bigger file the page also fetched. A copy of the same shape and the same length
++      // is the same video.
++      var pick = m;
++      if (m.duration > 0) {
++        pictures.forEach(function (p) {
++          if (sameShape(p.width, p.height, m.width, m.height) && near(p.duration, m.duration, 0.15) &&
++              p.width * p.height > pick.width * pick.height) pick = p;
++        });
++      }
++      // The sound of the same video has the same length. Two posts can share a length, so among
++      // those the one the player started fetching together with this picture is taken.
++      var audio = null;
++      if (!pick.sound && pick.duration > 0) {
++        sounds.forEach(function (s) {
++          if (!near(s.duration, pick.duration, lengthTolerance(pick.duration))) return;
++          if (!audio || Math.abs(s.first - m.first) < Math.abs(audio.first - m.first)) audio = s;
++        });
++      }
++      add({video: pick.url, audio: audio ? audio.url : '', width: pick.width, height: pick.height,
++           duration: pick.duration, bytes: pick.bytes, audioBytes: audio ? audio.bytes : 0,
++           sound: pick.sound, from: 'fetched'});
++    });
++
++    if (options.length) return options;
++
++    // A page with one video, whose picture size is not known yet: its one fetched picture file
++    // cannot belong to another video.
++    if (!pressed.width && sizeableVideos() === 1 && pictures.length === 1) {
++      var only = pictures[0], onlySound = null;
++      sounds.forEach(function (s) {
++        if (near(s.duration, only.duration, lengthTolerance(only.duration)) && !onlySound) onlySound = s;
++      });
++      add({video: only.url, audio: !only.sound && onlySound ? onlySound.url : '', width: only.width,
++           height: only.height, duration: only.duration, bytes: only.bytes,
++           audioBytes: !only.sound && onlySound ? onlySound.bytes : 0, sound: only.sound, from: 'fetched'});
++      return options;
++    }
++
++    // Nothing fetched fits, so go by the page's data alone. A site serves a smaller copy of the
++    // same shape to the player, so a block of the same shape counts, and its length decides.
++    var shaped = blocks.filter(function (bl) {
++      return bl.urls.some(function (u) {
++        return (u.width === pressed.width && u.height === pressed.height) ||
++               sameShape(u.width, u.height, pressed.width, pressed.height);
++      });
++    });
++    return Promise.all(shaped.map(function (bl) {
++      var best = bl.urls[0];
++      return head(best.url, false).then(function (info) {
++        return {video: best.url, audio: '', width: best.width, height: best.height,
++                duration: (info && info.duration) || bl.duration, bytes: info ? info.bytes : 0,
++                audioBytes: 0, sound: !info || !!trackOf(info, 'soun'), from: 'page'};
++      });
++    })).then(function (list) {
++      if (pressed.duration && list.some(function (o) { return o.duration > 0; })) {
++        list = list.filter(function (o) {
++          return near(o.duration, pressed.duration, lengthTolerance(pressed.duration));
++        });
++      }
++      list.forEach(add);
++      if (!options.length && sizeableVideos() === 1) {
++        // Older page layouts name the file of their one video under one of these keys.
++        var named = namedAddress();
++        if (named) add({video: named, audio: '', width: pressed.width, height: pressed.height,
++                        duration: pressed.duration, bytes: 0, audioBytes: 0, sound: true, from: 'page'});
++      }
++      return options;
++    });
++  }).then(function (options) {
++    // The sheet shows each file's size, so fill in the ones not known yet.
++    return Promise.all(options.map(function (o) {
++      return o.bytes ? o : sizeOf(o.video).then(function (b) { o.bytes = b; return o; });
++    }));
++  }).then(function (options) {
++    state.options = options;
++    done(options.length ? '' : (segmentsOnly() ? 'stream' : 'nothing'));
++  }, function () { done('nothing'); });
++  return 'started';
++})
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 6144c9aa9de..61125b94195 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -76,7 +76,13 @@ found in the LICENSE file.
+     <string name="bare_welcome_opt_hardened">Hardened JavaScript</string>
+     <string name="bare_welcome_hint_hardened">Safer against browser exploits, slower on heavy sites</string>
+     <string name="bare_video_choose_title">Choose the video to download</string>
+-    <string name="bare_video_which_one">Can’t tell which video this is</string>
++    <string name="bare_video_which_one">I can’t tell which video this is</string>
++    <string name="bare_video_confirm_title">Save this video?</string>
++    <string name="bare_video_confirm_summary">More than one file on this page could be this video.</string>
++    <string name="bare_video_save">Save</string>
++    <string name="bare_video_choose_another">Choose another file</string>
++    <string name="bare_video_protected">This video is protected, so it can’t be saved</string>
++    <string name="bare_video_stream_only">This video is only streamed in pieces, so it can’t be saved as one file</string>
+     <string name="bare_welcome_security_note">Websites can still use the information they receive, and characteristics of your browser, to recognize or track a visitor.</string>
+     <string name="bare_page_translation_title">Translate pages with Google</string>
+     <string name="bare_leave_as_exit_title">Treat leaving the app as exit</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaMenuGuard.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaMenuGuard.java
+index 952f46de7b8..156c812632a 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaMenuGuard.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareMediaMenuGuard.java
+@@ -19,6 +19,12 @@ import org.chromium.content_public.browser.WebContentsObserver;
+  * that runs before the page's own and stops the page from seeing a real long-press over a video.
+  * Nothing else about the event changes, and only the user's own presses count, not events a page
+  * makes up.
++ *
++ * <p>It also keeps a short list of the media files the page fetches, for Download video to match
++ * the pressed video against. The page's own record of fetches holds 250 entries by default, and a
++ * feed fills it in a minute, after which nothing new is recorded there; an observer is told about
++ * every fetch whether the record is full or not. The list lives in Bare's own script world, so the
++ * page cannot see it, and holds at most a few hundred addresses.
+  */
+ @NullMarked
+ public final class BareMediaMenuGuard extends WebContentsObserver {
+@@ -27,7 +33,15 @@ public final class BareMediaMenuGuard extends WebContentsObserver {
+                     + "window.addEventListener('contextmenu',function(e){if(!e.isTrusted)return;"
+                     + "var els=document.elementsFromPoint(e.clientX,e.clientY)||[];"
+                     + "for(var i=0;i<els.length&&i<16;i++){if(els[i].tagName==='VIDEO'){"
+-                    + "e.stopImmediatePropagation();return;}}},true);})()";
++                    + "e.stopImmediatePropagation();return;}}},true);"
++                    + "try{var keep=window.__bareMediaFetches=[];"
++                    + "new PerformanceObserver(function(list){list.getEntries().forEach(function(e){"
++                    + "if(!/\\.(mp4|m4v|m4a|mov|m3u8|mpd|m4s|ts)(\\?|$)/i.test(e.name))return;"
++                    + "keep.push({name:e.name,initiatorType:e.initiatorType,"
++                    + "encodedBodySize:e.encodedBodySize,transferSize:e.transferSize,"
++                    + "startTime:e.startTime,responseEnd:e.responseEnd});"
++                    + "if(keep.length>600)keep.splice(0,100);});})"
++                    + ".observe({type:'resource',buffered:true});}catch(x){}})()";
+ 
+     private final WebContents mWebContents;
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoMatch.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoMatch.java
+new file mode 100644
+index 00000000000..606121f7dad
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoMatch.java
+@@ -0,0 +1,226 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.graphics.Bitmap;
++import android.graphics.BitmapFactory;
++import android.graphics.Color;
++import android.os.SystemClock;
++import android.util.Base64;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import org.chromium.base.Callback;
++import org.chromium.base.task.PostTask;
++import org.chromium.base.task.TaskTraits;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.content_public.browser.WebContents;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++
++/**
++ * Finds the file that holds the video under a press.
++ *
++ * <p>A feed plays most of its videos from a blob, so the pressed element has no file address, and
++ * the page has fetched files for several videos at once. The script, {@code
++ * res/raw/bare_video_match.js}, matches the pressed video to a file by its picture size and then by
++ * its length, which it reads from the start of each file. It also finds the separate sound file
++ * when the site keeps picture and sound apart. Only files that fit the pressed video are returned;
++ * when none fit, nothing is.
++ */
++@NullMarked
++public final class BareVideoMatch {
++    private BareVideoMatch() {}
++
++    private static final long POLL_MS = 150;
++    private static final long MAX_WAIT_MS = 10_000;
++    private static final int MAX_OPTIONS = 8;
++
++    /** Why there is nothing to save. */
++    public static final String NOTHING = "nothing";
++
++    /** Two videos lie under the press. */
++    public static final String TWO = "two";
++
++    /** The video is protected (DRM) and is not saved. */
++    public static final String PROTECTED = "protected";
++
++    /** The page fetched only a playlist and its pieces, never a whole file. */
++    public static final String STREAM = "stream";
++
++    /** One file that could be the pressed video. */
++    public static final class Option {
++        public final String video;
++
++        /** The separate sound file to join to the video, or null when there is none. */
++        public final @Nullable String audio;
++
++        public final int width;
++        public final int height;
++        public final double durationSeconds;
++        public final long bytes;
++        public final long audioBytes;
++
++        /** Whether the video file has its own sound. */
++        public final boolean sound;
++
++        Option(
++                String video,
++                @Nullable String audio,
++                int width,
++                int height,
++                double durationSeconds,
++                long bytes,
++                long audioBytes,
++                boolean sound) {
++            this.video = video;
++            this.audio = audio;
++            this.width = width;
++            this.height = height;
++            this.durationSeconds = durationSeconds;
++            this.bytes = bytes;
++            this.audioBytes = audioBytes;
++            this.sound = sound;
++        }
++    }
++
++    /** What the page said. */
++    public static final class Result {
++        public final String why;
++        public final List<Option> options;
++
++        /** The pressed video's current picture, or null when the page could not draw it. */
++        public final @Nullable Bitmap thumbnail;
++
++        Result(String why, List<Option> options, @Nullable Bitmap thumbnail) {
++            this.why = why;
++            this.options = options;
++            this.thumbnail = thumbnail;
++        }
++
++        static Result nothing() {
++            return new Result(NOTHING, Collections.emptyList(), null);
++        }
++    }
++
++    /**
++     * Asks the page which file holds the video at the press, and passes on the answer. The answer
++     * comes within a few seconds; a page that does not answer in time gives nothing.
++     */
++    public static void find(
++            @Nullable WebContents webContents, int xDp, int yDp, Callback<Result> done) {
++        String script = BareMediaProbe.readRaw(R.raw.bare_video_match);
++        if (webContents == null || webContents.isDestroyed() || script.isEmpty()) {
++            done.onResult(Result.nothing());
++            return;
++        }
++        long deadline = SystemClock.uptimeMillis() + MAX_WAIT_MS;
++        BareScriptBridge.evaluate(
++                webContents,
++                script + "(" + xDp + "," + yDp + ")",
++                ignored -> poll(webContents, deadline, done));
++    }
++
++    private static void poll(WebContents webContents, long deadline, Callback<Result> done) {
++        if (webContents.isDestroyed()) {
++            done.onResult(Result.nothing());
++            return;
++        }
++        // Only the finished answer is sent back, as it carries a small picture.
++        BareScriptBridge.evaluate(
++                webContents,
++                "(function(){var s=window.__bareVideoMatch;"
++                        + "return JSON.stringify(s&&s.state==='done'?s:{state:'running'});})()",
++                json -> {
++                    Result result = parse(json);
++                    if (result != null) {
++                        done.onResult(result);
++                        return;
++                    }
++                    if (SystemClock.uptimeMillis() >= deadline) {
++                        done.onResult(Result.nothing());
++                        return;
++                    }
++                    PostTask.postDelayedTask(
++                            TaskTraits.UI_DEFAULT,
++                            () -> poll(webContents, deadline, done),
++                            POLL_MS);
++                });
++    }
++
++    /** Reads the script's answer; null while it is still working. */
++    static @Nullable Result parse(@Nullable String scriptResult) {
++        if (scriptResult == null) return Result.nothing();
++        try {
++            Object decoded = new org.json.JSONTokener(scriptResult).nextValue();
++            if (!(decoded instanceof String)) return Result.nothing();
++            JSONObject state = new JSONObject((String) decoded);
++            if (!state.optString("state", "").equals("done")) return null;
++            List<Option> options = new ArrayList<>();
++            JSONArray list = state.optJSONArray("options");
++            for (int i = 0; list != null && i < list.length() && options.size() < MAX_OPTIONS; i++) {
++                JSONObject o = list.getJSONObject(i);
++                String video = o.optString("video", "");
++                String audio = o.optString("audio", "");
++                // The same rule as every other address taken from a page: a web file, or a file
++                // on this machine for a local test page. Anything else is dropped.
++                if (!BareMediaProbe.isFileAddress(video)) continue;
++                boolean hasAudio = !audio.isEmpty() && BareMediaProbe.isFileAddress(audio);
++                options.add(
++                        new Option(
++                                video,
++                                hasAudio ? audio : null,
++                                o.optInt("width", 0),
++                                o.optInt("height", 0),
++                                o.optDouble("duration", 0),
++                                o.optLong("bytes", 0),
++                                hasAudio ? o.optLong("audioBytes", 0) : 0,
++                                o.optBoolean("sound", true)));
++            }
++            String why = options.isEmpty() ? state.optString("why", NOTHING) : "";
++            if (options.isEmpty() && why.isEmpty()) why = NOTHING;
++            JSONObject pressed = state.optJSONObject("pressed");
++            Bitmap thumbnail = pressed == null ? null : decodeThumbnail(pressed.optString("thumb"));
++            return new Result(why, options, thumbnail);
++        } catch (JSONException e) {
++            return Result.nothing();
++        }
++    }
++
++    private static @Nullable Bitmap decodeThumbnail(String dataUrl) {
++        String prefix = "data:image/jpeg;base64,";
++        if (!dataUrl.startsWith(prefix) || dataUrl.length() > 200_000) return null;
++        try {
++            byte[] bytes = Base64.decode(dataUrl.substring(prefix.length()), Base64.DEFAULT);
++            Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
++            return bitmap == null || isDark(bitmap) ? null : bitmap;
++        } catch (IllegalArgumentException e) {
++            return null;
++        }
++    }
++
++    /**
++     * Whether a picture is black, or all but black, all over. A phone can hand the page a black
++     * frame instead of the video's picture; the card then shows its placeholder, not a black box.
++     */
++    private static boolean isDark(Bitmap bitmap) {
++        int width = bitmap.getWidth();
++        int height = bitmap.getHeight();
++        for (int y = 0; y < 8; y++) {
++            for (int x = 0; x < 8; x++) {
++                int pixel = bitmap.getPixel(x * (width - 1) / 7, y * (height - 1) / 7);
++                int light = Color.red(pixel) * 3 + Color.green(pixel) * 6 + Color.blue(pixel);
++                if (light > 240) return false;
++            }
++        }
++        return true;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSaver.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSaver.java
+new file mode 100644
+index 00000000000..5a5c23e584e
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSaver.java
+@@ -0,0 +1,74 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.app.Activity;
++import android.view.View;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.R;
++import org.chromium.components.browser_ui.widget.RiseSheet;
++import org.chromium.url.GURL;
++
++import java.util.List;
++
++/**
++ * Saves the video that was pressed, from what {@link BareVideoMatch} found.
++ *
++ * <p>One file that fits is saved at once, since a signed address soon expires. Several are shown
++ * on a card for the user to choose. None gives an honest message and saves nothing. When the
++ * site keeps the sound in a file of its own, that file is downloaded as well.
++ */
++@NullMarked
++public final class BareVideoSaver {
++    private BareVideoSaver() {}
++
++    /** Starts the download of one address through the browser's own download path. */
++    public interface Downloader {
++        void download(GURL url);
++    }
++
++    /** Acts on what the page said about the press. */
++    public static void handle(Activity activity, BareVideoMatch.Result result, Downloader downloader) {
++        View root = activity.getWindow().getDecorView();
++        List<BareVideoMatch.Option> options = result.options;
++        if (options.isEmpty()) {
++            tell(root, messageFor(result.why));
++            return;
++        }
++        if (options.size() == 1) {
++            save(options.get(0), downloader);
++            return;
++        }
++        BareVideoSheet.show(root, result, option -> save(option, downloader));
++    }
++
++    static int messageFor(String why) {
++        switch (why) {
++            case BareVideoMatch.PROTECTED:
++                return R.string.bare_video_protected;
++            case BareVideoMatch.STREAM:
++                return R.string.bare_video_stream_only;
++            default:
++                return R.string.bare_video_which_one;
++        }
++    }
++
++    private static void save(BareVideoMatch.Option option, Downloader downloader) {
++        GURL video = new GURL(option.video);
++        String audioAddress = option.audio;
++        if (audioAddress == null) {
++            downloader.download(video);
++            return;
++        }
++        // The site keeps the sound in a file of its own, so it is saved too.
++        downloader.download(video);
++        downloader.download(new GURL(audioAddress));
++    }
++
++    private static void tell(View root, int message) {
++        RiseSheet.showMessage(root, root.getContext().getString(message), null, null, null);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSheet.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSheet.java
+new file mode 100644
+index 00000000000..a9a99376c34
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVideoSheet.java
+@@ -0,0 +1,220 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.content.Context;
++import android.graphics.Bitmap;
++import android.graphics.Outline;
++import android.text.format.DateUtils;
++import android.text.format.Formatter;
++import android.util.TypedValue;
++import android.view.Gravity;
++import android.view.View;
++import android.view.ViewGroup;
++import android.view.ViewOutlineProvider;
++import android.widget.Button;
++import android.widget.ImageView;
++import android.widget.LinearLayout;
++import android.widget.ScrollView;
++import android.widget.TextView;
++
++import org.chromium.base.Callback;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.R;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.components.browser_ui.widget.RiseSheet;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Locale;
++
++/**
++ * The card that asks which file to save when more than one file on the page fits the pressed
++ * video. It rises from behind the address bar like Bare's other cards. It shows the picture the
++ * video was showing when it was pressed, and the length, picture size and file size of the best
++ * fit, with Save, and "Choose another file" for the others.
++ */
++@NullMarked
++final class BareVideoSheet {
++    private BareVideoSheet() {}
++
++    static void show(
++            View root, BareVideoMatch.Result result, Callback<BareVideoMatch.Option> chosen) {
++        Context context = root.getContext();
++        List<BareVideoMatch.Option> options = result.options;
++        BareVideoMatch.Option best = options.get(0);
++        List<BareVideoMatch.Option> picked = new ArrayList<>(1);
++
++        LinearLayout card = new LinearLayout(context);
++        card.setOrientation(LinearLayout.VERTICAL);
++        card.setPadding(0, dp(context, 6), 0, dp(context, 18));
++
++        TextView title =
++                text(context, context.getString(R.string.bare_video_confirm_title), 17, true);
++        title.setPadding(dp(context, 20), 0, dp(context, 20), dp(context, 2));
++        card.addView(title);
++        TextView summary = text(context, context.getString(R.string.bare_video_confirm_summary), 13,
++                false);
++        summary.setTextColor(SemanticColorUtils.getDefaultTextColorSecondary(context));
++        summary.setPadding(dp(context, 20), 0, dp(context, 20), dp(context, 12));
++        card.addView(summary);
++
++        LinearLayout body = new LinearLayout(context);
++        body.setOrientation(LinearLayout.VERTICAL);
++        body.setPadding(dp(context, 20), 0, dp(context, 20), 0);
++        body.setClipToPadding(false);
++        ScrollView scroll = new ScrollView(context);
++        scroll.addView(body);
++        card.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
++
++        // The best fit, beside the picture of the pressed video.
++        LinearLayout first = new LinearLayout(context);
++        first.setOrientation(LinearLayout.HORIZONTAL);
++        first.setGravity(Gravity.CENTER_VERTICAL);
++        Bitmap thumbnail = result.thumbnail;
++        if (thumbnail != null) {
++            ImageView picture = new ImageView(context);
++            picture.setImageBitmap(thumbnail);
++            picture.setScaleType(ImageView.ScaleType.CENTER_CROP);
++            picture.setClipToOutline(true);
++            picture.setOutlineProvider(
++                    new ViewOutlineProvider() {
++                        @Override
++                        public void getOutline(View view, Outline outline) {
++                            outline.setRoundRect(
++                                    0, 0, view.getWidth(), view.getHeight(), dp(context, 10));
++                        }
++                    });
++            int width = dp(context, 96);
++            int height =
++                    Math.min(
++                            dp(context, 160),
++                            Math.round(width * thumbnail.getHeight() / (float) thumbnail.getWidth()));
++            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(width, height);
++            params.setMarginEnd(dp(context, 16));
++            first.addView(picture, params);
++        }
++        LinearLayout details = new LinearLayout(context);
++        details.setOrientation(LinearLayout.VERTICAL);
++        details.addView(text(context, headline(best), 16, true));
++        TextView size = text(context, sizeLine(context, best), 14, false);
++        size.setTextColor(SemanticColorUtils.getDefaultTextColorSecondary(context));
++        details.addView(size);
++        first.addView(details, new LinearLayout.LayoutParams(0, -2, 1f));
++        body.addView(first);
++
++        // The others, shown on request, each a tap to save.
++        LinearLayout others = new LinearLayout(context);
++        others.setOrientation(LinearLayout.VERTICAL);
++        others.setVisibility(View.GONE);
++        others.setPadding(0, dp(context, 12), 0, 0);
++        for (int i = 1; i < options.size(); i++) {
++            BareVideoMatch.Option option = options.get(i);
++            LinearLayout row = new LinearLayout(context);
++            row.setOrientation(LinearLayout.VERTICAL);
++            row.setPadding(0, dp(context, 10), 0, dp(context, 10));
++            row.addView(text(context, headline(option), 15, false));
++            TextView rowSize = text(context, sizeLine(context, option), 13, false);
++            rowSize.setTextColor(SemanticColorUtils.getDefaultTextColorSecondary(context));
++            row.addView(rowSize);
++            TypedValue ripple = new TypedValue();
++            context.getTheme()
++                    .resolveAttribute(android.R.attr.selectableItemBackground, ripple, true);
++            row.setBackgroundResource(ripple.resourceId);
++            row.setClickable(true);
++            row.setOnClickListener(
++                    v -> {
++                        picked.add(option);
++                        RiseSheet.closeActive();
++                    });
++            others.addView(row, new LinearLayout.LayoutParams(-1, -2));
++        }
++        body.addView(others, new LinearLayout.LayoutParams(-1, -2));
++
++        LinearLayout buttons = new LinearLayout(context);
++        buttons.setOrientation(LinearLayout.HORIZONTAL);
++        buttons.setGravity(Gravity.CENTER_VERTICAL);
++        buttons.setPadding(0, dp(context, 8), 0, 0);
++        Button another = button(context, context.getString(R.string.bare_video_choose_another));
++        Button save = button(context, context.getString(R.string.bare_video_save));
++        another.setOnClickListener(
++                v -> {
++                    others.setVisibility(View.VISIBLE);
++                    another.setVisibility(View.INVISIBLE);
++                });
++        save.setOnClickListener(
++                v -> {
++                    picked.add(best);
++                    RiseSheet.closeActive();
++                });
++        buttons.addView(another);
++        buttons.addView(new View(context), new LinearLayout.LayoutParams(0, 1, 1f));
++        buttons.addView(save);
++        // Right under the best fit, so they show while the card is only part way up. The
++        // buttons' own padding is pulled into the margin so their text lines up with the rows.
++        LinearLayout.LayoutParams buttonsParams = new LinearLayout.LayoutParams(-1, -2);
++        buttonsParams.setMarginStart(-dp(context, 16));
++        buttonsParams.setMarginEnd(-dp(context, 16));
++        body.addView(buttons, 1, buttonsParams);
++
++        // The download starts once this card has gone: its save card cannot show while another
++        // card is still folding away, and would be skipped.
++        RiseSheet.show(
++                root,
++                card,
++                scroll,
++                () -> {
++                    if (!picked.isEmpty()) chosen.onResult(picked.get(0));
++                });
++    }
++
++    /** "1:07 · 720 × 1280" */
++    private static String headline(BareVideoMatch.Option option) {
++        StringBuilder out = new StringBuilder();
++        if (option.durationSeconds > 0) {
++            out.append(DateUtils.formatElapsedTime(Math.round(option.durationSeconds)));
++        }
++        if (option.width > 0 && option.height > 0) {
++            if (out.length() > 0) out.append(" · ");
++            out.append(String.format(Locale.getDefault(), "%d × %d", option.width, option.height));
++        }
++        return out.toString();
++    }
++
++    /** The download size, the sound file included. Empty when the page did not say. */
++    private static String sizeLine(Context context, BareVideoMatch.Option option) {
++        long total = option.bytes + option.audioBytes;
++        return total > 0 ? Formatter.formatShortFileSize(context, total) : "";
++    }
++
++    private static TextView text(Context context, String value, int sp, boolean bold) {
++        TextView view = new TextView(context);
++        view.setText(value);
++        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
++        view.setTextColor(SemanticColorUtils.getDefaultTextColor(context));
++        if (bold) view.setTypeface(view.getTypeface(), android.graphics.Typeface.BOLD);
++        return view;
++    }
++
++    private static Button button(Context context, String label) {
++        Button button = new Button(context, null, android.R.attr.borderlessButtonStyle);
++        button.setText(label);
++        button.setAllCaps(false);
++        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
++        button.setTextColor(SemanticColorUtils.getDefaultControlColorActive(context));
++        // A fixed side padding, so the text lines up with the rows under the margin pulled in
++        // below; the theme's own can be smaller and cut the first letter off.
++        int side = dp(context, 16);
++        button.setPaddingRelative(side, button.getPaddingTop(), side, button.getPaddingBottom());
++        button.setLayoutParams(
++                new LinearLayout.LayoutParams(
++                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
++        return button;
++    }
++
++    private static int dp(Context context, float value) {
++        return Math.round(value * context.getResources().getDisplayMetrics().density);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java
+index 87e59335dec..fe683fdab55 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerBridge.java
+@@ -21,7 +21,7 @@ import org.chromium.content_public.browser.WebContents;
+  * and which the page cannot see. Nothing here touches how the video is fetched or decoded.
+  */
+ @NullMarked
+-final class BarePlayerBridge {
++public final class BarePlayerBridge {
+     private BarePlayerBridge() {}
+ 
+     /**
+@@ -89,7 +89,7 @@ final class BarePlayerBridge {
+     }
+ 
+     /** Downloads {@code url} as the page's video, like the long-press menu's Save video. */
+-    static void download(@Nullable WebContents webContents, int frameId, String url) {
++    public static void download(@Nullable WebContents webContents, int frameId, String url) {
+         if (webContents == null || webContents.isDestroyed()) return;
+         BarePlayerBridgeJni.get().download(webContents, frameId, url);
+     }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
+index 942aba1466d..85660f87aa9 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/contextmenu/ChromeContextMenuPopulator.java
+@@ -49,11 +49,12 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.KeyboardShortcuts;
+-import org.chromium.chrome.browser.bare.BareMediaCandidates;
+-import org.chromium.chrome.browser.bare.BareMediaChooser;
+ import org.chromium.chrome.browser.bare.BareMediaProbe;
+ import org.chromium.chrome.browser.bare.BarePressedMedia;
+ import org.chromium.chrome.browser.bare.BareMediaRegistryBridge;
++import org.chromium.chrome.browser.bare.BareVideoMatch;
++import org.chromium.chrome.browser.bare.BareVideoSaver;
++import org.chromium.chrome.browser.bare.player.BarePlayerBridge;
+ import org.chromium.chrome.browser.bare.player.BarePlayerController;
+ import org.chromium.chrome.browser.bare.player.BarePlayerSettings;
+ import org.chromium.chrome.browser.bookmarks.BookmarkUtils;
+@@ -972,29 +973,16 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+                 && !upstreamOffersVideoDownload
+                 && mMode != ContextMenuMode.THIN_WEB_VIEW
+                 && areMandatoryFlowsCompleted(getProfile())) {
+-            BareMediaRegistryBridge.DownloadSet detected = getDetectedMedia();
+-            // The item is offered for any video the browser cannot save itself, not only when the
+-            // tab has fetched something. Asking the page about the video that was pressed can
+-            // find its file where the record of fetches cannot.
+-            {
+-                ModelList detectedGroup = new ModelList();
+-                detectedGroup.add(
+-                        createListItem(
+-                                Item.SAVE_DETECTED_VIDEO,
+-                                /* showInProductHelp= */ false,
+-                                !mIsDownloadRestrictedByPolicy));
+-                // Adaptive streaming splits sound off into its own file, so the video on its
+-                // own is silent. Offer the audio as well rather than quietly handing over half
+-                // of what was playing.
+-                if (detected != null && detected.audio != null) {
+-                    detectedGroup.add(
+-                            createListItem(
+-                                    Item.SAVE_DETECTED_AUDIO,
+-                                    /* showInProductHelp= */ false,
+-                                    !mIsDownloadRestrictedByPolicy));
+-                }
+-                groupedItems.add(detectedGroup);
+-            }
++            // The item is offered for any video the browser cannot save itself. Choosing it asks
++            // the page which file holds the pressed video, and its sound comes with it, so there
++            // is no separate item for the sound.
++            ModelList detectedGroup = new ModelList();
++            detectedGroup.add(
++                    createListItem(
++                            Item.SAVE_DETECTED_VIDEO,
++                            /* showInProductHelp= */ false,
++                            !mIsDownloadRestrictedByPolicy));
++            groupedItems.add(detectedGroup);
+         }
+ 
+         // Media Chromium did not classify, found by asking the page what lies under the press. A
+@@ -1013,16 +1001,6 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+                                     : Item.SAVE_DETECTED_IMAGE,
+                             /* showInProductHelp= */ false,
+                             !mIsDownloadRestrictedByPolicy));
+-            BareMediaRegistryBridge.DownloadSet pressedDetected = getDetectedMedia();
+-            if (BarePressedMedia.offersAudio(pressedOffer, BarePressedMedia.get(mParams))
+-                    && pressedDetected != null
+-                    && pressedDetected.audio != null) {
+-                pressedGroup.add(
+-                        createListItem(
+-                                Item.SAVE_DETECTED_AUDIO,
+-                                /* showInProductHelp= */ false,
+-                                !mIsDownloadRestrictedByPolicy));
+-            }
+             groupedItems.add(pressedGroup);
+         }
+ 
+@@ -2037,75 +2015,35 @@ public class ChromeContextMenuPopulator implements ContextMenuPopulator {
+      * same external download manager handoff apply.
+      */
+     /**
+-     * Downloads the video that was pressed: the file the page itself names for it if it names one,
+-     * otherwise the file the tab fetched.
++     * Downloads the video that was pressed, and only that one. The page is asked which of its files
++     * fits the pressed video: one fit is saved at once, several are offered on a card, none is
++     * said honestly and nothing is saved. The download starts as soon as the answer is in, because
++     * the addresses streaming sites hand out expire.
++     *
++     * <p>The menu is gone by the time the answer comes, and its own download call with it, so the
++     * download goes through Bare Player's, which takes the same path as Save video: the page as
++     * referrer, the browser's own download handling and the external download manager if one is
++     * chosen.
+      */
+     private void startPressedVideoDownload() {
+         if (mIsDownloadRestrictedByPolicy) {
+             showDownloadRestrictedToast();
+             return;
+         }
+-        BareMediaProbe.findPressed(
+-                mItemDelegate.getWebContents(),
++        WebContents webContents = mItemDelegate.getWebContents();
++        android.app.Activity activity =
++                org.chromium.base.ContextUtils.activityFromContext(mContext);
++        if (activity == null) return;
++        BareVideoMatch.find(
++                webContents,
+                 mParams.getTriggeringTouchXDp(),
+                 mParams.getTriggeringTouchYDp(),
+-                pressed -> {
+-                    if (pressed.kind == BareMediaProbe.Pressed.VIDEO && pressed.address != null) {
+-                        GURL url = new GURL(pressed.address);
+-                        if (mItemDelegate.startDownload(url, /* isLink= */ false)) {
+-                            mNativeDelegate.startDownload(url, /* isMedia= */ true);
+-                        }
+-                        return;
+-                    }
+-                    // The record of what the tab fetched cannot say which video was pressed, so
+-                    // with several videos on the page it would be a guess, and another post's
+-                    // video is the wrong answer.
+-                    if (pressed.ambiguous
+-                            || (pressed.videos > 1 && pressed.kind != BareMediaProbe.Pressed.VIDEO)) {
+-                        Toast.makeText(mContext, R.string.bare_video_which_one, Toast.LENGTH_LONG)
+-                                .show();
+-                        return;
+-                    }
+-                    // The pressed video is known but its file is not, and the page holds several
+-                    // videos, so the user is asked to pick among the files it fetched.
+-                    if (pressed.videos > 1) {
+-                        chooseVideoFile(pressed);
+-                        return;
+-                    }
+-                    BareMediaRegistryBridge.DownloadSet detected = getDetectedMedia();
+-                    if (detected != null) {
+-                        startDetectedDownload(detected.video);
+-                        return;
+-                    }
+-                    Toast.makeText(mContext, R.string.bare_video_not_found, Toast.LENGTH_LONG)
+-                            .show();
+-                });
+-    }
+-
+-    /** Lists the video files the page fetched, and downloads the one the user picks. */
+-    private void chooseVideoFile(BareMediaProbe.Pressed pressed) {
+-        BareMediaCandidates.load(
+-                mItemDelegate.getWebContents(),
+-                all -> {
+-                    java.util.List<BareMediaCandidates.Candidate> choices =
+-                            BareMediaCandidates.choices(
+-                                    all, pressed.videoWidth, pressed.videoHeight);
+-                    android.app.Activity activity =
+-                            org.chromium.base.ContextUtils.activityFromContext(mContext);
+-                    if (choices.isEmpty() || activity == null) {
+-                        Toast.makeText(mContext, R.string.bare_video_which_one, Toast.LENGTH_LONG)
+-                                .show();
+-                        return;
+-                    }
+-                    BareMediaChooser.show(
++                result -> {
++                    if (activity.isFinishing() || activity.isDestroyed()) return;
++                    BareVideoSaver.handle(
+                             activity,
+-                            choices,
+-                            candidate -> {
+-                                GURL url = new GURL(candidate.url);
+-                                if (mItemDelegate.startDownload(url, /* isLink= */ false)) {
+-                                    mNativeDelegate.startDownload(url, /* isMedia= */ true);
+-                                }
+-                            });
++                            result,
++                            url -> BarePlayerBridge.download(webContents, -1, url.getSpec()));
+                 });
+     }
+ 

@@ -1,0 +1,230 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index 1b7abf73bed..e6e13172754 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -4180,6 +4180,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                     public void onDidFinishNavigationInPrimaryMainFrame(
+                             Tab tab, NavigationHandle navigation) {
+                         if (!navigation.hasCommitted()) return;
++                        BarePlayerController.onPageLoaded(
++                                ChromeTabbedActivity.this, tab, navigation.getUrl().getSpec());
+ 
+                         // Show the sync error message even if the navigation happened on incognito.
+                         Profile profile = getOriginalProfile();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/download/home/DownloadManagerCoordinatorFactoryHelper.java b/chrome/android/java/src/org/chromium/chrome/browser/app/download/home/DownloadManagerCoordinatorFactoryHelper.java
+index 28725849e9a..08a42f76cee 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/download/home/DownloadManagerCoordinatorFactoryHelper.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/download/home/DownloadManagerCoordinatorFactoryHelper.java
+@@ -6,8 +6,13 @@ package org.chromium.chrome.browser.app.download.home;
+ 
+ import android.app.Activity;
+ import android.content.Context;
++import android.content.Intent;
++import android.net.Uri;
+ 
+ import org.chromium.base.Callback;
++import org.chromium.chrome.browser.IntentHandler;
++import org.chromium.chrome.browser.bare.player.BarePlayerController;
++import org.chromium.chrome.browser.download.BareDownloadPlay;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.download.DownloadMetrics;
+@@ -28,6 +33,8 @@ import org.chromium.components.browser_ui.util.GlobalDiscardableReferencePool;
+ import org.chromium.components.offline_items_collection.OfflineItem;
+ import org.chromium.ui.modaldialog.ModalDialogManager;
+ 
++import java.io.File;
++
+ /** A helper class to build and return an {@link DownloadManagerCoordinator}. */
+ @NullMarked
+ class DownloadManagerCoordinatorFactoryHelper {
+@@ -71,6 +78,9 @@ class DownloadManagerCoordinatorFactoryHelper {
+                             DownloadMetrics.OpenWithExternalAppsSource.DOWNLOAD_HOME_MENU);
+                 };
+ 
++        BareDownloadPlay.setHandler(
++                item -> playInBare(activity, item, openWithHandler));
++
+         return DownloadManagerCoordinatorFactory.create(
+                 activity,
+                 config,
+@@ -86,6 +96,28 @@ class DownloadManagerCoordinatorFactoryHelper {
+                 GlobalDiscardableReferencePool.getReferencePool());
+     }
+ 
++    /**
++     * Bare: opens a finished video in a Bare tab and starts Bare Player on it. Anything that goes
++     * wrong falls back to the old way, a chooser of other apps.
++     */
++    private static void playInBare(
++            Activity activity, OfflineItem item, Callback<OfflineItem> fallback) {
++        String path = item.filePath;
++        if (path == null) {
++            fallback.onResult(item);
++            return;
++        }
++        String url = path.startsWith("content:") ? path : Uri.fromFile(new File(path)).toString();
++        try {
++            Intent intent = IntentHandler.createTrustedOpenNewTabIntent(activity, false);
++            intent.setData(Uri.parse(url));
++            BarePlayerController.armLocal(url);
++            activity.startActivity(intent);
++        } catch (RuntimeException e) {
++            fallback.onResult(item);
++        }
++    }
++
+     private static void settingsLaunchHelper(Context context) {
+         SettingsNavigation settingsNavigation =
+                 SettingsNavigationFactory.createSettingsNavigation();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerController.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerController.java
+index 427284c03f8..ab6278d49f8 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/player/BarePlayerController.java
+@@ -66,6 +66,42 @@ public final class BarePlayerController implements FullscreenManager.Observer, B
+     private static final WeakHashMap<Activity, BarePlayerController> sControllers =
+             new WeakHashMap<>();
+ 
++    // Bare: a downloaded video opened from the Downloads page plays here even when the player is
++    // switched off. The address is held until that page has loaded; the page then counts as ours.
++    private static final long LOCAL_WAIT_MS = 20000;
++    private static @Nullable String sLocalUrl;
++    private static long sLocalAt;
++    private static @Nullable WeakReference<WebContents> sLocalContents;
++
++    /** Notes the address of a downloaded file about to open in a tab, to play when it loads. */
++    public static void armLocal(String url) {
++        sLocalUrl = url;
++        sLocalAt = android.os.SystemClock.uptimeMillis();
++    }
++
++    /** Called when a page has loaded in a tab of {@code activity}. */
++    public static void onPageLoaded(Activity activity, Tab tab, String url) {
++        String pending = sLocalUrl;
++        if (pending == null) return;
++        if (android.os.SystemClock.uptimeMillis() - sLocalAt > LOCAL_WAIT_MS) {
++            sLocalUrl = null;
++            return;
++        }
++        if (!pending.equals(url)) return;
++        sLocalUrl = null;
++        WebContents webContents = tab.getWebContents();
++        BarePlayerController controller = sControllers.get(activity);
++        if (webContents == null || controller == null) return;
++        sLocalContents = new WeakReference<>(webContents);
++        // The video document needs a moment before its video can be found.
++        controller.mHandler.postDelayed(() -> controller.lookOnPage(webContents), 700);
++    }
++
++    private static boolean isLocal(WebContents webContents) {
++        WeakReference<WebContents> local = sLocalContents;
++        return local != null && local.get() == webContents;
++    }
++
+     // The page and frame whose video Bare Player last sent to picture-in-picture, so the
+     // window's expand button can bring it back fullscreen.
+     private static @Nullable WeakReference<WebContents> sPipContents;
+@@ -186,7 +222,7 @@ public final class BarePlayerController implements FullscreenManager.Observer, B
+         if (webContents == null) return;
+         // The player's own request for fullscreen on the video comes back through here.
+         if (mView != null && webContents == mWebContents) return;
+-        if (!BarePlayerSettings.isEnabled()) return;
++        if (!BarePlayerSettings.isEnabled() && !isLocal(webContents)) return;
+         tearDown();
+         mTab = tab;
+         mWebContents = webContents;
+@@ -626,6 +662,11 @@ public final class BarePlayerController implements FullscreenManager.Observer, B
+             return false;
+         }
+         String src = state.isNull("src") ? null : state.optString("src", null);
++        // Bare: a file on this phone has nothing to download.
++        if (src != null && (src.startsWith("file:") || src.startsWith("content:"))) {
++            mDirectSource = null;
++            return false;
++        }
+         mDirectSource = src == null || src.isEmpty() ? null : src;
+         return mDirectSource != null || BareMediaRegistryBridge.getDownloadSet(mWebContents) != null;
+     }
+diff --git a/chrome/browser/download/android/BUILD.gn b/chrome/browser/download/android/BUILD.gn
+index 40c19c33326..f1fb9a1c7bd 100644
+--- a/chrome/browser/download/android/BUILD.gn
++++ b/chrome/browser/download/android/BUILD.gn
+@@ -53,6 +53,7 @@ android_library("java") {
+     "java/src/org/chromium/chrome/browser/download/BareDownloadEngine.java",
+     "java/src/org/chromium/chrome/browser/download/BareDownloadLocation.java",
+     "java/src/org/chromium/chrome/browser/download/BareDownloadParts.java",
++    "java/src/org/chromium/chrome/browser/download/BareDownloadPlay.java",
+     "java/src/org/chromium/chrome/browser/download/DangerousDownloadDialogBridge.java",
+     "java/src/org/chromium/chrome/browser/download/DownloadConstants.java",
+     "java/src/org/chromium/chrome/browser/download/DownloadDelegateImpl.java",
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadPlay.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadPlay.java
+new file mode 100644
+index 00000000000..a5a3bea04cf
+--- /dev/null
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/BareDownloadPlay.java
+@@ -0,0 +1,42 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.download;
++
++import org.chromium.base.Callback;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.components.offline_items_collection.OfflineItem;
++import org.chromium.components.offline_items_collection.OfflineItemFilter;
++import org.chromium.components.offline_items_collection.OfflineItemState;
++
++/**
++ * Tapping a finished video on the Downloads page plays it in Bare Player instead of handing it to
++ * another app. The part that opens a tab lives with the activity code, which registers itself
++ * here.
++ */
++@NullMarked
++public final class BareDownloadPlay {
++    private BareDownloadPlay() {}
++
++    private static @Nullable Callback<OfflineItem> sHandler;
++
++    /** Sets what plays a video, or clears it. */
++    public static void setHandler(@Nullable Callback<OfflineItem> handler) {
++        sHandler = handler;
++    }
++
++    /** Plays {@code item} if it is a finished video there is a way to play; false otherwise. */
++    public static boolean play(OfflineItem item) {
++        Callback<OfflineItem> handler = sHandler;
++        if (handler == null
++                || item.filter != OfflineItemFilter.VIDEO
++                || item.state != OfflineItemState.COMPLETE
++                || item.filePath == null) {
++            return false;
++        }
++        handler.onResult(item);
++        return true;
++    }
++}
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListMediator.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListMediator.java
+index 68dcad48b6d..7215c68f82b 100644
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListMediator.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/DateOrderedListMediator.java
+@@ -37,6 +37,7 @@ import org.chromium.chrome.browser.download.home.filter.SearchOfflineItemFilter;
+ import org.chromium.chrome.browser.download.home.filter.TypeOfflineItemFilter;
+ import org.chromium.chrome.browser.download.home.glue.ThumbnailRequestGlue;
+ import org.chromium.chrome.browser.download.home.list.DateOrderedListCoordinator.DateOrderedListObserver;
++import org.chromium.chrome.browser.download.BareDownloadPlay;
+ import org.chromium.chrome.browser.download.home.list.DateOrderedListCoordinator.DeleteController;
+ import org.chromium.chrome.browser.download.home.list.mutator.DateOrderedListMutator;
+ import org.chromium.chrome.browser.download.home.list.mutator.ListMutationController;
+@@ -382,6 +383,10 @@ class DateOrderedListMediator implements BackPressHandler {
+             onShowWarningBypassDialog(item);
+             return;
+         }
++        // Bare: a finished video plays in Bare Player; if that cannot start, the usual open follows.
++        if (!OtrProfileId.isOffTheRecord(mUiConfig.otrProfileId) && BareDownloadPlay.play(item)) {
++            return;
++        }
+         OpenParams openParams = new OpenParams(LaunchLocation.DOWNLOAD_HOME);
+         openParams.openInIncognito = OtrProfileId.isOffTheRecord(mUiConfig.otrProfileId);
+         mProvider.openItem(openParams, assumeNonNull(item.id));
