@@ -79,7 +79,8 @@ nothing leaves the device until the Check for updates row is tapped.
 **If you make Google your search engine**, more of Chromium's Google-only behaviour switches on
 with it. Focusing the address bar asks `www.google.com/complete/search` for suggestions before you
 type anything. By the code, Chromium also preconnects to `www.google.com` from time to time,
-prefetches search results, prerenders `www.google.com/search/warmup.html` on focus (`kPrewarm`),
+prefetches search results if you turn on Preload pages, which is off by default (0000360),
+prerenders `www.google.com/search/warmup.html` on focus (`kPrewarm`),
 asks `www.google.com/async/folae` whether AI Mode is available, and sends a word you tap on a
 page to `www.google.com/s` for Touch to Search. With DuckDuckGo or any other engine none of this
 happens. With Google, the new tab page shows the plain Google logo; with DuckDuckGo it shows
