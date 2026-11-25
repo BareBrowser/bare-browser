@@ -1,0 +1,615 @@
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 94fc590d54..f671aab352 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -306,6 +306,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java",
+   "java/src/org/chromium/chrome/browser/bare/BareTabSwitcher.java",
+   "java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java",
++  "java/src/org/chromium/chrome/browser/bare/BareTvCursor.java",
+   "java/src/org/chromium/chrome/browser/bare/BareTvFocus.java",
+   "java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java",
+   "java/src/org/chromium/chrome/browser/bare/BareBackupUpgradeOverlay.java",
+diff --git a/chrome/android/java/res_chromium_base/values/channel_constants.xml b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+index 4f3e17e39f..94b6a86607 100644
+--- a/chrome/android/java/res_chromium_base/values/channel_constants.xml
++++ b/chrome/android/java/res_chromium_base/values/channel_constants.xml
+@@ -126,6 +126,8 @@ found in the LICENSE file.
+     <string name="bare_welcome_hint_download_sign_in">Also sends your cookies for the file\'s site. Off by default</string>
+     <string name="bare_welcome_opt_background_media">Background media playback</string>
+     <string name="bare_welcome_hint_background_media">Keep audio playing when you switch apps or lock the screen</string>
++    <string name="bare_tv_cursor_title">Remote pointer</string>
++    <string name="bare_tv_cursor_summary">Hold the center button on a page to move a pointer. Hold it again to go back to links</string>
+     <string name="bare_welcome_opt_notifications">Allow notifications</string>
+     <string name="bare_welcome_hint_notifications">Download progress, and sites you let notify you. Android asks you to confirm.</string>
+     <string name="bare_welcome_hint_notifications_on">Allowed. To turn them off, use Android\'s settings for Bare.</string>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index 11d8a61de2..93d46d25bf 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -116,6 +116,7 @@ import org.chromium.chrome.browser.back_press.BackPressManager;
+ import org.chromium.chrome.browser.bare.BareClearOnExit;
+ import org.chromium.chrome.browser.bare.BareClearVeil;
+ import org.chromium.chrome.browser.bare.BareNewTabRise;
++import org.chromium.chrome.browser.bare.BareTvCursor;
+ import org.chromium.chrome.browser.bare.BareTvFocus;
+ import org.chromium.chrome.browser.back_press.MinimizeAppAndCloseTabBackPressHandler;
+ import org.chromium.chrome.browser.back_press.MinimizeAppAndCloseTabBackPressHandler.MinimizeAppAndCloseTabType;
+@@ -605,6 +606,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+     private final OneshotSupplierImpl<TabSwitcher> mIncognitoTabSwitcherSupplier =
+             new OneshotSupplierImpl<>();
+     private final OneshotSupplierImpl<HubManager> mHubManagerSupplier = new OneshotSupplierImpl<>();
++    private final BareTvCursor mBareTvCursor = new BareTvCursor(this);
+     private final OneshotSupplierImpl<ModuleRegistry> mModuleRegistrySupplier =
+             new OneshotSupplierImpl<>();
+     private final TransitiveTopInsetProvider mTransitiveTopInsetProvider =
+@@ -5926,6 +5928,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+ 
+     @Override
+     public boolean dispatchKeyEvent(KeyEvent event) {
++        if (mBareTvCursor.dispatchKeyEvent(getActivityTab(), event)) return true;
+         Boolean result =
+                 KeyboardShortcuts.dispatchKeyEvent(
+                         event,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareTvCursor.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareTvCursor.java
+new file mode 100644
+index 0000000000..da9490803f
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareTvCursor.java
+@@ -0,0 +1,439 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Color;
++import android.graphics.Paint;
++import android.graphics.Path;
++import android.os.SystemClock;
++import android.view.Choreographer;
++import android.view.InputDevice;
++import android.view.KeyEvent;
++import android.view.MotionEvent;
++import android.view.View;
++import android.view.ViewGroup;
++import android.view.ViewParent;
++import android.view.ViewTreeObserver.OnGlobalFocusChangeListener;
++
++import androidx.activity.ComponentActivity;
++import androidx.activity.OnBackPressedCallback;
++
++import org.chromium.base.DeviceInfo;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
++import org.chromium.chrome.browser.tab.Tab;
++
++/**
++ * Bare: a pointer that a TV remote moves over a web page, for pages that are hard to use link by
++ * link. Holding the center key turns it on and off, and Back turns it off.
++ */
++@NullMarked
++public final class BareTvCursor {
++    private static final int HOLD_MS = 500;
++    private static final int FIRST_STEP_DP = 12;
++    private static final int MIN_SPEED_DP_PER_S = 220;
++    private static final int MAX_SPEED_DP_PER_S = 900;
++    private static final int SPEED_UP_MS = 1200;
++    private static final int SCROLL_SPEED_DP_PER_S = 700;
++    private static final int WHEEL_TICK_DP = 64;
++    private static final int TAP_MS = 50;
++    private static final int VISIBLE_DP = 8;
++
++    private final ComponentActivity mActivity;
++    private final Choreographer.FrameCallback mFrame = this::onFrame;
++    private @Nullable CursorView mView;
++    private @Nullable Tab mTab;
++    private @Nullable OnBackPressedCallback mBackCallback;
++    private final OnGlobalFocusChangeListener mFocusListener = this::onFocusChanged;
++    private @Nullable KeyEvent mCenterDown;
++    private boolean mCenterHeld;
++    private boolean mReplaying;
++    private int mHeldKey;
++    private long mHeldSinceMs;
++    private long mLastFrameNanos;
++    private boolean mTopBarAllowed;
++    private boolean mBottomBarAllowed;
++    private float mX;
++    private float mY;
++
++    public BareTvCursor(ComponentActivity activity) {
++        mActivity = activity;
++    }
++
++    /** Whether the user lets the center key turn the pointer on. */
++    public static boolean isEnabled() {
++        return ChromeSharedPreferences.getInstance()
++                .readBoolean(ChromePreferenceKeys.BARE_TV_CURSOR, true);
++    }
++
++    public static void setEnabled(boolean enabled) {
++        ChromeSharedPreferences.getInstance()
++                .writeBoolean(ChromePreferenceKeys.BARE_TV_CURSOR, enabled);
++    }
++
++    /** Takes the remote's keys while a web page has focus. */
++    public boolean dispatchKeyEvent(@Nullable Tab tab, KeyEvent event) {
++        if (!DeviceInfo.isTV() || mReplaying) return false;
++        mTab = tab;
++        View page = focusedPage(tab);
++        if (page == null || !isEnabled()) {
++            mCenterDown = null;
++            hide();
++            return false;
++        }
++        int key = event.getKeyCode();
++        if (key == KeyEvent.KEYCODE_DPAD_CENTER) return onCenter(page, event);
++        if (mView == null || !isDirection(key)) return false;
++        if (event.getAction() == KeyEvent.ACTION_UP) {
++            if (key == mHeldKey) stop();
++        } else if (event.getRepeatCount() == 0) {
++            start(page, key);
++        }
++        return true;
++    }
++
++    private boolean onCenter(View page, KeyEvent event) {
++        if (event.getAction() == KeyEvent.ACTION_DOWN) {
++            if (event.getRepeatCount() == 0) {
++                mCenterDown = event;
++                mCenterHeld = false;
++            } else if (mCenterDown != null
++                    && !mCenterHeld
++                    && (event.isLongPress()
++                            || event.getEventTime() - mCenterDown.getEventTime() >= HOLD_MS)) {
++                mCenterHeld = true;
++                if (mView == null) show(page);
++                else hide();
++            }
++            return true;
++        }
++        KeyEvent down = mCenterDown;
++        mCenterDown = null;
++        if (down == null || mCenterHeld) return true;
++        if (mView != null) {
++            tap();
++            // A button in a bar leads away from the page.
++            if (isInBar(page)) hide();
++            return true;
++        }
++        // A short press is the page's own key. Its down was held back until now.
++        mReplaying = true;
++        mActivity.dispatchKeyEvent(down);
++        mActivity.dispatchKeyEvent(event);
++        mReplaying = false;
++        return true;
++    }
++
++    private void onFocusChanged(@Nullable View was, @Nullable View now) {
++        View page = mActivity.findViewById(R.id.compositor_view_holder);
++        if (now != null && page != null && !contains(page, now)) hide();
++    }
++
++    private void show(View page) {
++        ViewGroup content = mActivity.findViewById(android.R.id.content);
++        if (content == null) return;
++        int[] at = positionIn(content, page);
++        if (mX == 0 && mY == 0) {
++            mX = at[0] + page.getWidth() / 2f;
++            mY = at[1] + page.getHeight() / 2f;
++        }
++        CursorView view = new CursorView(mActivity);
++        content.addView(view, new ViewGroup.LayoutParams(view.sizePx(), view.sizePx()));
++        mView = view;
++        place(page);
++        OnBackPressedCallback back =
++                new OnBackPressedCallback(true) {
++                    @Override
++                    public void handleOnBackPressed() {
++                        hide();
++                    }
++                };
++        mActivity.getOnBackPressedDispatcher().addCallback(back);
++        content.getViewTreeObserver().addOnGlobalFocusChangeListener(mFocusListener);
++        mBackCallback = back;
++    }
++
++    private void hide() {
++        stop();
++        if (mView != null && mView.getParent() instanceof ViewGroup parent) {
++            parent.getViewTreeObserver().removeOnGlobalFocusChangeListener(mFocusListener);
++            parent.removeView(mView);
++        }
++        mView = null;
++        if (mBackCallback != null) mBackCallback.remove();
++        mBackCallback = null;
++    }
++
++    private void start(View page, int key) {
++        boolean moving = mHeldKey != 0;
++        mHeldKey = key;
++        mHeldSinceMs = SystemClock.uptimeMillis();
++        // A new press at the edge leaves the page for the bar there, so a hold only scrolls.
++        allowBars(page, key);
++        move(page, FIRST_STEP_DP * density());
++        if (moving) return;
++        mLastFrameNanos = 0;
++        Choreographer.getInstance().postFrameCallback(mFrame);
++    }
++
++    private void stop() {
++        mHeldKey = 0;
++        Choreographer.getInstance().removeFrameCallback(mFrame);
++    }
++
++    private void onFrame(long nanos) {
++        View page = mView == null ? null : mActivity.findViewById(R.id.compositor_view_holder);
++        if (page == null || mHeldKey == 0) return;
++        float seconds = mLastFrameNanos == 0 ? 0 : (nanos - mLastFrameNanos) / 1e9f;
++        mLastFrameNanos = nanos;
++        float held = SystemClock.uptimeMillis() - mHeldSinceMs;
++        float ramp = Math.min(1f, held / SPEED_UP_MS);
++        float speed = MIN_SPEED_DP_PER_S + (MAX_SPEED_DP_PER_S - MIN_SPEED_DP_PER_S) * ramp;
++        if (held > HOLD_MS / 2f) {
++            boolean allowed =
++                    mHeldKey == KeyEvent.KEYCODE_DPAD_UP ? mTopBarAllowed : mBottomBarAllowed;
++            if (isAtEdge(page, mHeldKey) && !allowed) {
++                scroll(SCROLL_SPEED_DP_PER_S * seconds / WHEEL_TICK_DP);
++            } else {
++                move(page, speed * density() * seconds);
++            }
++        }
++        Choreographer.getInstance().postFrameCallback(mFrame);
++    }
++
++    private void move(View page, float distance) {
++        if (mHeldKey == KeyEvent.KEYCODE_DPAD_LEFT) mX -= distance;
++        if (mHeldKey == KeyEvent.KEYCODE_DPAD_RIGHT) mX += distance;
++        if (mHeldKey == KeyEvent.KEYCODE_DPAD_UP) mY -= distance;
++        if (mHeldKey == KeyEvent.KEYCODE_DPAD_DOWN) mY += distance;
++        place(page);
++    }
++
++    /** Keeps the pointer on the page, or on the window when it may reach the bars. */
++    private void place(View page) {
++        CursorView view = mView;
++        ViewGroup content = mActivity.findViewById(android.R.id.content);
++        if (view == null || content == null) return;
++        float top = mTopBarAllowed ? 0 : pageTop(content, page);
++        float bottom =
++                mBottomBarAllowed
++                        ? content.getHeight() - VISIBLE_DP * density()
++                        : pageBottom(content, page);
++        float visible = VISIBLE_DP * density();
++        mX = Math.max(0, Math.min(mX, content.getWidth() - visible));
++        mY = Math.max(top, Math.min(mY, bottom));
++        view.setTranslationX(mX);
++        view.setTranslationY(mY);
++        send(MotionEvent.ACTION_HOVER_MOVE, 0);
++    }
++
++    private boolean isInBar(View page) {
++        ViewGroup content = mActivity.findViewById(android.R.id.content);
++        return content != null && (mY < pageTop(content, page) || mY > pageBottom(content, page));
++    }
++
++    private void allowBars(View page, int key) {
++        ViewGroup content = mActivity.findViewById(android.R.id.content);
++        if (content == null) return;
++        float top = pageTop(content, page);
++        float bottom = pageBottom(content, page);
++        mTopBarAllowed = mY < top || (key == KeyEvent.KEYCODE_DPAD_UP && mY <= top);
++        mBottomBarAllowed = mY > bottom || (key == KeyEvent.KEYCODE_DPAD_DOWN && mY >= bottom);
++    }
++
++    private boolean isAtEdge(View page, int key) {
++        ViewGroup content = mActivity.findViewById(android.R.id.content);
++        if (content == null) return false;
++        if (key == KeyEvent.KEYCODE_DPAD_UP) return mY <= pageTop(content, page);
++        if (key == KeyEvent.KEYCODE_DPAD_DOWN) return mY >= pageBottom(content, page);
++        return false;
++    }
++
++    private float pageTop(ViewGroup content, View page) {
++        View bar = mActivity.findViewById(R.id.control_container);
++        int top = positionIn(content, page)[1];
++        return bar != null && bar.isShown()
++                ? Math.max(top, positionIn(content, bar)[1] + bar.getHeight())
++                : top;
++    }
++
++    private float pageBottom(ViewGroup content, View page) {
++        View bar = mActivity.findViewById(R.id.bottom_app_bar_container);
++        int bottom = positionIn(content, page)[1] + page.getHeight() - 1;
++        return bar != null && bar.isShown() && bar.getHeight() > 0
++                ? Math.min(bottom, positionIn(content, bar)[1] - 1)
++                : bottom;
++    }
++
++    private void scroll(float ticks) {
++        boolean up = mHeldKey == KeyEvent.KEYCODE_DPAD_UP;
++        send(MotionEvent.ACTION_SCROLL, up ? ticks : -ticks);
++    }
++
++    /**
++     * Sends a mouse event at the pointer to the page. Hover goes through the views above the page,
++     * which also tells it how far the toolbar moves it. A scroll goes straight to the page, because
++     * those views drop it on the right of a wide window.
++     */
++    private void send(int action, float ticks) {
++        ViewGroup content = mActivity.findViewById(android.R.id.content);
++        View holder = mActivity.findViewById(R.id.compositor_view_holder);
++        View page = mTab == null ? null : mTab.getContentView();
++        if (content == null || holder == null || page == null) return;
++        boolean scroll = action == MotionEvent.ACTION_SCROLL;
++        int[] at = positionIn(content, scroll ? page : holder);
++        MotionEvent.PointerCoords coords = new MotionEvent.PointerCoords();
++        coords.x = mX - at[0];
++        coords.y = mY - at[1];
++        coords.setAxisValue(MotionEvent.AXIS_VSCROLL, ticks);
++        MotionEvent event =
++                obtain(
++                        SystemClock.uptimeMillis(),
++                        action,
++                        coords,
++                        MotionEvent.TOOL_TYPE_MOUSE,
++                        InputDevice.SOURCE_MOUSE);
++        if (scroll) page.onGenericMotionEvent(event);
++        else holder.dispatchGenericMotionEvent(event);
++        event.recycle();
++    }
++
++    private void tap() {
++        View root = mActivity.getWindow().getDecorView();
++        ViewGroup content = mActivity.findViewById(android.R.id.content);
++        if (content == null) return;
++        int[] at = new int[2];
++        content.getLocationInWindow(at);
++        MotionEvent.PointerCoords coords = new MotionEvent.PointerCoords();
++        coords.x = mX + at[0];
++        coords.y = mY + at[1];
++        coords.pressure = 1;
++        coords.size = 1;
++        long down = SystemClock.uptimeMillis();
++        touch(down, MotionEvent.ACTION_DOWN, coords);
++        root.postDelayed(() -> touch(down, MotionEvent.ACTION_UP, coords), TAP_MS);
++    }
++
++    private void touch(long downTime, int action, MotionEvent.PointerCoords coords) {
++        MotionEvent event =
++                obtain(
++                        downTime,
++                        action,
++                        coords,
++                        MotionEvent.TOOL_TYPE_FINGER,
++                        InputDevice.SOURCE_TOUCHSCREEN);
++        mActivity.dispatchTouchEvent(event);
++        event.recycle();
++    }
++
++    private static MotionEvent obtain(
++            long downTime,
++            int action,
++            MotionEvent.PointerCoords coords,
++            int toolType,
++            int source) {
++        MotionEvent.PointerProperties properties = new MotionEvent.PointerProperties();
++        properties.id = 0;
++        properties.toolType = toolType;
++        return MotionEvent.obtain(
++                downTime,
++                SystemClock.uptimeMillis(),
++                action,
++                1,
++                new MotionEvent.PointerProperties[] {properties},
++                new MotionEvent.PointerCoords[] {coords},
++                0,
++                0,
++                1,
++                1,
++                0,
++                0,
++                source,
++                0);
++    }
++
++    /** The page's container when a web page, and nothing above it, has focus. */
++    private @Nullable View focusedPage(@Nullable Tab tab) {
++        View page = mActivity.findViewById(R.id.compositor_view_holder);
++        View focused = mActivity.getCurrentFocus();
++        View tabs = mActivity.findViewById(R.id.hub_pane_host);
++        if (tab == null || tab.isNativePage() || tab.getWebContents() == null) return null;
++        if (page == null || focused == null || (tabs != null && tabs.isShown())) return null;
++        return contains(page, focused) ? page : null;
++    }
++
++    private static boolean contains(View ancestor, View view) {
++        if (ancestor == view) return true;
++        for (ViewParent parent = view.getParent(); parent != null; parent = parent.getParent()) {
++            if (parent == ancestor) return true;
++        }
++        return false;
++    }
++
++    private static boolean isDirection(int key) {
++        return key == KeyEvent.KEYCODE_DPAD_UP
++                || key == KeyEvent.KEYCODE_DPAD_DOWN
++                || key == KeyEvent.KEYCODE_DPAD_LEFT
++                || key == KeyEvent.KEYCODE_DPAD_RIGHT;
++    }
++
++    private float density() {
++        return mActivity.getResources().getDisplayMetrics().density;
++    }
++
++    private static int[] positionIn(View ancestor, View view) {
++        int[] from = new int[2];
++        int[] to = new int[2];
++        ancestor.getLocationInWindow(from);
++        view.getLocationInWindow(to);
++        return new int[] {to[0] - from[0], to[1] - from[1]};
++    }
++
++    /** An arrow whose tip is its top left corner. */
++    private static final class CursorView extends View {
++        private static final int SIZE_DP = 28;
++
++        private final Path mArrow = new Path();
++        private final Paint mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final float mDensity;
++
++        CursorView(Context context) {
++            super(context);
++            mDensity = context.getResources().getDisplayMetrics().density;
++            setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
++            setElevation(64 * mDensity);
++            setOutlineProvider(null);
++            float unit = mDensity * SIZE_DP / 24f;
++            float[][] points = {
++                {1, 1}, {1, 19}, {5.5f, 15}, {8.5f, 22}, {11.5f, 20.7f}, {8.5f, 14}, {14.5f, 14}
++            };
++            mArrow.moveTo(points[0][0] * unit, points[0][1] * unit);
++            for (int i = 1; i < points.length; i++) {
++                mArrow.lineTo(points[i][0] * unit, points[i][1] * unit);
++            }
++            mArrow.close();
++        }
++
++        int sizePx() {
++            return Math.round(SIZE_DP * mDensity);
++        }
++
++        @Override
++        protected void onDraw(Canvas canvas) {
++            mPaint.setStyle(Paint.Style.FILL);
++            mPaint.setColor(Color.WHITE);
++            canvas.drawPath(mArrow, mPaint);
++            mPaint.setStyle(Paint.Style.STROKE);
++            mPaint.setStrokeWidth(1.5f * mDensity);
++            mPaint.setColor(Color.BLACK);
++            canvas.drawPath(mArrow, mPaint);
++        }
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+index 330f0ead9f..0ef568ec4c 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+@@ -65,6 +65,7 @@ import com.google.android.material.materialswitch.MaterialSwitch;
+ 
+ import org.chromium.base.Callback;
+ import org.chromium.base.ContextUtils;
++import org.chromium.base.DeviceInfo;
+ import org.chromium.base.shared_preferences.SharedPreferencesManager;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+@@ -1358,6 +1359,30 @@ public class BareWelcomeOverlay {
+             notifications.setOnClickListener(view -> askForNotifications());
+             mNotificationsRow = notifications;
+             refreshNotifications();
++            if (DeviceInfo.isTV()) addTvCursorRow((ViewGroup) notifications.getParent());
++        }
++
++        /** Not kept for Start: it is a remote's own setting, not a part of the choices. */
++        private void addTvCursorRow(ViewGroup group) {
++            View divider = new View(mActivity);
++            divider.setBackgroundColor(mActivity.getColor(R.color.bare_welcome_divider));
++            float density = mActivity.getResources().getDisplayMetrics().density;
++            LinearLayout.LayoutParams params =
++                    new LinearLayout.LayoutParams(
++                            ViewGroup.LayoutParams.MATCH_PARENT, Math.round(density));
++            params.setMarginStart(Math.round(56 * density));
++            group.addView(divider, params);
++            View row =
++                    mActivity
++                            .getLayoutInflater()
++                            .inflate(R.layout.bare_welcome_option_row, group, false);
++            setUpRow(
++                    row,
++                    R.drawable.bare_menu_tap,
++                    R.string.bare_tv_cursor_title,
++                    R.string.bare_tv_cursor_summary);
++            switchRow(row, BareTvCursor.isEnabled(), BareTvCursor::setEnabled);
++            group.addView(row);
+         }
+ 
+         /**
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/media/settings/MediaSettingsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/media/settings/MediaSettingsFragment.java
+index 2342291223..8b273a79ec 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/media/settings/MediaSettingsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/media/settings/MediaSettingsFragment.java
+@@ -7,12 +7,14 @@ package org.chromium.chrome.browser.media.settings;
+ import android.content.Context;
+ import android.os.Bundle;
+ 
++import org.chromium.base.DeviceInfo;
+ import org.chromium.base.supplier.MonotonicObservableSupplier;
+ import org.chromium.base.supplier.ObservableSuppliers;
+ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
++import org.chromium.chrome.browser.bare.BareTvCursor;
+ import org.chromium.chrome.browser.bare.player.BarePlayerSettings;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+@@ -35,6 +37,23 @@ public class MediaSettingsFragment extends ChromeBaseSettingsFragment {
+     private final SettableMonotonicObservableSupplier<String> mPageTitle =
+             ObservableSuppliers.createMonotonic();
+ 
++    // Added here, not in the XML, so that phones and the settings search never show it.
++    private void addTvCursorSwitch() {
++        ChromeSwitchPreference cursor = new ChromeSwitchPreference(getContext(), null);
++        cursor.setKey("bare_tv_cursor");
++        cursor.setPersistent(false);
++        cursor.setOrder(-1);
++        cursor.setTitle(R.string.bare_tv_cursor_title);
++        cursor.setSummary(R.string.bare_tv_cursor_summary);
++        cursor.setChecked(BareTvCursor.isEnabled());
++        cursor.setOnPreferenceChangeListener(
++                (preference, newValue) -> {
++                    BareTvCursor.setEnabled((boolean) newValue);
++                    return true;
++                });
++        getPreferenceScreen().addPreference(cursor);
++    }
++
+     @Override
+     public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
+         mPageTitle.set(getTitle(getContext()));
+@@ -63,6 +82,8 @@ public class MediaSettingsFragment extends ChromeBaseSettingsFragment {
+                     return true;
+                 });
+ 
++        if (DeviceInfo.isTV()) addTvCursorSwitch();
++
+         ChromeSwitchPreference haptics = (ChromeSwitchPreference) findPreference(PREF_HAPTICS);
+         assert haptics != null;
+         haptics.setChecked(
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index 9b98b0438a..c397541229 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -546,6 +546,9 @@ public final class ChromePreferenceKeys {
+     /** Whether pressing a toolbar button ticks. On unless the user turned it off. */
+     public static final String BARE_HAPTICS = "Bare.Haptics";
+ 
++    /** Whether holding the center key of a TV remote shows a pointer. On unless turned off. */
++    public static final String BARE_TV_CURSOR = "Bare.Tv.Cursor";
++
+     /** Whether panels are frosted glass where the system allows it. On unless turned off. */
+     public static final String BARE_GLASS = "Bare.Glass";
+     public static final String BARE_TOOLBAR_ALWAYS_VISIBLE = "Bare.ToolbarAlwaysVisible";
+@@ -1519,6 +1522,7 @@ public final class ChromePreferenceKeys {
+                 BARE_INCOGNITO_FAILED_ATTEMPTS,
+                 BARE_INCOGNITO_QUIET_ENTRY,
+                 BARE_HAPTICS,
++                BARE_TV_CURSOR,
+                 BARE_GLASS,
+                 BARE_TOOLBAR_ALWAYS_VISIBLE,
+                 BARE_INCOGNITO_BLOCK_SCREENSHOTS,
