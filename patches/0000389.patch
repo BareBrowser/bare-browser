@@ -1,0 +1,518 @@
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+index 9e72a40d4f..7ca2f6d6a1 100644
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -191,6 +191,7 @@ if (_is_default_toolchain) {
+       "java/res_chromium_base/mipmap-anydpi-v26/bare_icon_v5_round.xml",
+       "java/res_chromium_base/mipmap-anydpi-v26/bare_icon_dark.xml",
+       "java/res_chromium_base/mipmap-anydpi-v26/bare_icon_dark_round.xml",
++      "java/res_chromium_base/drawable/bare_tv_banner.xml",
+       "java/res_chromium_base/values/bare_icon_v5_colors.xml",
+       "java/res_chromium_base/values/bare_launcher_label.xml",
+       "java/res_chromium_base/values/channel_constants.xml",
+@@ -1932,6 +1933,7 @@ if (_is_default_toolchain) {
+       "java/res_chromium_base/mipmap-anydpi-v26/bare_icon_v5_round.xml",
+       "java/res_chromium_base/mipmap-anydpi-v26/bare_icon_dark.xml",
+       "java/res_chromium_base/mipmap-anydpi-v26/bare_icon_dark_round.xml",
++      "java/res_chromium_base/drawable/bare_tv_banner.xml",
+       "java/res_chromium_base/values/bare_icon_v5_colors.xml",
+       "java/res_chromium_base/values/bare_launcher_label.xml",
+       "java/res_chromium_base/values/channel_constants.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index c358a5371e..94fc590d54 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -306,6 +306,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BareOpenInAppsMode.java",
+   "java/src/org/chromium/chrome/browser/bare/BareTabSwitcher.java",
+   "java/src/org/chromium/chrome/browser/bare/BareToolbarActionCatalogue.java",
++  "java/src/org/chromium/chrome/browser/bare/BareTvFocus.java",
+   "java/src/org/chromium/chrome/browser/bare/BareUpdateCheck.java",
+   "java/src/org/chromium/chrome/browser/bare/BareBackupUpgradeOverlay.java",
+   "java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java",
+diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/AndroidManifest.xml
+index b757dada8e..bc748ca0a6 100644
+--- a/chrome/android/java/AndroidManifest.xml
++++ b/chrome/android/java/AndroidManifest.xml
+@@ -212,6 +212,7 @@ by a child template that "extends" this file.
+       all applications and needs to be disabled manually.
+     -->
+     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
++    <uses-feature android:name="android.software.leanback" android:required="false" />
+ 
+     {% block extra_keyset_definitions %}
+     {% endblock %}
+@@ -246,6 +247,7 @@ by a child template that "extends" this file.
+       <application android:name="{% block application_name %}org.chromium.chrome.browser.base.SplitChromeApplication{% endblock %}"
+         android:icon="@mipmap/bare_icon_v5"
+         android:roundIcon="@mipmap/bare_icon_v5_round"
++        android:banner="@drawable/bare_tv_banner"
+         android:label="{% block application_label %}@string/bare_launcher_label{% endblock %}"
+         android:memtagMode="async"
+         android:largeHeap="false"
+@@ -702,6 +704,7 @@ by a child template that "extends" this file.
+                 <action android:name="android.intent.action.MAIN" />
+                 <category android:name="android.intent.category.DEFAULT" />
+                 <category android:name="android.intent.category.LAUNCHER" />
++                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                 <category android:name="android.intent.category.BROWSABLE" />
+                 <category android:name="android.intent.category.APP_BROWSER" />
+                 {% if channel in ['dev', 'canary', 'default'] %}
+@@ -728,6 +731,7 @@ by a child template that "extends" this file.
+                 <action android:name="android.intent.action.MAIN" />
+                 <category android:name="android.intent.category.DEFAULT" />
+                 <category android:name="android.intent.category.LAUNCHER" />
++                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                 <category android:name="android.intent.category.BROWSABLE" />
+                 <category android:name="android.intent.category.APP_BROWSER" />
+             </intent-filter>
+@@ -746,6 +750,7 @@ by a child template that "extends" this file.
+                 <action android:name="android.intent.action.MAIN" />
+                 <category android:name="android.intent.category.DEFAULT" />
+                 <category android:name="android.intent.category.LAUNCHER" />
++                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                 <category android:name="android.intent.category.BROWSABLE" />
+                 <category android:name="android.intent.category.APP_BROWSER" />
+             </intent-filter>
+@@ -767,6 +772,7 @@ by a child template that "extends" this file.
+                 <action android:name="android.intent.action.MAIN" />
+                 <category android:name="android.intent.category.DEFAULT" />
+                 <category android:name="android.intent.category.LAUNCHER" />
++                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                 <category android:name="android.intent.category.BROWSABLE" />
+                 <category android:name="android.intent.category.APP_BROWSER" />
+             </intent-filter>
+diff --git a/chrome/android/java/res_chromium_base/drawable/bare_tv_banner.xml b/chrome/android/java/res_chromium_base/drawable/bare_tv_banner.xml
+new file mode 100644
+index 0000000000..23f7f1a28d
+--- /dev/null
++++ b/chrome/android/java/res_chromium_base/drawable/bare_tv_banner.xml
+@@ -0,0 +1,21 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The Chromium Authors
++Use of this source code is governed by a BSD-style license that can be
++found in the LICENSE file.
++-->
++
++<!-- Bare: the Android TV home screen shows this banner instead of the launcher icon. -->
++<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
++    <item>
++        <shape android:shape="rectangle">
++            <solid android:color="@color/bare_icon_v5_background" />
++            <size android:width="320dp" android:height="180dp" />
++        </shape>
++    </item>
++    <item
++        android:width="180dp"
++        android:height="180dp"
++        android:gravity="center"
++        android:drawable="@mipmap/bare_icon_v5_foreground" />
++</layer-list>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index 1b7abf73be..11d8a61de2 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -116,6 +116,7 @@ import org.chromium.chrome.browser.back_press.BackPressManager;
+ import org.chromium.chrome.browser.bare.BareClearOnExit;
+ import org.chromium.chrome.browser.bare.BareClearVeil;
+ import org.chromium.chrome.browser.bare.BareNewTabRise;
++import org.chromium.chrome.browser.bare.BareTvFocus;
+ import org.chromium.chrome.browser.back_press.MinimizeAppAndCloseTabBackPressHandler;
+ import org.chromium.chrome.browser.back_press.MinimizeAppAndCloseTabBackPressHandler.MinimizeAppAndCloseTabType;
+ import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpenerImpl;
+@@ -5963,6 +5964,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+             mHandler.postDelayed(mShowHistoryRunnable, ViewConfiguration.getLongPressTimeout());
+             return super.onKeyDown(keyCode, event);
+         }
++        if (BareTvFocus.onKeyDown(this, getActivityTab(), event)) return true;
+         boolean isCurrentTabVisible =
+                 !isInOverviewMode() && (!isTablet() || getCurrentTabModel().getCount() != 0);
+         boolean keyboardShortcutHandled =
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/tab_activity_glue/ActivityTabWebContentsDelegateAndroid.java b/chrome/android/java/src/org/chromium/chrome/browser/app/tab_activity_glue/ActivityTabWebContentsDelegateAndroid.java
+index 3f81b20569..0d0c2e3046 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/tab_activity_glue/ActivityTabWebContentsDelegateAndroid.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/tab_activity_glue/ActivityTabWebContentsDelegateAndroid.java
+@@ -37,6 +37,7 @@ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.IntentHandler;
+ import org.chromium.chrome.browser.SwipeRefreshHandler;
+ import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
++import org.chromium.chrome.browser.bare.BareTvFocus;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
+ import org.chromium.chrome.browser.compositor.CompositorViewHolder;
+ import org.chromium.chrome.browser.customtabs.PopupCreatorFactory;
+@@ -514,6 +515,7 @@ public class ActivityTabWebContentsDelegateAndroid extends TabWebContentsDelegat
+     @Override
+     public void handleKeyboardEvent(KeyEvent event) {
+         if (event.getAction() == KeyEvent.ACTION_DOWN && mActivity != null) {
++            if (BareTvFocus.onKeyDown(mActivity, mTab, event)) return;
+             if (!ChromeFeatureList.isEnabled(ChromeFeatureList.UNIVERSAL_KEYBOARD_HANDLING)) {
+                 if (mActivity.onKeyDown(event.getKeyCode(), event)) return;
+             }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareBackupUpgradeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareBackupUpgradeOverlay.java
+index ebcf224e5d..157c7f0739 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareBackupUpgradeOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareBackupUpgradeOverlay.java
+@@ -94,5 +94,6 @@ final class BareBackupUpgradeOverlay {
+                     view.post(() -> view.setPadding(bars.left, bars.top, bars.right, bars.bottom));
+                 });
+         root.addView(overlay);
++        BareTvFocus.keepFocusIn(overlay);
+     }
+ }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareTvFocus.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareTvFocus.java
+new file mode 100644
+index 0000000000..59846ae9f1
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareTvFocus.java
+@@ -0,0 +1,243 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.app.Activity;
++import android.graphics.drawable.Drawable;
++import android.graphics.drawable.GradientDrawable;
++import android.graphics.drawable.InsetDrawable;
++import android.view.FocusFinder;
++import android.view.KeyEvent;
++import android.view.View;
++import android.view.ViewGroup;
++import android.view.ViewParent;
++import android.view.ViewTreeObserver.OnGlobalFocusChangeListener;
++
++import org.chromium.base.DeviceInfo;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.components.browser_ui.widget.MenuOrKeyboardActionController;
++
++/** Bare: D-pad focus for Android TV, where a remote is the only input. */
++@NullMarked
++public final class BareTvFocus {
++    private static final int RING_WIDTH_DP = 3;
++    private static final int RING_RADIUS_DP = 28;
++    private static final int ADDRESS_BAR_INSET_DP = 7;
++
++    private BareTvFocus() {}
++
++    /**
++     * Moves focus between the page and the bars around it. The page lies under both bars, so
++     * Android's own search finds nothing above or below it.
++     */
++    public static boolean onKeyDown(Activity activity, @Nullable Tab tab, KeyEvent event) {
++        if (!DeviceInfo.isTV() || !event.hasNoModifiers()) return false;
++        View focused = activity.getCurrentFocus();
++        if (focused == null) return false;
++        int key = event.getKeyCode();
++        if (key == KeyEvent.KEYCODE_DPAD_LEFT || key == KeyEvent.KEYCODE_DPAD_RIGHT) {
++            return moveInsideTabCard(activity, focused, key)
++                    || moveInsideToolbar(activity, focused, key);
++        }
++        boolean up = key == KeyEvent.KEYCODE_DPAD_UP;
++        if (!up && key != KeyEvent.KEYCODE_DPAD_DOWN) return false;
++
++        View next = focused.focusSearch(up ? View.FOCUS_UP : View.FOCUS_DOWN);
++        if (next == focused) next = null;
++        View page = activity.findViewById(R.id.compositor_view_holder);
++        View topBar = activity.findViewById(R.id.control_container);
++        View bottomBar = activity.findViewById(R.id.bottom_app_bar_container);
++
++        if (contains(page, focused)) {
++            if (contains(page, next)) return false;
++            View tabs = activity.findViewById(R.id.hub_pane_host);
++            if (tabs != null && tabs.isShown()) return tabs.requestFocus();
++            View bar = up ? topBar : bottomBar;
++            if (bar == null || !bar.isShown()) return false;
++            if (up) {
++                View addressBar = setUpAddressBar(activity);
++                if (addressBar != null && addressBar.requestFocus()) return true;
++            }
++            return bar.requestFocus();
++        }
++
++        View bar = up ? bottomBar : topBar;
++        if (!contains(bar, focused) || contains(bar, next)) return false;
++        View content = tab == null ? null : tab.getView();
++        return content != null && content.isShown() && content.requestFocus();
++    }
++
++    /** A tab card spans its close button, so Android finds nothing beside it. */
++    private static boolean moveInsideTabCard(Activity activity, View focused, int key) {
++        View tabs = activity.findViewById(R.id.hub_pane_host);
++        if (focused == tabs || !contains(tabs, focused)) return false;
++        boolean rtl = focused.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL;
++        if ((key == KeyEvent.KEYCODE_DPAD_RIGHT) != rtl) {
++            for (View button : focused.getFocusables(View.FOCUS_DOWN)) {
++                if (button != focused && button.isClickable()) return button.requestFocus();
++            }
++            return false;
++        }
++        for (ViewParent parent = focused.getParent();
++                parent instanceof View card && card != tabs;
++                parent = parent.getParent()) {
++            if (card.isFocusable() && card.isClickable()) return card.requestFocus();
++        }
++        return false;
++    }
++
++    /** The address bar spans the toolbar buttons, so Android finds nothing beside it. */
++    private static boolean moveInsideToolbar(Activity activity, View focused, int key) {
++        View topBar = activity.findViewById(R.id.control_container);
++        View buttons = activity.findViewById(R.id.toolbar_buttons);
++        if (buttons == null || !contains(topBar, focused)) return false;
++        View addressBar = setUpAddressBar(activity);
++        if (addressBar == null) return false;
++        boolean rtl = buttons.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL;
++        boolean toButtons = (key == KeyEvent.KEYCODE_DPAD_RIGHT) != rtl;
++        if (focused == addressBar && toButtons) return buttons.requestFocus(View.FOCUS_DOWN);
++        View next =
++                focused.focusSearch(
++                        key == KeyEvent.KEYCODE_DPAD_RIGHT ? View.FOCUS_RIGHT : View.FOCUS_LEFT);
++        if (contains(buttons, focused)) {
++            if (toButtons || (next != focused && contains(buttons, next))) return false;
++            return addressBar.requestFocus();
++        }
++        // The button on the other side finds a view inside the address bar, not the bar itself.
++        return !contains(addressBar, focused)
++                && contains(addressBar, next)
++                && addressBar.requestFocus();
++    }
++
++    /**
++     * Makes the address bar focusable, rings it, and opens it on the center key. Its pill is
++     * shorter than its view. Without a bottom toolbar it is not focusable.
++     */
++    private static @Nullable View setUpAddressBar(Activity activity) {
++        View addressBar = activity.findViewById(R.id.location_bar);
++        if (addressBar == null || !addressBar.isShown()) return null;
++        addressBar.setFocusable(true);
++        float density = addressBar.getResources().getDisplayMetrics().density;
++        int inset = Math.round(ADDRESS_BAR_INSET_DP * density);
++        addressBar.setOnFocusChangeListener(
++                (view, hasFocus) ->
++                        view.setForeground(
++                                hasFocus
++                                        ? new InsetDrawable(ringFor(view), 0, inset, 0, inset)
++                                        : null));
++        if (!(activity instanceof MenuOrKeyboardActionController controller)) return addressBar;
++        addressBar.setOnKeyListener(
++                (view, code, event) -> {
++                    if (code != KeyEvent.KEYCODE_DPAD_CENTER && code != KeyEvent.KEYCODE_ENTER) {
++                        return false;
++                    }
++                    if (event.getAction() == KeyEvent.ACTION_UP) {
++                        controller.onMenuOrKeyboardAction(R.id.focus_url_bar, false);
++                    }
++                    return true;
++                });
++        return addressBar;
++    }
++
++    /** Focuses the first control in {@code page}, or {@code fallback} when it has none. */
++    public static void focusFirstControl(View page, View fallback) {
++        if (!DeviceInfo.isTV()) return;
++        for (View view : page.getFocusables(View.FOCUS_DOWN)) {
++            if (view.isClickable() && view.requestFocus()) return;
++        }
++        fallback.requestFocus();
++    }
++
++    /**
++     * Keeps focus inside {@code overlay} while it covers the browser, and rings its focused
++     * control.
++     */
++    public static void keepFocusIn(View overlay) {
++        if (!DeviceInfo.isTV()) return;
++        overlay.addOnUnhandledKeyEventListener((view, event) -> moveInside(overlay, event));
++        OnGlobalFocusChangeListener listener =
++                new OnGlobalFocusChangeListener() {
++                    private @Nullable View mRinged;
++                    private @Nullable Drawable mForegroundWas;
++
++                    @Override
++                    public void onGlobalFocusChanged(@Nullable View was, @Nullable View now) {
++                        if (mRinged != null) mRinged.setForeground(mForegroundWas);
++                        boolean inside = contains(overlay, now);
++                        mRinged = inside && now != null && now.isClickable() ? now : null;
++                        if (mRinged != null) {
++                            mForegroundWas = mRinged.getForeground();
++                            mRinged.setForeground(ringFor(mRinged));
++                        }
++                        if (now != null && !inside) overlay.post(() -> bringBack(overlay, was));
++                    }
++                };
++        overlay.addOnAttachStateChangeListener(
++                new View.OnAttachStateChangeListener() {
++                    @Override
++                    public void onViewAttachedToWindow(View view) {}
++
++                    @Override
++                    public void onViewDetachedFromWindow(View view) {
++                        view.getViewTreeObserver().removeOnGlobalFocusChangeListener(listener);
++                    }
++                });
++        overlay.getViewTreeObserver().addOnGlobalFocusChangeListener(listener);
++        overlay.post(() -> bringBack(overlay, null));
++    }
++
++    /** Android's own search would also find the browser's controls behind the overlay. */
++    private static boolean moveInside(View overlay, KeyEvent event) {
++        int direction =
++                switch (event.getKeyCode()) {
++                    case KeyEvent.KEYCODE_DPAD_UP -> View.FOCUS_UP;
++                    case KeyEvent.KEYCODE_DPAD_DOWN -> View.FOCUS_DOWN;
++                    case KeyEvent.KEYCODE_DPAD_LEFT -> View.FOCUS_LEFT;
++                    case KeyEvent.KEYCODE_DPAD_RIGHT -> View.FOCUS_RIGHT;
++                    default -> 0;
++                };
++        View focused = overlay.findFocus();
++        if (direction == 0
++                || focused == null
++                || event.getAction() != KeyEvent.ACTION_DOWN
++                || !(overlay instanceof ViewGroup group)) {
++            return false;
++        }
++        View next = FocusFinder.getInstance().findNextFocus(group, focused, direction);
++        if (next != null) next.requestFocus(direction);
++        return true;
++    }
++
++    private static void bringBack(View overlay, @Nullable View was) {
++        if (!overlay.isShown() || overlay.hasFocus()) return;
++        if (was != null && contains(overlay, was) && was.isShown() && was.requestFocus()) return;
++        focusFirstControl(overlay, overlay);
++    }
++
++    private static Drawable ringFor(View view) {
++        float density = view.getResources().getDisplayMetrics().density;
++        float half = view.getHeight() / 2f;
++        boolean round = view.getWidth() == view.getHeight();
++        GradientDrawable ring = new GradientDrawable();
++        ring.setCornerRadius(round ? half : Math.min(half, RING_RADIUS_DP * density));
++        ring.setStroke(
++                Math.round(RING_WIDTH_DP * density),
++                SemanticColorUtils.getDefaultIconColor(view.getContext()));
++        return ring;
++    }
++
++    private static boolean contains(@Nullable View ancestor, @Nullable View view) {
++        if (ancestor == null || view == null) return false;
++        if (ancestor == view) return true;
++        for (ViewParent parent = view.getParent(); parent != null; parent = parent.getParent()) {
++            if (parent == ancestor) return true;
++        }
++        return false;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpgradePagesOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpgradePagesOverlay.java
+index 1d2d3c77cf..1a49b48b71 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpgradePagesOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareUpgradePagesOverlay.java
+@@ -151,6 +151,7 @@ final class BareUpgradePagesOverlay {
+                     view.post(() -> view.setPadding(bars.left, bars.top, bars.right, bars.bottom));
+                 });
+         mRoot.addView(mOverlay);
++        BareTvFocus.keepFocusIn(mOverlay);
+ 
+         // When What's new was seen at an earlier start, this is the first screen, and the system
+         // splash would otherwise fade out over it.
+@@ -170,6 +171,9 @@ final class BareUpgradePagesOverlay {
+         View view = page == PAGE_CANVAS ? buildCanvasPage() : buildMenuPage();
+         @Nullable View old = mStage.getChildCount() > 0 ? mStage.getChildAt(0) : null;
+         mStage.addView(view);
++        // Bare: a TV remote has only a D-pad, so the page starts on its first control.
++        BareTvFocus.focusFirstControl(
++                view, mOverlay.findViewById(R.id.bare_upgrade_pages_continue));
+         if (old != null) {
+             if (!ValueAnimator.areAnimatorsEnabled()) {
+                 mStage.removeView(old);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+index a647908f3c..a3d36f8300 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareVerticalTabsDrawer.java
+@@ -60,6 +60,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
+ import androidx.recyclerview.widget.RecyclerView;
+ 
+ import org.chromium.base.Callback;
++import org.chromium.base.DeviceInfo;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+@@ -252,6 +253,7 @@ public final class BareVerticalTabsDrawer {
+         animateTo(1f, null);
+         Panel panel = mPanel;
+         if (panel != null) {
++            BareTvFocus.focusFirstControl(panel, panel);
+             panel.announceForAccessibility(
+                     mActivity.getString(org.chromium.chrome.R.string.bare_vtabs_title));
+         }
+@@ -483,6 +485,7 @@ public final class BareVerticalTabsDrawer {
+                 new FrameLayout.LayoutParams(
+                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+         mGlass = false;
++        BareTvFocus.keepFocusIn(root);
+ 
+         if (mActivity instanceof ComponentActivity componentActivity) {
+             mBackCallback =
+@@ -677,6 +680,8 @@ public final class BareVerticalTabsDrawer {
+      * Android 12 or newer, and the system allows blurring what is behind a window.
+      */
+     private boolean glassWanted() {
++        // Bare: the glass window cannot take focus, and a TV remote needs it.
++        if (DeviceInfo.isTV()) return false;
+         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false;
+         if (!ChromeSharedPreferences.getInstance()
+                 .readBoolean(ChromePreferenceKeys.BARE_GLASS, true)) {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+index b512d7cca3..330f0ead9f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWelcomeOverlay.java
+@@ -500,6 +500,7 @@ public class BareWelcomeOverlay {
+                     });
+ 
+             mRoot.addView(mOverlay);
++            BareTvFocus.keepFocusIn(mOverlay);
+             // The browser keeps adding views behind the welcome while it starts, so this runs on
+             // every layout until the welcome is gone rather than once.
+             hideBrowserBehind();
+@@ -745,6 +746,8 @@ public class BareWelcomeOverlay {
+             if (mPage == PAGE_BROWSING) refreshNotifications();
+             if (mPage == PAGE_READY) refreshDefaultBrowser();
+             if (mPage == PAGE_BACKUP) refreshBackup();
++            // Bare: a TV remote has only a D-pad, so each page starts on its first control.
++            BareTvFocus.focusFirstControl(page, mNext);
+         }
+ 
+         private void buildProgress() {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWhatsNewOverlay.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWhatsNewOverlay.java
+index edf814dd73..e366782ebb 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWhatsNewOverlay.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareWhatsNewOverlay.java
+@@ -96,6 +96,7 @@ final class BareWhatsNewOverlay {
+                     view.post(() -> view.setPadding(bars.left, bars.top, bars.right, bars.bottom));
+                 });
+         root.addView(overlay);
++        BareTvFocus.keepFocusIn(overlay);
+ 
+         // The system splash would otherwise fade out over the screen; drop it at once.
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
+index ba90f4f880..e00eddbd13 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
+@@ -290,6 +290,10 @@ public class ProcessInitializationHandler {
+ 
+         DeviceUtils.updateDeviceSpecificUserAgentSwitch(ContextUtils.getApplicationContext());
+         UserAgentPresets.appendSwitches();
++        // Bare: a TV remote has only a D-pad, so let it move focus between links and fields.
++        if (DeviceInfo.isTV()) {
++            CommandLine.getInstance().appendSwitch("enable-spatial-navigation");
++        }
+         // Web push subscriptions go through the distributor app the user chose, or through
+         // Google Play services if there is none.
+         InstanceIDWithSubtype.setTokenBroker(new BarePushSubscriber());
