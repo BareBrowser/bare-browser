@@ -20,6 +20,7 @@ from email.utils import parsedate_to_datetime
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-\[\]_.]{0,60}$")
 STATE_RE = re.compile(r"<!-- barefilter-gate-state:(\{.*?\}) -->", re.S)
+COMMENT_RE = re.compile(r"!(?!#)[^\r\u2028\u2029]*\r?")   # a "!" line that is not "!#" and holds no inner line break
 BOT_LOGIN = "github-actions[bot]"
 MAX_COMMITS = 250          # the API lists at most 250 commits of a PR
 FILES_PER_PAGE = 100
@@ -63,16 +64,20 @@ def ceil_second(t):
 def patch_rule_lines(patch):
     """Count (added, removed) rule lines in a unified-diff patch.
 
-    A rule line is any changed line that is not blank and does not start with
-    "!". Whitespace inside a rule line counts, so a whitespace edit is a rule
-    edit. Comment lines, blank lines and hunk or no-newline markers do not.
+    A rule line is any changed line that is neither blank nor a comment. A
+    comment starts with "!" but not "!#" (uBlock Origin reads lines such as
+    "!#include" and "!#if" as preprocessor directives) and holds no U+2028 or
+    U+2029, and no carriage return except one at its very end (a CRLF file):
+    uBlock Origin can start a new line at those. Whitespace inside a rule line
+    counts, so a whitespace edit is a rule edit. Comment lines, blank lines and
+    hunk or no-newline markers do not.
     """
     added = removed = 0
     for line in patch.split("\n"):
         if not line or line[0] not in "+-":
             continue
         body = line[1:]
-        if body.strip() == "" or body.startswith("!"):
+        if body.strip() == "" or COMMENT_RE.fullmatch(body):
             continue
         if line[0] == "+":
             added += 1

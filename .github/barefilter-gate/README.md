@@ -32,7 +32,7 @@ The window starts at the **latest** of:
 - the moment the check first saw a commit that changes a rule line (including a commit that is later reverted);
 - any force-push, reopen or base-branch change.
 
-A rule line is a non-blank line of `BareFilter.txt` that doesn't start with `!`. Added, removed, edited, moved and whitespace-only changes to one all count. Comments, blank lines and other files don't.
+A rule line is a non-blank line of `BareFilter.txt` that doesn't start with `!`, or any line that starts with `!#`, because uBlock Origin reads lines such as `!#include` and `!#if` as preprocessor directives. A `!` line that holds a Unicode line or paragraph separator, or a carriage return anywhere but its very end, also counts, because uBlock Origin can start a new line there. Added, removed, edited, moved and whitespace-only changes to one all count. Comments, blank lines and other files don't.
 
 ## Times come from GitHub
 

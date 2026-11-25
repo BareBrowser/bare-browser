@@ -73,9 +73,9 @@ You never need to share passwords, cookies, private links or full diagnostic log
 ## Review
 
 - **When the clock starts.** A proposal stays open for **at least 72 hours** after it is marked ready for review with the evidence above. Draft pull requests don't start the clock. The maintainer confirms the evidence by applying the `evidence-complete` label; the window can't start before that.
-- **Any edit to a rule line restarts the full 72 hours,** even if you believe it changes nothing. That includes additions, removals, exception rules, selector changes and whitespace changes within a rule line, and it applies to changes the maintainer suggests. A rule line is any non-blank line in `BareFilter.txt` that doesn't start with `!`.
+- **Any edit to a rule line restarts the full 72 hours,** even if you believe it changes nothing. That includes additions, removals, exception rules, selector changes and whitespace changes within a rule line, and it applies to changes the maintainer suggests. A rule line is any non-blank line in `BareFilter.txt` that doesn't start with `!`, and any line that starts with `!#`, because uBlock Origin reads lines such as `!#include` and `!#if` as preprocessor directives.
 - **Force-pushing, reopening the pull request or changing its base branch** while a window runs also restarts it. Please add commits instead of rewriting history.
-- **What doesn't restart it:** edits to comments (lines starting with `!`), edits to documentation files, and formatting outside rule lines, such as blank lines.
+- **What doesn't restart it:** edits to comments (lines starting with `!` but not `!#`, with no line break hidden inside them), edits to documentation files, and formatting outside rule lines, such as blank lines.
 - **No rule lines, no rule waiting period.** A pull request that only changes comments, blank lines or other files has no 72-hour wait. The maintainer still reads it. If it ever changes a rule line, even in one commit that is later reverted, it becomes a rule proposal and stays one.
 - **Silence is not approval.** Approvals from the community are useful feedback, but there is no vote count to reach, and the maintainer still reviews every proposal.
 - **The maintainer can add or change rules directly,** after testing them on a device. Those changes are in the commit history.
