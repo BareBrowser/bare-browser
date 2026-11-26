@@ -1,0 +1,580 @@
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -247,6 +247,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/bare/BareSecurityChoices.java",
+   "java/src/org/chromium/chrome/browser/bare/BareScriptBridge.java",
+   "java/src/org/chromium/chrome/browser/bare/BareVideoJoiner.java",
++  "java/src/org/chromium/chrome/browser/bare/BareScrollThumb.java",
+   "java/src/org/chromium/chrome/browser/bare/BareVideoMatch.java",
+   "java/src/org/chromium/chrome/browser/bare/BareVideoSaver.java",
+   "java/src/org/chromium/chrome/browser/bare/BareVideoSheet.java",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bare/BareScrollThumb.java b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareScrollThumb.java
+new file mode 100644
+index 00000000000..fd66d554f7a
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bare/BareScrollThumb.java
+@@ -0,0 +1,527 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.bare;
++
++import android.app.Activity;
++import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Color;
++import android.graphics.Paint;
++import android.graphics.Rect;
++import android.os.SystemClock;
++import android.view.ActionMode;
++import android.view.KeyEvent;
++import android.view.KeyboardShortcutGroup;
++import android.view.Menu;
++import android.view.MenuItem;
++import android.view.MotionEvent;
++import android.view.SearchEvent;
++import android.view.View;
++import android.view.ViewGroup;
++import android.view.ViewParent;
++import android.view.Window;
++import android.view.WindowManager;
++import android.view.accessibility.AccessibilityEvent;
++
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.compositor.CompositorViewHolder;
++import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.content_public.browser.RenderCoordinates;
++import org.chromium.content_public.browser.WebContents;
++
++import java.lang.reflect.Method;
++import java.util.Collections;
++import java.util.List;
++
++/**
++ * A scrollbar thumb on the right edge of the page that can be held and dragged.
++ *
++ * <p>Chromium's own scrollbar on Android is a thin line that only shows the position and cannot
++ * be touched. This one is a view laid over the page, just above it and under the toolbars. It
++ * appears while the page scrolls, stays a moment, and fades. It draws nothing itself: the page's
++ * own scrollbar is the one on screen, and this makes it draggable. While it shows, a touch that
++ * lands on it grabs it and moves the page with the finger. Touches are offered to it at the
++ * window, ahead of the page's layout, which would otherwise take them first. Every other touch
++ * goes through to the page as before.
++ *
++ * <p>The position, the length of the page and the height of the screen come from the same three
++ * numbers the system uses to draw its own scroll bars. {@link View} keeps them behind protected
++ * methods, so they are read by reflection on the framework class, which the build does not
++ * rename. The page is moved with {@code EventForwarder.scrollTo}, as Scroll to top does. If the
++ * numbers cannot be read, the thumb never shows and the page behaves as it did.
++ */
++public final class BareScrollThumb extends View {
++    /** Where the thumb finds the tab whose page it follows. */
++    public interface TabSource {
++        /** The tab on screen, or null when there is none. */
++        @Nullable Tab getTab();
++    }
++
++    private static final int THUMB_DP = 4;
++    private static final int HELD_DP = 8;
++    private static final int EDGE_DP = 2;
++    // How far in from the edge a touch can be and still grab the thumb. The thumb itself is thin.
++    private static final int TOUCH_DP = 36;
++    // How far above and below the thumb a touch can be and still grab it.
++    private static final int HIT_SLOP_DP = 16;
++    private static final int MIN_THUMB_DP = 48;
++    private static final int TRACK_PAD_DP = 8;
++    // A page that scrolls less than this does not get a thumb.
++    private static final int MIN_SCROLLABLE_DP = 48;
++    // The system keeps at most this much of one screen edge free of its back gesture.
++    private static final int MAX_EXCLUSION_DP = 200;
++    private static final int EXCLUSION_STEP_DP = 24;
++
++    private static final long HIDE_DELAY_MS = 1300;
++    private static final long IDLE_POLL_MS = 150;
++    private static final long RETRY_MS = 500;
++    private static final int MAX_ATTEMPTS = 20;
++    private static final float FADE_IN_STEP = 0.25f;
++    private static final float FADE_OUT_STEP = 0.05f;
++    // Below this the thumb is too faint to grab.
++    private static final float GRAB_MIN_ALPHA = 0.3f;
++
++    // The page's own scrollbar is the one that is drawn. This view only makes it draggable.
++    private static final boolean DRAW = false;
++
++    private static final int THUMB_COLOR = 0xCC7A7A7A;
++    private static final int HELD_COLOR = 0xF05F6368;
++
++    private static final @Nullable Method sOffset = findMethod("computeVerticalScrollOffset");
++    private static final @Nullable Method sRange = findMethod("computeVerticalScrollRange");
++    private static final @Nullable Method sExtent = findMethod("computeVerticalScrollExtent");
++
++    private final TabSource mTabs;
++    private final Paint mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final float mDensity;
++    private final int[] mViewLocation = new int[2];
++    private final int[] mContentLocation = new int[2];
++    private final Runnable mTick = this::tick;
++
++    private @Nullable View mContent;
++    private int mLastOffset;
++    private long mLastMovedAt;
++    private float mAlpha;
++    private boolean mHeld;
++    private float mGrabOffset;
++
++    // What the last pass measured.
++    private boolean mHasThumb;
++    private float mTrackTop;
++    private float mTrackBottom;
++    private float mThumbTop;
++    private float mThumbLength;
++    private int mRange;
++    private int mExtent;
++    private float mExclusionCenter = -1f;
++
++    /**
++     * Puts a thumb over the page of {@code activity}. The page may not be in the window yet, so
++     * this looks for it again for a few seconds. Does nothing if the page already has a thumb.
++     */
++    public static void install(Activity activity, TabSource tabs) {
++        tryInstall(activity, tabs, 0);
++    }
++
++    private static void tryInstall(Activity activity, TabSource tabs, int attempt) {
++        if (activity.isFinishing() || activity.isDestroyed()) return;
++        View decor = activity.getWindow().getDecorView();
++        CompositorViewHolder page = findPage(decor);
++        if (page == null || !(page.getParent() instanceof ViewGroup)) {
++            if (attempt < MAX_ATTEMPTS) {
++                decor.postDelayed(() -> tryInstall(activity, tabs, attempt + 1), RETRY_MS);
++            }
++            return;
++        }
++        ViewGroup parent = (ViewGroup) page.getParent();
++        for (int i = 0; i < parent.getChildCount(); i++) {
++            if (parent.getChildAt(i) instanceof BareScrollThumb) return;
++        }
++        BareScrollThumb thumb = new BareScrollThumb(activity, tabs);
++        // The page's parent layout takes touches before a sibling view is offered them, so the
++        // thumb is offered each touch at the window, ahead of everything under it.
++        Window.Callback callback = activity.getWindow().getCallback();
++        if (callback != null) activity.getWindow().setCallback(new Hook(callback, thumb));
++        parent.addView(
++                thumb,
++                parent.indexOfChild(page) + 1,
++                new ViewGroup.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++    }
++
++    private static @Nullable CompositorViewHolder findPage(View view) {
++        if (view instanceof CompositorViewHolder) return (CompositorViewHolder) view;
++        if (!(view instanceof ViewGroup)) return null;
++        ViewGroup group = (ViewGroup) view;
++        for (int i = 0; i < group.getChildCount(); i++) {
++            CompositorViewHolder found = findPage(group.getChildAt(i));
++            if (found != null) return found;
++        }
++        return null;
++    }
++
++    private static @Nullable Method findMethod(String name) {
++        try {
++            Method method = View.class.getDeclaredMethod(name);
++            method.setAccessible(true);
++            return method;
++        } catch (ReflectiveOperationException | RuntimeException e) {
++            return null;
++        }
++    }
++
++    private static int read(@Nullable Method method, View view) {
++        if (method == null) return 0;
++        try {
++            Object value = method.invoke(view);
++            return value instanceof Integer ? (Integer) value : 0;
++        } catch (ReflectiveOperationException | RuntimeException e) {
++            return 0;
++        }
++    }
++
++    private BareScrollThumb(Context context, TabSource tabs) {
++        super(context);
++        mTabs = tabs;
++        mDensity = context.getResources().getDisplayMetrics().density;
++        mPaint.setStyle(Paint.Style.FILL);
++        setWillNotDraw(false);
++        setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
++    }
++
++    @Override
++    protected void onAttachedToWindow() {
++        super.onAttachedToWindow();
++        removeCallbacks(mTick);
++        postOnAnimation(mTick);
++    }
++
++    @Override
++    protected void onDetachedFromWindow() {
++        removeCallbacks(mTick);
++        mHeld = false;
++        super.onDetachedFromWindow();
++    }
++
++    @Override
++    protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
++        super.onSizeChanged(width, height, oldWidth, oldHeight);
++        // The area kept free of the back gesture is in this view's own coordinates.
++        mExclusionCenter = -1f;
++    }
++
++    private void tick() {
++        boolean tracking = measure();
++        float target = 0f;
++        if (tracking && (mHeld || SystemClock.uptimeMillis() - mLastMovedAt < HIDE_DELAY_MS)) {
++            target = 1f;
++        }
++        float before = mAlpha;
++        if (mAlpha < target) {
++            mAlpha = Math.min(target, mAlpha + FADE_IN_STEP);
++        } else if (mAlpha > target) {
++            mAlpha = Math.max(target, mAlpha - FADE_OUT_STEP);
++        }
++        updateGestureExclusion(tracking && mAlpha >= GRAB_MIN_ALPHA);
++        if (mAlpha > 0f || before > 0f || mHeld) invalidate();
++        // A frame at a time while it shows or is about to; slowly while the page is still.
++        if (mAlpha > 0f || target > 0f) {
++            postOnAnimation(mTick);
++        } else {
++            postDelayed(mTick, IDLE_POLL_MS);
++        }
++    }
++
++    /** Reads where the page is. Returns false when there is no page worth a thumb. */
++    private boolean measure() {
++        Tab tab = mTabs.getTab();
++        if (tab == null || tab.isNativePage() || tab.getWebContents() == null) return forget();
++        View content = tab.getContentView();
++        if (content == null || !content.isShown() || content.getHeight() <= 0 || getWidth() <= 0) {
++            return forget();
++        }
++        int range = read(sRange, content);
++        int extent = read(sExtent, content);
++        int offset = read(sOffset, content);
++        int scrollable = range - extent;
++        if (extent <= 0 || scrollable < MIN_SCROLLABLE_DP * mDensity) return forget();
++
++        if (content != mContent) {
++            // Another page: it has not been scrolled by anyone yet, so show nothing for it.
++            mContent = content;
++            mLastOffset = offset;
++            mLastMovedAt = 0;
++        } else if (offset != mLastOffset) {
++            mLastOffset = offset;
++            mLastMovedAt = SystemClock.uptimeMillis();
++        }
++
++        getLocationInWindow(mViewLocation);
++        content.getLocationInWindow(mContentLocation);
++        float pad = TRACK_PAD_DP * mDensity;
++        float top = mContentLocation[1] - mViewLocation[1];
++        mTrackTop = top + pad;
++        mTrackBottom = top + content.getHeight() - pad;
++        float track = mTrackBottom - mTrackTop;
++        float minThumb = MIN_THUMB_DP * mDensity;
++        if (track < minThumb * 2) return forget();
++        mThumbLength = Math.max(minThumb, Math.min(track, track * extent / range));
++        mRange = range;
++        mExtent = extent;
++        if (!mHeld) {
++            float fraction = Math.max(0f, Math.min(1f, offset / (float) scrollable));
++            mThumbTop = mTrackTop + fraction * (track - mThumbLength);
++        }
++        mHasThumb = true;
++        return true;
++    }
++
++    private boolean forget() {
++        mHasThumb = false;
++        mHeld = false;
++        mContent = null;
++        return false;
++    }
++
++    private boolean hitsThumb(float x, float y) {
++        float slop = HIT_SLOP_DP * mDensity;
++        return x >= getWidth() - TOUCH_DP * mDensity
++                && y >= mThumbTop - slop
++                && y <= mThumbTop + mThumbLength + slop;
++    }
++
++    private boolean mCapturing;
++
++    /** Offered every touch of the window before the page's own views. True when it takes it. */
++    boolean interceptTouch(MotionEvent event) {
++        getLocationInWindow(mViewLocation);
++        float x = event.getX() - mViewLocation[0];
++        float y = event.getY() - mViewLocation[1];
++        switch (event.getActionMasked()) {
++            case MotionEvent.ACTION_DOWN:
++                mCapturing = false;
++                // Not on the thumb: say so, and the touch goes on to the page.
++                if (!mHasThumb || mAlpha < GRAB_MIN_ALPHA || !hitsThumb(x, y)) return false;
++                mCapturing = true;
++                mHeld = true;
++                mGrabOffset = y - mThumbTop;
++                mLastMovedAt = SystemClock.uptimeMillis();
++                invalidate();
++                return true;
++            case MotionEvent.ACTION_MOVE:
++                if (!mCapturing) return false;
++                dragTo(y);
++                return true;
++            case MotionEvent.ACTION_UP:
++            case MotionEvent.ACTION_CANCEL:
++                if (!mCapturing) return false;
++                mCapturing = false;
++                mHeld = false;
++                mLastMovedAt = SystemClock.uptimeMillis();
++                invalidate();
++                return true;
++            default:
++                return mCapturing;
++        }
++    }
++
++    /** Passes everything on to the window's callback, but offers touches to the thumb first. */
++    private static final class Hook implements Window.Callback {
++        private final Window.Callback mBase;
++        private final BareScrollThumb mThumb;
++
++        Hook(Window.Callback base, BareScrollThumb thumb) {
++            mBase = base;
++            mThumb = thumb;
++        }
++
++        @Override
++        public boolean dispatchTouchEvent(MotionEvent e) {
++            if (mThumb.isAttachedToWindow() && mThumb.interceptTouch(e)) return true;
++            return mBase.dispatchTouchEvent(e);
++        }
++
++        @Override
++        public boolean dispatchKeyEvent(KeyEvent e) {
++            return mBase.dispatchKeyEvent(e);
++        }
++
++        @Override
++        public boolean dispatchKeyShortcutEvent(KeyEvent e) {
++            return mBase.dispatchKeyShortcutEvent(e);
++        }
++
++        @Override
++        public boolean dispatchTrackballEvent(MotionEvent e) {
++            return mBase.dispatchTrackballEvent(e);
++        }
++
++        @Override
++        public boolean dispatchGenericMotionEvent(MotionEvent e) {
++            return mBase.dispatchGenericMotionEvent(e);
++        }
++
++        @Override
++        public boolean dispatchPopulateAccessibilityEvent(AccessibilityEvent e) {
++            return mBase.dispatchPopulateAccessibilityEvent(e);
++        }
++
++        @Override
++        public @Nullable View onCreatePanelView(int featureId) {
++            return mBase.onCreatePanelView(featureId);
++        }
++
++        @Override
++        public boolean onCreatePanelMenu(int featureId, Menu menu) {
++            return mBase.onCreatePanelMenu(featureId, menu);
++        }
++
++        @Override
++        public boolean onPreparePanel(int featureId, @Nullable View view, Menu menu) {
++            return mBase.onPreparePanel(featureId, view, menu);
++        }
++
++        @Override
++        public boolean onMenuOpened(int featureId, Menu menu) {
++            return mBase.onMenuOpened(featureId, menu);
++        }
++
++        @Override
++        public boolean onMenuItemSelected(int featureId, MenuItem item) {
++            return mBase.onMenuItemSelected(featureId, item);
++        }
++
++        @Override
++        public void onWindowAttributesChanged(WindowManager.LayoutParams attrs) {
++            mBase.onWindowAttributesChanged(attrs);
++        }
++
++        @Override
++        public void onContentChanged() {
++            mBase.onContentChanged();
++        }
++
++        @Override
++        public void onWindowFocusChanged(boolean hasFocus) {
++            mBase.onWindowFocusChanged(hasFocus);
++        }
++
++        @Override
++        public void onAttachedToWindow() {
++            mBase.onAttachedToWindow();
++        }
++
++        @Override
++        public void onDetachedFromWindow() {
++            mBase.onDetachedFromWindow();
++        }
++
++        @Override
++        public void onPanelClosed(int featureId, Menu menu) {
++            mBase.onPanelClosed(featureId, menu);
++        }
++
++        @Override
++        public boolean onSearchRequested() {
++            return mBase.onSearchRequested();
++        }
++
++        @Override
++        public boolean onSearchRequested(SearchEvent event) {
++            return mBase.onSearchRequested(event);
++        }
++
++        @Override
++        public @Nullable ActionMode onWindowStartingActionMode(ActionMode.Callback callback) {
++            return mBase.onWindowStartingActionMode(callback);
++        }
++
++        @Override
++        public @Nullable ActionMode onWindowStartingActionMode(
++                ActionMode.Callback callback, int type) {
++            return mBase.onWindowStartingActionMode(callback, type);
++        }
++
++        @Override
++        public void onActionModeStarted(ActionMode mode) {
++            mBase.onActionModeStarted(mode);
++        }
++
++        @Override
++        public void onActionModeFinished(ActionMode mode) {
++            mBase.onActionModeFinished(mode);
++        }
++
++        @Override
++        public void onProvideKeyboardShortcuts(
++                List<KeyboardShortcutGroup> data, @Nullable Menu menu, int deviceId) {
++            mBase.onProvideKeyboardShortcuts(data, menu, deviceId);
++        }
++
++        @Override
++        public void onPointerCaptureChanged(boolean hasCapture) {
++            mBase.onPointerCaptureChanged(hasCapture);
++        }
++    }
++
++    /** Moves the thumb so that the touch keeps its place on it, and the page with it. */
++    private void dragTo(float y) {
++        Tab tab = mTabs.getTab();
++        WebContents webContents = tab == null ? null : tab.getWebContents();
++        if (webContents == null || !mHasThumb) return;
++        float travel = (mTrackBottom - mTrackTop) - mThumbLength;
++        if (travel <= 0f) return;
++        mThumbTop = Math.max(mTrackTop, Math.min(mTrackTop + travel, y - mGrabOffset));
++        float fraction = (mThumbTop - mTrackTop) / travel;
++        int target = Math.round(fraction * (mRange - mExtent));
++        RenderCoordinates coordinates = RenderCoordinates.fromWebContents(webContents);
++        webContents.getEventForwarder().scrollTo(coordinates.getScrollXPixInt(), target);
++        invalidate();
++    }
++
++    /**
++     * Keeps the system back gesture, which starts at the screen edge, off the part of the edge
++     * the thumb is on, so that grabbing it does not go back a page.
++     */
++    private void updateGestureExclusion(boolean show) {
++        if (!show) {
++            if (mExclusionCenter >= 0f) {
++                setSystemGestureExclusionRects(Collections.<Rect>emptyList());
++                mExclusionCenter = -1f;
++            }
++            return;
++        }
++        float center = mThumbTop + mThumbLength / 2f;
++        if (mExclusionCenter >= 0f
++                && Math.abs(center - mExclusionCenter) < EXCLUSION_STEP_DP * mDensity) {
++            return;
++        }
++        mExclusionCenter = center;
++        float half =
++                Math.min(
++                        mThumbLength / 2f + HIT_SLOP_DP * mDensity,
++                        MAX_EXCLUSION_DP * mDensity / 2f);
++        setSystemGestureExclusionRects(
++                Collections.singletonList(
++                        new Rect(
++                                (int) (getWidth() - TOUCH_DP * mDensity),
++                                (int) (center - half),
++                                getWidth(),
++                                (int) (center + half))));
++    }
++
++    @Override
++    protected void onDraw(Canvas canvas) {
++        if (!DRAW || !mHasThumb || mAlpha <= 0f) return;
++        float width = (mHeld ? HELD_DP : THUMB_DP) * mDensity;
++        float right = getWidth() - EDGE_DP * mDensity;
++        int color = mHeld ? HELD_COLOR : THUMB_COLOR;
++        mPaint.setColor(color);
++        mPaint.setAlpha(Math.round(Color.alpha(color) * mAlpha));
++        canvas.drawRoundRect(
++                right - width, mThumbTop, right, mThumbTop + mThumbLength, width / 2f, width / 2f,
++                mPaint);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -74,6 +74,7 @@ import org.chromium.chrome.browser.back_press.BackPressMetrics;
+ import org.chromium.chrome.browser.back_press.BackPressMetrics.PredictiveGestureNavPhase;
+ import org.chromium.chrome.browser.bare.BareFrostBackdrop;
+ import org.chromium.chrome.browser.bare.BareNewTabRise;
++import org.chromium.chrome.browser.bare.BareScrollThumb;
+ import org.chromium.chrome.browser.bare.BareTabSwitcher;
+ import org.chromium.chrome.browser.bare.BareUpdateCheck;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+@@ -1252,6 +1253,8 @@ public class ToolbarManager
+                         this::onSendTabToSelfClicked);
+         // Bare: "Scroll to top" in the address bar's long-press menu.
+         mToolbarLongPressMenuHandler.setScrollToTop(this::scrollActiveTabToTop);
++        // Bare: a thumb on the page's right edge that can be held and dragged to scroll.
++        installBareScrollThumb();
+         OnLongClickListener onLongClickListener =
+                 mToolbarLongPressMenuHandler.getOnLongClickListener();
+ 
+@@ -2630,6 +2633,15 @@ public class ToolbarManager
+         animator.start();
+     }
+ 
++    /** Bare: puts a thumb on the page's right edge that can be held and dragged to scroll. */
++    private void installBareScrollThumb() {
++        BareScrollThumb.install(mActivity, this::getBareActiveTab);
++    }
++
++    private @Nullable Tab getBareActiveTab() {
++        return mActivityTabProvider.get();
++    }
++
+     /** Returns the {@link ViewRectProvider} for the UrlBar. */
+     public ViewRectProvider getUrlBarViewRectProvider() {
+         assert mLocationBar instanceof LocationBarCoordinator;
